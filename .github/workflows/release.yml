@@ -1,0 +1,36 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Extract changelog for version
+        id: changelog
+        run: python3 .github/scripts/extract_changelog.py
+        env:
+          VERSION: ${{ github.ref_name }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }}
+          files: |
+            CHANGELOG.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

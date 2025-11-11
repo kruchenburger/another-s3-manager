@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+env/
+venv/
+.venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Configuration (may contain sensitive credentials)
+config.json
+
+# User data and bans
+users.json
+bans.json
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# CI/CD
+.github/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
