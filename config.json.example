@@ -1,0 +1,47 @@
+{
+  "roles": [
+    {
+      "name": "Default",
+      "type": "default",
+      "description": "Use default AWS credentials"
+    },
+    {
+      "name": "Production Account",
+      "type": "assume_role",
+      "role_arn": "arn:aws:iam::123456789012:role/S3AccessRole",
+      "description": "Production account via role assumption"
+    },
+    {
+      "name": "Production Profile",
+      "type": "profile",
+      "profile_name": "jet-prod",
+      "description": "Production account using AWS profile"
+    },
+    {
+      "name": "Dev Account",
+      "type": "credentials",
+      "access_key_id": "AKIAIOSFODNN7EXAMPLE",
+      "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      "region": "eu-central-1",
+      "description": "Development account with direct credentials"
+    },
+    {
+      "name": "MinIO",
+      "type": "s3_compatible",
+      "access_key_id": "minioadmin",
+      "secret_access_key": "minioadmin",
+      "endpoint_url": "http://minio:9000",
+      "use_ssl": false,
+      "verify_ssl": false,
+      "addressing_style": "path",
+      "description": "Local MinIO instance"
+    }
+  ],
+  "default_role": "Default",
+  "items_per_page": 200,
+  "enable_lazy_loading": true,
+  "max_file_size": 104857600,
+  "disable_deletion": false,
+  "data_dir": "/app/data"
+}
+

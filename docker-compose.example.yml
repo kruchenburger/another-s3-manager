@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  s3-manager:
+    image: ghcr.io/kruchenburger/another-s3-manager:latest
+    container_name: s3-manager
+    ports:
+      - "8080:8080"
+    environment:
+      # REQUIRED: Generate with: python -c 'import secrets; print(secrets.token_urlsafe(32))'
+      - JWT_SECRET_KEY=your-secret-key-here-change-in-production
+
+      # Optional: Server configuration
+      - PORT=8080
+      - UVICORN_HOST=0.0.0.0
+      - LOG_LEVEL=info
+
+      # Optional: AWS credentials (if not using IAM role or AWS config files)
+      # - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      # - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      # - AWS_REGION=${AWS_REGION}
+
+      # Optional: Application configuration
+      - ADMIN_PASSWORD=change_me_pls
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=180
+      - ITEMS_PER_PAGE=200
+      - DISABLE_DELETION=false
+      - MAX_FILE_SIZE=104857600
+      - ENABLE_LAZY_LOADING=true
+      - DATA_DIR=/app/data
+    volumes:
+      # Mount config file (optional - can be created via web UI)
+      - ./config.json:/app/config.json
+
+      # Mount data directory for persistent user data and bans
+      - ./data:/app/data
+
+      # Optional: Mount AWS credentials if using profiles
+      # - ~/.aws:/root/.aws:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/app-info')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+

@@ -1,0 +1,1633 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title id="page-title">Admin - Another S3 Manager</title>
+    <meta charset="utf-8">
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <script>
+        // Apply theme on admin page
+        (function() {
+            function getSystemTheme() {
+                return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            }
+            function applyTheme(themePreference) {
+                let actualTheme = themePreference;
+                if (themePreference === 'auto') {
+                    actualTheme = getSystemTheme();
+                }
+                document.documentElement.setAttribute('data-theme', actualTheme);
+            }
+            // Try to get theme from localStorage
+            try {
+                const storedUser = localStorage.getItem('user');
+                if (storedUser) {
+                    const user = JSON.parse(storedUser);
+                    applyTheme(user.theme || 'auto');
+                } else {
+                    applyTheme('auto');
+                }
+            } catch (e) {
+                applyTheme('auto');
+            }
+        })();
+    </script>
+    <style>
+        .admin-container {
+            max-width: 1000px;
+            margin: 20px auto;
+        }
+        .admin-section {
+            background: var(--bg-secondary);
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px var(--shadow);
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .admin-section h2 {
+            margin-bottom: 20px;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+            color: var(--text-primary);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 8px;
+            font-size: 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            box-sizing: border-box;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+        }
+        .form-group.checkbox {
+            display: flex;
+            align-items: center;
+        }
+        .form-group.checkbox input {
+            width: auto;
+            margin-right: 10px;
+        }
+        .roles-checkbox-container {
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-primary);
+            padding: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .roles-checkbox-container .role-checkbox-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 8px;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+        .roles-checkbox-container .role-checkbox-item:hover {
+            background: var(--bg-hover);
+        }
+        .roles-checkbox-container .role-checkbox-item input[type="checkbox"] {
+            margin-right: 8px;
+            cursor: pointer;
+            width: auto;
+        }
+        .roles-checkbox-container .role-checkbox-item label {
+            cursor: pointer;
+            margin: 0;
+            flex: 1;
+            user-select: none;
+            font-weight: normal;
+        }
+        .roles-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin: 0;
+            padding: 0;
+            align-items: flex-start;
+        }
+        .role-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            font-size: 12px;
+            color: var(--text-primary);
+            white-space: nowrap;
+            line-height: 1.4;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        table th, table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+        }
+        table th {
+            background: var(--bg-tertiary);
+            font-weight: 600;
+        }
+        .back-link {
+            margin-bottom: 20px;
+        }
+        .back-link a {
+            color: var(--text-primary);
+        }
+        .notification-toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 10000;
+            min-width: 300px;
+            max-width: 500px;
+            padding: 16px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            animation: slideInRight 0.3s ease-out;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .notification-toast.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .notification-toast.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        @keyframes slideInRight {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        @keyframes slideOutRight {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+        }
+        .notification-toast.closing {
+            animation: slideOutRight 0.3s ease-in forwards;
+        }
+        [data-theme="dark"] .notification-toast.success {
+            background: #1e4620;
+            color: #a5d6a7;
+            border: 1px solid #2e7d32;
+        }
+        [data-theme="dark"] .notification-toast.error {
+            background: #4a1f1f;
+            color: #ef9a9a;
+            border: 1px solid #c62828;
+        }
+    </style>
+</head>
+<body>
+    <!-- Notification Toast -->
+    <div id="notification-toast" class="notification-toast" style="display: none;"></div>
+
+    <div id="demo-banner" class="demo-banner" style="display: none;">
+        <div class="demo-banner-content">
+            <span class="demo-banner-text">
+                <strong>Demo instance</strong> - This is a demonstration instance. Demo bucket size is limited to <span id="demo-bucket-limit">1GB. You can add your own buckets.</span>.
+            </span>
+        </div>
+    </div>
+
+    <div class="container admin-container">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <img src="/static/favicon.ico" alt="S3 File Manager" style="width: 40px; height: 40px;">
+                <span id="app-name">Another S3 Manager</span>
+                <span id="app-version" class="app-version-text"></span>
+            </div>
+            <a href="https://github.com/kruchenburger/another-s3-manager" class="github-link" target="_blank" rel="noopener" style="margin-left: auto;">
+                <i class="fa-brands fa-github"></i>
+                View on GitHub
+            </a>
+        </div>
+        <div class="back-link">
+            <a href="/" style="color: #007bff; text-decoration: none;">← Back to File Manager</a>
+        </div>
+        <h1>⚙️ Admin Panel</h1>
+
+        <div class="admin-section">
+            <h2>Users</h2>
+            <div id="users-error" style="margin-bottom: 15px;"></div>
+            <table id="users-table">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Admin</th>
+                        <th>Allowed Roles</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="users-tbody">
+                    <tr><td colspan="5">Loading...</td></tr>
+                </tbody>
+            </table>
+            <h3 style="margin-top: 20px;">Create New User</h3>
+            <form id="create-user-form" onsubmit="createUser(event)">
+                <div class="form-group">
+                    <label for="new-username">Username:</label>
+                    <input type="text" id="new-username" required>
+                </div>
+                <div class="form-group">
+                    <label for="new-password">Password:</label>
+                    <input type="password" id="new-password" required>
+                </div>
+                <div class="form-group checkbox">
+                    <input type="checkbox" id="new-is-admin">
+                    <label for="new-is-admin">Admin privileges</label>
+                </div>
+                <div class="form-group">
+                    <label>Allowed Roles:</label>
+                    <div id="new-allowed-roles-container" class="roles-checkbox-container">
+                        <div style="color: var(--text-secondary); padding: 8px;">Loading roles...</div>
+                    </div>
+                    <small style="color: var(--text-secondary);">Select roles to grant access. Leave empty for no access.</small>
+                </div>
+                <button type="submit" class="btn-primary">Create User</button>
+            </form>
+        </div>
+
+        <!-- Confirm Delete User Modal -->
+        <div id="confirm-delete-user-modal" class="modal" style="display: none;">
+            <div class="modal-content" style="max-width: 500px;">
+                <div class="modal-header">
+                    <h2>⚠️ Confirm Deletion</h2>
+                    <button class="modal-close" onclick="closeConfirmDeleteUserModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p>Are you sure you want to delete user <strong id="delete-username-text"></strong>?</p>
+                    <p style="color: #dc3545; font-weight: 500;">This action cannot be undone.</p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-danger" id="confirm-delete-user-btn" onclick="confirmDeleteUser()">🗑️ Delete User</button>
+                    <button class="btn-secondary" onclick="closeConfirmDeleteUserModal()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Change Password Modal -->
+        <div id="change-password-modal" class="modal" style="display: none;">
+            <div class="modal-content" style="max-width: 500px;">
+                <div class="modal-header">
+                    <h2>🔑 Change Password</h2>
+                    <button class="modal-close" onclick="closeChangePasswordModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="change-password-form" onsubmit="changePasswordFromForm(event)">
+                        <div class="form-group">
+                            <label for="change-password-username">Username:</label>
+                            <input type="text" id="change-password-username" readonly style="background: var(--bg-tertiary);">
+                        </div>
+                        <div class="form-group">
+                            <label for="new-password-input">New Password:</label>
+                            <input type="password" id="new-password-input" required minlength="1" autocomplete="new-password">
+                        </div>
+                        <div class="form-group">
+                            <label for="confirm-password-input">Confirm Password:</label>
+                            <input type="password" id="confirm-password-input" required minlength="1" autocomplete="new-password">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-primary" id="confirm-change-password-btn" onclick="changePasswordFromForm(event)">🔑 Change Password</button>
+                    <button class="btn-secondary" onclick="closeChangePasswordModal()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Confirm Unban User Modal -->
+        <div id="confirm-unban-user-modal" class="modal" style="display: none;">
+            <div class="modal-content" style="max-width: 500px;">
+                <div class="modal-header">
+                    <h2>🔓 Confirm Unban</h2>
+                    <button class="modal-close" onclick="closeConfirmUnbanUserModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p>Are you sure you want to unban user <strong id="unban-username-text"></strong>?</p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-primary" id="confirm-unban-user-btn" onclick="confirmUnbanUser()">🔓 Unban User</button>
+                    <button class="btn-secondary" onclick="closeConfirmUnbanUserModal()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Edit User Modal -->
+        <div id="edit-user-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>✏️ Edit User</h2>
+                    <button class="modal-close" onclick="closeEditUserModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="edit-user-form" onsubmit="updateUserFromForm(event)">
+                        <div class="form-group">
+                            <label for="edit-username">Username:</label>
+                            <input type="text" id="edit-username" readonly style="background: var(--bg-tertiary);">
+                        </div>
+                        <div class="form-group checkbox">
+                            <input type="checkbox" id="edit-is-admin">
+                            <label for="edit-is-admin">Admin privileges</label>
+                        </div>
+                        <div class="form-group">
+                            <label>Allowed Roles:</label>
+                            <div id="edit-allowed-roles-container" class="roles-checkbox-container">
+                                <div style="color: var(--text-secondary); padding: 8px;">Loading roles...</div>
+                            </div>
+                            <small style="color: var(--text-secondary);">Select roles to grant access. Leave empty for no access.</small>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-primary" onclick="updateUserFromForm(event)">💾 Save Changes</button>
+                    <button class="btn-secondary" onclick="closeEditUserModal()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="admin-section" id="configuration">
+            <h2>Configuration</h2>
+            <div id="config-read-only-warning" style="display: none; background: #fff3cd; color: #856404; padding: 15px; border-radius: 6px; border-left: 4px solid #ffc107; margin-bottom: 20px;">
+                <strong>⚠️ Configuration is Read-Only</strong>
+                <p style="margin: 8px 0 0 0; font-size: 0.95em;">
+                    The application does not have write access to the configuration file (e.g., mounted as read-only from Kubernetes ConfigMap).
+                    Configuration management must be handled externally. All editing controls have been disabled.
+                </p>
+            </div>
+            <div id="config-error" style="margin-bottom: 15px;"></div>
+
+            <div style="margin-bottom: 20px;">
+                <button class="btn-primary" onclick="exportConfig()" style="margin-right: 10px;">📥 Export Config (JSON)</button>
+                <button class="btn-secondary" onclick="toggleConfigView()" id="toggle-config-view-btn">📝 Switch to JSON Editor</button>
+            </div>
+
+            <!-- Form View -->
+            <div id="config-form-view">
+                <div class="form-group" style="background: var(--bg-primary); padding: 15px; border-radius: 6px; border-left: 4px solid #007bff; margin-bottom: 20px;">
+                    <label for="config-default-role" style="font-weight: 600; color: var(--text-primary); margin-bottom: 8px; display: flex; align-items: center;">
+                        Default Role (Global)
+                        <span style="margin-left: 8px; font-size: 0.85em; font-weight: normal; color: var(--text-secondary);">(Applied to all users)</span>
+                    </label>
+                    <select id="config-default-role" style="width: 100%; padding: 10px; font-size: 14px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                        <option value="">-- No default role --</option>
+                    </select>
+                    <small style="display: block; margin-top: 6px; color: var(--text-secondary); font-size: 0.9em; line-height: 1.4;">
+                        💡 The role that will be automatically selected for all users. If not set, each user's current role is used.
+                    </small>
+                </div>
+
+                <div class="form-group" style="background: var(--bg-primary); padding: 15px; border-radius: 6px; border-left: 4px solid #28a745; margin-bottom: 20px;">
+                    <label for="config-items-per-page" style="font-weight: 600; color: var(--text-primary); margin-bottom: 8px; display: flex; align-items: center;">
+                        Items Per Page
+                        <span style="margin-left: 8px; font-size: 0.85em; font-weight: normal; color: var(--text-secondary);">(10-1000)</span>
+                    </label>
+                    <input type="number" id="config-items-per-page" min="10" max="1000" value="200" style="width: 100%; padding: 10px; font-size: 14px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                    <small style="display: block; margin-top: 6px; color: var(--text-secondary); font-size: 0.9em; line-height: 1.4;">
+                        💡 Number of files/objects to display per page in the file list. Higher values may impact performance
+                    </small>
+                </div>
+
+                <div class="form-group checkbox" style="background: var(--bg-primary); padding: 15px; border-radius: 6px; border-left: 4px solid #ffc107; margin-bottom: 20px;">
+                    <div style="display: flex; align-items: start;">
+                        <input type="checkbox" id="config-enable-lazy-loading" style="margin-top: 4px; margin-right: 12px; width: 20px; height: 20px; cursor: pointer;">
+                        <div style="flex: 1;">
+                            <label for="config-enable-lazy-loading" style="font-weight: 600; color: var(--text-primary); cursor: pointer; margin-bottom: 6px; display: block;">
+                                Enable Lazy Loading
+                            </label>
+                            <small style="display: block; color: var(--text-secondary); font-size: 0.9em; line-height: 1.4;">
+                                💡 When enabled, files load automatically as you scroll. When disabled, you must click "Load more..." to load additional files
+                            </small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group checkbox" style="background: var(--bg-primary); padding: 15px; border-radius: 6px; border-left: 4px solid #dc3545; margin-bottom: 20px;">
+                    <div style="display: flex; align-items: start;">
+                        <input type="checkbox" id="config-disable-deletion" style="margin-top: 4px; margin-right: 12px; width: 20px; height: 20px; cursor: pointer;">
+                        <div style="flex: 1;">
+                            <label for="config-disable-deletion" style="font-weight: 600; color: var(--text-primary); cursor: pointer; margin-bottom: 6px; display: block;">
+                                Disable Deletion
+                            </label>
+                            <small style="display: block; color: var(--text-secondary); font-size: 0.9em; line-height: 1.4;">
+                                ⚠️ When enabled, all file deletion functionality will be disabled. Useful for read-only deployments
+                            </small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group" style="background: var(--bg-primary); padding: 15px; border-radius: 6px; border-left: 4px solid #17a2b8; margin-bottom: 20px;">
+                    <label for="config-max-file-size" style="font-weight: 600; color: var(--text-primary); margin-bottom: 8px; display: flex; align-items: center;">
+                        Max File Size
+                        <span style="margin-left: 8px; font-size: 0.85em; font-weight: normal; color: var(--text-secondary);">(Current: <span id="config-max-file-size-mb">100</span> MB)</span>
+                    </label>
+                    <input type="number" id="config-max-file-size" min="1024" value="104857600" style="width: 100%; padding: 10px; font-size: 14px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                    <small style="display: block; margin-top: 6px; color: var(--text-secondary); font-size: 0.9em; line-height: 1.4;">
+                        💡 Maximum file size allowed for uploads (in bytes). Files larger than this will be rejected. Minimum: 1KB (1024 bytes)
+                    </small>
+                </div>
+
+                <div class="form-group" style="background: var(--bg-primary); padding: 15px; border-radius: 6px; border-left: 4px solid #6f42c1; margin-bottom: 20px;">
+                    <label for="config-data-dir" style="font-weight: 600; color: var(--text-primary); margin-bottom: 8px; display: flex; align-items: center;">
+                        Data Directory
+                        <span style="margin-left: 8px; font-size: 0.85em; font-weight: normal; color: var(--text-secondary);">(Optional)</span>
+                    </label>
+                    <input type="text" id="config-data-dir" placeholder="Leave empty for default (application directory)" style="width: 100%; padding: 10px; font-size: 14px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                    <small style="display: block; margin-top: 6px; color: var(--text-secondary); font-size: 0.9em; line-height: 1.4;">
+                        💡 Directory path for storing users.json and bans.json files. Useful for Kubernetes volumes. Leave empty to use the application directory
+                    </small>
+                </div>
+
+                <div style="background: var(--bg-primary); padding: 20px; border-radius: 6px; border-left: 4px solid #007bff; margin-top: 30px;">
+                    <h3 style="margin-top: 0; margin-bottom: 15px; color: var(--text-primary); display: flex; align-items: center;">
+                        Roles
+                        <span style="margin-left: 10px; font-size: 0.85em; font-weight: normal; color: var(--text-secondary);">(AWS role configurations)</span>
+                    </h3>
+                    <small style="display: block; margin-bottom: 15px; color: var(--text-secondary); font-size: 0.9em; line-height: 1.4;">
+                        💡 Configure AWS roles and accounts that can be used to access S3 buckets. Each role can use default credentials, AWS profile, assume IAM role, or direct credentials
+                    </small>
+                    <div id="roles-list-container">
+                        <div style="color: var(--text-secondary); padding: 8px;">Loading roles...</div>
+                    </div>
+                    <button class="btn-primary" onclick="addNewRole()" style="margin-top: 15px;">➕ Add Role</button>
+                </div>
+            </div>
+
+            <!-- JSON Editor View -->
+            <div id="config-json-view" style="display: none;">
+                <textarea id="config-json-editor" rows="25" style="width: 100%; font-family: monospace; font-size: 12px; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-primary); color: var(--text-primary);"></textarea>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <button class="btn-primary" onclick="saveConfig()">💾 Save Configuration</button>
+            </div>
+        </div>
+
+        <!-- Add/Edit Role Modal -->
+        <div id="role-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="role-modal-title">➕ Add Role</h2>
+                    <button class="modal-close" onclick="closeRoleModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="role-form">
+                        <div class="form-group">
+                            <label for="role-name">Role Name:</label>
+                            <input type="text" id="role-name" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="role-type">Role Type:</label>
+                            <select id="role-type" required onchange="updateRoleTypeFields()">
+                                <option value="default">Default (Use default AWS credentials)</option>
+                                <option value="profile">Profile (AWS profile from ~/.aws/credentials)</option>
+                                <option value="assume_role">Assume Role (IAM role assumption)</option>
+                                <option value="credentials">Credentials (Direct access key/secret for AWS S3)</option>
+                                <option value="s3_compatible">S3-Compatible Service (e.g., MinIO, DigitalOcean Spaces)</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="role-profile-name-group" style="display: none;">
+                            <label for="role-profile-name">Profile Name:</label>
+                            <input type="text" id="role-profile-name" placeholder="e.g., jet-prod">
+                        </div>
+                        <div class="form-group" id="role-arn-group" style="display: none;">
+                            <label for="role-arn">Role ARN:</label>
+                            <input type="text" id="role-arn" placeholder="arn:aws:iam::123456789012:role/RoleName">
+                        </div>
+                        <div class="form-group" id="role-access-key-group" style="display: none;">
+                            <label for="role-access-key">Access Key ID:</label>
+                            <input type="text" id="role-access-key" placeholder="AKIAIOSFODNN7EXAMPLE">
+                        </div>
+                        <div class="form-group" id="role-secret-key-group" style="display: none;">
+                            <label for="role-secret-key">Secret Access Key:</label>
+                            <input type="password" id="role-secret-key" placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY">
+                        </div>
+                        <div class="form-group" id="role-region-group" style="display: none;">
+                            <label for="role-region">Region (optional):</label>
+                            <input type="text" id="role-region" placeholder="eu-central-1">
+                        </div>
+                        <div class="form-group" id="role-s3-compatible-group" style="display: none;">
+                            <label for="role-endpoint-url">Endpoint URL:</label>
+                            <input type="text" id="role-endpoint-url" placeholder="http://minio:9000 or https://nyc3.digitaloceanspaces.com">
+                            <small style="display: block; margin-top: 5px; color: var(--text-secondary); font-size: 0.9em;">
+                                💡 Full URL to your S3-compatible service endpoint
+                            </small>
+                            <label for="role-s3-access-key" style="margin-top: 15px;">Access Key (Username):</label>
+                            <input type="text" id="role-s3-access-key" placeholder="minioadmin or your access key">
+                            <small style="display: block; margin-top: 5px; color: var(--text-secondary); font-size: 0.9em;">
+                                💡 Access key or username for your S3-compatible service
+                            </small>
+                            <label for="role-s3-secret-key" style="margin-top: 15px;">Secret Key (Password):</label>
+                            <input type="password" id="role-s3-secret-key" placeholder="minioadmin or your secret key">
+                            <small style="display: block; margin-top: 5px; color: var(--text-secondary); font-size: 0.9em;">
+                                💡 Secret key or password for your S3-compatible service
+                            </small>
+                            <label for="role-s3-region" style="margin-top: 15px;">Region (optional):</label>
+                            <input type="text" id="role-s3-region" placeholder="us-east-1">
+                            <div style="margin-top: 15px;">
+                                <label>
+                                    <input type="checkbox" id="role-s3-use-ssl" checked> Use SSL/TLS
+                                </label>
+                            </div>
+                            <div style="margin-top: 10px;">
+                                <label>
+                                    <input type="checkbox" id="role-s3-verify-ssl" checked> Verify SSL Certificate
+                                </label>
+                            </div>
+                            <div style="margin-top: 10px;">
+                                <label for="role-s3-addressing-style">Addressing Style:</label>
+                                <select id="role-s3-addressing-style">
+                                    <option value="auto">Auto (default)</option>
+                                    <option value="path">Path Style</option>
+                                    <option value="virtual">Virtual Hosted Style</option>
+                                </select>
+                                <small style="display: block; margin-top: 5px; color: var(--text-secondary); font-size: 0.9em;">
+                                    💡 MinIO typically uses "Path Style"
+                                </small>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="role-allowed-buckets">Allowed Buckets (optional):</label>
+                            <input type="text" id="role-allowed-buckets" placeholder="e.g., bucket1,bucket2,bucket3">
+                            <small style="display: block; margin-top: 5px; color: var(--text-secondary); font-size: 0.9em;">
+                                💡 Comma-separated list of bucket names. If specified, only these buckets will be available (no s3:ListAllMyBuckets permission needed). Leave empty to list all buckets.
+                            </small>
+                        </div>
+                        <div class="form-group">
+                            <label for="role-description">Description:</label>
+                            <input type="text" id="role-description" placeholder="Optional description">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-primary" onclick="saveRole()">💾 Save Role</button>
+                    <button class="btn-secondary" onclick="closeRoleModal()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="admin-section">
+            <h2>Banned Users</h2>
+            <div id="bans-error" style="margin-bottom: 15px;"></div>
+            <table id="bans-table">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Reason</th>
+                        <th>Remaining Time</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="bans-tbody">
+                    <tr><td colspan="4">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <script>
+        const token = localStorage.getItem('access_token');
+        if (!token) {
+            window.location.href = '/login';
+            throw new Error('No token');
+        }
+
+        // Helper function to get CSRF token
+        function getCsrfToken() {
+            return localStorage.getItem('csrf_token');
+        }
+
+        // Helper function to add auth header and CSRF token to fetch requests
+        function authFetch(url, options = {}) {
+            if (!token) {
+                window.location.href = '/login';
+                return Promise.reject(new Error('Not authenticated'));
+            }
+
+            options.headers = options.headers || {};
+            options.headers['Authorization'] = `Bearer ${token}`;
+
+            // Add CSRF token for state-changing requests (POST, PUT, DELETE)
+            const method = (options.method || 'GET').toUpperCase();
+            if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+                const csrfToken = getCsrfToken();
+                if (csrfToken) {
+                    options.headers['X-CSRF-Token'] = csrfToken;
+                }
+            }
+
+            return fetch(url, options);
+        }
+
+        // Verify token is valid before loading page
+        fetch('/api/me', {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                if (response.status === 401 || response.status === 403) {
+                    localStorage.removeItem('access_token');
+                    localStorage.removeItem('user');
+                    localStorage.removeItem('csrf_token');
+                    window.location.href = '/login';
+                } else {
+                    throw new Error('Failed to verify authentication');
+                }
+            }
+            return response.json();
+        })
+        .then(user => {
+            // Store CSRF token if provided
+            if (user.csrf_token) {
+                localStorage.setItem('csrf_token', user.csrf_token);
+            }
+            if (!user.is_admin) {
+                const errorDiv = document.createElement('div');
+                errorDiv.style.cssText = 'background: #f8d7da; color: #721c24; padding: 20px; border-radius: 4px; margin: 20px; text-align: center;';
+                errorDiv.innerHTML = '<h2>Access Denied</h2><p>Admin privileges required</p><a href="/" style="color: #007bff;">Go to File Manager</a>';
+                document.body.innerHTML = '';
+                document.body.appendChild(errorDiv);
+            }
+        })
+        .catch(error => {
+            console.error('Auth check failed:', error);
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('user');
+            window.location.href = '/login';
+        });
+
+        let availableRoles = [];
+
+        async function loadUsers() {
+            try {
+                const response = await authFetch('/api/admin/users');
+                if (response.ok) {
+                    const data = await response.json();
+                    availableRoles = data.available_roles || [];
+                    console.log('Available roles loaded:', availableRoles);
+
+                    // Update role selectors
+                    updateRoleSelectors(availableRoles);
+
+                    const tbody = document.getElementById('users-tbody');
+                    if (data.users.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="5">No users found</td></tr>';
+                    } else {
+                        tbody.innerHTML = data.users.map(user => `
+                            <tr>
+                                <td>${user.username}</td>
+                                <td>${user.is_admin ? '✓' : ''}</td>
+                                <td>
+                                    ${(user.allowed_roles || []).length > 0
+                                        ? `<div class="roles-list">${(user.allowed_roles || []).map(role => `<span class="role-badge">${role}</span>`).join('')}</div>`
+                                        : '<span style="color: var(--text-secondary);">None</span>'
+                                    }
+                                </td>
+                                <td>${user.created_at ? new Date(user.created_at).toLocaleString() : 'N/A'}</td>
+                                <td>
+                                    ${user.username !== 'admin' ? `
+                                        <button class="btn-primary" onclick="editUser('${user.username}', ${user.is_admin}, '${(user.allowed_roles || []).join(',')}')" style="margin-right: 5px;">Edit</button>
+                                        <button class="btn-secondary" onclick="changePassword('${user.username}')" style="margin-right: 5px;">🔑 Change Password</button>
+                                        <button class="btn-danger" onclick="deleteUser('${user.username}')">Delete</button>
+                                    ` : ''}
+                                </td>
+                            </tr>
+                        `).join('');
+                    }
+                } else {
+                    if (response.status === 401 || response.status === 403) {
+                        window.location.href = '/login';
+                    }
+                }
+            } catch (error) {
+                showErrorMessage('Failed to load users: ' + error.message);
+            }
+        }
+
+        async function loadBans() {
+            try {
+                const response = await authFetch('/api/admin/bans');
+                if (response.ok) {
+                    const data = await response.json();
+                    const tbody = document.getElementById('bans-tbody');
+                    if (data.bans.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="4">No banned users</td></tr>';
+                    } else {
+                        tbody.innerHTML = data.bans.map(ban => `
+                            <tr>
+                                <td>${ban.username}</td>
+                                <td>${ban.reason || 'N/A'}</td>
+                                <td>${ban.remaining_minutes} minutes</td>
+                                <td>
+                                    <button class="btn-primary" onclick="unbanUser('${ban.username}')">Unban</button>
+                                </td>
+                            </tr>
+                        `).join('');
+                    }
+                } else {
+                    if (response.status === 401 || response.status === 403) {
+                        window.location.href = '/login';
+                    }
+                }
+            } catch (error) {
+                showNotification('Failed to load bans: ' + error.message, 'error');
+            }
+        }
+
+        function updateRoleSelectors(roles) {
+            // Update create user checkbox container
+            const createContainer = document.getElementById('new-allowed-roles-container');
+            if (createContainer) {
+                createContainer.innerHTML = '';
+                if (roles.length === 0) {
+                    createContainer.innerHTML = '<div style="color: var(--text-secondary); padding: 8px;">No roles available</div>';
+                } else {
+                    roles.forEach(role => {
+                        const item = document.createElement('div');
+                        item.className = 'role-checkbox-item';
+                        const checkbox = document.createElement('input');
+                        checkbox.type = 'checkbox';
+                        checkbox.id = `new-role-${role}`;
+                        checkbox.value = role;
+                        const label = document.createElement('label');
+                        label.htmlFor = `new-role-${role}`;
+                        label.textContent = role;
+                        item.appendChild(checkbox);
+                        item.appendChild(label);
+                        createContainer.appendChild(item);
+                    });
+                }
+            }
+
+            // Update edit user checkbox container
+            const editContainer = document.getElementById('edit-allowed-roles-container');
+            if (editContainer) {
+                editContainer.innerHTML = '';
+                if (roles.length === 0) {
+                    editContainer.innerHTML = '<div style="color: var(--text-secondary); padding: 8px;">No roles available</div>';
+                } else {
+                    roles.forEach(role => {
+                        const item = document.createElement('div');
+                        item.className = 'role-checkbox-item';
+                        const checkbox = document.createElement('input');
+                        checkbox.type = 'checkbox';
+                        checkbox.id = `edit-role-${role}`;
+                        checkbox.value = role;
+                        const label = document.createElement('label');
+                        label.htmlFor = `edit-role-${role}`;
+                        label.textContent = role;
+                        item.appendChild(checkbox);
+                        item.appendChild(label);
+                        editContainer.appendChild(item);
+                    });
+                }
+            }
+        }
+
+        async function createUser(event) {
+            event.preventDefault();
+            const username = document.getElementById('new-username').value;
+            const password = document.getElementById('new-password').value;
+            const isAdmin = document.getElementById('new-is-admin').checked;
+            const createContainer = document.getElementById('new-allowed-roles-container');
+            const selectedCheckboxes = createContainer.querySelectorAll('input[type="checkbox"]:checked');
+            const selectedRoles = Array.from(selectedCheckboxes).map(cb => cb.value);
+            const allowedRoles = selectedRoles.join(',');
+
+            try {
+                const formData = new FormData();
+                formData.append('username', username);
+                formData.append('password', password);
+                formData.append('is_admin', isAdmin);
+                formData.append('allowed_roles', allowedRoles);
+
+                const response = await authFetch('/api/admin/users', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    document.getElementById('create-user-form').reset();
+                    // Clear selected roles
+                    const createContainer = document.getElementById('new-allowed-roles-container');
+                    if (createContainer) {
+                        createContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+                    }
+                    loadUsers();
+                    showSuccessMessage('User created successfully');
+                } else {
+                    const error = await response.json();
+                    showErrorMessage('Failed to create user: ' + error.detail);
+                }
+            } catch (error) {
+                showErrorMessage('Failed to create user: ' + error.message);
+            }
+        }
+
+        function editUser(username, isAdmin, allowedRoles) {
+            document.getElementById('edit-username').value = username;
+            document.getElementById('edit-is-admin').checked = isAdmin;
+
+            // Set selected roles in the checkboxes
+            const editContainer = document.getElementById('edit-allowed-roles-container');
+            if (editContainer) {
+                // Clear all selections first
+                editContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+
+                // Set selected roles
+                if (allowedRoles) {
+                    const rolesArray = allowedRoles.split(',').map(r => r.trim()).filter(r => r);
+                    rolesArray.forEach(role => {
+                        const checkbox = editContainer.querySelector(`input[type="checkbox"][value="${role}"]`);
+                        if (checkbox) {
+                            checkbox.checked = true;
+                        }
+                    });
+                }
+            }
+
+            const modal = document.getElementById('edit-user-modal');
+            modal.style.display = 'block';
+        }
+
+        function closeEditUserModal() {
+            const modal = document.getElementById('edit-user-modal');
+            modal.style.display = 'none';
+            document.getElementById('edit-user-form').reset();
+            // Clear selected roles
+            const editContainer = document.getElementById('edit-allowed-roles-container');
+            if (editContainer) {
+                editContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+            }
+        }
+
+        async function updateUserFromForm(event) {
+            event.preventDefault();
+            const username = document.getElementById('edit-username').value;
+            const isAdmin = document.getElementById('edit-is-admin').checked;
+            const editContainer = document.getElementById('edit-allowed-roles-container');
+            const selectedCheckboxes = editContainer.querySelectorAll('input[type="checkbox"]:checked');
+            const selectedRoles = Array.from(selectedCheckboxes).map(cb => cb.value);
+            const allowedRoles = selectedRoles.join(',');
+
+            await updateUser(username, isAdmin, allowedRoles);
+            closeEditUserModal();
+        }
+
+        async function updateUser(username, isAdmin, allowedRoles) {
+            try {
+                const formData = new FormData();
+                formData.append('is_admin', isAdmin);
+                formData.append('allowed_roles', allowedRoles || '');
+
+                const response = await authFetch(`/api/admin/users/${username}`, {
+                    method: 'PUT',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    loadUsers();
+                    showSuccessMessage('User updated successfully');
+                } else {
+                    const error = await response.json();
+                    showErrorMessage('Failed to update user: ' + error.detail);
+                }
+            } catch (error) {
+                showErrorMessage('Failed to update user: ' + error.message);
+            }
+        }
+
+        function showSuccessMessage(message) {
+            showNotification(message, 'success');
+        }
+
+        function showErrorMessage(message) {
+            showNotification(message, 'error');
+        }
+
+        let userToDelete = null;
+
+        let userToChangePassword = null;
+
+        function changePassword(username) {
+            userToChangePassword = username;
+            document.getElementById('change-password-username').value = username;
+            document.getElementById('new-password-input').value = '';
+            document.getElementById('confirm-password-input').value = '';
+            const modal = document.getElementById('change-password-modal');
+            modal.style.display = 'block';
+        }
+
+        function closeChangePasswordModal() {
+            const modal = document.getElementById('change-password-modal');
+            modal.style.display = 'none';
+            document.getElementById('change-password-form').reset();
+            userToChangePassword = null;
+        }
+
+        async function changePasswordFromForm(event) {
+            event.preventDefault();
+            if (!userToChangePassword) return;
+
+            const newPassword = document.getElementById('new-password-input').value;
+            const confirmPassword = document.getElementById('confirm-password-input').value;
+
+            if (newPassword !== confirmPassword) {
+                showErrorMessage('Passwords do not match');
+                return;
+            }
+
+            if (newPassword.length === 0) {
+                showErrorMessage('Password cannot be empty');
+                return;
+            }
+
+            const btn = document.getElementById('confirm-change-password-btn');
+            const originalText = btn.innerHTML;
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner" style="display: inline-block; width: 14px; height: 14px; border: 2px solid #ffffff; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 5px; vertical-align: middle;"></span> Changing...';
+
+            try {
+                const response = await authFetch(`/api/admin/users/${encodeURIComponent(userToChangePassword)}/password`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ password: newPassword })
+                });
+
+                if (response.ok) {
+                    closeChangePasswordModal();
+                    showSuccessMessage('Password changed successfully');
+                } else {
+                    let errorMessage = 'Failed to change password';
+                    try {
+                        const error = await response.json();
+                        errorMessage = error.detail || errorMessage;
+                    } catch (e) {
+                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+                    showErrorMessage(errorMessage);
+                }
+            } catch (error) {
+                showErrorMessage('Failed to change password: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+        }
+
+        function deleteUser(username) {
+            userToDelete = username;
+            document.getElementById('delete-username-text').textContent = username;
+            const modal = document.getElementById('confirm-delete-user-modal');
+            modal.style.display = 'block';
+        }
+
+        function closeConfirmDeleteUserModal() {
+            const modal = document.getElementById('confirm-delete-user-modal');
+            modal.style.display = 'none';
+            userToDelete = null;
+        }
+
+        async function confirmDeleteUser() {
+            if (!userToDelete) return;
+
+            const btn = document.getElementById('confirm-delete-user-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner" style="display: inline-block; width: 14px; height: 14px; border: 2px solid #ffffff; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 5px; vertical-align: middle;"></span> Deleting...';
+
+            try {
+                const response = await authFetch(`/api/admin/users/${userToDelete}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    closeConfirmDeleteUserModal();
+                    loadUsers();
+                    showSuccessMessage('User deleted successfully');
+                } else {
+                    const error = await response.json();
+                    showErrorMessage('Failed to delete user: ' + error.detail);
+                    btn.disabled = false;
+                    btn.innerHTML = '🗑️ Delete User';
+                }
+            } catch (error) {
+                showErrorMessage('Failed to delete user: ' + error.message);
+                btn.disabled = false;
+                btn.innerHTML = '🗑️ Delete User';
+            }
+        }
+
+        let userToUnban = null;
+
+        function unbanUser(username) {
+            userToUnban = username;
+            document.getElementById('unban-username-text').textContent = username;
+            const modal = document.getElementById('confirm-unban-user-modal');
+            modal.style.display = 'block';
+        }
+
+        function closeConfirmUnbanUserModal() {
+            const modal = document.getElementById('confirm-unban-user-modal');
+            modal.style.display = 'none';
+            userToUnban = null;
+        }
+
+        async function confirmUnbanUser() {
+            if (!userToUnban) return;
+
+            const btn = document.getElementById('confirm-unban-user-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner" style="display: inline-block; width: 14px; height: 14px; border: 2px solid #ffffff; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 5px; vertical-align: middle;"></span> Unbanning...';
+
+            try {
+                const response = await authFetch(`/api/admin/bans/${userToUnban}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    closeConfirmUnbanUserModal();
+                    loadBans();
+                    showSuccessMessage('User unbanned successfully');
+                } else {
+                    const error = await response.json();
+                    showErrorMessage('Failed to unban user: ' + error.detail);
+                    btn.disabled = false;
+                    btn.innerHTML = '🔓 Unban User';
+                }
+            } catch (error) {
+                showErrorMessage('Failed to unban user: ' + error.message);
+                btn.disabled = false;
+                btn.innerHTML = '🔓 Unban User';
+            }
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const editModal = document.getElementById('edit-user-modal');
+            if (event.target === editModal) {
+                closeEditUserModal();
+            }
+            const deleteModal = document.getElementById('confirm-delete-user-modal');
+            if (event.target === deleteModal) {
+                closeConfirmDeleteUserModal();
+            }
+            const unbanModal = document.getElementById('confirm-unban-user-modal');
+            if (event.target === unbanModal) {
+                closeConfirmUnbanUserModal();
+            }
+        }
+
+        // Load app name from API and show demo banner
+        fetch('/api/app-info')
+            .then(response => response.json())
+            .then(data => {
+                const appName = data.app_name || 'Another S3 Manager';
+                const pageTitle = document.getElementById('page-title');
+                const appNameElement = document.getElementById('app-name');
+                const versionElement = document.getElementById('app-version');
+                if (pageTitle) {
+                    pageTitle.textContent = `Admin - ${appName}`;
+                }
+                if (appNameElement) {
+                    appNameElement.textContent = appName;
+                }
+                if (versionElement) {
+                    versionElement.textContent = data.app_version ? `(v${data.app_version})` : '';
+                }
+                // Show demo banner if enabled
+                isDemoMode = data.is_demo === true;
+                if (isDemoMode) {
+                    const banner = document.getElementById('demo-banner');
+                    if (banner) {
+                        banner.style.display = 'block';
+                        const limitSpan = document.getElementById('demo-bucket-limit');
+                        if (limitSpan && data.demo_bucket_limit) {
+                            limitSpan.textContent = data.demo_bucket_limit;
+                        }
+                    }
+                }
+            })
+            .catch(err => {
+                console.error('Failed to load app name:', err);
+            });
+
+        // Configuration management
+        let configData = null;
+        let configViewMode = 'form'; // 'form' or 'json'
+        let editingRoleIndex = -1;
+        let isDemoMode = false; // Track demo mode state
+
+        async function loadConfig() {
+            try {
+                const response = await authFetch('/api/config?force_reload=true');
+                if (!response.ok) {
+                    throw new Error('Failed to load configuration');
+                }
+                configData = await response.json();
+                populateConfigForm();
+            } catch (error) {
+                showConfigError('Failed to load configuration: ' + error.message);
+            }
+        }
+
+        function populateConfigForm() {
+            if (!configData) return;
+
+            // Check if config is read-only
+            const isReadOnly = configData.is_read_only === true;
+            const readOnlyWarning = document.getElementById('config-read-only-warning');
+            if (readOnlyWarning) {
+                readOnlyWarning.style.display = isReadOnly ? 'block' : 'none';
+            }
+
+            // Disable all form inputs if read-only
+            const formInputs = document.querySelectorAll('#config-form-view input, #config-form-view select, #config-form-view textarea, #config-json-view textarea');
+            formInputs.forEach(input => {
+                input.disabled = isReadOnly;
+            });
+
+            // Disable buttons if read-only
+            const saveButton = document.querySelector('button[onclick="saveConfig()"]');
+            const exportButton = document.querySelector('button[onclick="exportConfig()"]');
+            const toggleViewButton = document.getElementById('toggle-config-view-btn');
+            const addRoleButton = document.querySelector('button[onclick="addNewRole()"]');
+
+            if (saveButton) saveButton.disabled = isReadOnly;
+            if (exportButton) exportButton.disabled = isReadOnly;
+            if (toggleViewButton) toggleViewButton.disabled = isReadOnly;
+            if (addRoleButton) addRoleButton.disabled = isReadOnly;
+
+            // Disable role edit/delete buttons
+            const roleButtons = document.querySelectorAll('button[onclick^="editRole("], button[onclick^="deleteRole("]');
+            roleButtons.forEach(btn => {
+                btn.disabled = isReadOnly;
+            });
+
+            // Update role selects first (before setting values)
+            updateRoleSelects(configData.default_role);
+
+            // Basic settings
+            document.getElementById('config-default-role').value = configData.default_role || '';
+            document.getElementById('config-items-per-page').value = configData.items_per_page || 200;
+            document.getElementById('config-enable-lazy-loading').checked = configData.enable_lazy_loading !== false;
+            document.getElementById('config-disable-deletion').checked = configData.disable_deletion === true;
+            document.getElementById('config-max-file-size').value = configData.max_file_size || 104857600;
+            const maxFileSizeMB = (configData.max_file_size || 104857600) / (1024 * 1024);
+            document.getElementById('config-max-file-size-mb').textContent = maxFileSizeMB.toFixed(0);
+            document.getElementById('config-data-dir').value = configData.data_dir || '';
+
+            // Populate roles list
+            populateRolesList();
+
+            // Update JSON editor
+            document.getElementById('config-json-editor').value = JSON.stringify(configData, null, 2);
+        }
+
+        function updateRoleSelects(defaultRoleValue) {
+            // Update default role dropdown
+            const defaultRoleSelect = document.getElementById('config-default-role');
+            if (defaultRoleSelect) {
+                defaultRoleSelect.innerHTML = '<option value="">-- No default role --</option>';
+                if (configData && configData.roles) {
+                    configData.roles.forEach(role => {
+                        const option = document.createElement('option');
+                        option.value = role.name;
+                        option.textContent = role.name;
+                        defaultRoleSelect.appendChild(option);
+                    });
+                    // Set default role if provided and role exists
+                    if (defaultRoleValue && configData.roles.some(r => r.name === defaultRoleValue)) {
+                        defaultRoleSelect.value = defaultRoleValue;
+                    }
+                }
+            }
+        }
+
+        function populateRolesList() {
+            const container = document.getElementById('roles-list-container');
+            if (!configData || !configData.roles || configData.roles.length === 0) {
+                container.innerHTML = '<div style="color: var(--text-secondary); padding: 8px;">No roles configured</div>';
+                return;
+            }
+
+            container.innerHTML = '';
+            const isReadOnly = configData.is_read_only === true;
+            configData.roles.forEach((role, index) => {
+                const roleDiv = document.createElement('div');
+                roleDiv.style.cssText = 'border: 1px solid var(--border-color); border-radius: 4px; padding: 12px; margin-bottom: 10px; background: var(--bg-primary);';
+                roleDiv.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: start;">
+                        <div style="flex: 1;">
+                            <strong style="color: var(--text-primary);">${escapeHtml(role.name)}</strong>
+                            <span style="color: var(--text-secondary); margin-left: 10px;">(${role.type})</span>
+                            ${role.description ? `<div style="color: var(--text-secondary); margin-top: 4px; font-size: 0.9em;">${escapeHtml(role.description)}</div>` : ''}
+                        </div>
+                        <div>
+                            <button class="btn-secondary" onclick="editRole(${index})" style="margin-right: 5px; padding: 4px 8px; font-size: 0.9em;" ${isReadOnly ? 'disabled' : ''}>✏️ Edit</button>
+                            <button class="btn-secondary" onclick="deleteRole(${index})" style="padding: 4px 8px; font-size: 0.9em; background: #dc3545; border-color: #dc3545;" ${isReadOnly ? 'disabled' : ''}>🗑️ Delete</button>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(roleDiv);
+            });
+        }
+
+        function toggleConfigView() {
+            configViewMode = configViewMode === 'form' ? 'json' : 'form';
+            const formView = document.getElementById('config-form-view');
+            const jsonView = document.getElementById('config-json-view');
+            const toggleBtn = document.getElementById('toggle-config-view-btn');
+
+            if (configViewMode === 'json') {
+                formView.style.display = 'none';
+                jsonView.style.display = 'block';
+                toggleBtn.textContent = '📋 Switch to Form View';
+            } else {
+                formView.style.display = 'block';
+                jsonView.style.display = 'none';
+                toggleBtn.textContent = '📝 Switch to JSON Editor';
+            }
+        }
+
+        async function saveConfig() {
+            // Check if config is read-only
+            if (configData && configData.is_read_only === true) {
+                showConfigError('The application does not have write access to the configuration file. Configuration management must be handled externally.');
+                return;
+            }
+
+            try {
+                let configToSave;
+
+                if (configViewMode === 'json') {
+                    // Parse JSON from editor
+                    const jsonText = document.getElementById('config-json-editor').value;
+                    configToSave = JSON.parse(jsonText);
+                } else {
+                    // Build config from form
+                    configToSave = {
+                        roles: configData.roles || [],
+                        default_role: document.getElementById('config-default-role').value || undefined,
+                        items_per_page: parseInt(document.getElementById('config-items-per-page').value),
+                        enable_lazy_loading: document.getElementById('config-enable-lazy-loading').checked,
+                        disable_deletion: document.getElementById('config-disable-deletion').checked,
+                        max_file_size: parseInt(document.getElementById('config-max-file-size').value),
+                    };
+                    const dataDir = document.getElementById('config-data-dir').value.trim();
+                    if (dataDir) {
+                        configToSave.data_dir = dataDir;
+                    }
+                }
+
+                const response = await authFetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(configToSave)
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to save configuration');
+                }
+
+                showConfigSuccess('Configuration saved successfully!');
+                await loadConfig();
+            } catch (error) {
+                showConfigError('Failed to save configuration: ' + error.message);
+            }
+        }
+
+        async function exportConfig() {
+            try {
+                const response = await authFetch('/api/config/export');
+                if (!response.ok) {
+                    throw new Error('Failed to export configuration');
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'config.json';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                showConfigSuccess('Configuration exported successfully!');
+            } catch (error) {
+                showConfigError('Failed to export configuration: ' + error.message);
+            }
+        }
+
+        function addNewRole() {
+            editingRoleIndex = -1;
+            document.getElementById('role-modal-title').textContent = '➕ Add Role';
+            document.getElementById('role-form').reset();
+            document.getElementById('role-type').value = 'default';
+            document.getElementById('role-allowed-buckets').value = '';
+            updateRoleTypeFields();
+            document.getElementById('role-modal').style.display = 'block';
+        }
+
+        function editRole(index) {
+            editingRoleIndex = index;
+            const role = configData.roles[index];
+            document.getElementById('role-modal-title').textContent = '✏️ Edit Role';
+            document.getElementById('role-name').value = role.name || '';
+            document.getElementById('role-type').value = role.type || 'default';
+            document.getElementById('role-profile-name').value = role.profile_name || '';
+            document.getElementById('role-arn').value = role.role_arn || '';
+            // Trim access_key_id when loading (in case it was saved with spaces)
+            document.getElementById('role-access-key').value = (role.access_key_id || '').trim();
+            // If secret_access_key is not provided (was removed for security) or is REDACTED, leave field empty
+            // User needs to re-enter it if they want to change it
+            const secretKey = role.secret_access_key || '';
+            document.getElementById('role-secret-key').value = (secretKey === '***REDACTED***' || secretKey === '') ? '' : secretKey;
+            document.getElementById('role-region').value = role.region || '';
+            // S3-compatible fields
+            document.getElementById('role-endpoint-url').value = role.endpoint_url || '';
+            document.getElementById('role-s3-access-key').value = (role.access_key_id || '').trim();
+            const s3SecretKey = role.secret_access_key || '';
+            document.getElementById('role-s3-secret-key').value = (s3SecretKey === '***REDACTED***' || s3SecretKey === '') ? '' : s3SecretKey;
+            document.getElementById('role-s3-region').value = role.region || '';
+            document.getElementById('role-s3-use-ssl').checked = role.use_ssl !== false; // Default to true
+            document.getElementById('role-s3-verify-ssl').checked = role.verify_ssl !== false; // Default to true
+            document.getElementById('role-s3-addressing-style').value = role.addressing_style || 'auto';
+            // Handle allowed_buckets - convert array to comma-separated string
+            const allowedBuckets = role.allowed_buckets || [];
+            document.getElementById('role-allowed-buckets').value = Array.isArray(allowedBuckets) ? allowedBuckets.join(', ') : '';
+            document.getElementById('role-description').value = role.description || '';
+            updateRoleTypeFields();
+            document.getElementById('role-modal').style.display = 'block';
+        }
+
+        function deleteRole(index) {
+            if (!confirm(`Are you sure you want to delete role "${configData.roles[index].name}"?`)) {
+                return;
+            }
+            const roleName = configData.roles[index].name;
+            configData.roles.splice(index, 1);
+            populateRolesList();
+            updateRoleSelects(configData.default_role);
+            // Update JSON editor
+            document.getElementById('config-json-editor').value = JSON.stringify(configData, null, 2);
+            showNotification(`Role "${roleName}" deleted successfully`, 'success');
+        }
+
+        function updateRoleTypeFields() {
+            const type = document.getElementById('role-type').value;
+            document.getElementById('role-profile-name-group').style.display = type === 'profile' ? 'block' : 'none';
+            document.getElementById('role-arn-group').style.display = type === 'assume_role' ? 'block' : 'none';
+            document.getElementById('role-access-key-group').style.display = type === 'credentials' ? 'block' : 'none';
+            document.getElementById('role-secret-key-group').style.display = type === 'credentials' ? 'block' : 'none';
+            document.getElementById('role-region-group').style.display = type === 'credentials' ? 'block' : 'none';
+            document.getElementById('role-s3-compatible-group').style.display = type === 's3_compatible' ? 'block' : 'none';
+        }
+
+        function saveRole() {
+            const role = {
+                name: document.getElementById('role-name').value.trim(),
+                type: document.getElementById('role-type').value,
+                description: document.getElementById('role-description').value.trim()
+            };
+
+            if (!role.name) {
+                showNotification('Role name is required', 'error');
+                return;
+            }
+
+            const type = role.type;
+            if (type === 'profile') {
+                role.profile_name = document.getElementById('role-profile-name').value.trim();
+                if (!role.profile_name) {
+                    showNotification('Profile name is required for profile type', 'error');
+                    return;
+                }
+            } else if (type === 'assume_role') {
+                role.role_arn = document.getElementById('role-arn').value.trim();
+                if (!role.role_arn) {
+                    showNotification('Role ARN is required for assume_role type', 'error');
+                    return;
+                }
+            } else if (type === 'credentials') {
+                role.access_key_id = document.getElementById('role-access-key').value.trim();
+                const secretKey = document.getElementById('role-secret-key').value.trim();
+
+                if (!role.access_key_id) {
+                    showNotification('Access Key ID is required for credentials type', 'error');
+                    return;
+                }
+
+                // Validate access_key_id format (should start with AKIA and be 20 characters)
+                if (!/^AKIA[0-9A-Z]{16}$/.test(role.access_key_id)) {
+                    showNotification('Invalid Access Key ID format. It should start with AKIA and be 20 characters long (e.g., AKIAIOSFODNN7EXAMPLE)', 'error');
+                    return;
+                }
+
+                // Only require secret_access_key for new roles, or if user explicitly provided it
+                // If editing existing role and secret_key is empty, backend will preserve existing
+                if (editingRoleIndex >= 0) {
+                    // Editing existing role - only include secret_access_key if user provided it
+                    if (secretKey) {
+                        role.secret_access_key = secretKey;
+                    }
+                    // If secretKey is empty, don't include it - backend will preserve existing
+                } else {
+                    // New role - secret_access_key is required
+                    if (!secretKey) {
+                        showNotification('Secret Access Key is required for new credentials role', 'error');
+                        return;
+                    }
+                    role.secret_access_key = secretKey;
+                }
+
+                const region = document.getElementById('role-region').value.trim();
+                if (region) {
+                    role.region = region;
+                }
+            } else if (type === 's3_compatible') {
+                role.endpoint_url = document.getElementById('role-endpoint-url').value.trim();
+                role.access_key_id = document.getElementById('role-s3-access-key').value.trim();
+                const secretKey = document.getElementById('role-s3-secret-key').value.trim();
+
+                if (!role.endpoint_url) {
+                    showNotification('Endpoint URL is required for S3-compatible service type', 'error');
+                    return;
+                }
+                if (!role.access_key_id) {
+                    showNotification('Access Key is required for S3-compatible service type', 'error');
+                    return;
+                }
+                if (!secretKey) {
+                    showNotification('Secret Key is required for S3-compatible service type', 'error');
+                    return;
+                }
+
+                role.secret_access_key = secretKey;
+
+                const region = document.getElementById('role-s3-region').value.trim();
+                if (region) {
+                    role.region = region;
+                }
+
+                role.use_ssl = document.getElementById('role-s3-use-ssl').checked;
+                role.verify_ssl = document.getElementById('role-s3-verify-ssl').checked;
+
+                const addressingStyle = document.getElementById('role-s3-addressing-style').value;
+                if (addressingStyle && addressingStyle !== 'auto') {
+                    role.addressing_style = addressingStyle;
+                }
+            }
+
+            // Handle allowed_buckets - convert comma-separated string to array
+            const allowedBucketsInput = document.getElementById('role-allowed-buckets').value.trim();
+            if (allowedBucketsInput) {
+                role.allowed_buckets = allowedBucketsInput.split(',').map(b => b.trim()).filter(b => b.length > 0);
+            }
+
+            if (!configData.roles) {
+                configData.roles = [];
+            }
+
+            if (editingRoleIndex >= 0) {
+                // Update existing role
+                configData.roles[editingRoleIndex] = role;
+                showNotification('Role updated successfully', 'success');
+            } else {
+                // Check if role with same name exists
+                if (configData.roles.some(r => r.name === role.name)) {
+                    showNotification('Role with this name already exists', 'error');
+                    return;
+                }
+                configData.roles.push(role);
+                showNotification('Role created successfully', 'success');
+            }
+
+            populateRolesList();
+            updateRoleSelects(configData.default_role);
+            // Update JSON editor
+            document.getElementById('config-json-editor').value = JSON.stringify(configData, null, 2);
+            closeRoleModal();
+        }
+
+        function closeRoleModal() {
+            document.getElementById('role-modal').style.display = 'none';
+            editingRoleIndex = -1;
+        }
+
+        function showConfigError(message) {
+            showNotification(message, 'error');
+        }
+
+        function showConfigSuccess(message) {
+            showNotification(message, 'success');
+        }
+
+        function showNotification(message, type = 'success') {
+            const toast = document.getElementById('notification-toast');
+            if (!toast) return;
+
+            // Remove closing class if present
+            toast.classList.remove('closing');
+
+            // Set content and type
+            const icon = type === 'success' ? '✓' : '✗';
+            toast.innerHTML = `<span style="font-size: 20px;">${icon}</span><span>${escapeHtml(message)}</span>`;
+            toast.className = `notification-toast ${type}`;
+            toast.style.display = 'flex';
+
+            // Auto-hide after 3 seconds
+            setTimeout(() => {
+                toast.classList.add('closing');
+                setTimeout(() => {
+                    toast.style.display = 'none';
+                    toast.classList.remove('closing');
+                }, 300);
+            }, 3000);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Update max file size display when value changes
+        document.addEventListener('DOMContentLoaded', function() {
+            const maxFileSizeInput = document.getElementById('config-max-file-size');
+            if (maxFileSizeInput) {
+                maxFileSizeInput.addEventListener('input', function() {
+                    const mb = parseInt(this.value) / (1024 * 1024);
+                    document.getElementById('config-max-file-size-mb').textContent = mb.toFixed(0);
+                });
+            }
+        });
+
+        // Scroll to configuration section if hash is present
+        window.addEventListener('DOMContentLoaded', function() {
+            if (window.location.hash === '#configuration') {
+                setTimeout(function() {
+                    const configSection = document.getElementById('configuration');
+                    if (configSection) {
+                        configSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        // Add highlight effect
+                        configSection.style.transition = 'box-shadow 0.3s ease';
+                        configSection.style.boxShadow = '0 0 20px rgba(0, 123, 255, 0.5)';
+                        setTimeout(function() {
+                            configSection.style.boxShadow = '';
+                        }, 2000);
+                    }
+                }, 100);
+            }
+        });
+
+        // Load data on page load
+        loadUsers();
+        loadBans();
+        loadConfig();
+    </script>
+</body>
+</html>
+
+

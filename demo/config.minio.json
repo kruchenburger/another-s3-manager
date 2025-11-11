@@ -1,0 +1,20 @@
+{
+  "items_per_page": 200,
+  "disable_deletion": false,
+  "enable_lazy_loading": true,
+  "max_file_size": 104857600,
+  "roles": [
+    {
+      "name": "MinIO",
+      "description": "Local MinIO demo",
+      "type": "credentials",
+      "access_key_id": "minioadmin",
+      "secret_access_key": "minioadmin",
+      "endpoint_url": "http://minio:9000",
+      "use_ssl": false,
+      "verify_ssl": false,
+      "path_style": true
+    }
+  ],
+  "default_role": "MinIO"
+}

@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title id="page-title">Another S3 Manager</title>
+    <meta charset="utf-8">
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <script>
+        // Theme functions (must be available globally for inline script)
+        function getSystemTheme() {
+            return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+
+        function applyTheme(themePreference) {
+            let actualTheme = themePreference;
+            if (themePreference === 'auto') {
+                actualTheme = getSystemTheme();
+            }
+            document.documentElement.setAttribute('data-theme', actualTheme);
+        }
+
+        // Apply theme immediately from localStorage if available (before page loads)
+        (function() {
+            try {
+                const storedUser = localStorage.getItem('user');
+                if (storedUser) {
+                    const user = JSON.parse(storedUser);
+                    // Apply theme from user preference, default to 'auto' (system theme)
+                    applyTheme(user.theme || 'auto');
+                } else {
+                    // Default to system theme for new users
+                    applyTheme('auto');
+                }
+            } catch (e) {
+                // If error, default to system theme
+                applyTheme('auto');
+            }
+        })();
+
+        // Immediate redirect check - before any content is rendered
+        (function() {
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                window.location.replace('/login');
+                // Prevent any content from showing
+                document.write('');
+                document.close();
+            }
+        })();
+
+        // Show demo banner immediately if demo mode is enabled
+        (function() {
+            fetch('/api/app-info')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.is_demo) {
+                        const banner = document.getElementById('demo-banner');
+                        if (banner) {
+                            banner.style.display = 'block';
+                            const limitSpan = document.getElementById('demo-bucket-limit');
+                            if (limitSpan && data.demo_bucket_limit) {
+                                limitSpan.textContent = data.demo_bucket_limit;
+                            }
+                        }
+                    }
+                })
+                .catch(() => {
+                    // Silently fail - banner will be shown by main script later
+                });
+        })();
+    </script>
+    <style>
+        /* Hide body until auth check is complete */
+        body { visibility: hidden; }
+        body.authenticated { visibility: visible; }
+    </style>
+</head>
+<body>
+    <div id="demo-banner" class="demo-banner" style="display: none;">
+        <div class="demo-banner-content">
+            <span class="demo-banner-text">
+                <strong>Demo instance</strong> - This is a demonstration instance. Bucket size is limited to <span id="demo-bucket-limit">1GB. You can add your own buckets.</span>.
+            </span>
+        </div>
+    </div>
+    <div class="container">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h1 style="margin: 0; display: flex; align-items: center; gap: 10px;">
+                <img src="/static/favicon.ico" alt="S3 File Manager" style="width: 48px; height: 48px; vertical-align: middle;">
+                <span id="app-name">Another S3 Manager</span>
+                <span id="app-version" class="app-version-text"></span>
+            </h1>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <span id="user-info" style="color: var(--text-primary); font-size: 14px; display: none;"></span>
+                <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle theme" style="display: none;">🌙</button>
+                <a href="/admin" id="admin-link" style="display: none; color: white; text-decoration: none; padding: 8px 12px; background: #007bff; border-radius: 4px; font-size: 14px;">⚙️ Admin Console</a>
+                <button class="btn-secondary" onclick="logout()" style="font-size: 14px;">Logout</button>
+            </div>
+        </div>
+        <div class="controls">
+            <div class="role-selector">
+                <label for="role-select">Role: </label>
+                <select id="role-select">
+                    <option value="">Loading roles...</option>
+                </select>
+                <button class="btn-secondary" id="config-btn" onclick="window.location.href='/admin#configuration'" style="margin-left: 10px; display: none;">⚙️ Configure</button>
+            </div>
+            <div class="bucket-selector">
+                <label for="bucket-select">Bucket: </label>
+                <select id="bucket-select">
+                    <option value="">Select a bucket...</option>
+                </select>
+            </div>
+            <div class="path-navigation">
+                <div class="breadcrumbs" id="breadcrumbs">
+                    <span class="breadcrumb-item" onclick="navigateToPath('')">🏠 Root</span>
+                </div>
+            </div>
+            <div class="actions">
+                <button class="btn-primary" id="refresh-btn" onclick="refreshList()" disabled>🔄 Refresh</button>
+                <button class="btn-primary" id="go-up-btn" onclick="goUp()" disabled>⬆️ Up</button>
+                <button class="btn-primary" id="upload-file-btn" onclick="document.getElementById('file-input').click()" disabled>📤 Upload Files</button>
+                <button class="btn-primary" id="upload-folder-btn" onclick="showUploadFolderModal()" disabled>📁 Upload Folder</button>
+                <input type="file" id="file-input" multiple onchange="uploadFile(event)" style="display: none;" />
+                <input type="file" id="folder-input" webkitdirectory multiple onchange="uploadFolder(event)" style="display: none;" />
+            </div>
+        </div>
+        <div id="error-message"></div>
+        <div class="progress-container" id="progress-container" style="display: none;">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <div class="progress-text" id="progress-text">Processing...</div>
+        </div>
+        <div class="sticky-delete-container" id="sticky-delete-container" style="display: none;">
+            <button class="btn-danger" id="delete-selected-sticky" onclick="deleteSelected()">🗑️ Delete Selected (<span class="selected-count">0</span>)</button>
+        </div>
+        <div class="file-list-header">
+            <div class="search-container">
+                <input type="text" id="search-input" placeholder="🔍 Search objects..." class="search-input" disabled>
+                <span id="file-count" class="file-count"></span>
+            </div>
+            <button class="btn-primary" id="select-all-btn" onclick="toggleSelectAll()" disabled>☑️ Select All</button>
+        </div>
+        <div class="file-list-container" id="file-list-container">
+            <div class="file-list" id="file-list">
+                <div class="loading">Select a bucket to start</div>
+            </div>
+        </div>
+        <div class="upload-area disabled" id="upload-area" ondrop="handleDrop(event)" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)">
+            <p>📤 Drag and drop files or folders here to upload</p>
+        </div>
+        <div style="text-align: center; margin-top: 20px;">
+            <a href="https://github.com/kruchenburger/another-s3-manager" class="github-link" target="_blank" rel="noopener">
+                <i class="fa-brands fa-github"></i>
+                View on GitHub
+            </a>
+        </div>
+    </div>
+
+    <!-- Confirm Delete Modal -->
+    <div id="confirm-delete-modal" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2>⚠️ Confirm Deletion</h2>
+                <button class="modal-close" onclick="closeConfirmDeleteModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete <strong id="delete-item-type"></strong> <strong id="delete-item-name"></strong>?</p>
+                <p style="color: #dc3545; font-weight: 500;">This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-danger" id="confirm-delete-btn" onclick="confirmDeleteItem()">🗑️ Delete</button>
+                <button class="btn-secondary" onclick="closeConfirmDeleteModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Delete Selected Modal -->
+    <div id="confirm-delete-selected-modal" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2>⚠️ Confirm Deletion</h2>
+                <button class="modal-close" onclick="closeConfirmDeleteSelectedModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete <strong id="delete-selected-count"></strong> selected item(s)?</p>
+                <p style="color: #dc3545; font-weight: 500;">This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-danger" id="confirm-delete-selected-btn" onclick="confirmDeleteSelected()">🗑️ Delete Selected</button>
+                <button class="btn-secondary" onclick="closeConfirmDeleteSelectedModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Folder Modal -->
+    <div id="upload-folder-modal" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2>📁 Upload Folder</h2>
+                <button class="modal-close" onclick="closeUploadFolderModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>To upload a folder, you can use either method:</p>
+                <div style="margin-top: 15px;">
+                    <p style="margin-bottom: 10px;"><strong>Option 1: Drag and Drop (Recommended)</strong></p>
+                    <ol style="margin-left: 20px; margin-top: 5px; margin-bottom: 20px;">
+                        <li>Drag a folder from your file explorer</li>
+                        <li>Drop it into the upload area below</li>
+                        <li>The folder structure will be preserved</li>
+                    </ol>
+                    <p style="margin-bottom: 10px;"><strong>Option 2: Browser Dialog</strong></p>
+                    <p style="margin-left: 20px; color: var(--text-secondary); font-size: 13px; margin-bottom: 20px;">
+                        Use the button below to open the standard folder selection dialog.
+                    </p>
+                </div>
+                <div style="margin-top: 20px; text-align: center;">
+                    <button class="btn-primary" onclick="document.getElementById('folder-input').click(); closeUploadFolderModal();">
+                        📂 Select Folder
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeUploadFolderModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Config Modal -->
+    <div id="config-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>⚙️ Configure Roles</h2>
+                <button class="modal-close" onclick="closeConfigModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Edit the JSON configuration to add roles. Supported types:</p>
+                <ul>
+                    <li><strong>default</strong>: Use default AWS credentials</li>
+                    <li><strong>profile</strong>: Use AWS profile from ~/.aws/credentials (requires <code>profile_name</code>)</li>
+                    <li><strong>assume_role</strong>: Assume an IAM role (requires <code>role_arn</code>)</li>
+                    <li><strong>credentials</strong>: Use direct credentials (requires <code>access_key_id</code>, <code>secret_access_key</code>, optional <code>region</code>)</li>
+                </ul>
+                <textarea id="config-editor" rows="20" style="width: 100%; font-family: monospace; font-size: 12px;"></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-primary" onclick="saveConfig()">💾 Save Configuration</button>
+                <button class="btn-secondary" onclick="closeConfigModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Check authentication immediately on page load
+        (async function() {
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                window.location.href = '/login';
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/me', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (!response.ok) {
+                    localStorage.removeItem('access_token');
+                    localStorage.removeItem('user');
+                    window.location.replace('/login');
+                    return;
+                }
+
+                // Store user info immediately for display
+                const user = await response.json();
+                localStorage.setItem('user', JSON.stringify(user));
+
+                // Apply theme immediately
+                if (typeof applyTheme === 'function') {
+                    applyTheme(user.theme || 'auto');
+                }
+
+                // Show body now that we're authenticated
+                document.body.classList.add('authenticated');
+
+                // Update UI immediately
+                const userInfo = document.getElementById('user-info');
+                if (userInfo) {
+                    // Sanitize username to prevent XSS
+                    const username = document.createTextNode(user.username).textContent;
+                    userInfo.innerHTML = '';
+                    const icon = document.createTextNode('👤 ');
+                    const strong = document.createElement('strong');
+                    strong.textContent = username;
+                    userInfo.appendChild(icon);
+                    userInfo.appendChild(strong);
+                    if (user.is_admin) {
+                        const adminBadge = document.createElement('span');
+                        adminBadge.style.cssText = 'background: #28a745; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; margin-left: 5px;';
+                        adminBadge.textContent = 'ADMIN';
+                        userInfo.appendChild(adminBadge);
+                    }
+                    userInfo.style.display = 'inline';
+                }
+
+                // Show theme toggle
+                const themeToggle = document.getElementById('theme-toggle');
+                if (themeToggle) {
+                    themeToggle.style.display = 'flex';
+                    // Update icon based on current theme
+                    const actualTheme = user.theme === 'auto' ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : user.theme;
+                    themeToggle.textContent = actualTheme === 'dark' ? '☀️' : '🌙';
+                }
+
+                // Show admin link and config button if admin
+                const adminLink = document.getElementById('admin-link');
+                if (adminLink && user.is_admin) {
+                    adminLink.style.display = 'inline-block';
+                }
+
+                const configBtn = document.getElementById('config-btn');
+                if (configBtn && user.is_admin) {
+                    configBtn.style.display = 'inline-block';
+                }
+            } catch (error) {
+                localStorage.removeItem('access_token');
+                localStorage.removeItem('user');
+                window.location.replace('/login');
+                return;
+            }
+
+            // If authenticated, wait for DOM to be ready, then load the main script
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', function() {
+                    loadMainScript();
+                });
+            } else {
+                loadMainScript();
+            }
+        })();
+
+        function loadMainScript() {
+            const script = document.createElement('script');
+            script.src = '/static/script.js';
+            script.onload = function() {
+                console.log('Main script loaded');
+            };
+            script.onerror = function() {
+                console.error('Failed to load main script');
+            };
+            document.body.appendChild(script);
+        }
+    </script>
+</body>
+</html>
+

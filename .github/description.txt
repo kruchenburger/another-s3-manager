@@ -1,0 +1,1 @@
+Lightweight web-based file manager for Amazon S3 buckets. Features multi-account support, user authentication, file browsing/upload/download, and modern web UI with dark/light themes.
