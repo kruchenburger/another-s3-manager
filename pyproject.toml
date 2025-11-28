@@ -1,6 +1,6 @@
 [project]
 name = "another-s3-manager"
-version = "0.1.0"
+version = "0.1.1"
 description = "Lightweight web-based file manager for Amazon S3 buckets built with FastAPI"
 readme = "README.md"
 requires-python = ">=3.13"

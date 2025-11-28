@@ -40,10 +40,16 @@ def load_config(force_reload: bool = False) -> Dict[str, Any]:
                 _migrating = True
                 try:
                     if _migrate_config():
-                        save_config(_config_cache, skip_migration=True)
-                        # Update mtime after save to prevent reload
-                        if CONFIG_FILE.exists():
-                            _config_mtime = CONFIG_FILE.stat().st_mtime
+                        # Try to save migrated config, but skip if file is read-only
+                        # Use internal function to avoid recursion if save_config is wrapped
+                        try:
+                            _save_config_internal(_config_cache, skip_migration=True)
+                            # Update mtime after save to prevent reload
+                            if CONFIG_FILE.exists():
+                                _config_mtime = CONFIG_FILE.stat().st_mtime
+                        except PermissionError:
+                            # Config file is read-only, migration applied in memory only
+                            pass
                 finally:
                     _migrating = False
 
@@ -68,6 +74,9 @@ def _migrate_config() -> bool:
     if "max_file_size" not in _config_cache:
         _config_cache["max_file_size"] = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
         config_modified = True
+    if "auto_inline_extensions" not in _config_cache:
+        _config_cache["auto_inline_extensions"] = []
+        config_modified = True
     # Note: data_dir is not migrated automatically - it should be set explicitly if needed
     # Note: default_role is optional and not migrated automatically - it should be set explicitly if needed
 
@@ -83,7 +92,8 @@ def _get_default_config() -> Dict[str, Any]:
         "items_per_page": int(os.getenv("ITEMS_PER_PAGE", str(DEFAULT_ITEMS_PER_PAGE))),
         "enable_lazy_loading": os.getenv("ENABLE_LAZY_LOADING", "true").lower() == "true",
         "max_file_size": int(os.getenv("MAX_FILE_SIZE", str(DEFAULT_MAX_FILE_SIZE))),
-        "disable_deletion": False
+        "disable_deletion": False,
+        "auto_inline_extensions": []
     }
 
 
@@ -113,16 +123,10 @@ def is_config_writable() -> bool:
         return False
 
 
-def save_config(config: Dict[str, Any], skip_migration: bool = False) -> None:
+# Store original save_config for internal use (before it might be wrapped)
+def _save_config_internal(config: Dict[str, Any], skip_migration: bool = False) -> None:
     """
-    Save configuration to file.
-
-    Args:
-        config: Configuration dictionary to save
-        skip_migration: If True, skip migration check (used internally to prevent recursion)
-
-    Raises:
-        PermissionError: If config file is read-only
+    Internal save_config implementation (used to avoid recursion when wrapped).
     """
     global _config_cache, _config_mtime
 
@@ -135,6 +139,20 @@ def save_config(config: Dict[str, Any], skip_migration: bool = False) -> None:
     _config_cache = config
     if CONFIG_FILE.exists():
         _config_mtime = CONFIG_FILE.stat().st_mtime
+
+
+def save_config(config: Dict[str, Any], skip_migration: bool = False) -> None:
+    """
+    Save configuration to file.
+
+    Args:
+        config: Configuration dictionary to save
+        skip_migration: If True, skip migration check (used internally to prevent recursion)
+
+    Raises:
+        PermissionError: If config file is read-only
+    """
+    _save_config_internal(config, skip_migration=skip_migration)
 
 
 def get_config_value(key: str, default: Any = None, env_var: Optional[str] = None) -> Any:

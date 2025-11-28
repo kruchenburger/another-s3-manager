@@ -6,6 +6,7 @@ from utils import (
     sanitize_bucket_name,
     validate_role_name,
     format_boto_error,
+    format_content_disposition,
 )
 
 
@@ -212,3 +213,41 @@ def test_format_boto_error_colon_strip():
     err = Exception("An error occurred: Bad things happened")
     message = format_boto_error(err)
     assert message == "Bad things happened"
+
+
+# -----------------------------------------------------------------------------
+# format_content_disposition
+# -----------------------------------------------------------------------------
+
+
+def test_format_content_disposition_ascii_filename():
+    """Test Content-Disposition header with ASCII filename."""
+    result = format_content_disposition("file.txt")
+    assert 'attachment' in result
+    assert 'filename="file.txt"' in result
+    assert 'filename*=UTF-8\'\'' in result
+
+
+def test_format_content_disposition_cyrillic_filename():
+    """Test Content-Disposition header with Cyrillic characters."""
+    result = format_content_disposition("файл.txt")
+    assert 'attachment' in result
+    assert 'filename*=' in result
+    assert 'UTF-8\'\'' in result
+    # Check that the encoded filename is present
+    assert '%D1%84%D0%B0%D0%B9%D0%BB' in result or 'filename*=' in result
+
+
+def test_format_content_disposition_chinese_filename():
+    """Test Content-Disposition header with Chinese characters."""
+    result = format_content_disposition("文件.txt")
+    assert 'attachment' in result
+    assert 'filename*=' in result
+    assert 'UTF-8\'\'' in result
+
+
+def test_format_content_disposition_special_characters():
+    """Test Content-Disposition header with special characters."""
+    result = format_content_disposition("file (1).txt")
+    assert 'attachment' in result
+    assert 'filename="file (1).txt"' in result or 'filename*=' in result

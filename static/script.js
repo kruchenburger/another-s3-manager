@@ -13,6 +13,13 @@ const SELECT_BUCKET_MESSAGE = 'Select a bucket to start browsing objects.';
 const NO_ROLES_MESSAGE = 'No roles assigned. Please contact your administrator.';
 const NO_BUCKETS_MESSAGE = 'No buckets available for the selected role.';
 
+const DEBUG_LOGGING_ENABLED = typeof window !== 'undefined' && window.__ANOTHER_S3_DEBUG__ === true;
+function debugLog(...args) {
+    if (DEBUG_LOGGING_ENABLED) {
+        console.log(...args);
+    }
+}
+
 // Virtualization and pagination state
 let allFiles = []; // All files from server
 let filteredFiles = []; // Files after search filter
@@ -82,7 +89,7 @@ async function loadAppInfo() {
         applyAppBranding(data);
         return data;
     } catch (error) {
-        console.error('Failed to load app info:', error);
+        debugLog('Failed to load app info:', error);
         return null;
     }
 }
@@ -146,7 +153,7 @@ function updateUserInfo() {
     const configBtn = document.getElementById('config-btn');
 
     if (!userInfo) {
-        console.warn('user-info element not found');
+        debugLog('user-info element not found');
         return;
     }
 
@@ -190,7 +197,7 @@ function updateUserInfo() {
                 currentUser = JSON.parse(storedUser);
                 updateUserInfo();
             } catch (e) {
-                console.error('Failed to parse stored user:', e);
+                debugLog('Failed to parse stored user:', e);
             }
         }
     }
@@ -246,11 +253,11 @@ async function toggleTheme() {
             if (response.ok) {
                 currentUser = await response.json();
             } else {
-                console.error('Failed to get user info');
+                debugLog('Failed to get user info');
                 return;
             }
         } catch (error) {
-            console.error('Error getting user info:', error);
+            debugLog('Error getting user info:', error);
             return;
         }
     }
@@ -294,15 +301,15 @@ async function toggleTheme() {
                     user.theme = newTheme;
                     localStorage.setItem('user', JSON.stringify(user));
                 } catch (e) {
-                    console.error('Failed to update user in localStorage:', e);
+                    debugLog('Failed to update user in localStorage:', e);
                 }
             }
             applyTheme(newTheme);
         } else {
-            console.error('Failed to update theme');
+            debugLog('Failed to update theme');
         }
     } catch (error) {
-        console.error('Error updating theme:', error);
+        debugLog('Error updating theme:', error);
     } finally {
         // Re-enable button
         if (toggleBtn) {
@@ -349,27 +356,32 @@ function authFetch(url, options = {}) {
 
 async function loadConfig(forceReload = true) {
     try {
-        console.log('Loading config, forceReload:', forceReload);
+        debugLog('Loading config, forceReload:', forceReload);
         const url = forceReload ? '/api/config?force_reload=true' : '/api/config';
-        console.log('Fetching from URL:', url);
+        debugLog('Fetching from URL:', url);
         const response = await authFetch(url);
-        console.log('Response status:', response.status, response.ok);
+        debugLog('Response status:', response.status, response.ok);
         if (!response.ok) {
             const errorText = await response.text();
-            console.error('Response error:', errorText);
+            debugLog('Response error:', errorText);
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
         config = await response.json();
-        console.log('Loaded config:', JSON.stringify(config, null, 2));
+        // Never log full config in demo mode to avoid exposing credentials
+        if (!appInfo || !appInfo.is_demo) {
+            debugLog('Loaded config:', JSON.stringify(config, null, 2));
+        } else {
+            debugLog('Loaded config (demo mode - config details hidden)');
+        }
         if (!config) {
-            console.error('Config is null or undefined');
+            debugLog('Config is null or undefined');
             return null;
         }
 
         // Update itemsPerPage from config
         if (config.items_per_page !== undefined) {
             itemsPerPage = parseInt(config.items_per_page) || 200;
-            console.log('Set itemsPerPage to:', itemsPerPage);
+            debugLog('Set itemsPerPage to:', itemsPerPage);
         }
 
         // Update DISABLE_DELETION flag
@@ -390,25 +402,25 @@ async function loadConfig(forceReload = true) {
         const hasCurrentRole = currentRole && roles.some(r => r.name === currentRole);
 
         if (hasCurrentRole) {
-            console.log('Keeping current role:', currentRole);
+            debugLog('Keeping current role:', currentRole);
         } else if (configCurrentRole && roles.some(r => r.name === configCurrentRole)) {
             // Use role from API (computed from default_role)
             currentRole = configCurrentRole;
             localStorage.setItem('selected_role', currentRole);
-            console.log('Using role from API (computed from default_role):', currentRole);
+            debugLog('Using role from API (computed from default_role):', currentRole);
         } else if (savedRole && roles.some(r => r.name === savedRole)) {
             currentRole = savedRole;
-            console.log('Restored saved role from localStorage:', currentRole);
+            debugLog('Restored saved role from localStorage:', currentRole);
         } else {
             currentRole = '';
             localStorage.removeItem('selected_role');
-            console.log('No saved role found. Waiting for user selection.');
+            debugLog('No saved role found. Waiting for user selection.');
         }
 
         updateRoleSelector();
         return config;
     } catch (error) {
-        console.error('Failed to load configuration:', error);
+        debugLog('Failed to load configuration:', error);
         showError('Failed to load configuration: ' + error.message);
         return null;
     }
@@ -419,7 +431,7 @@ async function loadConfig(forceReload = true) {
 function updateRoleSelector() {
     const select = document.getElementById('role-select');
     if (!select) {
-        console.warn('role-select element not found');
+        debugLog('role-select element not found');
         return;
     }
 
@@ -467,7 +479,7 @@ function updateRoleSelector() {
         select.appendChild(option);
     });
 
-    console.log('Role selector updated, current role:', currentRole);
+    debugLog('Role selector updated, current role:', currentRole);
 
     select.onchange = async () => {
         currentRole = select.value;
@@ -511,7 +523,7 @@ async function loadBuckets() {
 
         const roleIsAvailable = config && Array.isArray(config.roles) && config.roles.some(r => r.name === currentRole);
         if (!roleIsAvailable) {
-            console.warn('Selected role not available in config:', currentRole);
+            debugLog('Selected role not available in config:', currentRole);
             const select = document.getElementById('bucket-select');
             if (select) {
                 select.innerHTML = '<option value="">Select a bucket...</option>';
@@ -1042,7 +1054,7 @@ function refreshList() {
     loadFiles();
 }
 
-async function downloadFile(fileName) {
+function downloadFile(fileName) {
     if (!currentBucket) {
         showError('Please select a bucket first');
         return;
@@ -1051,7 +1063,6 @@ async function downloadFile(fileName) {
     try {
         const path = currentPath ? `${currentPath}/${fileName}` : fileName;
         const roleParam = currentRole ? `&role=${encodeURIComponent(currentRole)}` : '';
-        const url = `/api/buckets/${currentBucket}/download?path=${encodeURIComponent(path)}${roleParam}`;
 
         // Get auth token for the download request
         const token = getAuthToken();
@@ -1060,28 +1071,19 @@ async function downloadFile(fileName) {
             return;
         }
 
-        // Fetch file and trigger download
-        const response = await fetch(url, {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        });
+        // Create direct download link with token in URL parameter
+        // This allows browser to handle download immediately without buffering
+        const url = `/api/buckets/${currentBucket}/download?path=${encodeURIComponent(path)}${roleParam}&token=${encodeURIComponent(token)}`;
 
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to download file');
-        }
-
-        // Get blob and create download link
-        const blob = await response.blob();
-        const downloadUrl = window.URL.createObjectURL(blob);
+        // Create link and trigger download - browser will handle it directly
+        // This opens download dialog immediately and streams file without buffering
         const link = document.createElement('a');
-        link.href = downloadUrl;
-        link.download = fileName;
+        link.href = url;
+        link.download = fileName; // Set download attribute for filename hint
+        link.style.display = 'none';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        window.URL.revokeObjectURL(downloadUrl);
     } catch (error) {
         showError('Failed to download file: ' + error.message);
     }
@@ -1228,11 +1230,28 @@ async function uploadFiles(files, folderPrefix, folderName) {
 
             if (!response.ok) {
                 let errorMessage = `Failed to upload ${file.name}`;
+                let errorDetail = null;
                 try {
                     const error = await response.json();
+                    errorDetail = error;
                     errorMessage += ': ' + (error.detail || error.message || JSON.stringify(error));
                 } catch (e) {
                     errorMessage += `: HTTP ${response.status} ${response.statusText}`;
+                }
+                // Log error to console for debugging (without credentials)
+                const isAccessDenied = response.status === 403 || (errorDetail && /access.*denied|forbidden/i.test(errorDetail.detail || errorDetail.message || ''));
+                const logData = {
+                    file: file.name,
+                    bucket: currentBucket,
+                    key: key,
+                    status: response.status,
+                    statusText: response.statusText,
+                    error: errorDetail ? (errorDetail.detail || errorDetail.message) : null
+                };
+                if (isAccessDenied) {
+                    console.warn('Upload failed - Access Denied:', logData);
+                } else {
+                    console.error('Upload error:', logData);
                 }
                 throw new Error(errorMessage);
             }
@@ -1247,7 +1266,17 @@ async function uploadFiles(files, folderPrefix, folderName) {
             }
         } catch (error) {
             failed++;
-            errors.push(`${file.name}: ${error.message || error.toString()}`);
+            const errorMsg = `${file.name}: ${error.message || error.toString()}`;
+            errors.push(errorMsg);
+
+            // Log error to console for debugging (without credentials)
+            console.error('File upload failed:', {
+                file: file.name,
+                bucket: currentBucket,
+                key: key,
+                error: error.message || error.toString(),
+                stack: error.stack
+            });
 
             // Add delay even on error to prevent rapid retries
             if (i < files.length - 1) {
@@ -1942,11 +1971,11 @@ function hideTooltip(element) {
 }
 
 async function initializeApp() {
-    console.log('Initializing app...');
+    debugLog('Initializing app...');
     await loadAppInfo();
     const authenticated = await checkAuth();
     if (authenticated) {
-        console.log('User authenticated, loading config...');
+        debugLog('User authenticated, loading config...');
         const configData = await loadConfig(true);
         const roles = configData && Array.isArray(configData.roles) ? configData.roles : [];
 
@@ -1959,12 +1988,12 @@ async function initializeApp() {
             }
             disableButtons();
             clearFileList(NO_ROLES_MESSAGE);
-            console.log('No roles available; skipping bucket loading.');
+            debugLog('No roles available; skipping bucket loading.');
             return;
         }
 
         if (currentRole) {
-            console.log('Config loaded, loading buckets for role:', currentRole);
+            debugLog('Config loaded, loading buckets for role:', currentRole);
             await loadBuckets();
         } else {
             const bucketSelect = document.getElementById('bucket-select');
@@ -1975,10 +2004,10 @@ async function initializeApp() {
             }
             disableButtons();
             clearFileList(SELECT_ROLE_MESSAGE);
-            console.log('Waiting for user to select a role before loading buckets.');
+            debugLog('Waiting for user to select a role before loading buckets.');
             clearError({ force: true });
         }
-        console.log('App initialized');
+        debugLog('App initialized');
         // Initialize tooltips
         initTooltips();
         // Initialize search input

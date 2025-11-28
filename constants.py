@@ -43,7 +43,7 @@ if not APP_VERSION:
     APP_VERSION = _read_version_from_pyproject()
 
 if not APP_VERSION:
-    APP_VERSION = "0.1.0"
+    APP_VERSION = "0.1.1"
 
 
 def get_data_dir() -> Path:

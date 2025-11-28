@@ -420,7 +420,11 @@ def test_list_buckets_uses_s3(app_client, mocker):
     _, headers = login(app_client)
     s3_mock = mocker.MagicMock()
     s3_mock.list_buckets.return_value = {"Buckets": [{"Name": "bucket"}]}
-    mocker.patch("main.get_s3_client", return_value=s3_mock)
+
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(s3_mock)
+
+    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets", headers=headers)
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == ["bucket"]
@@ -443,7 +447,11 @@ def test_list_files(app_client, mocker):
     ]
     s3_mock = mocker.MagicMock()
     s3_mock.get_paginator.return_value = paginator_mock
-    mocker.patch("main.get_s3_client", return_value=s3_mock)
+
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(s3_mock)
+
+    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets/test-bucket/files", headers=headers)
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
@@ -453,7 +461,11 @@ def test_list_files(app_client, mocker):
 def test_upload_file(app_client, mocker):
     _, headers = login(app_client)
     s3_mock = mocker.MagicMock()
-    mocker.patch("main.get_s3_client", return_value=s3_mock)
+
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(s3_mock)
+
+    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     file_content = io.BytesIO(b"content")
     response = app_client.post(
         "/api/buckets/test-bucket/upload",
@@ -484,13 +496,18 @@ def test_upload_file_too_large(app_client, mocker):
 def test_download_file(app_client, mocker):
     _, headers = login(app_client)
     body_mock = mocker.MagicMock()
-    body_mock.read.return_value = b"data"
+    # Make read() return data on first call, then empty bytes to signal end
+    body_mock.read.side_effect = [b"data", b""]
     s3_mock = mocker.MagicMock()
     s3_mock.get_object.return_value = {
         "Body": body_mock,
         "ContentType": "text/plain",
     }
-    mocker.patch("main.get_s3_client", return_value=s3_mock)
+
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(s3_mock)
+
+    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets/test-bucket/download", params={"path": "file.txt"}, headers=headers)
     assert response.status_code == status.HTTP_200_OK
     assert response.content == b"data"
@@ -508,7 +525,11 @@ def test_delete_file(app_client, mocker):
     ]
     s3_mock = mocker.MagicMock()
     s3_mock.get_paginator.return_value = paginator_mock
-    mocker.patch("main.get_s3_client", return_value=s3_mock)
+
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(s3_mock)
+
+    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.delete(
         "/api/buckets/test-bucket/files", params={"path": "path"}, headers=headers
     )
@@ -637,34 +658,41 @@ def test_get_config_regular_user_no_roles(app_client):
 
 def test_list_buckets_handles_error(app_client, mocker):
     _, headers = login(app_client)
-    mocker.patch(
-        "main.get_s3_client",
-        side_effect=ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListBuckets"),
-    )
+
+    def mock_execute_with_s3_retry(role_name, callback):
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListBuckets")
+
+    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets", headers=headers)
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
 def test_list_files_handles_error(app_client, mocker):
     _, headers = login(app_client)
-    mocker.patch(
-        "main.get_s3_client",
-        side_effect=ClientError({"Error": {"Code": "NoSuchBucket", "Message": "Missing"}}, "ListObjectsV2"),
-    )
+
+    def mock_execute_with_s3_retry(role_name, callback):
+        raise ClientError({"Error": {"Code": "NoSuchBucket", "Message": "Missing"}}, "ListObjectsV2")
+
+    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets/test-bucket/files", headers=headers)
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 def test_upload_file_handles_exception(app_client, mocker):
     _, headers = login(app_client)
-    mocker.patch("main.get_s3_client", side_effect=ValueError("boom"))
+
+    def mock_execute_with_s3_retry(role_name, callback):
+        raise ValueError("boom")
+
+    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.post(
         "/api/buckets/test-bucket/upload",
         data={"key": "file.txt"},
         files={"file": ("file.txt", io.BytesIO(b"data"), "text/plain")},
         headers=headers,
     )
-    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    # ValueError from s3_client now returns 400 (configuration error) instead of 500
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
 def test_download_file_not_found(app_client, mocker):
@@ -674,7 +702,11 @@ def test_download_file_not_found(app_client, mocker):
         {"Error": {"Code": "404", "Message": "Missing"}},
         "GetObject",
     )
-    mocker.patch("main.get_s3_client", return_value=client_mock)
+
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(client_mock)
+
+    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get(
         "/api/buckets/test-bucket/download", params={"path": "ghost.txt"}, headers=headers
     )

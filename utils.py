@@ -114,6 +114,22 @@ def format_boto_error(error: Union[Exception, BaseException]) -> str:
             return "AWS SSO session has expired or is invalid. Please run 'aws sso login' with the corresponding profile to refresh your session."
         return "AWS SSO session has expired or is invalid. Please run 'aws sso login' to refresh your session."
 
+    # Check for generic expired credentials that require re-authentication
+    lower_message = error_message.lower()
+    expired_phrases = [
+        "token is expired",
+        "token expired",
+        "expiredtoken",
+        "basic claim validations",
+        "credentials have expired",
+        "session expired",
+    ]
+    if any(phrase in lower_message for phrase in expired_phrases):
+        return (
+            "AWS credentials have expired and automatic refresh failed. "
+            "Please re-authenticate the container or refresh the service account token."
+        )
+
     # Check for credential errors
     if "InvalidAccessKeyId" in error_message or "InvalidAccessKeyId" in error_type:
         return "Invalid AWS Access Key ID. Please check your credentials."
@@ -128,8 +144,16 @@ def format_boto_error(error: Union[Exception, BaseException]) -> str:
     if hasattr(error, 'response'):
         error_code = error.response.get('Error', {}).get('Code', '')
         error_msg = error.response.get('Error', {}).get('Message', '')
+        operation_name = error.response.get('ResponseMetadata', {}).get('RequestId', '')
 
         if error_code == 'AccessDenied':
+            # Check if this is an assume role error
+            if 'assume' in error_message.lower() or 'AssumeRole' in error_type:
+                return (
+                    f"Access denied when trying to assume IAM role. "
+                    f"Check that the pod/service account has sts:AssumeRole permission for the target role. "
+                    f"Error: {error_msg}" if error_msg else "Access denied. Check IAM permissions for role assumption."
+                )
             return f"Access denied: {error_msg}" if error_msg else "Access denied. Check your IAM permissions."
 
         if error_code == 'NoSuchBucket':
@@ -172,3 +196,25 @@ def format_boto_error(error: Union[Exception, BaseException]) -> str:
 
     return message if message else "An error occurred while accessing AWS services."
 
+
+def format_content_disposition(filename: str) -> str:
+    """
+    Format Content-Disposition header with UTF-8 support (RFC 5987).
+
+    Args:
+        filename: Filename that may contain non-ASCII characters
+
+    Returns:
+        Properly formatted Content-Disposition header value
+    """
+    # Create ASCII-safe fallback filename (replace non-ASCII with underscore)
+    ascii_filename = filename.encode('ascii', 'replace').decode('ascii').replace('?', '_')
+
+    # URL-encode the UTF-8 filename for RFC 5987 format
+    # Encode filename to UTF-8 bytes, then percent-encode each byte
+    utf8_bytes = filename.encode('utf-8')
+    # Convert bytes to percent-encoded string (each byte becomes %XX)
+    utf8_filename = ''.join(f'%{b:02X}' for b in utf8_bytes)
+
+    # Use RFC 5987 format: filename="fallback"; filename*=UTF-8''encoded
+    return f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{utf8_filename}'

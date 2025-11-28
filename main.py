@@ -3,6 +3,7 @@ Another S3 Manager - Lightweight S3 file management interface
 Provides file browsing, upload, and deletion capabilities for S3 buckets
 """
 import os
+import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import timedelta
@@ -33,14 +34,14 @@ from config import load_config, save_config, get_config_value
 from auth import (
     verify_password, create_access_token, get_current_user, verify_csrf_token,
     get_current_admin_user, check_ban, record_login_attempt, hash_password,
-    generate_csrf_token, get_jwt_secret_key
+    generate_csrf_token, get_jwt_secret_key, security
 )
 from users import (
     load_users, save_users, load_bans, save_bans, get_user_by_username,
     get_all_users, create_user, update_user, delete_user, get_available_roles
 )
-from s3_client import get_s3_client, clear_s3_clients_cache
-from utils import sanitize_path, sanitize_bucket_name, format_boto_error
+from s3_client import get_s3_client, execute_with_s3_retry, clear_s3_clients_cache
+from utils import sanitize_path, sanitize_bucket_name, format_boto_error, format_content_disposition
 
 # Validate required environment variables at startup
 try:
@@ -53,6 +54,9 @@ except ValueError as e:
     sys.exit(1)
 
 app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION)
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Exception handler to ensure all errors return JSON
 @app.exception_handler(HTTPException)
@@ -71,14 +75,15 @@ def _on_config_change():
     clear_s3_clients_cache()
 
 # Hook config save to clear cache
-_original_save_config = save_config
-def save_config_with_cache_clear(config: Dict[str, Any]) -> None:
+# Import config module and save original function before replacing it
+import config as config_module
+_original_save_config = config_module.save_config
+def save_config_with_cache_clear(config: Dict[str, Any], skip_migration: bool = False) -> None:
     """Wrapper for save_config that clears S3 cache."""
-    _original_save_config(config)
+    _original_save_config(config, skip_migration=skip_migration)
     _on_config_change()
 
 # Update config module's save_config to use our wrapper
-import config as config_module
 config_module.save_config = save_config_with_cache_clear
 
 
@@ -448,6 +453,7 @@ async def get_config(
     # If user is admin, return config but without credentials
     if current_user.get("is_admin", False):
         from config import is_config_writable
+        from constants import get_data_dir
         # Apply default_role if specified
         default_role = config.get("default_role", "")
         if default_role and any(r.get("name") == default_role for r in config.get("roles", [])):
@@ -464,6 +470,8 @@ async def get_config(
             "disable_deletion": disable_deletion,
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
+            "auto_inline_extensions": config.get("auto_inline_extensions", []),
+            "data_dir": str(get_data_dir()),  # Return current DATA_DIR value (read-only)
             "is_read_only": not is_config_writable()
         }
         return safe_config
@@ -613,6 +621,25 @@ async def update_config(
             else:
                 # Use env var or default if not in config
                 config["max_file_size"] = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
+
+        # Handle auto_inline_extensions - if provided, validate and use it; otherwise preserve existing
+        if "auto_inline_extensions" in config:
+            # Validate auto_inline_extensions (must be a list of strings)
+            if not isinstance(config["auto_inline_extensions"], list):
+                raise HTTPException(status_code=400, detail="auto_inline_extensions must be a list")
+            # Validate that all items are strings
+            for ext in config["auto_inline_extensions"]:
+                if not isinstance(ext, str):
+                    raise HTTPException(status_code=400, detail="auto_inline_extensions must contain only strings")
+            # Normalize extensions: remove leading dots and convert to lowercase
+            config["auto_inline_extensions"] = [ext.lstrip('.').lower() for ext in config["auto_inline_extensions"] if ext.strip()]
+        else:
+            # Preserve auto_inline_extensions from current config if exists, otherwise use default
+            current_config = load_config(force_reload=False)
+            if "auto_inline_extensions" in current_config:
+                config["auto_inline_extensions"] = current_config["auto_inline_extensions"]
+            else:
+                config["auto_inline_extensions"] = []
 
         # Validate roles and preserve existing secret_access_key if not provided
         current_config = load_config(force_reload=False)
@@ -774,17 +801,21 @@ async def list_buckets(
                 raise HTTPException(status_code=400, detail="allowed_buckets must be a list")
 
         # Fallback to listing all buckets (requires s3:ListAllMyBuckets permission)
-        s3_client = get_s3_client(validated_role)
-        response = s3_client.list_buckets()
-        buckets = [bucket['Name'] for bucket in response['Buckets']]
-        return buckets
+        def fetch_buckets(s3_client):
+            response = s3_client.list_buckets()
+            return [bucket['Name'] for bucket in response['Buckets']]
+
+        return execute_with_s3_retry(validated_role, fetch_buckets)
     except HTTPException:
         raise
+    except ValueError as e:
+        # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
+        error_msg = str(e)
+        logger.error(f"Configuration error when listing buckets: {error_msg}", exc_info=True)
+        raise HTTPException(status_code=400, detail=error_msg)
     except (ClientError, BotoCoreError) as e:
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to list buckets: {error_message}")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         # Catch other AWS-related exceptions (like UnauthorizedSSOTokenError)
         error_message = format_boto_error(e)
@@ -809,57 +840,57 @@ async def list_files(
 
         # Validate role access
         validated_role = validate_role_access(role, current_user)
-        s3_client = get_s3_client(validated_role)
         # Normalize path - remove leading/trailing slashes
         prefix = path + '/' if path else ''
 
-        files = []
-        directories = set()  # Track directories to avoid duplicates
+        def fetch_files(s3_client):
+            files = []
+            directories = set()  # Track directories to avoid duplicates
 
-        # Use paginator to get all pages
-        paginator = s3_client.get_paginator('list_objects_v2')
-        pages = paginator.paginate(
-            Bucket=bucket_name,
-            Prefix=prefix,
-            Delimiter='/'
-        )
+            paginator = s3_client.get_paginator('list_objects_v2')
+            pages = paginator.paginate(
+                Bucket=bucket_name,
+                Prefix=prefix,
+                Delimiter='/'
+            )
 
-        # Process all pages
-        for page in pages:
-            # Add directories (common prefixes)
-            if 'CommonPrefixes' in page:
-                for prefix_obj in page['CommonPrefixes']:
-                    dir_name = prefix_obj['Prefix'][len(prefix):].rstrip('/')
-                    if dir_name and dir_name not in directories:  # Skip empty names and duplicates
-                        directories.add(dir_name)
-                        files.append({
-                            'name': dir_name,
-                            'is_directory': True,
-                            'size': 0
-                        })
+            for page in pages:
+                if 'CommonPrefixes' in page:
+                    for prefix_obj in page['CommonPrefixes']:
+                        dir_name = prefix_obj['Prefix'][len(prefix):].rstrip('/')
+                        if dir_name and dir_name not in directories:
+                            directories.add(dir_name)
+                            files.append({
+                                'name': dir_name,
+                                'is_directory': True,
+                                'size': 0
+                            })
 
-            # Add files
-            if 'Contents' in page:
-                for obj in page['Contents']:
-                    # Skip the directory marker itself
-                    if obj['Key'].endswith('/') and obj['Size'] == 0:
-                        continue
+                if 'Contents' in page:
+                    for obj in page['Contents']:
+                        if obj['Key'].endswith('/') and obj['Size'] == 0:
+                            continue
 
-                    file_name = obj['Key'][len(prefix):]
-                    if file_name:  # Skip empty names
-                        files.append({
-                            'name': file_name,
-                            'is_directory': False,
-                            'size': obj['Size'],
-                            'last_modified': obj['LastModified'].isoformat()
-                        })
+                        file_name = obj['Key'][len(prefix):]
+                        if file_name:
+                            files.append({
+                                'name': file_name,
+                                'is_directory': False,
+                                'size': obj['Size'],
+                                'last_modified': obj['LastModified'].isoformat()
+                            })
 
-        # Sort: directories first, then files
-        files.sort(key=lambda x: (not x['is_directory'], x['name'].lower()))
+            files.sort(key=lambda x: (not x['is_directory'], x['name'].lower()))
+            return {'files': files, 'path': path, 'total_count': len(files)}
 
-        return {'files': files, 'path': path, 'total_count': len(files)}
+        return execute_with_s3_retry(validated_role, fetch_files)
     except HTTPException:
         raise
+    except ValueError as e:
+        # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
+        error_msg = str(e)
+        logger.error(f"Configuration error when listing files: {error_msg}", exc_info=True)
+        raise HTTPException(status_code=400, detail=error_msg)
     except (ClientError, BotoCoreError) as e:
         error_code = e.response.get('Error', {}).get('Code', '') if hasattr(e, 'response') else ''
         if error_code == 'NoSuchBucket':
@@ -892,8 +923,6 @@ async def upload_file(
 
         # Validate role access
         validated_role = validate_role_access(role, current_user)
-        s3_client = get_s3_client(validated_role)
-
         # Get max_file_size from config (with fallback to env var)
         config = load_config(force_reload=False)
         max_file_size = config.get("max_file_size")
@@ -950,23 +979,139 @@ async def upload_file(
         content = content_buffer.getvalue()
         content_buffer.close()
 
-        # Upload to S3
-        s3_client.put_object(
-            Bucket=bucket_name,
-            Key=key,
-            Body=content,
-            ContentType=file.content_type or 'application/octet-stream'
-        )
+        # Check if file extension should have Content-Disposition: inline
+        auto_inline_extensions = config.get("auto_inline_extensions", [])
+        content_disposition = None
+        if auto_inline_extensions:
+            # Get file extension from key (path)
+            file_ext = Path(key).suffix.lstrip('.').lower()
+            if file_ext in auto_inline_extensions:
+                content_disposition = 'inline'
 
-        return {'message': 'File uploaded successfully', 'key': key}
+        def upload_object(s3_client):
+            put_object_params = {
+                'Bucket': bucket_name,
+                'Key': key,
+                'Body': content,
+                'ContentType': file.content_type or 'application/octet-stream'
+            }
+            if content_disposition:
+                put_object_params['ContentDisposition'] = content_disposition
+            s3_client.put_object(**put_object_params)
+            return {'message': 'File uploaded successfully', 'key': key}
+
+        return execute_with_s3_retry(validated_role, upload_object)
     except HTTPException:
         raise
+    except ValueError as e:
+        # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
+        error_msg = str(e)
+        logger.error(f"Configuration error when uploading file: {error_msg}", exc_info=True)
+        raise HTTPException(status_code=400, detail=error_msg)
     except (ClientError, BotoCoreError) as e:
         error_message = format_boto_error(e)
-        raise HTTPException(status_code=500, detail=f"Failed to upload file: {error_message}")
+        # Log error details for debugging (without credentials)
+        error_code = ""
+        error_msg = ""
+        error_type = type(e).__name__
+        http_status_code = None
+        if hasattr(e, 'response') and e.response:
+            if isinstance(e.response, dict):
+                error_code = e.response.get('Error', {}).get('Code', '')
+                error_msg = e.response.get('Error', {}).get('Message', '')
+                http_status_code = e.response.get('ResponseMetadata', {}).get('HTTPStatusCode')
+            elif hasattr(e.response, 'get'):
+                error_code = e.response.get('Error', {}).get('Code', '') if hasattr(e.response.get('Error', {}), 'get') else ''
+
+        # Special handling for 403/AccessDenied errors
+        is_access_denied = error_code == 'AccessDenied' or (http_status_code and http_status_code == 403)
+        log_level = logger.warning if is_access_denied else logger.error
+
+        log_extra = {
+            "bucket": bucket_name,
+            "key": key,
+            "role": validated_role,
+            "error_type": error_type,
+            "error_code": error_code,
+            "file_size": total_read if 'total_read' in locals() else None,
+        }
+        if error_msg:
+            log_extra["error_message"] = error_msg
+        if http_status_code:
+            log_extra["http_status_code"] = http_status_code
+
+        log_level(
+            f"File upload failed (S3 error{' - Access Denied' if is_access_denied else ''})",
+            extra=log_extra,
+            exc_info=True
+        )
+
+        # Return 403 status for access denied errors
+        status_code = 403 if is_access_denied else 500
+        raise HTTPException(status_code=status_code, detail=f"Failed to upload file: {error_message}")
     except Exception as e:
         error_message = format_boto_error(e)
+        # Log error details for debugging (without credentials)
+        logger.error(
+            "File upload failed (unexpected error)",
+            extra={
+                "bucket": bucket_name,
+                "key": key,
+                "role": validated_role,
+                "error_type": type(e).__name__,
+                "file_size": total_read if 'total_read' in locals() else None,
+            },
+            exc_info=True
+        )
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {error_message}")
+
+
+def get_user_for_download(
+    token: Optional[str] = Query(None),
+    request: Request = None
+) -> Dict[str, Any]:
+    """Get user from token in URL or Bearer header for downloads"""
+    from auth import get_jwt_secret_key
+    from jose import jwt, JWTError
+    from constants import JWT_ALGORITHM
+    from users import load_users
+
+    # Try token from URL first (for direct link downloads without buffering)
+    if token:
+        try:
+            payload = jwt.decode(token, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
+            username = payload.get("sub")
+            if username:
+                users = load_users()
+                user = next((u for u in users.get("users", []) if u.get("username") == username), None)
+                if user:
+                    user["csrf_token"] = payload.get("csrf_token")
+                    return user
+        except (JWTError, Exception):
+            pass
+
+    # Fall back to Bearer header
+    if request:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            bearer_token = auth_header[7:]
+            try:
+                payload = jwt.decode(bearer_token, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
+                username = payload.get("sub")
+                if username:
+                    users = load_users()
+                    user = next((u for u in users.get("users", []) if u.get("username") == username), None)
+                    if user:
+                        user["csrf_token"] = payload.get("csrf_token")
+                        return user
+            except (JWTError, Exception):
+                pass
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 @app.get("/api/buckets/{bucket_name}/download")
@@ -974,7 +1119,7 @@ async def download_file(
     bucket_name: str,
     path: str = Query(..., description="Path to file to download"),
     role: Optional[str] = Query(None, description="Role name to use"),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_user_for_download)
 ):
     """Download a file from S3 bucket directly"""
     try:
@@ -987,38 +1132,59 @@ async def download_file(
 
         # Validate role access
         validated_role = validate_role_access(role, current_user)
-        s3_client = get_s3_client(validated_role)
+        def fetch_object(s3_client):
+            return s3_client.get_object(Bucket=bucket_name, Key=path)
 
-        # Get file from S3
-        try:
-            response = s3_client.get_object(Bucket=bucket_name, Key=path)
-            file_content = response['Body'].read()
-            content_type = response.get('ContentType', 'application/octet-stream')
-            filename = path.split('/')[-1]  # Get filename from path
-        except (ClientError, BotoCoreError) as e:
-            error_code = e.response.get('Error', {}).get('Code', '') if hasattr(e, 'response') else ''
-            if error_code == '404' or error_code == 'NoSuchKey':
-                raise HTTPException(status_code=404, detail=f"File '{path}' not found")
-            error_message = format_boto_error(e)
-            raise HTTPException(status_code=500, detail=f"Failed to download file: {error_message}")
-        except Exception as e:
-            error_message = format_boto_error(e)
-            raise HTTPException(status_code=500, detail=f"Failed to download file: {error_message}")
+        response = execute_with_s3_retry(validated_role, fetch_object)
+        content_type = response.get('ContentType', 'application/octet-stream')
+        filename = path.split('/')[-1]  # Get filename from path
 
-        # Return file as streaming response
+        # Create generator to stream file directly from S3 without loading into memory
+        # FastAPI StreamingResponse can handle regular generators for streaming
+        def generate():
+            body = response['Body']
+            chunk_size = 8192  # 8KB chunks
+            try:
+                while True:
+                    chunk = body.read(chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                # Ensure body is closed properly
+                if hasattr(body, 'close'):
+                    try:
+                        body.close()
+                    except Exception:
+                        pass
+
+        # Return file as streaming response - stream directly from S3
         from fastapi.responses import StreamingResponse
-        from io import BytesIO
         return StreamingResponse(
-            BytesIO(file_content),
+            generate(),
             media_type=content_type,
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"'
+                "Content-Disposition": format_content_disposition(filename)
             }
         )
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
+        # Check if it's a configuration error (contains role_arn or assume role related text)
+        error_msg = str(e)
+        if 'role' in error_msg.lower() or 'assume' in error_msg.lower() or 'credentials' in error_msg.lower():
+            logger.error(f"Configuration error when downloading file: {error_msg}", exc_info=True)
+        raise HTTPException(status_code=400, detail=error_msg)
+    except (ClientError, BotoCoreError) as e:
+        error_code = e.response.get('Error', {}).get('Code', '') if hasattr(e, 'response') else ''
+        if error_code in {'404', 'NoSuchKey'}:
+            raise HTTPException(status_code=404, detail=f"File '{path}' not found")
+        error_message = format_boto_error(e)
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {error_message}")
+    except Exception as e:
+        error_message = format_boto_error(e)
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {error_message}")
 
 
 @app.delete("/api/buckets/{bucket_name}/files")
@@ -1051,7 +1217,6 @@ async def delete_file(
 
         # Validate role access
         validated_role = validate_role_access(role, current_user)
-        s3_client = get_s3_client(validated_role)
         # Normalize path
         prefix = path
         if not prefix:
@@ -1064,57 +1229,57 @@ async def delete_file(
 
         deleted_count = 0
 
-        # List all objects with this prefix
-        paginator = s3_client.get_paginator('list_objects_v2')
-        pages = paginator.paginate(Bucket=bucket_name, Prefix=prefix + ('/' if is_directory else ''))
+        def perform_delete(s3_client):
+            deleted_count = 0
+            paginator = s3_client.get_paginator('list_objects_v2')
+            pages = paginator.paginate(Bucket=bucket_name, Prefix=prefix + ('/' if is_directory else ''))
 
-        objects_to_delete = []
-        for page in pages:
-            if 'Contents' in page:
-                for obj in page['Contents']:
-                    objects_to_delete.append({'Key': obj['Key']})
+            objects_to_delete = []
+            for page in pages:
+                if 'Contents' in page:
+                    for obj in page['Contents']:
+                        objects_to_delete.append({'Key': obj['Key']})
 
-        # If it's a single file (not a directory), check if it exists
-        if not is_directory and not objects_to_delete:
-            # Try to delete as a single file
-            try:
-                s3_client.delete_object(Bucket=bucket_name, Key=prefix)
-                deleted_count = 1
-            except (ClientError, BotoCoreError) as e:
-                error_code = e.response.get('Error', {}).get('Code', '') if hasattr(e, 'response') else ''
-                if error_code == '404' or error_code == 'NoSuchKey':
-                    raise HTTPException(status_code=404, detail=f"File or directory '{path}' not found")
-                error_message = format_boto_error(e)
-                raise HTTPException(status_code=500, detail=f"Failed to delete: {error_message}")
-            except Exception as e:
-                error_message = format_boto_error(e)
-                raise HTTPException(status_code=500, detail=f"Failed to delete: {error_message}")
-        else:
-            # Delete all objects in batch
-            if objects_to_delete:
-                # S3 allows up to 1000 objects per delete request
-                for i in range(0, len(objects_to_delete), 1000):
-                    batch = objects_to_delete[i:i + 1000]
-                    s3_client.delete_objects(
-                        Bucket=bucket_name,
-                        Delete={
-                            'Objects': batch,
-                            'Quiet': True
-                        }
-                    )
-                    deleted_count += len(batch)
+            if not is_directory and not objects_to_delete:
+                try:
+                    s3_client.delete_object(Bucket=bucket_name, Key=prefix)
+                    deleted_count = 1
+                except ClientError as e:
+                    error_code = e.response.get('Error', {}).get('Code', '') if hasattr(e, 'response') else ''
+                    if error_code in ('404', 'NoSuchKey'):
+                        raise HTTPException(status_code=404, detail=f"File or directory '{path}' not found")
+                    raise
+            else:
+                if objects_to_delete:
+                    for i in range(0, len(objects_to_delete), 1000):
+                        batch = objects_to_delete[i:i + 1000]
+                        s3_client.delete_objects(
+                            Bucket=bucket_name,
+                            Delete={
+                                'Objects': batch,
+                                'Quiet': True
+                            }
+                        )
+                        deleted_count += len(batch)
 
-        if deleted_count == 0:
-            raise HTTPException(status_code=404, detail=f"File or directory '{path}' not found")
+            if deleted_count == 0:
+                raise HTTPException(status_code=404, detail=f"File or directory '{path}' not found")
 
-        return {'message': f'Successfully deleted {deleted_count} object(s)', 'count': deleted_count}
+            return {'message': f'Successfully deleted {deleted_count} object(s)', 'count': deleted_count}
+
+        return execute_with_s3_retry(validated_role, perform_delete)
     except HTTPException:
         raise
+    except ValueError as e:
+        # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
+        # Check if it's a configuration error (contains role_arn or assume role related text)
+        error_msg = str(e)
+        if 'role' in error_msg.lower() or 'assume' in error_msg.lower() or 'credentials' in error_msg.lower():
+            logger.error(f"Configuration error when deleting file: {error_msg}", exc_info=True)
+        raise HTTPException(status_code=400, detail=error_msg)
     except (ClientError, BotoCoreError) as e:
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to delete: {error_message}")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to delete: {error_message}")

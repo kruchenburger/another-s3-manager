@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from botocore.exceptions import ClientError
 from fastapi import HTTPException
+import s3_client
 
 
 @pytest.fixture
@@ -490,7 +491,10 @@ async def test_list_buckets_allowed_buckets(monkeypatch, reload_main):
 
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: None)
     patch_load_config(monkeypatch, main, config_data)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: (_ for _ in ()).throw(AssertionError("should not call")))
+    def mock_execute_with_s3_retry(role_name, callback):
+        raise AssertionError("should not call")
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     buckets = await main.list_buckets(None, {"is_admin": True})
     assert buckets == ["bucket-1", "bucket-2"]
@@ -534,7 +538,10 @@ async def test_list_buckets_with_explicit_role(monkeypatch, reload_main):
 
     patch_load_config(monkeypatch, main, config_data)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     buckets = await main.list_buckets("RoleB", {"is_admin": True})
     assert buckets == ["bucket-x"]
@@ -583,7 +590,10 @@ async def test_list_buckets_generic_exception(monkeypatch, reload_main):
 
     patch_load_config(monkeypatch, main, config_data)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: None)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: (_ for _ in ()).throw(RuntimeError("boom")))
+    def mock_execute_with_s3_retry(role_name, callback):
+        raise RuntimeError("boom")
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     with pytest.raises(HTTPException) as exc:
         await main.list_buckets(None, {"is_admin": True})
@@ -614,7 +624,10 @@ async def test_list_files_success(monkeypatch, reload_main, fake_s3_client):
         ]
     )
 
-    monkeypatch.setattr(main, "get_s3_client", lambda role: fake_s3_client)
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(fake_s3_client)
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
     result = await main.list_files("bucket", path="folder1", role=None, current_user={"is_admin": True})
@@ -653,7 +666,10 @@ async def test_upload_file_rejects_by_header(monkeypatch, reload_main):
 
     client = DummyClient()
 
-    monkeypatch.setattr(main, "get_s3_client", lambda role: client)
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(client)
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
     patch_load_config(monkeypatch, main, {"max_file_size": 10})
 
     request = SimpleNamespace(headers={"content-length": "20"})
@@ -683,7 +699,10 @@ async def test_upload_file_streaming_limit(monkeypatch, reload_main):
 
     client = DummyClient()
 
-    monkeypatch.setattr(main, "get_s3_client", lambda role: client)
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(client)
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
     patch_load_config(monkeypatch, main, {"max_file_size": 5})
 
     request = SimpleNamespace(headers={})
@@ -703,7 +722,10 @@ async def test_upload_file_success(monkeypatch, reload_main, fake_s3_client):
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda key: key)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: fake_s3_client)
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(fake_s3_client)
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
     patch_load_config(monkeypatch, main, {"max_file_size": 50})
 
     request = SimpleNamespace(headers={})
@@ -730,7 +752,10 @@ async def test_list_files_s3_error(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     with pytest.raises(HTTPException) as exc:
         await main.list_files("bucket", path="", role=None, current_user={"is_admin": True})
@@ -754,7 +779,10 @@ async def test_list_buckets_boto_error(monkeypatch, reload_main):
 
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: None)
     patch_load_config(monkeypatch, main, config_data)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     with pytest.raises(HTTPException) as exc:
         await main.list_buckets(None, {"is_admin": True})
@@ -777,7 +805,10 @@ async def test_list_files_generic_exception(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     with pytest.raises(HTTPException) as exc:
         await main.list_files("bucket", path="", role=None, current_user={"is_admin": True})
@@ -799,7 +830,10 @@ async def test_list_files_client_error_other(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     with pytest.raises(HTTPException) as exc:
         await main.list_files("bucket", path="", role=None, current_user={"is_admin": True})
@@ -831,7 +865,10 @@ async def test_upload_file_env_max_file_size(monkeypatch, reload_main, fake_s3_c
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda key: key)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: fake_s3_client)
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(fake_s3_client)
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     request = SimpleNamespace(headers={})
     upload = SimpleUploadFile(b"abcd")
@@ -857,7 +894,10 @@ async def test_upload_file_invalid_content_length(monkeypatch, reload_main):
             self.called = True
 
     client = DummyClient()
-    monkeypatch.setattr(main, "get_s3_client", lambda role: client)
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(client)
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     request = SimpleNamespace(headers={"content-length": "abc"})
     upload = SimpleUploadFile(b"abcd")
@@ -879,14 +919,18 @@ async def test_upload_file_client_error(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda key: key)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: ErrorClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(ErrorClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     request = SimpleNamespace(headers={})
     upload = SimpleUploadFile(b"abcd")
 
     with pytest.raises(HTTPException) as exc:
         await main.upload_file(request, "bucket", upload, key="file.txt", role=None, current_user={"is_admin": True})
-    assert exc.value.status_code == 500
+    # AccessDenied errors now return 403 (Forbidden) instead of 500 (Internal Server Error)
+    assert exc.value.status_code == 403
     assert "Failed to upload file" in exc.value.detail
 
 
@@ -913,7 +957,10 @@ async def test_download_file_s3_not_found(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     with pytest.raises(HTTPException) as exc:
         await main.download_file("bucket", path="missing.txt", role=None, current_user={"is_admin": True})
@@ -931,7 +978,10 @@ async def test_download_file_generic_exception(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     with pytest.raises(HTTPException) as exc:
         await main.download_file("bucket", path="file.txt", role=None, current_user={"is_admin": True})
@@ -949,7 +999,10 @@ async def test_download_file_client_error_other(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     with pytest.raises(HTTPException) as exc:
         await main.download_file("bucket", path="file.txt", role=None, current_user={"is_admin": True})
@@ -1037,7 +1090,10 @@ async def test_delete_file_single_object_not_found(monkeypatch, reload_main):
         def delete_object(self, Bucket, Key):
             raise ClientError({"Error": {"Code": "NoSuchKey"}}, "DeleteObject")
 
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     request = SimpleNamespace()
 
@@ -1076,7 +1132,10 @@ async def test_delete_file_directory(monkeypatch, reload_main):
             self.deleted_batches.append(Delete["Objects"])
 
     client = FakeClient()
-    monkeypatch.setattr(main, "get_s3_client", lambda role: client)
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(client)
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     request = SimpleNamespace()
     response = await main.delete_file(request, "bucket", path="dir/", role=None, current_user={"is_admin": True})
@@ -1105,7 +1164,10 @@ async def test_delete_file_no_objects_deleted(monkeypatch, reload_main):
         def delete_object(self, Bucket, Key):
             return {}
 
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     request = SimpleNamespace()
     with pytest.raises(HTTPException) as exc:
@@ -1134,7 +1196,10 @@ async def test_delete_file_client_error(monkeypatch, reload_main):
         def delete_object(self, Bucket, Key):
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "DeleteObject")
 
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     request = SimpleNamespace()
 
@@ -1164,7 +1229,10 @@ async def test_delete_file_generic_exception(monkeypatch, reload_main):
         def delete_object(self, Bucket, Key):
             raise RuntimeError("boom")
 
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     request = SimpleNamespace()
 
@@ -1195,7 +1263,10 @@ async def test_delete_file_single_success(monkeypatch, reload_main):
         def delete_object(self, Bucket, Key):
             return {}
 
-    monkeypatch.setattr(main, "get_s3_client", lambda role: FakeClient())
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(FakeClient())
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     request = SimpleNamespace()
     response = await main.delete_file(request, "bucket", path="file.txt", role=None, current_user={"is_admin": True})
@@ -1212,7 +1283,10 @@ async def test_delete_file_get_client_exception(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
-    monkeypatch.setattr(main, "get_s3_client", lambda role: (_ for _ in ()).throw(RuntimeError("boom")))
+    def mock_execute_with_s3_retry(role_name, callback):
+        raise RuntimeError("boom")
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     request = SimpleNamespace()
     with pytest.raises(HTTPException) as exc:
@@ -1230,7 +1304,10 @@ async def test_delete_file_value_error(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
     monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
-    monkeypatch.setattr(main, "get_s3_client", lambda role: (_ for _ in ()).throw(ValueError("bad role")))
+    def mock_execute_with_s3_retry(role_name, callback):
+        raise ValueError("bad role")
+    import main
+    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
 
     request = SimpleNamespace()
     with pytest.raises(HTTPException) as exc:

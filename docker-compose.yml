@@ -1,0 +1,40 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: another-s3-manager-local
+    ports:
+      - "8080:8080"
+    environment:
+      # REQUIRED: Generate with: python -c 'import secrets; print(secrets.token_urlsafe(32))'
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+
+      # Optional: Server configuration
+      - PORT=8080
+      - UVICORN_HOST=0.0.0.0
+      - LOG_LEVEL=info
+
+      # Optional: Application configuration
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=180
+      - ITEMS_PER_PAGE=200
+      - DISABLE_DELETION=false
+      - MAX_FILE_SIZE=104857600 # 100MB
+      - ENABLE_LAZY_LOADING=true
+      - DATA_DIR=/app/data
+      - S3_FILE_MANAGER_CONFIG=/app/data/config.json
+    volumes:
+      # Mount data directory for persistent storage
+      - ./data:/app/data
+
+      # Optional: Mount AWS credentials if using profiles
+      - ~/.aws:/root/.aws:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/app-info')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+

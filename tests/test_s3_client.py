@@ -3,6 +3,7 @@ import importlib
 from unittest.mock import MagicMock, Mock
 
 import pytest
+from botocore.exceptions import ClientError, CredentialRetrievalError
 
 
 def reload_s3_client():
@@ -80,6 +81,15 @@ def test_create_s3_client_assume_role(mocker):
 
     mocker.patch("boto3.client", side_effect=client_side_effect)
 
+    # Mock RefreshableCredentials
+    refreshable_creds_mock = mocker.MagicMock()
+    mocker.patch("s3_client.RefreshableCredentials.create_from_metadata", return_value=refreshable_creds_mock)
+
+    # Mock BotocoreSession and its create_client method
+    botocore_session_mock = mocker.MagicMock()
+    botocore_session_mock.create_client.return_value = s3_client_mock
+    mocker.patch("s3_client.BotocoreSession", return_value=botocore_session_mock)
+
     role = {
         "type": "assume_role",
         "role_arn": "arn:aws:iam::123:role/Test",
@@ -89,8 +99,71 @@ def test_create_s3_client_assume_role(mocker):
     client = module._create_s3_client_from_role(role)
     assert client is s3_client_mock
     sts_client.assume_role.assert_called_once()
-    assert captured_kwargs["endpoint_url"] == "http://minio:9000"
-    assert captured_kwargs["use_ssl"] is False
+    # Check that create_client was called with correct arguments
+    botocore_session_mock.create_client.assert_called_once()
+    call_kwargs = botocore_session_mock.create_client.call_args[1]
+    assert call_kwargs["endpoint_url"] == "http://minio:9000"
+    assert call_kwargs["use_ssl"] is False
+
+
+def test_create_s3_client_assume_role_with_datetime_expiration(mocker):
+    """Test that assume_role handles datetime expiration correctly (not mocked RefreshableCredentials)."""
+    module = reload_s3_client()
+    from datetime import datetime, timezone
+
+    sts_client = mocker.MagicMock()
+    expiration_dt = datetime.now(timezone.utc)
+    sts_client.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "AKIA",
+            "SecretAccessKey": "SECRET",
+            "SessionToken": "TOKEN",
+            "Expiration": expiration_dt,  # datetime object
+        }
+    }
+
+    s3_client_mock = mocker.MagicMock()
+    captured_kwargs = {}
+
+    def client_side_effect(service_name, **kwargs):
+        if service_name == "sts":
+            return sts_client
+        captured_kwargs.update(kwargs)
+        return s3_client_mock
+
+    mocker.patch("boto3.client", side_effect=client_side_effect)
+
+    # Mock BotocoreSession and its create_client method
+    botocore_session_mock = mocker.MagicMock()
+    botocore_session_mock.create_client.return_value = s3_client_mock
+    mocker.patch("s3_client.BotocoreSession", return_value=botocore_session_mock)
+
+    # Don't mock RefreshableCredentials - let it run to test datetime handling
+    # But we need to verify it gets called with string expiry_time
+    original_create = module.RefreshableCredentials.create_from_metadata
+    call_args_capture = {}
+
+    def capture_create(*args, **kwargs):
+        call_args_capture['metadata'] = kwargs.get('metadata', args[0] if args else {})
+        return mocker.MagicMock()
+
+    mocker.patch("s3_client.RefreshableCredentials.create_from_metadata", side_effect=capture_create)
+
+    role = {
+        "type": "assume_role",
+        "role_arn": "arn:aws:iam::123:role/Test",
+    }
+    client = module._create_s3_client_from_role(role)
+    assert client is s3_client_mock
+    sts_client.assume_role.assert_called_once()
+
+    # Verify that expiry_time was passed as string, not datetime
+    metadata = call_args_capture.get('metadata', {})
+    expiry_time = metadata.get('expiry_time')
+    assert expiry_time is not None
+    assert isinstance(expiry_time, str), f"expiry_time should be string, got {type(expiry_time)}"
+    # Should be ISO format string
+    assert 'T' in expiry_time or '+' in expiry_time or 'Z' in expiry_time
 
 
 def test_create_s3_client_credentials(mocker):
@@ -389,6 +462,43 @@ def test_create_s3_client_s3_compatible_path_style_backward_compat(mocker):
     assert client is mock_client
     args, kwargs = patched_client.call_args
     assert kwargs["config"].s3["addressing_style"] == "path"
+
+
+def test_is_expired_credentials_error_handles_credential_retrieval_error():
+    module = reload_s3_client()
+    error = CredentialRetrievalError(provider="eks-pod-identity", error_msg="Token is expired")
+    assert module._is_expired_credentials_error(error) is True
+
+
+def test_is_expired_credentials_error_handles_client_error():
+    module = reload_s3_client()
+    error = ClientError(
+        {"Error": {"Code": "ExpiredTokenException", "Message": "Token expired"}}, "ListBuckets"
+    )
+    assert module._is_expired_credentials_error(error) is True
+
+
+def test_execute_with_s3_retry_clears_cache_on_expired_creds(mocker):
+    module = reload_s3_client()
+    mocker.patch.object(module, "get_s3_client", return_value="client")
+    mocker.patch.object(module, "_is_expired_credentials_error", return_value=True)
+    invalidate_mock = mocker.patch.object(module, "invalidate_s3_client")
+    clear_cache_mock = mocker.patch.object(module, "_clear_boto3_cached_credentials")
+
+    call_counter = {"count": 0}
+
+    def failing_then_successful_callback(_client):
+        call_counter["count"] += 1
+        if call_counter["count"] == 1:
+            raise RuntimeError("Token expired")
+        return "ok"
+
+    result = module.execute_with_s3_retry(None, failing_then_successful_callback)
+
+    assert result == "ok"
+    assert call_counter["count"] == 2
+    invalidate_mock.assert_called_once_with(None)
+    clear_cache_mock.assert_called_once()
 
 
 class Mock(MagicMock):

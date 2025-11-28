@@ -463,14 +463,24 @@
                     </small>
                 </div>
 
-                <div class="form-group" style="background: var(--bg-primary); padding: 15px; border-radius: 6px; border-left: 4px solid #6f42c1; margin-bottom: 20px;">
-                    <label for="config-data-dir" style="font-weight: 600; color: var(--text-primary); margin-bottom: 8px; display: flex; align-items: center;">
-                        Data Directory
-                        <span style="margin-left: 8px; font-size: 0.85em; font-weight: normal; color: var(--text-secondary);">(Optional)</span>
+                <div class="form-group" style="background: var(--bg-primary); padding: 15px; border-radius: 6px; border-left: 4px solid #fd7e14; margin-bottom: 20px;">
+                    <label for="config-auto-inline-extensions" style="font-weight: 600; color: var(--text-primary); margin-bottom: 8px; display: flex; align-items: center;">
+                        Auto Inline Extensions
+                        <span style="margin-left: 8px; font-size: 0.85em; font-weight: normal; color: var(--text-secondary);">(Comma-separated)</span>
                     </label>
-                    <input type="text" id="config-data-dir" placeholder="Leave empty for default (application directory)" style="width: 100%; padding: 10px; font-size: 14px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                    <input type="text" id="config-auto-inline-extensions" placeholder="pdf, jpg, png" style="width: 100%; padding: 10px; font-size: 14px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
                     <small style="display: block; margin-top: 6px; color: var(--text-secondary); font-size: 0.9em; line-height: 1.4;">
-                        💡 Directory path for storing users.json and bans.json files. Useful for Kubernetes volumes. Leave empty to use the application directory
+                        💡 File extensions (without dots) that should have Content-Disposition: inline header when uploaded to S3. Separate multiple extensions with commas (e.g., "pdf, jpg, png")
+                    </small>
+                </div>
+
+                <div class="form-group" style="background: var(--bg-primary); padding: 15px; border-radius: 6px; border-left: 4px solid #20c997; margin-bottom: 20px;">
+                    <label for="config-data-dir-display" style="font-weight: 600; color: var(--text-primary); margin-bottom: 8px; display: flex; align-items: center;">
+                        Current Data Directory (Read-Only)
+                    </label>
+                    <input type="text" id="config-data-dir-display" readonly style="width: 100%; padding: 10px; font-size: 14px; border: 2px solid var(--border-color); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary); opacity: 0.8; cursor: not-allowed;">
+                    <small style="display: block; margin-top: 6px; color: var(--text-secondary); font-size: 0.9em; line-height: 1.4;">
+                        💡 Current directory path used for storing users.json and bans.json files. This value is determined by DATA_DIR environment variable or config.json data_dir setting
                     </small>
                 </div>
 
@@ -701,7 +711,10 @@
                 if (response.ok) {
                     const data = await response.json();
                     availableRoles = data.available_roles || [];
-                    console.log('Available roles loaded:', availableRoles);
+                    // Never log roles in demo mode to avoid exposing sensitive information
+                    if (!isDemoMode) {
+                        console.log('Available roles loaded:', availableRoles);
+                    }
 
                     // Update role selectors
                     updateRoleSelectors(availableRoles);
@@ -1214,7 +1227,8 @@
             document.getElementById('config-max-file-size').value = configData.max_file_size || 104857600;
             const maxFileSizeMB = (configData.max_file_size || 104857600) / (1024 * 1024);
             document.getElementById('config-max-file-size-mb').textContent = maxFileSizeMB.toFixed(0);
-            document.getElementById('config-data-dir').value = configData.data_dir || '';
+            document.getElementById('config-auto-inline-extensions').value = (configData.auto_inline_extensions || []).join(', ');
+            document.getElementById('config-data-dir-display').value = configData.data_dir || '';
 
             // Populate roles list
             populateRolesList();
@@ -1313,9 +1327,12 @@
                         disable_deletion: document.getElementById('config-disable-deletion').checked,
                         max_file_size: parseInt(document.getElementById('config-max-file-size').value),
                     };
-                    const dataDir = document.getElementById('config-data-dir').value.trim();
-                    if (dataDir) {
-                        configToSave.data_dir = dataDir;
+                    // Parse auto_inline_extensions from comma-separated string
+                    const autoInlineExtensions = document.getElementById('config-auto-inline-extensions').value.trim();
+                    if (autoInlineExtensions) {
+                        configToSave.auto_inline_extensions = autoInlineExtensions.split(',').map(ext => ext.trim()).filter(ext => ext);
+                    } else {
+                        configToSave.auto_inline_extensions = [];
                     }
                 }
 
