@@ -2,8 +2,9 @@
 """
 Extract changelog section for a specific version from CHANGELOG.md
 """
-import re
+
 import os
+import re
 import sys
 
 
@@ -17,10 +18,10 @@ def extract_changelog(version: str, changelog_path: str = "CHANGELOG.md", output
         output_path: Path to output file
     """
     # Remove 'v' prefix if present
-    version = version.lstrip('v')
+    version = version.lstrip("v")
 
     try:
-        with open(changelog_path, 'r', encoding='utf-8') as f:
+        with open(changelog_path, "r", encoding="utf-8") as f:
             content = f.read()
     except FileNotFoundError:
         print(f"Error: {changelog_path} not found", file=sys.stderr)
@@ -29,14 +30,14 @@ def extract_changelog(version: str, changelog_path: str = "CHANGELOG.md", output
     # Try to find version section
     if version:
         # Match section like "## [0.1.0] - 2025-11-11" or "## [0.1.0]"
-        pattern = rf'^## \[{re.escape(version)}\].*?(?=^## \[|\Z)'
+        pattern = rf"^## \[{re.escape(version)}\].*?(?=^## \[|\Z)"
         match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
 
         if match:
             notes = match.group(0).strip()
         else:
             # Fallback to Unreleased section
-            pattern = r'^## \[Unreleased\].*?(?=^## \[|\Z)'
+            pattern = r"^## \[Unreleased\].*?(?=^## \[|\Z)"
             match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
             if match:
                 notes = match.group(0).strip()
@@ -45,7 +46,7 @@ def extract_changelog(version: str, changelog_path: str = "CHANGELOG.md", output
                 notes = content
     else:
         # No version, use Unreleased or full changelog
-        pattern = r'^## \[Unreleased\].*?(?=^## \[|\Z)'
+        pattern = r"^## \[Unreleased\].*?(?=^## \[|\Z)"
         match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
         if match:
             notes = match.group(0).strip()
@@ -53,7 +54,7 @@ def extract_changelog(version: str, changelog_path: str = "CHANGELOG.md", output
             notes = content
 
     # Write to output file
-    with open(output_path, 'w', encoding='utf-8') as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write(notes)
 
     # Output for debugging
@@ -64,7 +65,7 @@ def extract_changelog(version: str, changelog_path: str = "CHANGELOG.md", output
 
 if __name__ == "__main__":
     # Get version from environment variable or command line argument
-    version = os.environ.get('VERSION', '')
+    version = os.environ.get("VERSION", "")
     if len(sys.argv) > 1:
         version = sys.argv[1]
 
@@ -73,4 +74,3 @@ if __name__ == "__main__":
         sys.exit(1)
 
     extract_changelog(version)
-

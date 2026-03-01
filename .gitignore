@@ -30,6 +30,9 @@ wheels/
 *.swp
 *.swo
 
+# Claude Code
+.claude/
+
 # Environment
 .env
 .env.local
@@ -40,6 +43,10 @@ config.json
 # User data and bans
 users.json
 bans.json
+
+# Node
+node_modules/
+dist/
 
 # Logs
 *.log

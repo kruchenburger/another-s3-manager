@@ -8,7 +8,7 @@ import pytest
 
 
 def reload_config():
-    import config
+    import another_s3_manager.config as config
 
     importlib.reload(config)
     return config
@@ -99,7 +99,7 @@ def test_save_config_raises_when_read_only(monkeypatch, tmp_path):
     config.CONFIG_FILE = tmp_path / "config.json"
     config.CONFIG_FILE.write_text("{}")
 
-    monkeypatch.setattr("config.is_config_writable", lambda: False)
+    monkeypatch.setattr("another_s3_manager.config.is_config_writable", lambda: False)
     with pytest.raises(PermissionError):
         config.save_config({"sample": "value"})
 
@@ -125,23 +125,6 @@ def test_get_config_value_returns_default_when_missing():
     config = reload_config()
     value = config.get_config_value("not_there", default="fallback")
     assert value == "fallback"
-
-
-def test_config_import_fallback_when_constants_missing(monkeypatch):
-    original_import = builtins.__import__
-
-    def fake_import(name, *args, **kwargs):
-        if name == "constants":
-            raise ImportError("mock")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-    module = importlib.reload(importlib.import_module("config"))
-    try:
-        expected = Path(module.__file__).parent / "config.json"
-        assert module.CONFIG_FILE == expected
-    finally:
-        importlib.reload(module)
 
 
 def test_is_config_writable_creates_missing_directory(tmp_path):

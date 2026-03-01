@@ -1,8 +1,7 @@
 import importlib
 import json
 import os
-from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
 
 import pytest
 
@@ -13,13 +12,7 @@ os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
 def _default_config() -> Dict[str, Any]:
     return {
-        "roles": [
-            {
-                "name": "Default",
-                "type": "default",
-                "description": "Use default AWS credentials"
-            }
-        ],
+        "roles": [{"name": "Default", "type": "default", "description": "Use default AWS credentials"}],
         "items_per_page": 200,
         "enable_lazy_loading": True,
         "max_file_size": 100 * 1024 * 1024,
@@ -54,10 +47,10 @@ def isolated_environment(monkeypatch, tmp_path):
     monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
 
     # Reload modules that cache file paths or config to ensure isolation
-    import constants
-    import config as config_module
-    import users as users_module
-    import s3_client as s3_client_module
+    import another_s3_manager.config as config_module
+    import another_s3_manager.constants as constants
+    import another_s3_manager.s3_client as s3_client_module
+    import another_s3_manager.users as users_module
 
     importlib.reload(constants)
     importlib.reload(config_module)
@@ -81,7 +74,7 @@ def app_client(monkeypatch):
     """
     from fastapi.testclient import TestClient
 
-    import main
+    import another_s3_manager.main as main
 
     # Reload main to ensure it picks up the isolated environment
     importlib.reload(main)
@@ -118,9 +111,7 @@ def fake_s3_client():
             return FakePaginator(self._paginator_pages)
 
         def put_object(self, Bucket, Key, Body, ContentType=None):
-            self.uploads.append(
-                {"Bucket": Bucket, "Key": Key, "Body": Body, "ContentType": ContentType}
-            )
+            self.uploads.append({"Bucket": Bucket, "Key": Key, "Body": Body, "ContentType": ContentType})
             self.objects[Key] = Body
 
         def get_object(self, Bucket, Key):
@@ -162,4 +153,3 @@ def mock_boto3_client(mocker, fake_s3_client):
     Mock boto3.client to return a fake S3 client.
     """
     return mocker.patch("boto3.client", return_value=fake_s3_client)
-

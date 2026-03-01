@@ -1,13 +1,12 @@
-import builtins
 import importlib
-from unittest.mock import MagicMock, Mock
+from unittest.mock import Mock
 
 import pytest
 from botocore.exceptions import ClientError, CredentialRetrievalError
 
 
 def reload_s3_client():
-    import s3_client
+    import another_s3_manager.s3_client as s3_client
 
     importlib.reload(s3_client)
     s3_client._s3_clients_cache.clear()
@@ -83,12 +82,14 @@ def test_create_s3_client_assume_role(mocker):
 
     # Mock RefreshableCredentials
     refreshable_creds_mock = mocker.MagicMock()
-    mocker.patch("s3_client.RefreshableCredentials.create_from_metadata", return_value=refreshable_creds_mock)
+    mocker.patch(
+        "another_s3_manager.s3_client.RefreshableCredentials.create_from_metadata", return_value=refreshable_creds_mock
+    )
 
     # Mock BotocoreSession and its create_client method
     botocore_session_mock = mocker.MagicMock()
     botocore_session_mock.create_client.return_value = s3_client_mock
-    mocker.patch("s3_client.BotocoreSession", return_value=botocore_session_mock)
+    mocker.patch("another_s3_manager.s3_client.BotocoreSession", return_value=botocore_session_mock)
 
     role = {
         "type": "assume_role",
@@ -136,18 +137,17 @@ def test_create_s3_client_assume_role_with_datetime_expiration(mocker):
     # Mock BotocoreSession and its create_client method
     botocore_session_mock = mocker.MagicMock()
     botocore_session_mock.create_client.return_value = s3_client_mock
-    mocker.patch("s3_client.BotocoreSession", return_value=botocore_session_mock)
+    mocker.patch("another_s3_manager.s3_client.BotocoreSession", return_value=botocore_session_mock)
 
     # Don't mock RefreshableCredentials - let it run to test datetime handling
     # But we need to verify it gets called with string expiry_time
-    original_create = module.RefreshableCredentials.create_from_metadata
     call_args_capture = {}
 
     def capture_create(*args, **kwargs):
-        call_args_capture['metadata'] = kwargs.get('metadata', args[0] if args else {})
+        call_args_capture["metadata"] = kwargs.get("metadata", args[0] if args else {})
         return mocker.MagicMock()
 
-    mocker.patch("s3_client.RefreshableCredentials.create_from_metadata", side_effect=capture_create)
+    mocker.patch("another_s3_manager.s3_client.RefreshableCredentials.create_from_metadata", side_effect=capture_create)
 
     role = {
         "type": "assume_role",
@@ -158,12 +158,12 @@ def test_create_s3_client_assume_role_with_datetime_expiration(mocker):
     sts_client.assume_role.assert_called_once()
 
     # Verify that expiry_time was passed as string, not datetime
-    metadata = call_args_capture.get('metadata', {})
-    expiry_time = metadata.get('expiry_time')
+    metadata = call_args_capture.get("metadata", {})
+    expiry_time = metadata.get("expiry_time")
     assert expiry_time is not None
     assert isinstance(expiry_time, str), f"expiry_time should be string, got {type(expiry_time)}"
     # Should be ISO format string
-    assert 'T' in expiry_time or '+' in expiry_time or 'Z' in expiry_time
+    assert "T" in expiry_time or "+" in expiry_time or "Z" in expiry_time
 
 
 def test_create_s3_client_credentials(mocker):
@@ -229,7 +229,7 @@ def test_get_s3_client_with_named_role(mocker):
     mock_client = mocker.MagicMock()
     mocker.patch("boto3.client", return_value=mock_client)
 
-    import config as config_module
+    import another_s3_manager.config as config_module
 
     config_data = config_module.load_config(force_reload=True)
     config_data["roles"] = [
@@ -260,23 +260,6 @@ def test_clear_s3_clients_cache(mocker):
     assert module._s3_clients_cache
     module.clear_s3_clients_cache()
     assert module._s3_clients_cache == {}
-
-
-def test_s3_client_import_fallback(monkeypatch):
-    original_import = builtins.__import__
-
-    def fake_import(name, *args, **kwargs):
-        if name == "constants":
-            raise ImportError("mock")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-    module = importlib.reload(importlib.import_module("s3_client"))
-    try:
-        assert module.S3_USE_SSL is True
-        assert module.S3_VERIFY_SSL is True
-    finally:
-        importlib.reload(module)
 
 
 def test_create_s3_client_requires_profile_name():
@@ -318,7 +301,7 @@ def test_create_s3_client_unknown_type():
 def test_get_s3_client_without_roles_uses_default(mocker):
     module = reload_s3_client()
     mocker.patch("boto3.client", return_value="client")
-    import config as config_module
+    import another_s3_manager.config as config_module
 
     config_module.save_config(
         {
@@ -336,7 +319,7 @@ def test_get_s3_client_without_roles_uses_default(mocker):
 def test_get_s3_client_missing_named_role_raises(mocker):
     module = reload_s3_client()
     mocker.patch("boto3.client", return_value="client")
-    import config as config_module
+    import another_s3_manager.config as config_module
 
     config_module.save_config(
         {
@@ -472,9 +455,7 @@ def test_is_expired_credentials_error_handles_credential_retrieval_error():
 
 def test_is_expired_credentials_error_handles_client_error():
     module = reload_s3_client()
-    error = ClientError(
-        {"Error": {"Code": "ExpiredTokenException", "Message": "Token expired"}}, "ListBuckets"
-    )
+    error = ClientError({"Error": {"Code": "ExpiredTokenException", "Message": "Token expired"}}, "ListBuckets")
     assert module._is_expired_credentials_error(error) is True
 
 
@@ -499,8 +480,3 @@ def test_execute_with_s3_retry_clears_cache_on_expired_creds(mocker):
     assert call_counter["count"] == 2
     invalidate_mock.assert_called_once_with(None)
     clear_cache_mock.assert_called_once()
-
-
-class Mock(MagicMock):
-    """Helper class to improve assertion error messages."""
-
