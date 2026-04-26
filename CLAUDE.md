@@ -1,15 +1,15 @@
 # Another S3 Manager
 
-Лёгкий веб-UI для управления файлами в S3 и S3-совместимых хранилищах.
+Lightweight web UI for managing files in S3 and S3-compatible storage.
 
-## Стек
+## Stack
 
 - **Backend**: Python 3.13+, FastAPI, Boto3, JWT auth
-- **Frontend**: Vanilla HTML/JS/CSS (миграция на React + Mantine в процессе)
-- **Деплой**: Docker, Docker Compose, Kubernetes (Helm)
+- **Frontend**: Vanilla HTML/JS/CSS (migration to React + Mantine in progress)
+- **Deployment**: Docker, Docker Compose, Kubernetes (Helm)
 - **Package manager**: uv
 
-## Структура
+## Structure
 
 ```
 another-s3-manager/
@@ -34,34 +34,52 @@ another-s3-manager/
 └── uv.lock
 ```
 
-## Команды разработки
+## Development Commands
 
 ```bash
-# Установка зависимостей
+# Install dependencies
 uv sync
 
-# Линтер и форматирование
+# Linter and formatting
 uv run ruff check .
 uv run ruff format .
 
-# Тесты
+# Tests
 uv run pytest --cov
 
-# Запуск локально
+# Run locally
 JWT_SECRET_KEY=dev-secret uv run python -m another_s3_manager.main
 
 # Docker
 docker compose up --build
 ```
 
-## Версионирование
+## Versioning
 
-Версия берётся из git tag через `APP_VERSION` env var. В локальной разработке — `dev`.
+Version is derived from git tag via `APP_VERSION` env var. In local development — `dev`.
 
-## Особенности
+## Environment Variables
 
-- Поддержка нескольких AWS аккаунтов (assume_role, profiles, direct credentials)
-- S3-совместимые сервисы (MinIO, R2, Wasabi)
-- JWT аутентификация с CSRF защитой
-- Автоматическое обновление истекших credentials
-- Гранулярный доступ per-role, per-bucket
+| Variable                          | Required | Default         | Description                         |
+| --------------------------------- | -------- | --------------- | ----------------------------------- |
+| `JWT_SECRET_KEY`                  | Yes      | —               | JWT signing secret                  |
+| `PORT`                            | No       | `8080`          | Server port                         |
+| `UVICORN_HOST`                    | No       | `0.0.0.0`       | Server bind address                 |
+| `LOG_LEVEL`                       | No       | `info`          | Logging level                       |
+| `ADMIN_PASSWORD`                  | No       | `change_me_pls` | Admin user password                 |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | No       | `180`           | JWT expiration (minutes)            |
+| `ITEMS_PER_PAGE`                  | No       | `200`           | Items per page in file listing      |
+| `DISABLE_DELETION`                | No       | `false`         | Disable file deletion               |
+| `MAX_FILE_SIZE`                   | No       | `104857600`     | Max upload file size (bytes, 100MB) |
+| `ENABLE_LAZY_LOADING`             | No       | `true`          | Enable lazy loading for file lists  |
+| `AWS_REGION`                      | No       | `us-east-1`     | Default AWS region                  |
+| `S3_FILE_MANAGER_CONFIG`          | No       | `config.json`   | Path to config file                 |
+| `DATA_DIR`                        | No       | —               | Custom data directory               |
+
+## Features
+
+- Multiple AWS account support (assume_role, profiles, direct credentials)
+- S3-compatible services (MinIO, R2, Wasabi)
+- JWT authentication with CSRF protection
+- Automatic refresh of expired credentials
+- Granular per-role, per-bucket access control
