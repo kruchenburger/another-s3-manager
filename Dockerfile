@@ -9,9 +9,11 @@ RUN uv sync --frozen --no-dev --no-editable
 FROM python:3.13-slim
 WORKDIR /app
 COPY --from=builder /app/.venv .venv
-COPY src/ src/
-COPY migrations/ migrations/
+# Copy from least to most frequently changed for better layer cache reuse:
+# alembic.ini almost never changes, migrations/ changes occasionally, src/ changes often.
 COPY alembic.ini .
+COPY migrations/ migrations/
+COPY src/ src/
 
 RUN mkdir -p /app/data
 
