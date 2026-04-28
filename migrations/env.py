@@ -40,6 +40,12 @@ def run_migrations_online() -> None:
         context.configure(connection=connection, target_metadata=target_metadata, render_as_batch=True)
         with context.begin_transaction():
             context.run_migrations()
+        # SQLAlchemy 2.0 + SQLite (non-transactional DDL): commit explicitly so the
+        # alembic_version row written by run_migrations() is persisted to disk.
+        # Without this, the schema is created (DDL auto-commits) but the version
+        # stamp is lost on connection close, causing subsequent runs to re-apply
+        # the same migration and fail with "table already exists".
+        connection.commit()
 
 
 if context.is_offline_mode():
