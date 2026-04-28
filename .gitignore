@@ -52,6 +52,9 @@ bans.json
 # Runtime data directory (bind-mounted in docker-compose)
 data/
 
+# Local docker-compose override (per-developer customizations like host volume mounts)
+docker-compose.override.yml
+
 # Node
 node_modules/
 dist/
