@@ -30,7 +30,6 @@ another-s3-manager/
 ├── alembic.ini
 ├── tests/                    # pytest tests
 ├── frontend/                 # React + Mantine scaffold (WIP)
-├── demo/                     # MinIO demo configs
 ├── data/                     # Runtime data (not tracked)
 ├── pyproject.toml
 ├── Dockerfile

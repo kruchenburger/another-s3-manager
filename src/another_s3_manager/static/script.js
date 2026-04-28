@@ -59,23 +59,11 @@ function applyAppBranding(info) {
     if (pageTitle) {
         pageTitle.textContent = appName;
     }
-
-    // Show demo banner if demo mode is enabled
-    // Don't hide banner if info is not available yet - it might be shown by inline script
-    const demoBanner = document.getElementById('demo-banner');
-    if (demoBanner && info && info.is_demo) {
-        demoBanner.style.display = 'block';
-        const demoBucketLimit = document.getElementById('demo-bucket-limit');
-        if (demoBucketLimit && info.demo_bucket_limit) {
-            demoBucketLimit.textContent = info.demo_bucket_limit;
-        }
-    }
-    // Don't hide banner if info is not available - let inline script handle it
 }
 
 async function loadAppInfo() {
     if (appInfo) {
-        applyAppBranding(appInfo); // Re-apply branding in case banner was hidden
+        applyAppBranding(appInfo);
         return appInfo;
     }
 
@@ -367,12 +355,7 @@ async function loadConfig(forceReload = true) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
         config = await response.json();
-        // Never log full config in demo mode to avoid exposing credentials
-        if (!appInfo || !appInfo.is_demo) {
-            debugLog('Loaded config:', JSON.stringify(config, null, 2));
-        } else {
-            debugLog('Loaded config (demo mode - config details hidden)');
-        }
+        debugLog('Loaded config:', JSON.stringify(config, null, 2));
         if (!config) {
             debugLog('Config is null or undefined');
             return null;
