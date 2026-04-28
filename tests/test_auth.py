@@ -1,18 +1,17 @@
 import builtins
 import importlib
-import json
 import time
-from datetime import timedelta, UTC
+from datetime import timedelta
 
 import pytest
-from jose import jwt
 from fastapi import HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials
+from jose import jwt
 from starlette.requests import Request
 
 
 def reload_auth():
-    import auth
+    import another_s3_manager.auth as auth
 
     importlib.reload(auth)
     auth._login_attempts = {}
@@ -20,7 +19,7 @@ def reload_auth():
 
 
 def reload_users():
-    import users
+    import another_s3_manager.users as users
 
     importlib.reload(users)
     return users
@@ -46,11 +45,11 @@ def ensure_user(username="admin", password="password", is_admin=True):
 
 
 def test_cryptcontext_fallback_initialization(monkeypatch):
-    import auth
     import passlib.context as context
 
+    import another_s3_manager.auth as auth
+
     calls = {"count": 0}
-    original = context.CryptContext
 
     class FakeContext:
         def __init__(self, *args, **kwargs):
@@ -85,7 +84,7 @@ def test_verify_password_all_contexts_fail(monkeypatch):
         def verify(self, *args, **kwargs):
             raise RuntimeError("fallback broken")
 
-    monkeypatch.setattr("auth.CryptContext", lambda *a, **k: DummyContext())
+    monkeypatch.setattr("another_s3_manager.auth.CryptContext", lambda *a, **k: DummyContext())
     assert auth.verify_password("password", "hash") is False
 
 
@@ -267,23 +266,6 @@ def test_record_login_attempt_success_resets(tmp_path):
     assert auth._login_attempts["user"]["failed_count"] == 0
 
 
-def test_import_fallback_when_constants_unavailable(monkeypatch):
-    original_import = builtins.__import__
-
-    def fake_import(name, *args, **kwargs):
-        if name == "constants":
-            raise ImportError("mock")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-    module = importlib.reload(importlib.import_module("auth"))
-    try:
-        assert module.JWT_ALGORITHM == "HS256"
-        assert module.ACCESS_TOKEN_EXPIRE_MINUTES == 60 * 24
-    finally:
-        importlib.reload(module)
-
-
 def test_verify_password_uses_fallback_context(monkeypatch):
     auth = reload_auth()
 
@@ -341,8 +323,8 @@ def test_get_current_user_adds_missing_theme(monkeypatch):
     def fake_save_users(data):
         saved["data"] = data
 
-    monkeypatch.setattr("users.load_users", fake_load_users)
-    monkeypatch.setattr("users.save_users", fake_save_users)
+    monkeypatch.setattr("another_s3_manager.users.load_users", fake_load_users)
+    monkeypatch.setattr("another_s3_manager.users.save_users", fake_save_users)
 
     token = auth.create_access_token({"sub": "noteheme"})
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
@@ -355,7 +337,7 @@ def test_get_current_user_user_not_found(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "secret")
     auth = reload_auth()
 
-    monkeypatch.setattr("users.load_users", lambda: {"users": []})
+    monkeypatch.setattr("another_s3_manager.users.load_users", lambda: {"users": []})
 
     token = auth.create_access_token({"sub": "ghost"})
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
@@ -376,8 +358,8 @@ def test_check_ban_removes_expired(monkeypatch):
     def fake_save_bans(data):
         saved["data"] = data
 
-    monkeypatch.setattr("users.load_bans", fake_load_bans)
-    monkeypatch.setattr("users.save_bans", fake_save_bans)
+    monkeypatch.setattr("another_s3_manager.users.load_bans", fake_load_bans)
+    monkeypatch.setattr("another_s3_manager.users.save_bans", fake_save_bans)
 
     assert auth.check_ban("user") is False
     assert saved["data"] == {}
@@ -421,4 +403,3 @@ def test_record_login_attempt_logs(monkeypatch):
         auth.record_login_attempt("noisy", success=False)
 
     assert any("User noisy banned" in msg for msg in messages)
-

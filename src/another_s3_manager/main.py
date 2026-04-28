@@ -2,18 +2,19 @@
 Another S3 Manager - Lightweight S3 file management interface
 Provides file browsing, upload, and deletion capabilities for S3 buckets
 """
-import os
+
 import logging
+import os
 from pathlib import Path
-from typing import Optional, Dict, Any
-from datetime import timedelta
+from typing import Any, Dict, Optional
 
 # Load environment variables from .env file (if it exists)
 # This must be done before importing modules that use environment variables
 try:
     from dotenv import load_dotenv
+
     # Load .env file from the same directory as this file
-    env_path = Path(__file__).parent / '.env'
+    env_path = Path(__file__).parent / ".env"
     if env_path.exists():
         load_dotenv(dotenv_path=env_path)
     else:
@@ -23,25 +24,36 @@ except ImportError:
     # python-dotenv is optional, continue without it
     pass
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Form, Body, Depends, status, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from botocore.exceptions import ClientError, BotoCoreError
 from io import BytesIO
 
-from constants import APP_NAME, APP_DESCRIPTION, APP_VERSION, STATIC_DIR
-from config import load_config, save_config, get_config_value
-from auth import (
-    verify_password, create_access_token, get_current_user, verify_csrf_token,
-    get_current_admin_user, check_ban, record_login_attempt, hash_password,
-    generate_csrf_token, get_jwt_secret_key, security
+from botocore.exceptions import BotoCoreError, ClientError
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+import another_s3_manager.config as config_module
+from another_s3_manager.auth import (
+    check_ban,
+    create_access_token,
+    generate_csrf_token,
+    get_current_admin_user,
+    get_current_user,
+    get_jwt_secret_key,
+    hash_password,
+    record_login_attempt,
+    verify_csrf_token,
+    verify_password,
 )
-from users import (
-    load_users, save_users, load_bans, save_bans, get_user_by_username,
-    get_all_users, create_user, update_user, delete_user, get_available_roles
+from another_s3_manager.config import load_config, save_config
+from another_s3_manager.constants import APP_DESCRIPTION, APP_NAME, APP_VERSION, STATIC_DIR
+from another_s3_manager.s3_client import clear_s3_clients_cache, execute_with_s3_retry
+from another_s3_manager.users import (
+    load_bans,
+    load_users,
+    save_bans,
+    save_users,
 )
-from s3_client import get_s3_client, execute_with_s3_retry, clear_s3_clients_cache
-from utils import sanitize_path, sanitize_bucket_name, format_boto_error, format_content_disposition
+from another_s3_manager.utils import format_boto_error, format_content_disposition, sanitize_bucket_name, sanitize_path
 
 # Validate required environment variables at startup
 try:
@@ -51,6 +63,7 @@ except ValueError as e:
     print("Please set the JWT_SECRET_KEY environment variable.")
     print("Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(32))'")
     import sys
+
     sys.exit(1)
 
 app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION)
@@ -58,30 +71,38 @@ app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION)
 # Set up logging
 logger = logging.getLogger(__name__)
 
+
 # Exception handler to ensure all errors return JSON
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail}
-    )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+# Health endpoint (no auth required)
+@app.get("/health")
+async def health():
+    return {"status": "ok", "version": APP_VERSION}
+
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
 
 # Clear S3 clients cache when config changes (hook into config module)
 def _on_config_change():
     """Callback when config changes to clear S3 clients cache."""
     clear_s3_clients_cache()
 
+
 # Hook config save to clear cache
-# Import config module and save original function before replacing it
-import config as config_module
 _original_save_config = config_module.save_config
+
+
 def save_config_with_cache_clear(config: Dict[str, Any], skip_migration: bool = False) -> None:
     """Wrapper for save_config that clears S3 cache."""
     _original_save_config(config, skip_migration=skip_migration)
     _on_config_change()
+
 
 # Update config module's save_config to use our wrapper
 config_module.save_config = save_config_with_cache_clear
@@ -118,10 +139,10 @@ async def login(username: str = Form(...), password: str = Form(...)):
             ban_data = bans.get(username, {})
             banned_until = ban_data.get("banned_until", 0)
             import time
+
             remaining = int((banned_until - time.time()) / 60)
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Account is banned. Try again in {remaining} minutes."
+                status_code=status.HTTP_403_FORBIDDEN, detail=f"Account is banned. Try again in {remaining} minutes."
             )
 
         users = load_users()
@@ -129,18 +150,12 @@ async def login(username: str = Form(...), password: str = Form(...)):
 
         if user is None:
             record_login_attempt(username, False)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect username or password"
-            )
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
 
         # Verify password
         if not verify_password(password, user.get("password_hash", "")):
             record_login_attempt(username, False)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect username or password"
-            )
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
 
         # Successful login
         record_login_attempt(username, True)
@@ -152,18 +167,16 @@ async def login(username: str = Form(...), password: str = Form(...)):
             "access_token": access_token,
             "token_type": "bearer",
             "csrf_token": csrf_token,  # Also return CSRF token separately for convenience
-            "user": {"username": username, "is_admin": user.get("is_admin", False)}
+            "user": {"username": username, "is_admin": user.get("is_admin", False)},
         }
     except HTTPException:
         raise
     except Exception as e:
         # Log the error for debugging
         import traceback
+
         traceback.print_exc()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Login failed: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Login failed: {str(e)}")
 
 
 @app.get("/api/me")
@@ -214,16 +227,15 @@ async def list_users(current_user: Dict[str, Any] = Depends(get_current_admin_us
     # Don't return password hashes
     user_list = []
     for user in users.get("users", []):
-        user_list.append({
-            "username": user.get("username"),
-            "is_admin": user.get("is_admin", False),
-            "created_at": user.get("created_at"),
-            "allowed_roles": user.get("allowed_roles", [])
-        })
-    return {
-        "users": user_list,
-        "available_roles": available_roles
-    }
+        user_list.append(
+            {
+                "username": user.get("username"),
+                "is_admin": user.get("is_admin", False),
+                "created_at": user.get("created_at"),
+                "allowed_roles": user.get("allowed_roles", []),
+            }
+        )
+    return {"users": user_list, "available_roles": available_roles}
 
 
 @app.post("/api/admin/users")
@@ -234,7 +246,7 @@ async def create_user(
     is_admin: bool = Form(False),
     allowed_roles: str = Form("", description="Comma-separated list of allowed role names"),
     current_user: Dict[str, Any] = Depends(get_current_admin_user),
-    csrf_verified: bool = Depends(verify_csrf_token)
+    csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Create a new user (admin only)"""
     users = load_users()
@@ -244,9 +256,9 @@ async def create_user(
         raise HTTPException(status_code=400, detail="User already exists")
 
     # Hash password
-    password_bytes = password.encode('utf-8')
+    password_bytes = password.encode("utf-8")
     if len(password_bytes) > 72:
-        password = password_bytes[:72].decode('utf-8', errors='ignore')
+        password = password_bytes[:72].decode("utf-8", errors="ignore")
 
     # Hash password using auth module
     hashed_password = hash_password(password)
@@ -256,13 +268,14 @@ async def create_user(
 
     # Import datetime for timestamp
     from datetime import datetime
+
     new_user = {
         "username": username,
         "password_hash": hashed_password,
         "is_admin": is_admin,
         "allowed_roles": roles_list,
         "theme": "auto",  # Default to auto (system preference)
-        "created_at": datetime.now().isoformat()
+        "created_at": datetime.now().isoformat(),
     }
 
     users.setdefault("users", []).append(new_user)
@@ -277,7 +290,7 @@ async def update_user_password(
     username: str,
     password: str = Body(..., embed=True, description="New password"),
     current_user: Dict[str, Any] = Depends(get_current_admin_user),
-    csrf_verified: bool = Depends(verify_csrf_token)
+    csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Update user password (admin only)"""
     if not password or len(password.strip()) == 0:
@@ -305,7 +318,7 @@ async def update_user(
     is_admin: Optional[bool] = Form(None),
     allowed_roles: Optional[str] = Form(None, description="Comma-separated list of allowed role names"),
     current_user: Dict[str, Any] = Depends(get_current_admin_user),
-    csrf_verified: bool = Depends(verify_csrf_token)
+    csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Update user permissions (admin only)"""
     users = load_users()
@@ -331,7 +344,7 @@ async def update_user_theme(
     request: Request,
     theme: str = Body(..., embed=True, description="Theme preference: 'light' or 'dark' (auto only for initial state)"),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    csrf_verified: bool = Depends(verify_csrf_token)
+    csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Update user's theme preference"""
     # Allow only 'light' or 'dark' for manual changes (auto is only for initial state)
@@ -355,7 +368,7 @@ async def delete_user(
     request: Request,
     username: str,
     current_user: Dict[str, Any] = Depends(get_current_admin_user),
-    csrf_verified: bool = Depends(verify_csrf_token)
+    csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Delete a user (admin only)"""
     if username == current_user.get("username"):
@@ -374,17 +387,20 @@ async def list_bans(current_user: Dict[str, Any] = Depends(get_current_admin_use
     bans = load_bans()
     ban_list = []
     import time
+
     current_time = time.time()
     for username, ban_data in bans.items():
         banned_until = ban_data.get("banned_until", 0)
         remaining = int((banned_until - current_time) / 60)
-        ban_list.append({
-            "username": username,
-            "banned_until": banned_until,
-            "banned_at": ban_data.get("banned_at"),
-            "reason": ban_data.get("reason"),
-            "remaining_minutes": remaining if remaining > 0 else 0
-        })
+        ban_list.append(
+            {
+                "username": username,
+                "banned_until": banned_until,
+                "banned_at": ban_data.get("banned_at"),
+                "reason": ban_data.get("reason"),
+                "remaining_minutes": remaining if remaining > 0 else 0,
+            }
+        )
     return {"bans": ban_list}
 
 
@@ -393,7 +409,7 @@ async def unban_user(
     request: Request,
     username: str,
     current_user: Dict[str, Any] = Depends(get_current_admin_user),
-    csrf_verified: bool = Depends(verify_csrf_token)
+    csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Unban a user (admin only)"""
     bans = load_bans()
@@ -409,7 +425,7 @@ async def unban_user(
 @app.get("/api/config")
 async def get_config(
     force_reload: bool = Query(False, description="Force reload from file"),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """Get current configuration (filtered by user permissions)."""
     config = load_config(force_reload=force_reload)
@@ -452,8 +468,9 @@ async def get_config(
 
     # If user is admin, return config but without credentials
     if current_user.get("is_admin", False):
-        from config import is_config_writable
-        from constants import get_data_dir
+        from another_s3_manager.config import is_config_writable
+        from another_s3_manager.constants import get_data_dir
+
         # Apply default_role if specified
         default_role = config.get("default_role", "")
         if default_role and any(r.get("name") == default_role for r in config.get("roles", [])):
@@ -472,7 +489,7 @@ async def get_config(
             "max_file_size": max_file_size,
             "auto_inline_extensions": config.get("auto_inline_extensions", []),
             "data_dir": str(get_data_dir()),  # Return current DATA_DIR value (read-only)
-            "is_read_only": not is_config_writable()
+            "is_read_only": not is_config_writable(),
         }
         return safe_config
 
@@ -492,14 +509,11 @@ async def get_config(
             "items_per_page": items_per_page,
             "disable_deletion": disable_deletion,
             "enable_lazy_loading": enable_lazy_loading,
-            "max_file_size": max_file_size
+            "max_file_size": max_file_size,
         }
 
     # Filter roles and sanitize
-    filtered_roles = [
-        sanitize_role(role) for role in config.get("roles", [])
-        if role.get("name") in allowed_roles
-    ]
+    filtered_roles = [sanitize_role(role) for role in config.get("roles", []) if role.get("name") in allowed_roles]
 
     # Apply default_role if specified and available
     default_role = config.get("default_role", "")
@@ -517,33 +531,30 @@ async def get_config(
         "items_per_page": items_per_page,
         "disable_deletion": disable_deletion,
         "enable_lazy_loading": enable_lazy_loading,
-        "max_file_size": max_file_size
+        "max_file_size": max_file_size,
     }
 
 
 @app.get("/api/config/export")
-async def export_config(
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
+async def export_config(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Export full configuration as JSON (admin only)"""
     if not current_user.get("is_admin", False):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required to export configuration"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required to export configuration"
         )
 
     config = load_config(force_reload=True)
 
     # Return as JSON response with download headers
-    from fastapi.responses import Response
     import json
+
+    from fastapi.responses import Response
+
     json_str = json.dumps(config, indent=2, ensure_ascii=False)
     return Response(
         content=json_str,
         media_type="application/json",
-        headers={
-            "Content-Disposition": "attachment; filename=config.json"
-        }
+        headers={"Content-Disposition": "attachment; filename=config.json"},
     )
 
 
@@ -552,22 +563,22 @@ async def update_config(
     request: Request,
     config: Dict[str, Any] = Body(...),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    csrf_verified: bool = Depends(verify_csrf_token)
+    csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Update configuration (admin only)"""
     # Only admins can update config
     if not current_user.get("is_admin", False):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required to update configuration"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required to update configuration"
         )
 
     # Check if config is read-only
-    from config import is_config_writable
+    from another_s3_manager.config import is_config_writable
+
     if not is_config_writable():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="The application does not have write access to the configuration file (e.g., mounted as read-only from Kubernetes ConfigMap). Configuration management must be handled externally."
+            detail="The application does not have write access to the configuration file (e.g., mounted as read-only from Kubernetes ConfigMap). Configuration management must be handled externally.",
         )
 
     try:
@@ -632,7 +643,9 @@ async def update_config(
                 if not isinstance(ext, str):
                     raise HTTPException(status_code=400, detail="auto_inline_extensions must contain only strings")
             # Normalize extensions: remove leading dots and convert to lowercase
-            config["auto_inline_extensions"] = [ext.lstrip('.').lower() for ext in config["auto_inline_extensions"] if ext.strip()]
+            config["auto_inline_extensions"] = [
+                ext.lstrip(".").lower() for ext in config["auto_inline_extensions"] if ext.strip()
+            ]
         else:
             # Preserve auto_inline_extensions from current config if exists, otherwise use default
             current_config = load_config(force_reload=False)
@@ -663,8 +676,12 @@ async def update_config(
 
                 # Validate AWS format (should start with AKIA and be 20 characters)
                 import re
-                if not re.match(r'^AKIA[0-9A-Z]{16}$', access_key_id):
-                    raise HTTPException(status_code=400, detail="Invalid access_key_id format. AWS access keys should start with AKIA and be 20 characters long")
+
+                if not re.match(r"^AKIA[0-9A-Z]{16}$", access_key_id):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid access_key_id format. AWS access keys should start with AKIA and be 20 characters long",
+                    )
 
                 role["access_key_id"] = access_key_id  # Save trimmed value
 
@@ -679,10 +696,15 @@ async def update_config(
                         if existing_secret and existing_secret != "***REDACTED***":
                             role["secret_access_key"] = existing_secret
                         else:
-                            raise HTTPException(status_code=400, detail=f"secret_access_key is required for role '{role_name}'. Please provide it.")
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"secret_access_key is required for role '{role_name}'. Please provide it.",
+                            )
                     else:
                         # New role - secret_access_key is required
-                        raise HTTPException(status_code=400, detail="secret_access_key is required for new credentials role")
+                        raise HTTPException(
+                            status_code=400, detail="secret_access_key is required for new credentials role"
+                        )
                 else:
                     # New secret_access_key provided, use it
                     role["secret_access_key"] = secret_access_key
@@ -716,10 +738,15 @@ async def update_config(
                         if existing_secret and existing_secret != "***REDACTED***":
                             role["secret_access_key"] = existing_secret
                         else:
-                            raise HTTPException(status_code=400, detail=f"secret_access_key is required for role '{role_name}'. Please provide it.")
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"secret_access_key is required for role '{role_name}'. Please provide it.",
+                            )
                     else:
                         # New role - secret_access_key is required
-                        raise HTTPException(status_code=400, detail="secret_access_key is required for new s3_compatible role")
+                        raise HTTPException(
+                            status_code=400, detail="secret_access_key is required for new s3_compatible role"
+                        )
                 else:
                     # New secret_access_key provided, use it
                     role["secret_access_key"] = secret_access_key
@@ -731,10 +758,7 @@ async def update_config(
         save_config(config)
         return {"message": "Configuration updated successfully"}
     except PermissionError as e:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -759,8 +783,7 @@ def validate_role_access(role_name: Optional[str], current_user: Dict[str, Any])
     allowed_roles = user.get("allowed_roles", [])
     if role_name not in allowed_roles:
         raise HTTPException(
-            status_code=403,
-            detail=f"Access denied: You don't have permission to use role '{role_name}'"
+            status_code=403, detail=f"Access denied: You don't have permission to use role '{role_name}'"
         )
 
     return role_name
@@ -769,7 +792,7 @@ def validate_role_access(role_name: Optional[str], current_user: Dict[str, Any])
 @app.get("/api/buckets")
 async def list_buckets(
     role: Optional[str] = Query(None, description="Role name to use"),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """List available S3 buckets - either from allowed_buckets config or by listing all buckets"""
     try:
@@ -777,8 +800,9 @@ async def list_buckets(
         validated_role = validate_role_access(role, current_user)
 
         # Load config to check for allowed_buckets
-        from config import load_config
-        config = load_config(force_reload=False)
+        from another_s3_manager.config import load_config as _load_config
+
+        config = _load_config(force_reload=False)
         roles = config.get("roles", [])
 
         # Find the role configuration
@@ -803,7 +827,7 @@ async def list_buckets(
         # Fallback to listing all buckets (requires s3:ListAllMyBuckets permission)
         def fetch_buckets(s3_client):
             response = s3_client.list_buckets()
-            return [bucket['Name'] for bucket in response['Buckets']]
+            return [bucket["Name"] for bucket in response["Buckets"]]
 
         return execute_with_s3_retry(validated_role, fetch_buckets)
     except HTTPException:
@@ -827,7 +851,7 @@ async def list_files(
     bucket_name: str,
     path: str = Query("", description="Path prefix to list files from"),
     role: Optional[str] = Query(None, description="Role name to use"),
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """List files and directories in a bucket at the specified path"""
     try:
@@ -841,47 +865,41 @@ async def list_files(
         # Validate role access
         validated_role = validate_role_access(role, current_user)
         # Normalize path - remove leading/trailing slashes
-        prefix = path + '/' if path else ''
+        prefix = path + "/" if path else ""
 
         def fetch_files(s3_client):
             files = []
             directories = set()  # Track directories to avoid duplicates
 
-            paginator = s3_client.get_paginator('list_objects_v2')
-            pages = paginator.paginate(
-                Bucket=bucket_name,
-                Prefix=prefix,
-                Delimiter='/'
-            )
+            paginator = s3_client.get_paginator("list_objects_v2")
+            pages = paginator.paginate(Bucket=bucket_name, Prefix=prefix, Delimiter="/")
 
             for page in pages:
-                if 'CommonPrefixes' in page:
-                    for prefix_obj in page['CommonPrefixes']:
-                        dir_name = prefix_obj['Prefix'][len(prefix):].rstrip('/')
+                if "CommonPrefixes" in page:
+                    for prefix_obj in page["CommonPrefixes"]:
+                        dir_name = prefix_obj["Prefix"][len(prefix) :].rstrip("/")
                         if dir_name and dir_name not in directories:
                             directories.add(dir_name)
-                            files.append({
-                                'name': dir_name,
-                                'is_directory': True,
-                                'size': 0
-                            })
+                            files.append({"name": dir_name, "is_directory": True, "size": 0})
 
-                if 'Contents' in page:
-                    for obj in page['Contents']:
-                        if obj['Key'].endswith('/') and obj['Size'] == 0:
+                if "Contents" in page:
+                    for obj in page["Contents"]:
+                        if obj["Key"].endswith("/") and obj["Size"] == 0:
                             continue
 
-                        file_name = obj['Key'][len(prefix):]
+                        file_name = obj["Key"][len(prefix) :]
                         if file_name:
-                            files.append({
-                                'name': file_name,
-                                'is_directory': False,
-                                'size': obj['Size'],
-                                'last_modified': obj['LastModified'].isoformat()
-                            })
+                            files.append(
+                                {
+                                    "name": file_name,
+                                    "is_directory": False,
+                                    "size": obj["Size"],
+                                    "last_modified": obj["LastModified"].isoformat(),
+                                }
+                            )
 
-            files.sort(key=lambda x: (not x['is_directory'], x['name'].lower()))
-            return {'files': files, 'path': path, 'total_count': len(files)}
+            files.sort(key=lambda x: (not x["is_directory"], x["name"].lower()))
+            return {"files": files, "path": path, "total_count": len(files)}
 
         return execute_with_s3_retry(validated_role, fetch_files)
     except HTTPException:
@@ -892,8 +910,8 @@ async def list_files(
         logger.error(f"Configuration error when listing files: {error_msg}", exc_info=True)
         raise HTTPException(status_code=400, detail=error_msg)
     except (ClientError, BotoCoreError) as e:
-        error_code = e.response.get('Error', {}).get('Code', '') if hasattr(e, 'response') else ''
-        if error_code == 'NoSuchBucket':
+        error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+        if error_code == "NoSuchBucket":
             raise HTTPException(status_code=404, detail=f"Bucket '{bucket_name}' not found")
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to list files: {error_message}")
@@ -910,7 +928,7 @@ async def upload_file(
     key: str = Form(..., description="S3 object key (path)"),
     role: Optional[str] = Form(None, description="Role name to use"),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    csrf_verified: bool = Depends(verify_csrf_token)
+    csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Upload a file to S3 bucket using streaming to minimize memory usage"""
     try:
@@ -934,11 +952,11 @@ async def upload_file(
         # Check file size if available (some clients provide Content-Length)
         # If not available, we'll check during streaming
         file_size = None
-        if hasattr(file, 'size') and file.size is not None:
+        if hasattr(file, "size") and file.size is not None:
             file_size = file.size
-        elif hasattr(request, 'headers') and 'content-length' in request.headers:
+        elif hasattr(request, "headers") and "content-length" in request.headers:
             try:
-                file_size = int(request.headers['content-length'])
+                file_size = int(request.headers["content-length"])
             except (ValueError, TypeError):
                 pass
 
@@ -984,21 +1002,21 @@ async def upload_file(
         content_disposition = None
         if auto_inline_extensions:
             # Get file extension from key (path)
-            file_ext = Path(key).suffix.lstrip('.').lower()
+            file_ext = Path(key).suffix.lstrip(".").lower()
             if file_ext in auto_inline_extensions:
-                content_disposition = 'inline'
+                content_disposition = "inline"
 
         def upload_object(s3_client):
             put_object_params = {
-                'Bucket': bucket_name,
-                'Key': key,
-                'Body': content,
-                'ContentType': file.content_type or 'application/octet-stream'
+                "Bucket": bucket_name,
+                "Key": key,
+                "Body": content,
+                "ContentType": file.content_type or "application/octet-stream",
             }
             if content_disposition:
-                put_object_params['ContentDisposition'] = content_disposition
+                put_object_params["ContentDisposition"] = content_disposition
             s3_client.put_object(**put_object_params)
-            return {'message': 'File uploaded successfully', 'key': key}
+            return {"message": "File uploaded successfully", "key": key}
 
         return execute_with_s3_retry(validated_role, upload_object)
     except HTTPException:
@@ -1015,16 +1033,18 @@ async def upload_file(
         error_msg = ""
         error_type = type(e).__name__
         http_status_code = None
-        if hasattr(e, 'response') and e.response:
+        if hasattr(e, "response") and e.response:
             if isinstance(e.response, dict):
-                error_code = e.response.get('Error', {}).get('Code', '')
-                error_msg = e.response.get('Error', {}).get('Message', '')
-                http_status_code = e.response.get('ResponseMetadata', {}).get('HTTPStatusCode')
-            elif hasattr(e.response, 'get'):
-                error_code = e.response.get('Error', {}).get('Code', '') if hasattr(e.response.get('Error', {}), 'get') else ''
+                error_code = e.response.get("Error", {}).get("Code", "")
+                error_msg = e.response.get("Error", {}).get("Message", "")
+                http_status_code = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            elif hasattr(e.response, "get"):
+                error_code = (
+                    e.response.get("Error", {}).get("Code", "") if hasattr(e.response.get("Error", {}), "get") else ""
+                )
 
         # Special handling for 403/AccessDenied errors
-        is_access_denied = error_code == 'AccessDenied' or (http_status_code and http_status_code == 403)
+        is_access_denied = error_code == "AccessDenied" or (http_status_code and http_status_code == 403)
         log_level = logger.warning if is_access_denied else logger.error
 
         log_extra = {
@@ -1033,7 +1053,7 @@ async def upload_file(
             "role": validated_role,
             "error_type": error_type,
             "error_code": error_code,
-            "file_size": total_read if 'total_read' in locals() else None,
+            "file_size": total_read if "total_read" in locals() else None,
         }
         if error_msg:
             log_extra["error_message"] = error_msg
@@ -1043,7 +1063,7 @@ async def upload_file(
         log_level(
             f"File upload failed (S3 error{' - Access Denied' if is_access_denied else ''})",
             extra=log_extra,
-            exc_info=True
+            exc_info=True,
         )
 
         # Return 403 status for access denied errors
@@ -1059,22 +1079,20 @@ async def upload_file(
                 "key": key,
                 "role": validated_role,
                 "error_type": type(e).__name__,
-                "file_size": total_read if 'total_read' in locals() else None,
+                "file_size": total_read if "total_read" in locals() else None,
             },
-            exc_info=True
+            exc_info=True,
         )
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {error_message}")
 
 
-def get_user_for_download(
-    token: Optional[str] = Query(None),
-    request: Request = None
-) -> Dict[str, Any]:
+def get_user_for_download(token: Optional[str] = Query(None), request: Request = None) -> Dict[str, Any]:
     """Get user from token in URL or Bearer header for downloads"""
-    from auth import get_jwt_secret_key
-    from jose import jwt, JWTError
-    from constants import JWT_ALGORITHM
-    from users import load_users
+    from jose import JWTError, jwt
+
+    from another_s3_manager.auth import get_jwt_secret_key
+    from another_s3_manager.constants import JWT_ALGORITHM
+    from another_s3_manager.users import load_users
 
     # Try token from URL first (for direct link downloads without buffering)
     if token:
@@ -1119,7 +1137,7 @@ async def download_file(
     bucket_name: str,
     path: str = Query(..., description="Path to file to download"),
     role: Optional[str] = Query(None, description="Role name to use"),
-    current_user: Dict[str, Any] = Depends(get_user_for_download)
+    current_user: Dict[str, Any] = Depends(get_user_for_download),
 ):
     """Download a file from S3 bucket directly"""
     try:
@@ -1132,17 +1150,18 @@ async def download_file(
 
         # Validate role access
         validated_role = validate_role_access(role, current_user)
+
         def fetch_object(s3_client):
             return s3_client.get_object(Bucket=bucket_name, Key=path)
 
         response = execute_with_s3_retry(validated_role, fetch_object)
-        content_type = response.get('ContentType', 'application/octet-stream')
-        filename = path.split('/')[-1]  # Get filename from path
+        content_type = response.get("ContentType", "application/octet-stream")
+        filename = path.split("/")[-1]  # Get filename from path
 
         # Create generator to stream file directly from S3 without loading into memory
         # FastAPI StreamingResponse can handle regular generators for streaming
         def generate():
-            body = response['Body']
+            body = response["Body"]
             chunk_size = 8192  # 8KB chunks
             try:
                 while True:
@@ -1152,7 +1171,7 @@ async def download_file(
                     yield chunk
             finally:
                 # Ensure body is closed properly
-                if hasattr(body, 'close'):
+                if hasattr(body, "close"):
                     try:
                         body.close()
                     except Exception:
@@ -1160,12 +1179,9 @@ async def download_file(
 
         # Return file as streaming response - stream directly from S3
         from fastapi.responses import StreamingResponse
+
         return StreamingResponse(
-            generate(),
-            media_type=content_type,
-            headers={
-                "Content-Disposition": format_content_disposition(filename)
-            }
+            generate(), media_type=content_type, headers={"Content-Disposition": format_content_disposition(filename)}
         )
     except HTTPException:
         raise
@@ -1173,12 +1189,12 @@ async def download_file(
         # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
         # Check if it's a configuration error (contains role_arn or assume role related text)
         error_msg = str(e)
-        if 'role' in error_msg.lower() or 'assume' in error_msg.lower() or 'credentials' in error_msg.lower():
+        if "role" in error_msg.lower() or "assume" in error_msg.lower() or "credentials" in error_msg.lower():
             logger.error(f"Configuration error when downloading file: {error_msg}", exc_info=True)
         raise HTTPException(status_code=400, detail=error_msg)
     except (ClientError, BotoCoreError) as e:
-        error_code = e.response.get('Error', {}).get('Code', '') if hasattr(e, 'response') else ''
-        if error_code in {'404', 'NoSuchKey'}:
+        error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+        if error_code in {"404", "NoSuchKey"}:
             raise HTTPException(status_code=404, detail=f"File '{path}' not found")
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to download file: {error_message}")
@@ -1194,7 +1210,7 @@ async def delete_file(
     path: str = Query(..., description="Path to file or directory to delete"),
     role: Optional[str] = Query(None, description="Role name to use"),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    csrf_verified: bool = Depends(verify_csrf_token)
+    csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Delete a file or recursively delete a directory from S3"""
     # Check if deletion is disabled (from environment variable or config)
@@ -1203,10 +1219,7 @@ async def delete_file(
     disable_deletion_config = config.get("disable_deletion", False)
 
     if disable_deletion_env or disable_deletion_config:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="File deletion is disabled by administrator"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File deletion is disabled by administrator")
     try:
         # Validate and sanitize inputs
         try:
@@ -1223,49 +1236,41 @@ async def delete_file(
             raise HTTPException(status_code=400, detail="Cannot delete root path")
 
         # Check if it's a directory (ends with /) or a file
-        is_directory = prefix.endswith('/')
+        is_directory = prefix.endswith("/")
         if is_directory:
-            prefix = prefix.rstrip('/')
-
-        deleted_count = 0
+            prefix = prefix.rstrip("/")
 
         def perform_delete(s3_client):
             deleted_count = 0
-            paginator = s3_client.get_paginator('list_objects_v2')
-            pages = paginator.paginate(Bucket=bucket_name, Prefix=prefix + ('/' if is_directory else ''))
+            paginator = s3_client.get_paginator("list_objects_v2")
+            pages = paginator.paginate(Bucket=bucket_name, Prefix=prefix + ("/" if is_directory else ""))
 
             objects_to_delete = []
             for page in pages:
-                if 'Contents' in page:
-                    for obj in page['Contents']:
-                        objects_to_delete.append({'Key': obj['Key']})
+                if "Contents" in page:
+                    for obj in page["Contents"]:
+                        objects_to_delete.append({"Key": obj["Key"]})
 
             if not is_directory and not objects_to_delete:
                 try:
                     s3_client.delete_object(Bucket=bucket_name, Key=prefix)
                     deleted_count = 1
                 except ClientError as e:
-                    error_code = e.response.get('Error', {}).get('Code', '') if hasattr(e, 'response') else ''
-                    if error_code in ('404', 'NoSuchKey'):
+                    error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+                    if error_code in ("404", "NoSuchKey"):
                         raise HTTPException(status_code=404, detail=f"File or directory '{path}' not found")
                     raise
             else:
                 if objects_to_delete:
                     for i in range(0, len(objects_to_delete), 1000):
-                        batch = objects_to_delete[i:i + 1000]
-                        s3_client.delete_objects(
-                            Bucket=bucket_name,
-                            Delete={
-                                'Objects': batch,
-                                'Quiet': True
-                            }
-                        )
+                        batch = objects_to_delete[i : i + 1000]
+                        s3_client.delete_objects(Bucket=bucket_name, Delete={"Objects": batch, "Quiet": True})
                         deleted_count += len(batch)
 
             if deleted_count == 0:
                 raise HTTPException(status_code=404, detail=f"File or directory '{path}' not found")
 
-            return {'message': f'Successfully deleted {deleted_count} object(s)', 'count': deleted_count}
+            return {"message": f"Successfully deleted {deleted_count} object(s)", "count": deleted_count}
 
         return execute_with_s3_retry(validated_role, perform_delete)
     except HTTPException:
@@ -1274,7 +1279,7 @@ async def delete_file(
         # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
         # Check if it's a configuration error (contains role_arn or assume role related text)
         error_msg = str(e)
-        if 'role' in error_msg.lower() or 'assume' in error_msg.lower() or 'credentials' in error_msg.lower():
+        if "role" in error_msg.lower() or "assume" in error_msg.lower() or "credentials" in error_msg.lower():
             logger.error(f"Configuration error when deleting file: {error_msg}", exc_info=True)
         raise HTTPException(status_code=400, detail=error_msg)
     except (ClientError, BotoCoreError) as e:
@@ -1287,6 +1292,7 @@ async def delete_file(
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
+
     port = int(os.getenv("PORT", "8080"))
     log_level = str(os.getenv("LOG_LEVEL", "info")).lower()
     host = str(os.getenv("UVICORN_HOST", "0.0.0.0"))

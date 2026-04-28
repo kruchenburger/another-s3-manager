@@ -1,9 +1,9 @@
 [project]
 name = "another-s3-manager"
-version = "0.1.1"
 description = "Lightweight web-based file manager for Amazon S3 buckets built with FastAPI"
 readme = "README.md"
 requires-python = ">=3.13"
+dynamic = ["version"]
 dependencies = [
     "fastapi==0.104.1",
     "uvicorn[standard]==0.24.0",
@@ -23,12 +23,42 @@ dev = [
     "pytest-mock==3.12.0",
     "httpx==0.27.0",
     "moto[s3]==5.1.2",
+    "ruff>=0.8",
 ]
 
-[tool.setuptools]
-# Explicitly specify Python modules (not packages) to avoid auto-discovery issues
-py-modules = ["auth", "config", "constants", "main", "s3_client", "users", "utils"]
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+another_s3_manager = ["static/**/*"]
 
 [build-system]
 requires = ["setuptools>=67", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["another_s3_manager"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "--tb=short"
+
+[tool.coverage.run]
+source = ["another_s3_manager"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__",
+]
+omit = ["tests/*"]

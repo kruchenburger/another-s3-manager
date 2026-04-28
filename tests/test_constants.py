@@ -2,11 +2,9 @@ import importlib
 import os
 from pathlib import Path
 
-import pytest
-
 
 def reload_constants():
-    import constants
+    import another_s3_manager.constants as constants
 
     importlib.reload(constants)
     return constants
@@ -23,7 +21,7 @@ def test_get_data_dir_uses_environment_variable():
 def test_get_data_dir_falls_back_to_config(monkeypatch, tmp_path):
     monkeypatch.delenv("DATA_DIR", raising=False)
 
-    import config as config_module
+    import another_s3_manager.config as config_module
 
     config_data = config_module.load_config(force_reload=True)
     custom_dir = tmp_path / "custom-data"
@@ -39,7 +37,7 @@ def test_get_data_dir_falls_back_to_config(monkeypatch, tmp_path):
 def test_get_data_dir_defaults_to_base_dir(monkeypatch, tmp_path):
     monkeypatch.delenv("DATA_DIR", raising=False)
 
-    import config as config_module
+    import another_s3_manager.config as config_module
 
     config_data = config_module.load_config(force_reload=True)
     config_data.pop("data_dir", None)
@@ -73,7 +71,7 @@ def test_get_bans_file(monkeypatch, tmp_path):
 
 def test_get_data_dir_handles_load_config_error(monkeypatch):
     constants = reload_constants()
-    import config as config_module
+    import another_s3_manager.config as config_module
 
     def boom(*args, **kwargs):
         raise RuntimeError("load_config failed")
@@ -86,7 +84,7 @@ def test_get_data_dir_handles_load_config_error(monkeypatch):
 
 def test_invalid_jwt_expire_env_resets_to_default(monkeypatch):
     monkeypatch.setenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "not-a-number")
-    constants = importlib.reload(importlib.import_module("constants"))
+    constants = importlib.reload(importlib.import_module("another_s3_manager.constants"))
     try:
         assert constants.ACCESS_TOKEN_EXPIRE_MINUTES == constants.DEFAULT_JWT_EXPIRE_MINUTES
     finally:
@@ -96,7 +94,7 @@ def test_invalid_jwt_expire_env_resets_to_default(monkeypatch):
 
 def test_jwt_expire_minimum_enforced(monkeypatch):
     monkeypatch.setenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "0")
-    module = importlib.reload(importlib.import_module("constants"))
+    module = importlib.reload(importlib.import_module("another_s3_manager.constants"))
     try:
         assert module.ACCESS_TOKEN_EXPIRE_MINUTES == module.DEFAULT_JWT_EXPIRE_MINUTES
     finally:
@@ -105,7 +103,7 @@ def test_jwt_expire_minimum_enforced(monkeypatch):
 
 
 def test_app_version_prefers_env(monkeypatch):
-    import constants as constants_module
+    import another_s3_manager.constants as constants_module
 
     monkeypatch.setenv("APP_VERSION", "9.9.9")
     reloaded = importlib.reload(constants_module)
@@ -116,59 +114,12 @@ def test_app_version_prefers_env(monkeypatch):
         importlib.reload(constants_module)
 
 
-def test_app_version_from_pyproject(monkeypatch):
-    import constants as constants_module
+def test_app_version_defaults_to_dev(monkeypatch):
+    import another_s3_manager.constants as constants_module
 
     monkeypatch.delenv("APP_VERSION", raising=False)
-    if constants_module.tomllib is None:
-        pytest.skip("tomllib not available")
-    version = constants_module._read_version_from_pyproject()
-    assert version is not None
-    assert version.count('.') >= 1
-
-
-def test_app_version_without_tomllib(monkeypatch):
-    import constants as constants_module
-
-    monkeypatch.setattr(constants_module, "tomllib", None)
-    assert constants_module._read_version_from_pyproject() is None
-    importlib.reload(constants_module)
-
-
-def test_app_version_default_fallback(monkeypatch):
-    import constants as constants_module
-
-    monkeypatch.delenv("APP_VERSION", raising=False)
-    monkeypatch.setattr(constants_module, "APP_VERSION", None, raising=False)
-    monkeypatch.setattr(constants_module, "_read_version_from_pyproject", lambda: None, raising=False)
-    exec(
-        "if not APP_VERSION:\n    APP_VERSION = _read_version_from_pyproject()\nif not APP_VERSION:\n    APP_VERSION = '0.1.0'",
-        constants_module.__dict__,
-    )
-    assert constants_module.APP_VERSION == "0.1.0"
-    importlib.reload(constants_module)
-
-
-def test_read_version_from_parent_pyproject(monkeypatch, tmp_path):
-    import constants as constants_module
-
-    if constants_module.tomllib is None:
-        pytest.skip("tomllib not available")
-
-    app_dir = tmp_path / "app"
-    app_dir.mkdir()
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text('[project]\nversion = "3.2.1"\n', encoding="utf-8")
-
-    monkeypatch.setattr(constants_module, "BASE_DIR", app_dir, raising=False)
-    version = constants_module._read_version_from_pyproject()
-    assert version == "3.2.1"
-
-
-def test_read_version_missing_pyproject(monkeypatch, tmp_path):
-    import constants as constants_module
-
-    app_dir = tmp_path / "app"
-    app_dir.mkdir()
-    monkeypatch.setattr(constants_module, "BASE_DIR", app_dir, raising=False)
-    assert constants_module._read_version_from_pyproject() is None
+    reloaded = importlib.reload(constants_module)
+    try:
+        assert reloaded.APP_VERSION == "dev"
+    finally:
+        importlib.reload(constants_module)

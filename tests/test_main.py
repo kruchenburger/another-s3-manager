@@ -1,38 +1,36 @@
 import builtins
+import copy
 import importlib
 import io
-import json
-import time
-import copy
-from datetime import datetime, timedelta, UTC
-
 import os
+import time
+from datetime import UTC, datetime
 
 os.environ.setdefault("APP_VERSION", "0.1.0")
 
-from constants import APP_VERSION
-
 import pytest
 from botocore.exceptions import ClientError
-from fastapi import status, HTTPException
+from fastapi import HTTPException, status
+
+from another_s3_manager.constants import APP_VERSION
 
 
 def reload_main():
-    import main
+    import another_s3_manager.main as main
 
     importlib.reload(main)
     return main
 
 
 def reload_auth_module():
-    import auth
+    import another_s3_manager.auth as auth
 
     importlib.reload(auth)
     return auth
 
 
 def reload_users_module():
-    import users
+    import another_s3_manager.users as users
 
     importlib.reload(users)
     return users
@@ -80,7 +78,7 @@ def test_main_import_without_dotenv(monkeypatch):
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    module = importlib.reload(importlib.import_module("main"))
+    module = importlib.reload(importlib.import_module("another_s3_manager.main"))
     try:
         assert hasattr(module, "app")
     finally:
@@ -88,7 +86,7 @@ def test_main_import_without_dotenv(monkeypatch):
 
 
 def test_main_exits_when_secret_missing(monkeypatch):
-    module = importlib.import_module("main")
+    module = importlib.import_module("another_s3_manager.main")
     monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
     monkeypatch.setenv("JWT_SECRET_KEY", "")
 
@@ -169,9 +167,7 @@ def test_login_success(app_client):
 
 
 def test_login_failure(app_client):
-    response = app_client.post(
-        "/api/login", data={"username": "admin", "password": "wrong"}
-    )
+    response = app_client.post("/api/login", data={"username": "admin", "password": "wrong"})
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
@@ -180,9 +176,7 @@ def test_login_banned_user(app_client):
     for _ in range(auth_module.MAX_LOGIN_ATTEMPTS):
         auth_module.record_login_attempt("admin", success=False)
     assert auth_module.check_ban("admin") is True
-    response = app_client.post(
-        "/api/login", data={"username": "admin", "password": "admin123"}
-    )
+    response = app_client.post("/api/login", data={"username": "admin", "password": "admin123"})
     assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
@@ -218,12 +212,9 @@ def test_admin_page(app_client):
 def test_list_users_requires_admin(app_client):
     create_user("user", is_admin=False)
     data, headers = login(app_client)
-    headers_non_admin = headers.copy()
     # create non-admin token
     create_user("regular", is_admin=False)
-    response = app_client.post(
-        "/api/login", data={"username": "regular", "password": "password"}
-    )
+    response = app_client.post("/api/login", data={"username": "regular", "password": "password"})
     assert response.status_code == status.HTTP_200_OK
     regular_data = response.json()
     regular_headers = {
@@ -300,9 +291,7 @@ def test_update_user(app_client):
 def test_update_user_theme(app_client):
     create_user("themer", is_admin=False)
     app_client.post("/api/login", data={"username": "themer", "password": "password"})
-    login_response = app_client.post(
-        "/api/login", data={"username": "themer", "password": "password"}
-    )
+    login_response = app_client.post("/api/login", data={"username": "themer", "password": "password"})
     data = login_response.json()
     headers = {
         "Authorization": f"Bearer {data['access_token']}",
@@ -355,9 +344,7 @@ def test_get_config_admin(app_client):
 
 def test_get_config_regular_user(app_client):
     create_user("viewer", is_admin=False)
-    login_response = app_client.post(
-        "/api/login", data={"username": "viewer", "password": "password"}
-    )
+    login_response = app_client.post("/api/login", data={"username": "viewer", "password": "password"})
     data = login_response.json()
     headers = {"Authorization": f"Bearer {data['access_token']}"}
     response = app_client.get("/api/config", headers=headers)
@@ -375,9 +362,7 @@ def test_export_config_admin(app_client):
 
 def test_export_config_requires_admin(app_client):
     create_user("viewer", is_admin=False)
-    login_response = app_client.post(
-        "/api/login", data={"username": "viewer", "password": "password"}
-    )
+    login_response = app_client.post("/api/login", data={"username": "viewer", "password": "password"})
     data = login_response.json()
     headers = {"Authorization": f"Bearer {data['access_token']}"}
     response = app_client.get("/api/config/export", headers=headers)
@@ -403,8 +388,7 @@ def test_update_config(app_client):
 
 
 def test_list_buckets_with_allowed_list(app_client, monkeypatch):
-    import config as config_module
-    import main
+    import another_s3_manager.config as config_module
 
     config_data = config_module.load_config(force_reload=True)
     config_data["roles"][0]["allowed_buckets"] = ["bucket-a", "bucket-b"]
@@ -424,7 +408,7 @@ def test_list_buckets_uses_s3(app_client, mocker):
     def mock_execute_with_s3_retry(role_name, callback):
         return callback(s3_mock)
 
-    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets", headers=headers)
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == ["bucket"]
@@ -451,7 +435,7 @@ def test_list_files(app_client, mocker):
     def mock_execute_with_s3_retry(role_name, callback):
         return callback(s3_mock)
 
-    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets/test-bucket/files", headers=headers)
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
@@ -465,7 +449,7 @@ def test_upload_file(app_client, mocker):
     def mock_execute_with_s3_retry(role_name, callback):
         return callback(s3_mock)
 
-    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     file_content = io.BytesIO(b"content")
     response = app_client.post(
         "/api/buckets/test-bucket/upload",
@@ -478,7 +462,7 @@ def test_upload_file(app_client, mocker):
 
 
 def test_upload_file_too_large(app_client, mocker):
-    import config as config_module
+    import another_s3_manager.config as config_module
 
     config_data = config_module.load_config(force_reload=True)
     config_data["max_file_size"] = 1
@@ -507,7 +491,7 @@ def test_download_file(app_client, mocker):
     def mock_execute_with_s3_retry(role_name, callback):
         return callback(s3_mock)
 
-    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets/test-bucket/download", params={"path": "file.txt"}, headers=headers)
     assert response.status_code == status.HTTP_200_OK
     assert response.content == b"data"
@@ -517,11 +501,7 @@ def test_delete_file(app_client, mocker):
     _, headers = login(app_client)
     paginator_mock = mocker.MagicMock()
     paginator_mock.paginate.return_value = [
-        {
-            "Contents": [
-                {"Key": "path/file.txt", "Size": 1, "LastModified": datetime.now(UTC)}
-            ]
-        }
+        {"Contents": [{"Key": "path/file.txt", "Size": 1, "LastModified": datetime.now(UTC)}]}
     ]
     s3_mock = mocker.MagicMock()
     s3_mock.get_paginator.return_value = paginator_mock
@@ -529,10 +509,8 @@ def test_delete_file(app_client, mocker):
     def mock_execute_with_s3_retry(role_name, callback):
         return callback(s3_mock)
 
-    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
-    response = app_client.delete(
-        "/api/buckets/test-bucket/files", params={"path": "path"}, headers=headers
-    )
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    response = app_client.delete("/api/buckets/test-bucket/files", params={"path": "path"}, headers=headers)
     assert response.status_code == status.HTTP_200_OK
     s3_mock.delete_objects.assert_called_once()
 
@@ -546,7 +524,7 @@ def test_login_user_not_found(app_client):
 
 
 def test_login_handles_unexpected_error(app_client, mocker):
-    mocker.patch("main.load_users", side_effect=RuntimeError("boom"))
+    mocker.patch("another_s3_manager.main.load_users", side_effect=RuntimeError("boom"))
     response = app_client.post(
         "/api/login",
         data={"username": "admin", "password": "admin123"},
@@ -597,9 +575,7 @@ def test_update_user_not_found(app_client):
 
 def test_update_user_theme_invalid_value(app_client):
     create_user("themer", is_admin=False)
-    login_response = app_client.post(
-        "/api/login", data={"username": "themer", "password": "password"}
-    )
+    login_response = app_client.post("/api/login", data={"username": "themer", "password": "password"})
     data = login_response.json()
     headers = {
         "Authorization": f"Bearer {data['access_token']}",
@@ -615,7 +591,7 @@ def test_update_user_theme_invalid_value(app_client):
 
 def test_update_user_theme_user_missing(app_client, mocker):
     _, headers = login(app_client)
-    mocker.patch("main.load_users", return_value={"users": []})
+    mocker.patch("another_s3_manager.main.load_users", return_value={"users": []})
     response = app_client.put(
         "/api/user/theme",
         json={"theme": "light"},
@@ -638,7 +614,7 @@ def test_unban_user_not_banned(app_client):
 
 def test_get_config_admin_read_only(app_client, mocker):
     _, headers = login(app_client)
-    mocker.patch("config.is_config_writable", return_value=False)
+    mocker.patch("another_s3_manager.config.is_config_writable", return_value=False)
     response = app_client.get("/api/config", headers=headers)
     assert response.status_code == status.HTTP_200_OK
     assert response.json()["is_read_only"] is True
@@ -646,9 +622,7 @@ def test_get_config_admin_read_only(app_client, mocker):
 
 def test_get_config_regular_user_no_roles(app_client):
     create_user("limited", is_admin=False, allowed_roles=[])
-    login_response = app_client.post(
-        "/api/login", data={"username": "limited", "password": "password"}
-    )
+    login_response = app_client.post("/api/login", data={"username": "limited", "password": "password"})
     data = login_response.json()
     headers = {"Authorization": f"Bearer {data['access_token']}"}
     response = app_client.get("/api/config", headers=headers)
@@ -662,7 +636,7 @@ def test_list_buckets_handles_error(app_client, mocker):
     def mock_execute_with_s3_retry(role_name, callback):
         raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListBuckets")
 
-    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets", headers=headers)
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
@@ -673,7 +647,7 @@ def test_list_files_handles_error(app_client, mocker):
     def mock_execute_with_s3_retry(role_name, callback):
         raise ClientError({"Error": {"Code": "NoSuchBucket", "Message": "Missing"}}, "ListObjectsV2")
 
-    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets/test-bucket/files", headers=headers)
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
@@ -684,7 +658,7 @@ def test_upload_file_handles_exception(app_client, mocker):
     def mock_execute_with_s3_retry(role_name, callback):
         raise ValueError("boom")
 
-    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.post(
         "/api/buckets/test-bucket/upload",
         data={"key": "file.txt"},
@@ -706,22 +680,18 @@ def test_download_file_not_found(app_client, mocker):
     def mock_execute_with_s3_retry(role_name, callback):
         return callback(client_mock)
 
-    mocker.patch("main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
-    response = app_client.get(
-        "/api/buckets/test-bucket/download", params={"path": "ghost.txt"}, headers=headers
-    )
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    response = app_client.get("/api/buckets/test-bucket/download", params={"path": "ghost.txt"}, headers=headers)
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 def test_delete_file_handles_error(app_client, mocker):
     _, headers = login(app_client)
     mocker.patch(
-        "main.get_s3_client",
+        "another_s3_manager.s3_client.get_s3_client",
         side_effect=ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListObjectsV2"),
     )
-    response = app_client.delete(
-        "/api/buckets/test-bucket/files", params={"path": "path"}, headers=headers
-    )
+    response = app_client.delete("/api/buckets/test-bucket/files", params={"path": "path"}, headers=headers)
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
@@ -729,7 +699,7 @@ def test_list_bans_includes_remaining_minutes(app_client, mocker):
     _, headers = login(app_client)
     now = time.time()
     mocker.patch(
-        "main.load_bans",
+        "another_s3_manager.main.load_bans",
         return_value={
             "trouble": {
                 "banned_until": now + 120,
@@ -746,9 +716,7 @@ def test_list_bans_includes_remaining_minutes(app_client, mocker):
 
 def test_update_config_requires_admin(app_client):
     create_user("viewer", is_admin=False)
-    login_response = app_client.post(
-        "/api/login", data={"username": "viewer", "password": "password"}
-    )
+    login_response = app_client.post("/api/login", data={"username": "viewer", "password": "password"})
     info = login_response.json()
     headers = {
         "Authorization": f"Bearer {info['access_token']}",
@@ -764,7 +732,7 @@ def test_update_config_requires_admin(app_client):
 
 def test_update_config_read_only(app_client, mocker):
     _, headers = login(app_client)
-    mocker.patch("config.is_config_writable", return_value=False)
+    mocker.patch("another_s3_manager.config.is_config_writable", return_value=False)
     response = app_client.post(
         "/api/config",
         json={"roles": []},
@@ -1026,11 +994,11 @@ def test_update_config_s3_compatible_preserves_secret_on_edit(app_client):
 @pytest.mark.asyncio
 async def test_list_buckets_invalid_allowed_buckets(mocker):
     module = reload_main()
-    import config as config_module
+    import another_s3_manager.config as config_module
 
     config_data = copy.deepcopy(config_module.load_config(force_reload=True))
     config_data["roles"][0]["allowed_buckets"] = "not-a-list"
-    mocker.patch("config.load_config", return_value=config_data)
+    mocker.patch("another_s3_manager.config.load_config", return_value=config_data)
 
     with pytest.raises(HTTPException) as exc:
         await module.list_buckets(None, {"username": "admin", "is_admin": True})
@@ -1070,7 +1038,7 @@ def test_delete_file_root_path_forbidden(app_client):
 
 def test_delete_file_disabled(app_client, mocker):
     _, headers = login(app_client)
-    import config as config_module
+    import another_s3_manager.config as config_module
 
     config_data = config_module.load_config(force_reload=True)
     config_data["disable_deletion"] = True
@@ -1081,4 +1049,3 @@ def test_delete_file_disabled(app_client, mocker):
         headers=headers,
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN
-

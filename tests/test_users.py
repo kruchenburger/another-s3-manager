@@ -8,7 +8,7 @@ import pytest
 
 
 def reload_users():
-    import users
+    import another_s3_manager.users as users
 
     importlib.reload(users)
     return users
@@ -136,7 +136,7 @@ def test_get_available_roles(monkeypatch):
         "max_file_size": 100,
     }
 
-    import config as config_module
+    import another_s3_manager.config as config_module
 
     config_module.save_config(config_data)
 
@@ -153,54 +153,20 @@ def test_load_users_invalid_structure(tmp_path):
     assert data["users"][0]["username"] == "admin"
 
 
-def test_users_import_fallback(monkeypatch):
-    original_import = builtins.__import__
-
-    def fake_import(name, *args, **kwargs):
-        if name == "constants":
-            raise ImportError("mock")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-    module = importlib.reload(importlib.import_module("users"))
-    try:
-        assert module.get_users_file().name == "users.json"
-    finally:
-        importlib.reload(module)
-
-
 def test_get_available_roles_handles_import_error(monkeypatch):
     original_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
-        if name == "config":
+        if name == "another_s3_manager.config":
             raise ImportError("missing config")
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    users = importlib.reload(importlib.import_module("users"))
+    users = importlib.reload(importlib.import_module("another_s3_manager.users"))
     try:
         assert users.get_available_roles() == []
     finally:
         importlib.reload(users)
-
-
-def test_users_import_without_constants(monkeypatch):
-    import users
-    original_import = builtins.__import__
-
-    def fake_import(name, *args, **kwargs):
-        if name == "constants":
-            raise ImportError("missing")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-    module = importlib.reload(users)
-    try:
-        assert module.get_users_file().name == "users.json"
-        assert module.get_bans_file().name == "bans.json"
-    finally:
-        importlib.reload(module)
 
 
 def test_load_bans_removes_missing(monkeypatch, tmp_path):
@@ -223,4 +189,3 @@ def test_load_bans_returns_empty_when_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(users_module, "get_bans_file", lambda: bans_path)
 
     assert users_module.load_bans() == {}
-
