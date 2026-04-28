@@ -55,6 +55,11 @@ def get_bans_file() -> Path:
     return get_data_dir() / "bans.json"
 
 
+def get_db_path() -> Path:
+    """Get the SQLite DB file path. Lives next to users.json/bans.json under DATA_DIR."""
+    return get_data_dir() / "another_s3_manager.db"
+
+
 # Security settings
 JWT_ALGORITHM = "HS256"
 # JWT token expiration - can be overridden by JWT_ACCESS_TOKEN_EXPIRE_MINUTES env var

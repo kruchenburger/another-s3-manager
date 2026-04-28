@@ -3,10 +3,15 @@ Another S3 Manager - Lightweight S3 file management interface
 Provides file browsing, upload, and deletion capabilities for S3 buckets
 """
 
+import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+from alembic import command
+from alembic.config import Config
 
 # Load environment variables from .env file (if it exists)
 # This must be done before importing modules that use environment variables
@@ -62,14 +67,55 @@ except ValueError as e:
     print(f"ERROR: {e}")
     print("Please set the JWT_SECRET_KEY environment variable.")
     print("Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(32))'")
-    import sys
-
     sys.exit(1)
 
 app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION)
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+
+def _run_alembic_upgrade() -> None:
+    """Run `alembic upgrade head` programmatically.
+
+    Looks for alembic.ini and migrations/ in the current working directory.
+    Local dev: run from repo root, both are present.
+    Docker: WORKDIR /app, Dockerfile copies migrations/ + alembic.ini to /app.
+    """
+    cwd = Path.cwd()
+    alembic_cfg_path = cwd / "alembic.ini"
+    if not alembic_cfg_path.exists():
+        # Fallback for environments where cwd isn't repo root: try resolving from __file__
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        alembic_cfg_path = repo_root / "alembic.ini"
+        cwd = repo_root
+    cfg = Config(str(alembic_cfg_path))
+    cfg.set_main_option("script_location", str(cwd / "migrations"))
+    command.upgrade(cfg, "head")
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    """Run DB migrations + import legacy JSON files if needed."""
+    try:
+        _run_alembic_upgrade()
+    except Exception:
+        logger.critical("alembic upgrade failed", exc_info=True)
+        raise
+
+    try:
+        from another_s3_manager.migration import migrate_json_if_needed
+
+        migrate_json_if_needed()
+    except json.JSONDecodeError:
+        logger.critical(
+            "Legacy users.json or bans.json is corrupt. Fix or delete the file manually, then restart.",
+            exc_info=True,
+        )
+        sys.exit(1)
+    except Exception:
+        logger.warning("JSON migration failed; DB is still usable", exc_info=True)
+        # Don't exit — DB is still usable, admin can investigate
 
 
 # Exception handler to ensure all errors return JSON
@@ -546,8 +592,6 @@ async def export_config(current_user: Dict[str, Any] = Depends(get_current_user)
     config = load_config(force_reload=True)
 
     # Return as JSON response with download headers
-    import json
-
     from fastapi.responses import Response
 
     json_str = json.dumps(config, indent=2, ensure_ascii=False)

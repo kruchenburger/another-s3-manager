@@ -50,10 +50,23 @@ Role types: `default`, `profile`, `assume_role`, `credentials`. Any role can inc
 | `ADMIN_PASSWORD` | Initial admin password | `change_me_pls` |
 | `PORT` | Server port | `8080` |
 | `AWS_REGION` | Default AWS region | from env |
-| `DATA_DIR` | Directory for `users.json`, `bans.json` | `/app/data` |
+| `DATA_DIR` | Directory for SQLite DB and runtime data | `/app/data` |
 | `MAX_FILE_SIZE` | Max upload size in bytes | `104857600` (100 MB) |
 | `DISABLE_DELETION` | Disable delete operations | `false` |
 | `ITEMS_PER_PAGE` | Files per page | `200` |
+
+## Storage
+
+User accounts, ban records, and authentication state live in a SQLite database
+(`<DATA_DIR>/another_s3_manager.db`). On first startup, if legacy
+`users.json` or `bans.json` files are present, they are auto-imported
+into the database and renamed to `*.migrated.bak` (kept as backup).
+
+Configuration (`config.json`) remains a file — it's admin-edited
+infrequently and benefits from human readability.
+
+DB schema is managed via Alembic. Migrations run at startup
+(`alembic upgrade head`).
 
 ## Docker Compose
 
