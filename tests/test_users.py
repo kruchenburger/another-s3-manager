@@ -88,6 +88,82 @@ def test_save_users_replaces_all(db_session):
     assert usernames == ["carol"]
 
 
+def test_save_users_preserves_bans_for_unchanged_users(db_session):
+    """Modifying one user's properties via save_users should NOT wipe bans for any user."""
+    from another_s3_manager.users import load_bans, save_bans, save_users
+
+    save_users(
+        {
+            "users": [
+                {"username": "alice", "password_hash": "h1", "is_admin": False, "allowed_roles": [], "theme": "auto"},
+                {"username": "bob", "password_hash": "h2", "is_admin": False, "allowed_roles": [], "theme": "auto"},
+            ]
+        }
+    )
+    now = time.time()
+    save_bans(
+        {
+            "alice": {"banned_until": now + 3600, "banned_at": now, "reason": "test"},
+            "bob": {"banned_until": now + 3600, "banned_at": now, "reason": "test"},
+        }
+    )
+
+    # Mutate one user (e.g. change alice's theme) — bans should stay intact
+    save_users(
+        {
+            "users": [
+                {"username": "alice", "password_hash": "h1", "is_admin": False, "allowed_roles": [], "theme": "dark"},
+                {"username": "bob", "password_hash": "h2", "is_admin": False, "allowed_roles": [], "theme": "auto"},
+            ]
+        }
+    )
+
+    bans = load_bans()
+    assert "alice" in bans
+    assert "bob" in bans
+
+
+def test_save_users_preserves_created_at_for_existing_users(db_session):
+    """save_users must NOT reset created_at on existing users."""
+    from another_s3_manager.users import get_user_by_username, save_users
+
+    save_users(
+        {
+            "users": [
+                {"username": "alice", "password_hash": "h1", "is_admin": False, "allowed_roles": [], "theme": "auto"},
+            ]
+        }
+    )
+    original = get_user_by_username("alice")
+    original_created_at = original["created_at"]
+
+    # Sleep > 1s so any reset would be detectable at second precision
+    time.sleep(1.5)
+
+    # Update the same user
+    save_users(
+        {
+            "users": [
+                {
+                    "username": "alice",
+                    "password_hash": "h1_new",
+                    "is_admin": True,
+                    "allowed_roles": [],
+                    "theme": "dark",
+                },
+            ]
+        }
+    )
+
+    after = get_user_by_username("alice")
+    assert after["created_at"] == original_created_at, (
+        f"created_at should be preserved across save_users; was {original_created_at}, now {after['created_at']}"
+    )
+    # Verify the actual mutation happened
+    assert after["is_admin"] is True
+    assert after["theme"] == "dark"
+
+
 def test_create_user_appends(db_session):
     from another_s3_manager.users import create_user, get_all_users
 

@@ -99,22 +99,22 @@ async def startup() -> None:
     """Run DB migrations + import legacy JSON files if needed."""
     try:
         _run_alembic_upgrade()
-    except Exception as e:
-        print(f"FATAL: alembic upgrade failed: {e}", file=sys.stderr)
+    except Exception:
+        logger.critical("alembic upgrade failed", exc_info=True)
         raise
 
     try:
         from another_s3_manager.migration import migrate_json_if_needed
 
         migrate_json_if_needed()
-    except json.JSONDecodeError as e:
-        print(
-            f"FATAL: legacy users.json or bans.json is corrupt: {e}\nFix or delete the file manually, then restart.",
-            file=sys.stderr,
+    except json.JSONDecodeError:
+        logger.critical(
+            "Legacy users.json or bans.json is corrupt. Fix or delete the file manually, then restart.",
+            exc_info=True,
         )
         sys.exit(1)
-    except Exception as e:
-        print(f"WARNING: JSON migration failed: {e}", file=sys.stderr)
+    except Exception:
+        logger.warning("JSON migration failed; DB is still usable", exc_info=True)
         # Don't exit — DB is still usable, admin can investigate
 
 

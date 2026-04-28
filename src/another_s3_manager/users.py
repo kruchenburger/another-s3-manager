@@ -67,24 +67,51 @@ def load_users() -> Dict[str, Any]:
 
 
 def save_users(users_data: Dict[str, Any]) -> None:
-    """Replace the entire user set with the given list. Atomic within a transaction."""
+    """Replace the user set with the given list using upsert semantics.
+
+    For each incoming user:
+      - If username exists, UPDATE the row in place (preserves id, created_at, bans).
+      - If new, INSERT it.
+    Users in the DB but absent from the incoming list are DELETED (cascade clears their roles + bans).
+
+    All in a single transaction. This preserves bans and timestamps for unaffected users —
+    matching the legacy JSON behavior where save_users only touched users.json.
+    """
     incoming: List[Dict[str, Any]] = users_data.get("users", [])
+    incoming_by_username = {u["username"]: u for u in incoming}
+
     with session_scope() as session:
-        # Wipe all users (cascades will clear roles + bans)
-        for u in session.execute(select(User)).scalars().all():
-            session.delete(u)
+        existing_users = session.execute(select(User).options(selectinload(User.roles))).scalars().all()
+        existing_by_username = {u.username: u for u in existing_users}
+
+        # Delete users that are no longer in the incoming list
+        for username, user in existing_by_username.items():
+            if username not in incoming_by_username:
+                session.delete(user)
         session.flush()
 
+        # Upsert: update existing in place, insert new
         for user_dict in incoming:
-            user = User(
-                username=user_dict["username"],
-                password_hash=user_dict["password_hash"],
-                is_admin=user_dict.get("is_admin", False),
-                theme=user_dict.get("theme", "auto"),
-            )
-            for role_name in user_dict.get("allowed_roles", []):
-                user.roles.append(UserRole(role_name=role_name))
-            session.add(user)
+            existing = existing_by_username.get(user_dict["username"])
+            if existing is not None:
+                # In-place update preserves id, created_at, and bans (no cascade)
+                existing.password_hash = user_dict["password_hash"]
+                existing.is_admin = user_dict.get("is_admin", False)
+                existing.theme = user_dict.get("theme", "auto")
+                # Replace roles atomically
+                existing.roles.clear()
+                for role_name in user_dict.get("allowed_roles", []):
+                    existing.roles.append(UserRole(role_name=role_name))
+            else:
+                user = User(
+                    username=user_dict["username"],
+                    password_hash=user_dict["password_hash"],
+                    is_admin=user_dict.get("is_admin", False),
+                    theme=user_dict.get("theme", "auto"),
+                )
+                for role_name in user_dict.get("allowed_roles", []):
+                    user.roles.append(UserRole(role_name=role_name))
+                session.add(user)
 
 
 def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
