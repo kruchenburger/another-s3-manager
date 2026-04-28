@@ -1052,3 +1052,50 @@ def test_delete_file_disabled(app_client, mocker):
         headers=headers,
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+def test_startup_runs_migrations_and_json_import(monkeypatch, tmp_path):
+    """At startup, app runs alembic upgrade head and migrates JSON if needed."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key")
+
+    import importlib
+
+    from another_s3_manager import constants, database
+
+    importlib.reload(constants)
+    importlib.reload(database)
+    database.reset_engine_for_tests()
+
+    # Seed a JSON file
+    import json
+
+    (tmp_path / "users.json").write_text(
+        json.dumps(
+            {
+                "users": [
+                    {
+                        "username": "imported",
+                        "password_hash": "h",
+                        "is_admin": False,
+                        "allowed_roles": [],
+                        "theme": "auto",
+                    }
+                ]
+            }
+        )
+    )
+
+    import asyncio
+
+    from another_s3_manager.main import startup
+
+    asyncio.run(startup())
+
+    # DB exists, has the imported user, JSON renamed
+    assert (tmp_path / "another_s3_manager.db").exists()
+    assert (tmp_path / "users.json.migrated.bak").exists()
+
+    from another_s3_manager.users import get_user_by_username
+
+    assert get_user_by_username("imported") is not None
