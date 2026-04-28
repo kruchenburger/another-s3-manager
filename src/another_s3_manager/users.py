@@ -5,14 +5,18 @@ update_user, delete_user, get_user_by_username, get_all_users, get_available_rol
 is preserved unchanged so callers in auth.py and main.py need no edits.
 """
 
+import logging
 import os
 import time
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from another_s3_manager.database import session_scope
 from another_s3_manager.models import Ban, User, UserRole
+
+logger = logging.getLogger(__name__)
 
 
 def _user_to_dict(user: User) -> Dict[str, Any]:
@@ -27,24 +31,38 @@ def _user_to_dict(user: User) -> Dict[str, Any]:
     }
 
 
+def _seed_default_admin_if_empty(session) -> Optional[User]:
+    """If the users table is empty, create the default admin from ADMIN_PASSWORD env. Returns the new admin or None.
+
+    Caller must commit the session (we use session.flush() to assign an id without committing).
+    """
+    from another_s3_manager.auth import hash_password
+
+    existing = session.execute(select(User).limit(1)).scalar_one_or_none()
+    if existing is not None:
+        return None
+    admin_password = os.getenv("ADMIN_PASSWORD", "change_me_pls")
+    admin = User(
+        username="admin",
+        password_hash=hash_password(admin_password),
+        is_admin=True,
+        theme="auto",
+    )
+    session.add(admin)
+    session.flush()
+    return admin
+
+
 def load_users() -> Dict[str, Any]:
     """Load all users. If the table is empty, seed a default admin from env."""
     with session_scope() as session:
-        users = session.execute(select(User)).scalars().all()
+        users = session.execute(select(User).options(selectinload(User.roles))).scalars().all()
         if not users:
-            # Seed default admin
-            from another_s3_manager.auth import hash_password
-
-            admin_password = os.getenv("ADMIN_PASSWORD", "change_me_pls")
-            admin = User(
-                username="admin",
-                password_hash=hash_password(admin_password),
-                is_admin=True,
-                theme="auto",
-            )
-            session.add(admin)
-            session.flush()  # assign id
-            return {"users": [_user_to_dict(admin)]}
+            admin = _seed_default_admin_if_empty(session)
+            if admin is not None:
+                return {"users": [_user_to_dict(admin)]}
+            # Race: someone else seeded between our check and now — re-fetch
+            users = session.execute(select(User).options(selectinload(User.roles))).scalars().all()
         return {"users": [_user_to_dict(u) for u in users]}
 
 
@@ -77,8 +95,10 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
 
 
 def get_all_users() -> List[Dict[str, Any]]:
-    """Get all users."""
-    return load_users().get("users", [])
+    """Read all users. Does NOT seed — read operations are pure reads."""
+    with session_scope() as session:
+        users = session.execute(select(User).options(selectinload(User.roles))).scalars().all()
+        return [_user_to_dict(u) for u in users]
 
 
 def create_user(
@@ -87,13 +107,7 @@ def create_user(
     is_admin: bool = False,
     allowed_roles: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Create a new user. Raises ValueError if the username already exists.
-
-    Mirrors the old JSON-backed behavior: triggers default-admin seeding via
-    load_users() if the table is empty before the new user is inserted.
-    """
-    # Trigger default admin seeding when DB is empty (matches old behavior)
-    load_users()
+    """Create a single user. Does NOT seed default admin (that's load_users's job)."""
     with session_scope() as session:
         existing = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
         if existing:
@@ -163,7 +177,7 @@ def load_bans() -> Dict[str, Any]:
 
 
 def save_bans(bans_data: Dict[str, Any]) -> None:
-    """Replace all bans with the given dict. Skips bans for unknown usernames."""
+    """Replace all bans with the given dict. Skips bans for unknown usernames (with warning log)."""
     with session_scope() as session:
         # Wipe existing bans
         for b in session.execute(select(Ban)).scalars().all():
@@ -173,7 +187,11 @@ def save_bans(bans_data: Dict[str, Any]) -> None:
         for username, ban_dict in bans_data.items():
             user = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
             if user is None:
-                continue  # skip orphan ban silently
+                logger.warning(
+                    "save_bans: dropped ban for unknown user %r (FK constraint requires existing user)",
+                    username,
+                )
+                continue
             session.add(
                 Ban(
                     user_id=user.id,

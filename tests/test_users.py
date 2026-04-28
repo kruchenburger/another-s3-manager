@@ -93,8 +93,8 @@ def test_create_user_appends(db_session):
 
     create_user(username="alice", password_hash="h", is_admin=False, allowed_roles=["r1"])
     users = get_all_users()
-    assert len(users) == 2  # default admin + alice
-    assert any(u["username"] == "alice" for u in users)
+    assert len(users) == 1  # no implicit seeding from create_user
+    assert users[0]["username"] == "alice"
 
 
 def test_create_user_duplicate_raises(db_session):
@@ -168,11 +168,11 @@ def test_get_user_by_username_not_found(db_session):
 def test_get_all_users(db_session):
     from another_s3_manager.users import create_user, get_all_users
 
-    # First create_user seeds default admin (matching legacy behavior), then appends "one" and "two"
+    # create_user no longer seeds default admin — read ops are pure reads
     create_user(username="one", password_hash="h")
     create_user(username="two", password_hash="h")
     all_users = get_all_users()
-    assert sorted(u["username"] for u in all_users) == ["admin", "one", "two"]
+    assert sorted(u["username"] for u in all_users) == ["one", "two"]
 
 
 def test_update_user_success(db_session):

@@ -24,7 +24,7 @@ def _default_config() -> Dict[str, Any]:
 def isolated_environment(monkeypatch, tmp_path):
     """
     Prepare isolated environment for each test:
-    - Temporary config, users, bans files
+    - Temporary config file and SQLite-backed data directory
     - Environment variables required by the app
     - Reset module-level caches
     """
@@ -33,12 +33,6 @@ def isolated_environment(monkeypatch, tmp_path):
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-
-    users_path = data_dir / "users.json"
-    users_path.write_text(json.dumps({"users": []}))
-
-    bans_path = data_dir / "bans.json"
-    bans_path.write_text(json.dumps({}))
 
     monkeypatch.setenv("S3_FILE_MANAGER_CONFIG", str(config_path))
     monkeypatch.setenv("DATA_DIR", str(data_dir))
