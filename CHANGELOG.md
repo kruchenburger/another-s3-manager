@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-04-28
+
+### Changed
+- Migrated project layout from flat to `src/another_s3_manager/` package
+- All imports updated to use fully qualified module paths
+- Replaced `docker-build.yml` with standardized `ci.yml` workflow
+- Multi-stage Dockerfile with `BUILD_VERSION` arg for version injection
+- README rewritten — concise and structured
+
+### Added
+- `/health` endpoint exposing app version from `APP_VERSION` env var
+- `CLAUDE.md` with project documentation for AI-assisted development
+- React + Mantine frontend scaffold (`frontend/`) — no UI rewrite yet
+- Ruff and Pyright configuration in `pyproject.toml`
+
+### Fixed
+- Docker build now installs the project with static assets included in the wheel (two-stage `uv sync`)
+
+### Removed
+- Standalone `pytest.ini` and `.coveragerc` (merged into `pyproject.toml`)
+- Outdated `PUBLISHING.md`
+
 ## [0.1.1] - 2025-11-23
 
 ### Added
@@ -39,7 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CSRF protection
 - Login attempt rate limiting
 
-[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/kruchenburger/another-s3-manager/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/kruchenburger/another-s3-manager/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/kruchenburger/another-s3-manager/releases/tag/v0.1.0
 
