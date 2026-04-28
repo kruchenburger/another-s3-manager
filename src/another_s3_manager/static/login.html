@@ -14,7 +14,7 @@
             }
             document.documentElement.setAttribute('data-theme', getSystemTheme());
 
-            // Load app name from API and show demo banner
+            // Load app name from API
             fetch('/api/app-info')
                 .then(response => response.json())
                 .then(data => {

@@ -63,7 +63,7 @@ function applyAppBranding(info) {
 
 async function loadAppInfo() {
     if (appInfo) {
-        applyAppBranding(appInfo); // Re-apply branding in case banner was hidden
+        applyAppBranding(appInfo);
         return appInfo;
     }
 
