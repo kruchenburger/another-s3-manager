@@ -90,3 +90,14 @@ DEFAULT_ITEMS_PER_PAGE = 200
 # S3 settings
 S3_USE_SSL = True
 S3_VERIFY_SSL = True
+
+# Rate limiting — header name to read client IP from when behind a reverse proxy.
+# Unset (default) → use direct socket address (correct for local Docker without proxy).
+# Behind Cloudflare / nginx / etc → set to "X-Forwarded-For" or "CF-Connecting-IP" so
+# limits are enforced per real client, not per proxy.
+RATE_LIMIT_PROXY_HEADER = os.getenv("RATE_LIMIT_PROXY_HEADER", "").strip() or None
+
+# Rate limit thresholds (per-IP, per-minute):
+RATE_LIMIT_LOGIN = "5/minute"  # brute-force defense (existing ban logic remains)
+RATE_LIMIT_MUTATING = "30/minute"  # POST/PUT/DELETE on user data, config, files
+RATE_LIMIT_READ = "100/minute"  # GET endpoints (buckets, files, app-info, health)
