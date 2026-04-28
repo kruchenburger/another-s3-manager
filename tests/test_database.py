@@ -67,3 +67,18 @@ def test_session_scope_rolls_back_on_exception(monkeypatch, tmp_path):
     with engine.connect() as conn:
         rows = conn.execute(text("SELECT val FROM t ORDER BY val")).fetchall()
         assert rows == [(1,)]  # the (2,) insert was rolled back
+
+
+def test_get_engine_is_idempotent(monkeypatch, tmp_path):
+    """Calling get_engine() twice returns the same engine (module-level singleton)."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    import importlib
+
+    from another_s3_manager import constants, database
+
+    importlib.reload(constants)
+    importlib.reload(database)
+
+    engine1 = database.get_engine()
+    engine2 = database.get_engine()
+    assert engine1 is engine2
