@@ -87,14 +87,6 @@ volumes:
   s3m-data:
 ```
 
-## Try It Locally with MinIO
-
-```bash
-docker compose -f docker-compose-demo.yml up
-```
-
-This starts MinIO + the app with a pre-configured demo bucket. Open `http://localhost:8080` (app) or `http://localhost:9001` (MinIO console).
-
 ## Development
 
 ```bash

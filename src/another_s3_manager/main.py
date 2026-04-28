@@ -241,16 +241,10 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
 @app.get("/api/app-info")
 async def get_app_info():
     """Get application information (public endpoint)"""
-    # Check if demo mode is enabled via environment variable
-    is_demo = os.getenv("DEMO_MODE", "").lower() == "true"
-    demo_bucket_limit = os.getenv("DEMO_BUCKET_LIMIT", "")
-
     return {
         "app_name": APP_NAME,
         "app_description": APP_DESCRIPTION,
         "app_version": APP_VERSION,
-        "is_demo": is_demo,
-        "demo_bucket_limit": demo_bucket_limit if is_demo else None,
     }
 
 

@@ -57,64 +57,6 @@ body {
     border: 1px dashed var(--border-color);
 }
 
-.demo-banner {
-    position: sticky;
-    top: 0;
-    z-index: 9999;
-    padding: 14px 20px;
-    background: linear-gradient(135deg, #ffc107 0%, #ffb300 100%);
-    border-bottom: 3px solid #ff9800;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-    width: 100%;
-}
-
-[data-theme="dark"] .demo-banner {
-    background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
-    border-bottom-color: #ffc107;
-}
-
-.demo-banner-content {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    color: #000;
-    font-size: 15px;
-    font-weight: 500;
-    max-width: 1400px;
-    margin: 0 auto;
-    text-align: center;
-}
-
-[data-theme="dark"] .demo-banner-content {
-    color: #000;
-}
-
-.demo-banner-icon {
-    font-size: 20px;
-    flex-shrink: 0;
-    animation: pulse 2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-    0%, 100% {
-        transform: scale(1);
-    }
-    50% {
-        transform: scale(1.1);
-    }
-}
-
-.demo-banner-text {
-    flex: 0 1 auto;
-    text-align: center;
-}
-
-.demo-banner-text strong {
-    font-weight: 700;
-    font-size: 16px;
-}
-
 .container {
     max-width: 1200px;
     margin: 0 auto;

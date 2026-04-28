@@ -27,17 +27,6 @@
                     if (pageTitle) {
                         pageTitle.textContent = `Login - ${appName}`;
                     }
-                    // Show demo banner if enabled
-                    if (data.is_demo) {
-                        const banner = document.getElementById('demo-banner');
-                        if (banner) {
-                            banner.style.display = 'block';
-                            const limitSpan = document.getElementById('demo-bucket-limit');
-                            if (limitSpan && data.demo_bucket_limit) {
-                                limitSpan.textContent = data.demo_bucket_limit;
-                            }
-                        }
-                    }
                 })
                 .catch(err => {
                     console.error('Failed to load app name:', err);
@@ -91,13 +80,6 @@
     </style>
 </head>
 <body>
-    <div id="demo-banner" class="demo-banner" style="display: none;">
-        <div class="demo-banner-content">
-            <span class="demo-banner-text">
-                <strong>Demo instance</strong> - This is a demonstration instance. Bucket size is limited to <span id="demo-bucket-limit">1GB. You can add your own buckets.</span>.
-            </span>
-        </div>
-    </div>
     <div class="login-container">
         <h1 style="display: flex; align-items: center; justify-content: center; gap: 10px;">
             <img src="/static/favicon.ico" alt="S3 File Manager" style="width: 64px; height: 64px; vertical-align: middle;">

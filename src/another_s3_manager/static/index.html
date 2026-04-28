@@ -48,27 +48,6 @@
                 document.close();
             }
         })();
-
-        // Show demo banner immediately if demo mode is enabled
-        (function() {
-            fetch('/api/app-info')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.is_demo) {
-                        const banner = document.getElementById('demo-banner');
-                        if (banner) {
-                            banner.style.display = 'block';
-                            const limitSpan = document.getElementById('demo-bucket-limit');
-                            if (limitSpan && data.demo_bucket_limit) {
-                                limitSpan.textContent = data.demo_bucket_limit;
-                            }
-                        }
-                    }
-                })
-                .catch(() => {
-                    // Silently fail - banner will be shown by main script later
-                });
-        })();
     </script>
     <style>
         /* Hide body until auth check is complete */
@@ -77,13 +56,6 @@
     </style>
 </head>
 <body>
-    <div id="demo-banner" class="demo-banner" style="display: none;">
-        <div class="demo-banner-content">
-            <span class="demo-banner-text">
-                <strong>Demo instance</strong> - This is a demonstration instance. Bucket size is limited to <span id="demo-bucket-limit">1GB. You can add your own buckets.</span>.
-            </span>
-        </div>
-    </div>
     <div class="container">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <h1 style="margin: 0; display: flex; align-items: center; gap: 10px;">

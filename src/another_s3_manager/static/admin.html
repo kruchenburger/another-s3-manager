@@ -217,14 +217,6 @@
     <!-- Notification Toast -->
     <div id="notification-toast" class="notification-toast" style="display: none;"></div>
 
-    <div id="demo-banner" class="demo-banner" style="display: none;">
-        <div class="demo-banner-content">
-            <span class="demo-banner-text">
-                <strong>Demo instance</strong> - This is a demonstration instance. Demo bucket size is limited to <span id="demo-bucket-limit">1GB. You can add your own buckets.</span>.
-            </span>
-        </div>
-    </div>
-
     <div class="container admin-container">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
             <div style="display: flex; align-items: center; gap: 10px;">
@@ -711,10 +703,7 @@
                 if (response.ok) {
                     const data = await response.json();
                     availableRoles = data.available_roles || [];
-                    // Never log roles in demo mode to avoid exposing sensitive information
-                    if (!isDemoMode) {
-                        console.log('Available roles loaded:', availableRoles);
-                    }
+                    console.log('Available roles loaded:', availableRoles);
 
                     // Update role selectors
                     updateRoleSelectors(availableRoles);
@@ -1147,18 +1136,6 @@
                 if (versionElement) {
                     versionElement.textContent = data.app_version ? `(v${data.app_version})` : '';
                 }
-                // Show demo banner if enabled
-                isDemoMode = data.is_demo === true;
-                if (isDemoMode) {
-                    const banner = document.getElementById('demo-banner');
-                    if (banner) {
-                        banner.style.display = 'block';
-                        const limitSpan = document.getElementById('demo-bucket-limit');
-                        if (limitSpan && data.demo_bucket_limit) {
-                            limitSpan.textContent = data.demo_bucket_limit;
-                        }
-                    }
-                }
             })
             .catch(err => {
                 console.error('Failed to load app name:', err);
@@ -1168,7 +1145,6 @@
         let configData = null;
         let configViewMode = 'form'; // 'form' or 'json'
         let editingRoleIndex = -1;
-        let isDemoMode = false; // Track demo mode state
 
         async function loadConfig() {
             try {
