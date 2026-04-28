@@ -1,4 +1,5 @@
 """Alembic environment — uses our app's engine + models."""
+
 from logging.config import fileConfig
 
 from alembic import context
@@ -21,7 +22,9 @@ config.set_main_option("sqlalchemy.url", f"sqlite:///{get_db_path()}")
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url, target_metadata=target_metadata, literal_binds=True,
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
     with context.begin_transaction():

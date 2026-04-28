@@ -131,6 +131,7 @@ def test_get_db_path_uses_data_dir(monkeypatch, tmp_path):
     import importlib
 
     from another_s3_manager import constants
+
     importlib.reload(constants)
     assert constants.get_db_path() == tmp_path / "another_s3_manager.db"
 
@@ -143,6 +144,7 @@ def test_get_db_path_creates_data_dir_if_missing(monkeypatch, tmp_path):
     import importlib
 
     from another_s3_manager import constants
+
     importlib.reload(constants)
     constants.get_db_path()
     assert db_dir.exists()
