@@ -1,162 +1,187 @@
-"""
-User management module
+"""User and ban management — SQLAlchemy-backed.
+
+Public API surface (load_users, save_users, load_bans, save_bans, create_user,
+update_user, delete_user, get_user_by_username, get_all_users, get_available_roles)
+is preserved unchanged so callers in auth.py and main.py need no edits.
 """
 
-import json
 import os
-from datetime import datetime
-from typing import Any, Dict, List
+import time
+from typing import Any, Dict, List, Optional
 
-from another_s3_manager.constants import get_bans_file, get_users_file
+from sqlalchemy import select
+
+from another_s3_manager.database import session_scope
+from another_s3_manager.models import Ban, User, UserRole
+
+
+def _user_to_dict(user: User) -> Dict[str, Any]:
+    """Render a User row to the dict shape that the rest of the app expects."""
+    return {
+        "username": user.username,
+        "password_hash": user.password_hash,
+        "is_admin": user.is_admin,
+        "allowed_roles": [r.role_name for r in user.roles],
+        "theme": user.theme,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+    }
 
 
 def load_users() -> Dict[str, Any]:
-    """Load users from file or create default admin user."""
-    users_file = get_users_file()
-    try:
-        if users_file.exists():
-            with open(users_file, "r", encoding="utf-8") as f:
-                users_data = json.load(f)
-                # Validate structure
-                if "users" not in users_data or not isinstance(users_data["users"], list):
-                    raise ValueError("Invalid users.json structure")
-                # Migrate old users to have allowed_roles and theme fields
-                needs_save = False
-                for user in users_data.get("users", []):
-                    if "allowed_roles" not in user:
-                        user["allowed_roles"] = []
-                        needs_save = True
-                    if "theme" not in user:
-                        user["theme"] = "auto"
-                        needs_save = True
-                if needs_save:
-                    save_users(users_data)
-                return users_data
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"Warning: Error loading users.json: {e}. Creating new file.")
+    """Load all users. If the table is empty, seed a default admin from env."""
+    with session_scope() as session:
+        users = session.execute(select(User)).scalars().all()
+        if not users:
+            # Seed default admin
+            from another_s3_manager.auth import hash_password
 
-    # Create default admin user
-    admin_password = os.getenv("ADMIN_PASSWORD", "change_me_pls")
-    # Import here to avoid circular dependency
-    from another_s3_manager.auth import hash_password
-
-    hashed_password = hash_password(admin_password)
-
-    default_users = {
-        "users": [
-            {
-                "username": "admin",
-                "password_hash": hashed_password,
-                "is_admin": True,
-                "allowed_roles": [],  # Admins have access to all roles
-                "theme": "auto",
-                "created_at": datetime.now().isoformat(),
-            }
-        ]
-    }
-    save_users(default_users)
-    return default_users
+            admin_password = os.getenv("ADMIN_PASSWORD", "change_me_pls")
+            admin = User(
+                username="admin",
+                password_hash=hash_password(admin_password),
+                is_admin=True,
+                theme="auto",
+            )
+            session.add(admin)
+            session.flush()  # assign id
+            return {"users": [_user_to_dict(admin)]}
+        return {"users": [_user_to_dict(u) for u in users]}
 
 
-def save_users(users: Dict[str, Any]) -> None:
-    """Save users to file."""
-    users_file = get_users_file()
-    with open(users_file, "w", encoding="utf-8") as f:
-        json.dump(users, f, indent=2, ensure_ascii=False)
+def save_users(users_data: Dict[str, Any]) -> None:
+    """Replace the entire user set with the given list. Atomic within a transaction."""
+    incoming: List[Dict[str, Any]] = users_data.get("users", [])
+    with session_scope() as session:
+        # Wipe all users (cascades will clear roles + bans)
+        for u in session.execute(select(User)).scalars().all():
+            session.delete(u)
+        session.flush()
+
+        for user_dict in incoming:
+            user = User(
+                username=user_dict["username"],
+                password_hash=user_dict["password_hash"],
+                is_admin=user_dict.get("is_admin", False),
+                theme=user_dict.get("theme", "auto"),
+            )
+            for role_name in user_dict.get("allowed_roles", []):
+                user.roles.append(UserRole(role_name=role_name))
+            session.add(user)
 
 
-def load_bans() -> Dict[str, Any]:
-    """Load bans from file and remove expired ones."""
-    bans_file = get_bans_file()
-    if bans_file.exists():
-        with open(bans_file, "r", encoding="utf-8") as f:
-            bans = json.load(f)
-            # Remove expired bans
-            import time
-
-            current_time = time.time()
-            active_bans = {
-                username: ban_data
-                for username, ban_data in bans.items()
-                if ban_data.get("banned_until", 0) > current_time
-            }
-            if len(active_bans) != len(bans):
-                save_bans(active_bans)
-            return active_bans
-    return {}
-
-
-def save_bans(bans: Dict[str, Any]) -> None:
-    """Save bans to file."""
-    bans_file = get_bans_file()
-    with open(bans_file, "w", encoding="utf-8") as f:
-        json.dump(bans, f, indent=2, ensure_ascii=False)
-
-
-def get_user_by_username(username: str) -> Dict[str, Any]:
-    """Get user by username."""
-    users = load_users()
-    return next((u for u in users.get("users", []) if u.get("username") == username), None)
+def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
+    """Get user by username, or None if not found."""
+    with session_scope() as session:
+        user = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
+        return _user_to_dict(user) if user else None
 
 
 def get_all_users() -> List[Dict[str, Any]]:
     """Get all users."""
-    users = load_users()
-    return users.get("users", [])
+    return load_users().get("users", [])
 
 
 def create_user(
-    username: str, password_hash: str, is_admin: bool = False, allowed_roles: List[str] = None
+    username: str,
+    password_hash: str,
+    is_admin: bool = False,
+    allowed_roles: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Create a new user."""
-    users = load_users()
+    """Create a new user. Raises ValueError if the username already exists.
 
-    # Check if user already exists
-    if get_user_by_username(username):
-        raise ValueError(f"User {username} already exists")
+    Mirrors the old JSON-backed behavior: triggers default-admin seeding via
+    load_users() if the table is empty before the new user is inserted.
+    """
+    # Trigger default admin seeding when DB is empty (matches old behavior)
+    load_users()
+    with session_scope() as session:
+        existing = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
+        if existing:
+            raise ValueError(f"User {username} already exists")
 
-    new_user = {
-        "username": username,
-        "password_hash": password_hash,
-        "is_admin": is_admin,
-        "allowed_roles": allowed_roles or [],
-        "theme": "auto",
-        "created_at": None,  # Will be set by caller
-    }
+        user = User(
+            username=username,
+            password_hash=password_hash,
+            is_admin=is_admin,
+            theme="auto",
+        )
+        for role_name in allowed_roles or []:
+            user.roles.append(UserRole(role_name=role_name))
+        session.add(user)
+        session.flush()
+        return _user_to_dict(user)
 
-    users.setdefault("users", []).append(new_user)
-    save_users(users)
-    return new_user
 
+def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
+    """Update user properties. Raises ValueError if the user doesn't exist."""
+    with session_scope() as session:
+        user = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
+        if not user:
+            raise ValueError(f"User {username} not found")
 
-def update_user(username: str, **kwargs) -> Dict[str, Any]:
-    """Update user properties."""
-    users = load_users()
-    user = get_user_by_username(username)
+        if "password_hash" in kwargs:
+            user.password_hash = kwargs["password_hash"]
+        if "is_admin" in kwargs:
+            user.is_admin = kwargs["is_admin"]
+        if "theme" in kwargs:
+            user.theme = kwargs["theme"]
+        if "allowed_roles" in kwargs:
+            # Replace all roles
+            user.roles.clear()
+            for role_name in kwargs["allowed_roles"]:
+                user.roles.append(UserRole(role_name=role_name))
 
-    if not user:
-        raise ValueError(f"User {username} not found")
-
-    # Update user properties
-    for key, value in kwargs.items():
-        if key in user:
-            user[key] = value
-
-    # Update in users list
-    for u in users.get("users", []):
-        if u.get("username") == username:
-            u.update(user)
-            break
-
-    save_users(users)
-    return user
+        session.flush()
+        return _user_to_dict(user)
 
 
 def delete_user(username: str) -> None:
-    """Delete a user."""
-    users = load_users()
-    users["users"] = [u for u in users.get("users", []) if u.get("username") != username]
-    save_users(users)
+    """Delete a user (no-op if missing). Cascades to roles and bans."""
+    with session_scope() as session:
+        user = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
+        if user:
+            session.delete(user)
+
+
+def load_bans() -> Dict[str, Any]:
+    """Return bans as {username: {banned_until, banned_at, reason}}. Filters and removes expired bans."""
+    current_time = time.time()
+    with session_scope() as session:
+        rows = session.execute(select(Ban, User).join(User, Ban.user_id == User.id)).all()
+        active: Dict[str, Any] = {}
+        for ban, user in rows:
+            if ban.banned_until > current_time:
+                active[user.username] = {
+                    "banned_until": ban.banned_until,
+                    "banned_at": ban.banned_at,
+                    "reason": ban.reason,
+                }
+            else:
+                # Auto-cleanup expired
+                session.delete(ban)
+        return active
+
+
+def save_bans(bans_data: Dict[str, Any]) -> None:
+    """Replace all bans with the given dict. Skips bans for unknown usernames."""
+    with session_scope() as session:
+        # Wipe existing bans
+        for b in session.execute(select(Ban)).scalars().all():
+            session.delete(b)
+        session.flush()
+
+        for username, ban_dict in bans_data.items():
+            user = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
+            if user is None:
+                continue  # skip orphan ban silently
+            session.add(
+                Ban(
+                    user_id=user.id,
+                    banned_until=ban_dict.get("banned_until", 0),
+                    banned_at=ban_dict.get("banned_at", time.time()),
+                    reason=ban_dict.get("reason"),
+                )
+            )
 
 
 def get_available_roles() -> List[str]:

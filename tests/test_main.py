@@ -324,6 +324,9 @@ def test_unban_user(app_client):
     users_module = reload_users_module()
     _, headers = login(app_client)
 
+    # User must exist for the ban FK to be honored
+    users_module.create_user(username="troublesome", password_hash="h")
+
     auth_module = reload_auth_module()
     for _ in range(auth_module.MAX_LOGIN_ATTEMPTS):
         auth_module.record_login_attempt("troublesome", success=False)

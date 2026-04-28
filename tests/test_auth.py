@@ -232,6 +232,8 @@ def test_get_current_admin_user_forbidden():
 def test_check_ban_true(tmp_path):
     auth = reload_auth()
     users = reload_users()
+    # User must exist for the ban FK to be honored
+    users.create_user(username="user", password_hash="h")
     bans = {"user": {"banned_until": time.time() + 3600}}
     users.save_bans(bans)
     assert auth.check_ban("user") is True
@@ -248,6 +250,8 @@ def test_record_login_attempt_ban(tmp_path):
     auth = reload_auth()
     users = reload_users()
     users.save_bans({})
+    # User must exist for the ban FK to be honored
+    users.create_user(username="user", password_hash="h")
 
     for _ in range(auth.MAX_LOGIN_ATTEMPTS):
         auth.record_login_attempt("user", success=False)
