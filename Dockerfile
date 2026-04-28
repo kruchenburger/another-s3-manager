@@ -10,6 +10,8 @@ FROM python:3.13-slim
 WORKDIR /app
 COPY --from=builder /app/.venv .venv
 COPY src/ src/
+COPY migrations/ migrations/
+COPY alembic.ini .
 
 RUN mkdir -p /app/data
 
