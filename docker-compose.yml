@@ -15,6 +15,10 @@ services:
     volumes:
       - ./data:/app/data
       - ./src:/app/src
+      # AWS credentials/config from host (read-only). Required for SSO profiles —
+      # token cache lives in ~/.aws/sso/cache/. Refresh on host with:
+      #   aws sso login --profile <name>
+      - ${USERPROFILE}/.aws:/root/.aws:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]

@@ -44,6 +44,14 @@ config.json
 users.json
 bans.json
 
+# SQLite database (contains password hashes and runtime state)
+*.db
+*.db-wal
+*.db-shm
+
+# Runtime data directory (bind-mounted in docker-compose)
+data/
+
 # Node
 node_modules/
 dist/
