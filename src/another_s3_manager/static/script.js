@@ -2,7 +2,6 @@ let currentBucket = '';
 let currentPath = '';
 let currentRole = '';
 let config = null;
-let authToken = null;
 let currentUser = null;
 let appInfo = null;
 let errorClearTimer = null;
@@ -31,13 +30,8 @@ let isScrolling = false;
 let scrollTimeout = null;
 
 
-// Get auth token from localStorage
-function getAuthToken() {
-    if (!authToken) {
-        authToken = localStorage.getItem('access_token');
-    }
-    return authToken;
-}
+// Auth is now cookie-based — JWT lives in an httpOnly cookie that JS can't read.
+// All fetches use credentials: 'include' so the browser sends the cookie automatically.
 
 function applyAppBranding(info) {
     if (!info) {
@@ -82,28 +76,19 @@ async function loadAppInfo() {
     }
 }
 
-// Check authentication and redirect if needed
+// Check authentication and redirect if needed (cookie-based — ask the server).
 async function checkAuth() {
-    const token = getAuthToken();
-    if (!token) {
-        window.location.replace('/login');
-        return false;
-    }
-
     try {
-        const response = await fetch('/api/me', {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        });
+        const response = await fetch('/api/me', { credentials: 'include' });
 
         if (response.ok) {
             const userData = await response.json();
             currentUser = userData;
-            // Store CSRF token if provided
-            if (userData.csrf_token) {
-                localStorage.setItem('csrf_token', userData.csrf_token);
-            }
+            // CSRF token is NOT a credential — fine to keep in sessionStorage.
+            sessionStorage.setItem('csrf_token', userData.csrf_token || '');
+            sessionStorage.setItem('user', JSON.stringify(userData));
+            sessionStorage.setItem('username', userData.username);
+            sessionStorage.setItem('is_admin', String(userData.is_admin));
             // Apply theme
             applyTheme(userData.theme || 'auto');
             // Update app name if provided
@@ -118,18 +103,13 @@ async function checkAuth() {
             updateUserInfo();
             return true;
         } else {
-            // Clear invalid token and redirect
-            localStorage.removeItem('access_token');
-            localStorage.removeItem('user');
-            localStorage.removeItem('csrf_token');
+            // Cookie missing or expired — redirect to login.
+            sessionStorage.clear();
             window.location.replace('/login');
             return false;
         }
     } catch (error) {
-        // Clear invalid token and redirect
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('user');
-        localStorage.removeItem('csrf_token');
+        sessionStorage.clear();
         window.location.replace('/login');
         return false;
     }
@@ -178,8 +158,8 @@ function updateUserInfo() {
             }
         }
     } else {
-        // Fallback: try to get user from localStorage
-        const storedUser = localStorage.getItem('user');
+        // Fallback: try to get user from sessionStorage
+        const storedUser = sessionStorage.getItem('user');
         if (storedUser) {
             try {
                 currentUser = JSON.parse(storedUser);
@@ -191,10 +171,20 @@ function updateUserInfo() {
     }
 }
 
-function logout() {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('user');
-    localStorage.removeItem('csrf_token');
+async function logout() {
+    try {
+        // Tell the server to clear the auth cookie. Mirror CSRF header for parity
+        // with other mutations (the endpoint itself doesn't enforce CSRF).
+        await fetch('/api/logout', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'X-CSRF-Token': sessionStorage.getItem('csrf_token') || '' }
+        });
+    } catch (e) {
+        // Ignore network errors — we still want to clear local state and redirect.
+        debugLog('Logout request failed:', e);
+    }
+    sessionStorage.clear();
     window.location.replace('/login');
 }
 
@@ -226,17 +216,10 @@ async function toggleTheme() {
         return;
     }
 
-    // Get current user if not loaded
+    // Get current user if not loaded (cookie-based — no Authorization header needed).
     if (!currentUser) {
         try {
-            const token = getAuthToken();
-            if (!token) return;
-
-            const response = await fetch('/api/me', {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
+            const response = await fetch('/api/me', { credentials: 'include' });
 
             if (response.ok) {
                 currentUser = await response.json();
@@ -281,15 +264,15 @@ async function toggleTheme() {
         if (response.ok) {
             const data = await response.json();
             currentUser.theme = newTheme;
-            // Update localStorage
-            const storedUser = localStorage.getItem('user');
+            // Update sessionStorage (user info is now stored there, not localStorage).
+            const storedUser = sessionStorage.getItem('user');
             if (storedUser) {
                 try {
                     const user = JSON.parse(storedUser);
                     user.theme = newTheme;
-                    localStorage.setItem('user', JSON.stringify(user));
+                    sessionStorage.setItem('user', JSON.stringify(user));
                 } catch (e) {
-                    debugLog('Failed to update user in localStorage:', e);
+                    debugLog('Failed to update user in sessionStorage:', e);
                 }
             }
             applyTheme(newTheme);
@@ -316,21 +299,16 @@ if (window.matchMedia) {
 }
 
 function getCsrfToken() {
-    return localStorage.getItem('csrf_token');
+    return sessionStorage.getItem('csrf_token') || '';
 }
 
-// Helper function to add auth header to fetch requests
+// Helper that wraps fetch with cookie credentials and CSRF for mutations.
+// Auth itself is provided automatically by the httpOnly access_token cookie.
 function authFetch(url, options = {}) {
-    const token = getAuthToken();
-    if (!token) {
-        window.location.href = '/login';
-        return Promise.reject(new Error('Not authenticated'));
-    }
-
+    options.credentials = 'include';
     options.headers = options.headers || {};
-    options.headers['Authorization'] = `Bearer ${token}`;
 
-    // Add CSRF token for state-changing requests (POST, PUT, DELETE)
+    // Add CSRF token for state-changing requests (POST, PUT, DELETE, PATCH).
     const method = (options.method || 'GET').toUpperCase();
     if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
         const csrfToken = getCsrfToken();
@@ -339,7 +317,14 @@ function authFetch(url, options = {}) {
         }
     }
 
-    return fetch(url, options);
+    return fetch(url, options).then(response => {
+        // On 401, the cookie is missing/expired — kick back to login.
+        if (response.status === 401) {
+            sessionStorage.clear();
+            window.location.href = '/login';
+        }
+        return response;
+    });
 }
 
 async function loadConfig(forceReload = true) {
@@ -1047,16 +1032,9 @@ function downloadFile(fileName) {
         const path = currentPath ? `${currentPath}/${fileName}` : fileName;
         const roleParam = currentRole ? `&role=${encodeURIComponent(currentRole)}` : '';
 
-        // Get auth token for the download request
-        const token = getAuthToken();
-        if (!token) {
-            showError('Not authenticated');
-            return;
-        }
-
-        // Create direct download link with token in URL parameter
-        // This allows browser to handle download immediately without buffering
-        const url = `/api/buckets/${currentBucket}/download?path=${encodeURIComponent(path)}${roleParam}&token=${encodeURIComponent(token)}`;
+        // Direct download link — browser sends the httpOnly auth cookie automatically
+        // for same-origin GET requests. No token needs to be passed in the URL.
+        const url = `/api/buckets/${currentBucket}/download?path=${encodeURIComponent(path)}${roleParam}`;
 
         // Create link and trigger download - browser will handle it directly
         // This opens download dialog immediately and streams file without buffering

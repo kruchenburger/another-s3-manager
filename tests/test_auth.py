@@ -2,12 +2,19 @@ import builtins
 import importlib
 import time
 from datetime import timedelta
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials
 from jose import jwt
 from starlette.requests import Request
+
+
+def _make_request_with_cookie(token_value):
+    """Build a fake Starlette Request whose .cookies acts like a dict."""
+    request = MagicMock()
+    request.cookies = {} if token_value is None else {"access_token": token_value}
+    return request
 
 
 def reload_auth():
@@ -162,8 +169,8 @@ def test_get_current_user_success(monkeypatch):
     auth = reload_auth()
     ensure_user(username="user", password="password", is_admin=False)
     token = auth.create_access_token({"sub": "user"})
-    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-    user = auth.get_current_user(credentials)
+    request = _make_request_with_cookie(token)
+    user = auth.get_current_user(request)
     assert user["username"] == "user"
     assert "csrf_token" in user
 
@@ -171,9 +178,9 @@ def test_get_current_user_success(monkeypatch):
 def test_get_current_user_invalid_token(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "secret")
     auth = reload_auth()
-    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="invalid")
+    request = _make_request_with_cookie("invalid")
     with pytest.raises(HTTPException) as exc:
-        auth.get_current_user(credentials)
+        auth.get_current_user(request)
     assert exc.value.status_code == status.HTTP_401_UNAUTHORIZED
 
 
@@ -182,8 +189,8 @@ def test_verify_csrf_token_success(monkeypatch):
     auth = reload_auth()
     ensure_user(username="user", password="password", is_admin=False)
     token = auth.create_access_token({"sub": "user"})
-    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-    current_user = auth.get_current_user(credentials)
+    auth_request = _make_request_with_cookie(token)
+    current_user = auth.get_current_user(auth_request)
     csrf_token = current_user["csrf_token"]
 
     scope = {
@@ -201,8 +208,8 @@ def test_verify_csrf_token_invalid(monkeypatch):
     auth = reload_auth()
     ensure_user(username="user", password="password", is_admin=False)
     token = auth.create_access_token({"sub": "user"})
-    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-    current_user = auth.get_current_user(credentials)
+    auth_request = _make_request_with_cookie(token)
+    current_user = auth.get_current_user(auth_request)
 
     scope = {
         "type": "http",
@@ -301,9 +308,9 @@ def test_get_current_user_missing_sub(monkeypatch):
         "secret",
         algorithm="HS256",
     )
-    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    request = _make_request_with_cookie(token)
     with pytest.raises(HTTPException) as exc:
-        auth.get_current_user(credentials)
+        auth.get_current_user(request)
     assert exc.value.status_code == status.HTTP_401_UNAUTHORIZED
 
 
@@ -331,8 +338,8 @@ def test_get_current_user_adds_missing_theme(monkeypatch):
     monkeypatch.setattr("another_s3_manager.users.save_users", fake_save_users)
 
     token = auth.create_access_token({"sub": "noteheme"})
-    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-    user = auth.get_current_user(credentials)
+    request = _make_request_with_cookie(token)
+    user = auth.get_current_user(request)
     assert user["theme"] == "auto"
     assert saved["data"]["users"][0]["theme"] == "auto"
 
@@ -344,9 +351,9 @@ def test_get_current_user_user_not_found(monkeypatch):
     monkeypatch.setattr("another_s3_manager.users.load_users", lambda: {"users": []})
 
     token = auth.create_access_token({"sub": "ghost"})
-    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    request = _make_request_with_cookie(token)
     with pytest.raises(HTTPException) as exc:
-        auth.get_current_user(credentials)
+        auth.get_current_user(request)
     assert exc.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert exc.value.detail == "User not found"
 
@@ -407,3 +414,33 @@ def test_record_login_attempt_logs(monkeypatch):
         auth.record_login_attempt("noisy", success=False)
 
     assert any("User noisy banned" in msg for msg in messages)
+
+
+def test_get_current_user_reads_from_cookie(monkeypatch, valid_jwt_token, valid_user_dict):
+    """get_current_user pulls the token from request.cookies['access_token']."""
+    auth = reload_auth()
+    monkeypatch.setattr("another_s3_manager.users.load_users", lambda: {"users": [valid_user_dict]})
+    monkeypatch.setattr("another_s3_manager.users.save_users", lambda _: None)
+
+    request = _make_request_with_cookie(valid_jwt_token)
+    user = auth.get_current_user(request)
+
+    assert user["username"] == valid_user_dict["username"]
+
+
+def test_get_current_user_401_when_cookie_missing():
+    """No cookie -> 401."""
+    auth = reload_auth()
+    request = _make_request_with_cookie(None)
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(request)
+    assert exc.value.status_code == 401
+
+
+def test_get_current_user_401_when_cookie_invalid():
+    """Garbage cookie -> 401."""
+    auth = reload_auth()
+    request = _make_request_with_cookie("not-a-jwt")
+    with pytest.raises(HTTPException) as exc:
+        auth.get_current_user(request)
+    assert exc.value.status_code == 401

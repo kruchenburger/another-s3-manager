@@ -148,3 +148,33 @@ def test_get_db_path_creates_data_dir_if_missing(monkeypatch, tmp_path):
     importlib.reload(constants)
     constants.get_db_path()
     assert db_dir.exists()
+
+
+def test_cookie_secure_defaults_to_true(monkeypatch):
+    monkeypatch.delenv("COOKIE_SECURE", raising=False)
+    import importlib
+
+    from another_s3_manager import constants
+
+    importlib.reload(constants)
+    assert constants.COOKIE_SECURE is True
+
+
+def test_cookie_secure_respects_env_false(monkeypatch):
+    monkeypatch.setenv("COOKIE_SECURE", "false")
+    import importlib
+
+    from another_s3_manager import constants
+
+    importlib.reload(constants)
+    assert constants.COOKIE_SECURE is False
+
+
+def test_cookie_secure_case_insensitive(monkeypatch):
+    monkeypatch.setenv("COOKIE_SECURE", "FALSE")
+    import importlib
+
+    from another_s3_manager import constants
+
+    importlib.reload(constants)
+    assert constants.COOKIE_SECURE is False

@@ -83,6 +83,10 @@ else:
 MAX_LOGIN_ATTEMPTS = 3
 BAN_DURATION_MINUTES = 60  # 1 hour
 
+# Cookie security — Set-Cookie Secure flag.
+# Default true (production-safe). MUST be set to false on localhost (HTTP) or browser will silently drop the cookie.
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() == "true"
+
 # File upload settings
 DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
 DEFAULT_ITEMS_PER_PAGE = 200

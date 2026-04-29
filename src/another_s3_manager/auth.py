@@ -9,7 +9,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
@@ -26,8 +25,6 @@ try:
 except Exception as e:
     print(f"Warning: bcrypt initialization failed: {e}. Using pbkdf2_sha256 instead.")
     pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
-
-security = HTTPBearer()
 
 # Login attempts tracking (in-memory, resets on restart)
 _login_attempts: Dict[str, Dict[str, Any]] = {}
@@ -93,26 +90,30 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
     return encoded_jwt
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
-    """Get current authenticated user from JWT token."""
+def get_current_user(request: Request) -> Dict[str, Any]:
+    """Get current authenticated user from JWT token in httpOnly cookie."""
     # Import here to avoid circular dependency
     from another_s3_manager.users import load_users, save_users
 
+    token = request.cookies.get("access_token")
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+
     try:
-        token = credentials.credentials
         payload = jwt.decode(token, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
-        username: str = payload.get("sub")
+        username: Optional[str] = payload.get("sub")
         if username is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials",
-                headers={"WWW-Authenticate": "Bearer"},
             )
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
         )
 
     users = load_users()
@@ -121,7 +122,6 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
-            headers={"WWW-Authenticate": "Bearer"},
         )
 
     # Add CSRF token from JWT to user dict for validation

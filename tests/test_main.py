@@ -121,10 +121,15 @@ def login(client, username="admin", password="admin123"):
     )
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
-    token = data["access_token"]
-    csrf = data["csrf_token"]
+    # Cookie-based auth: TestClient's cookie jar auto-captures the Set-Cookie
+    # response header, so subsequent calls on the same client send the
+    # access_token cookie. CSRF token now lives only in the JWT (not in the
+    # login body) and is exposed via /api/me for the client to echo back in
+    # the X-CSRF-Token header on mutating requests.
+    me_response = client.get("/api/me")
+    assert me_response.status_code == status.HTTP_200_OK, me_response.text
+    csrf = me_response.json()["csrf_token"]
     headers = {
-        "Authorization": f"Bearer {token}",
         "X-CSRF-Token": csrf,
     }
     return data, headers
@@ -160,15 +165,132 @@ def test_login_page_returns_html(app_client):
     assert "<!DOCTYPE html>" in response.text
 
 
+def test_v2_mount_serves_static_directory(app_client):
+    """The /v2 mount exists — even if empty, requesting a non-existent path returns 404, not 500."""
+    response = app_client.get("/v2/does-not-exist.html")
+    # Either 404 (file not found) or 200 (if html=True falls back) — but never 500
+    assert response.status_code in (200, 404)
+
+
 def test_login_success(app_client):
     data, _ = login(app_client)
-    assert "access_token" in data
-    assert "csrf_token" in data
+    # After cookie-based auth migration: body returns only the user object,
+    # the JWT itself rides in an httpOnly cookie set via Set-Cookie header.
+    assert data["user"]["username"] == "admin"
+    assert data["user"]["is_admin"] is True
+    assert "access_token" not in data
+    assert "csrf_token" not in data
 
 
 def test_login_failure(app_client):
     response = app_client.post("/api/login", data={"username": "admin", "password": "wrong"})
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+def test_login_sets_httponly_cookie_and_returns_user_only(app_client, monkeypatch):
+    """Successful login: Set-Cookie header has access_token; body has only user object (no token)."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-pw-12345")
+    from another_s3_manager.auth import hash_password
+    from another_s3_manager.users import save_users
+
+    save_users(
+        {
+            "users": [
+                {
+                    "username": "admin",
+                    "password_hash": hash_password("test-pw-12345"),
+                    "is_admin": True,
+                    "allowed_roles": [],
+                    "theme": "auto",
+                }
+            ]
+        }
+    )
+
+    response = app_client.post(
+        "/api/login",
+        data={"username": "admin", "password": "test-pw-12345"},
+    )
+    assert response.status_code == 200
+
+    # Cookie set with httpOnly + SameSite=Strict
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "access_token=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "SameSite=strict" in set_cookie or "samesite=strict" in set_cookie.lower()
+
+    # Body shape: only `user`, no `access_token` / `token_type` / `csrf_token`
+    body = response.json()
+    assert "access_token" not in body
+    assert "csrf_token" not in body  # CSRF now comes via /api/me, not login body
+    assert body["user"] == {"username": "admin", "is_admin": True}
+
+
+def test_login_wrong_password_no_cookie(app_client, monkeypatch):
+    """Wrong password: 401, no Set-Cookie."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-pw-12345")
+    from another_s3_manager.auth import hash_password
+    from another_s3_manager.users import save_users
+
+    save_users(
+        {
+            "users": [
+                {
+                    "username": "admin",
+                    "password_hash": hash_password("test-pw-12345"),
+                    "is_admin": True,
+                    "allowed_roles": [],
+                    "theme": "auto",
+                }
+            ]
+        }
+    )
+
+    response = app_client.post(
+        "/api/login",
+        data={"username": "admin", "password": "WRONG"},
+    )
+    assert response.status_code == 401
+    assert "access_token=" not in response.headers.get("set-cookie", "")
+
+
+def test_logout_clears_cookie(app_client, monkeypatch):
+    """POST /api/logout returns ok and Set-Cookie that clears access_token."""
+    # Seed admin
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-pw-12345")
+    from another_s3_manager.auth import hash_password
+    from another_s3_manager.users import save_users
+
+    save_users(
+        {
+            "users": [
+                {
+                    "username": "admin",
+                    "password_hash": hash_password("test-pw-12345"),
+                    "is_admin": True,
+                    "allowed_roles": [],
+                    "theme": "auto",
+                }
+            ]
+        }
+    )
+
+    # Log in to get the cookie
+    login = app_client.post(
+        "/api/login",
+        data={"username": "admin", "password": "test-pw-12345"},
+    )
+    assert login.status_code == 200
+
+    # Logout
+    response = app_client.post("/api/logout")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "access_token=" in set_cookie
+    # Cookie cleared via Max-Age=0 or expires in past
+    assert "Max-Age=0" in set_cookie or "max-age=0" in set_cookie.lower() or "expires=" in set_cookie.lower()
 
 
 def test_login_banned_user(app_client):
@@ -192,7 +314,8 @@ def test_get_current_user_info(app_client):
 
 def test_get_current_user_info_requires_auth(app_client):
     response = app_client.get("/api/me")
-    assert response.status_code == status.HTTP_403_FORBIDDEN
+    # Cookie-based auth: missing access_token cookie -> 401 Not authenticated
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 def test_get_app_info(app_client):
@@ -212,15 +335,12 @@ def test_admin_page(app_client):
 def test_list_users_requires_admin(app_client):
     create_user("user", is_admin=False)
     data, headers = login(app_client)
-    # create non-admin token
+    # Switch the active cookie to the regular user — TestClient's cookie jar
+    # auto-replaces the access_token cookie from the new login's Set-Cookie.
     create_user("regular", is_admin=False)
     response = app_client.post("/api/login", data={"username": "regular", "password": "password"})
     assert response.status_code == status.HTTP_200_OK
-    regular_data = response.json()
-    regular_headers = {
-        "Authorization": f"Bearer {regular_data['access_token']}",
-    }
-    resp = app_client.get("/api/admin/users", headers=regular_headers)
+    resp = app_client.get("/api/admin/users")
     assert resp.status_code == status.HTTP_403_FORBIDDEN
 
 
@@ -290,13 +410,11 @@ def test_update_user(app_client):
 
 def test_update_user_theme(app_client):
     create_user("themer", is_admin=False)
-    app_client.post("/api/login", data={"username": "themer", "password": "password"})
     login_response = app_client.post("/api/login", data={"username": "themer", "password": "password"})
-    data = login_response.json()
-    headers = {
-        "Authorization": f"Bearer {data['access_token']}",
-        "X-CSRF-Token": data["csrf_token"],
-    }
+    assert login_response.status_code == status.HTTP_200_OK
+    # Cookie set automatically by TestClient cookie jar; pull CSRF from /api/me.
+    csrf = app_client.get("/api/me").json()["csrf_token"]
+    headers = {"X-CSRF-Token": csrf}
     response = app_client.put(
         "/api/user/theme",
         json={"theme": "light"},
@@ -348,9 +466,8 @@ def test_get_config_admin(app_client):
 def test_get_config_regular_user(app_client):
     create_user("viewer", is_admin=False)
     login_response = app_client.post("/api/login", data={"username": "viewer", "password": "password"})
-    data = login_response.json()
-    headers = {"Authorization": f"Bearer {data['access_token']}"}
-    response = app_client.get("/api/config", headers=headers)
+    assert login_response.status_code == status.HTTP_200_OK
+    response = app_client.get("/api/config")
     assert response.status_code == status.HTTP_200_OK
     assert "roles" in response.json()
 
@@ -366,9 +483,8 @@ def test_export_config_admin(app_client):
 def test_export_config_requires_admin(app_client):
     create_user("viewer", is_admin=False)
     login_response = app_client.post("/api/login", data={"username": "viewer", "password": "password"})
-    data = login_response.json()
-    headers = {"Authorization": f"Bearer {data['access_token']}"}
-    response = app_client.get("/api/config/export", headers=headers)
+    assert login_response.status_code == status.HTTP_200_OK
+    response = app_client.get("/api/config/export")
     assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
@@ -579,11 +695,9 @@ def test_update_user_not_found(app_client):
 def test_update_user_theme_invalid_value(app_client):
     create_user("themer", is_admin=False)
     login_response = app_client.post("/api/login", data={"username": "themer", "password": "password"})
-    data = login_response.json()
-    headers = {
-        "Authorization": f"Bearer {data['access_token']}",
-        "X-CSRF-Token": data["csrf_token"],
-    }
+    assert login_response.status_code == status.HTTP_200_OK
+    csrf = app_client.get("/api/me").json()["csrf_token"]
+    headers = {"X-CSRF-Token": csrf}
     response = app_client.put(
         "/api/user/theme",
         json={"theme": "blue"},
@@ -626,9 +740,8 @@ def test_get_config_admin_read_only(app_client, mocker):
 def test_get_config_regular_user_no_roles(app_client):
     create_user("limited", is_admin=False, allowed_roles=[])
     login_response = app_client.post("/api/login", data={"username": "limited", "password": "password"})
-    data = login_response.json()
-    headers = {"Authorization": f"Bearer {data['access_token']}"}
-    response = app_client.get("/api/config", headers=headers)
+    assert login_response.status_code == status.HTTP_200_OK
+    response = app_client.get("/api/config")
     assert response.status_code == status.HTTP_200_OK
     assert response.json()["roles"] == []
 
@@ -720,11 +833,9 @@ def test_list_bans_includes_remaining_minutes(app_client, mocker):
 def test_update_config_requires_admin(app_client):
     create_user("viewer", is_admin=False)
     login_response = app_client.post("/api/login", data={"username": "viewer", "password": "password"})
-    info = login_response.json()
-    headers = {
-        "Authorization": f"Bearer {info['access_token']}",
-        "X-CSRF-Token": info["csrf_token"],
-    }
+    assert login_response.status_code == status.HTTP_200_OK
+    csrf = app_client.get("/api/me").json()["csrf_token"]
+    headers = {"X-CSRF-Token": csrf}
     response = app_client.post(
         "/api/config",
         json={"roles": []},

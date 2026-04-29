@@ -64,6 +64,7 @@ Role types: `default`, `profile`, `assume_role`, `credentials`. Any role can inc
 | `ITEMS_PER_PAGE` | Files per page | `200` |
 | `RATE_LIMIT_ENABLED` | Enable per-IP rate limiting | `true` |
 | `RATE_LIMIT_PROXY_HEADER` | Header carrying real client IP behind a proxy (e.g. `X-Forwarded-For`) | unset |
+| `COOKIE_SECURE` | Auth cookie `Secure` flag — set to `false` for local HTTP, `true` for HTTPS prod | `true` |
 
 ## Rate Limiting
 
@@ -76,6 +77,16 @@ Exceeding the limit returns `429 Too Many Requests` with `Retry-After`,
 Behind a reverse proxy (Cloudflare, nginx, etc.), set `RATE_LIMIT_PROXY_HEADER` to
 the header carrying the real client IP. Otherwise all requests appear to come from
 the proxy and share one quota.
+
+## Authentication
+
+Login issues an `httpOnly + Secure + SameSite=Strict` cookie carrying a JWT.
+The cookie is **not accessible to JavaScript** (XSS-safe). CSRF protection
+via `X-CSRF-Token` header on mutating requests; the CSRF token comes from
+`/api/me` after login.
+
+For local HTTP development, set `COOKIE_SECURE=false` or the browser will
+silently drop the cookie (Secure flag requires HTTPS).
 
 ## Storage
 

@@ -32,7 +32,7 @@ except ImportError:
 from io import BytesIO
 
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
@@ -53,9 +53,11 @@ from another_s3_manager.auth import (
 )
 from another_s3_manager.config import load_config, save_config
 from another_s3_manager.constants import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
     APP_DESCRIPTION,
     APP_NAME,
     APP_VERSION,
+    COOKIE_SECURE,
     STATIC_DIR,
 )
 from another_s3_manager.rate_limit import limiter
@@ -163,6 +165,10 @@ async def health():
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# /v2 mount — placeholder for the React SPA (populated in Phase 2 by the multi-stage Dockerfile).
+# During strangler-fig migration vanilla UI keeps serving /, /login, /admin.
+app.mount("/v2", StaticFiles(directory=str(STATIC_DIR / "v2"), html=True, check_dir=False), name="v2")
+
 
 # Clear S3 clients cache when config changes (hook into config module)
 def _on_config_change():
@@ -206,8 +212,13 @@ async def login_page():
 
 
 @app.post("/api/login")
-async def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    """Login endpoint"""
+async def login(
+    request: Request,
+    response: Response,
+    username: str = Form(...),
+    password: str = Form(...),
+):
+    """Login endpoint — issues an httpOnly cookie carrying the JWT."""
     try:
         # Check if user is banned
         if check_ban(username):
@@ -218,7 +229,8 @@ async def login(request: Request, username: str = Form(...), password: str = For
 
             remaining = int((banned_until - time.time()) / 60)
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail=f"Account is banned. Try again in {remaining} minutes."
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Account is banned. Try again in {remaining} minutes.",
             )
 
         users = load_users()
@@ -226,25 +238,40 @@ async def login(request: Request, username: str = Form(...), password: str = For
 
         if user is None:
             record_login_attempt(username, False)
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password",
+            )
 
         # Verify password
         if not verify_password(password, user.get("password_hash", "")):
             record_login_attempt(username, False)
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password",
+            )
 
         # Successful login
         record_login_attempt(username, True)
 
-        # Generate CSRF token and include in JWT
+        # Generate CSRF token and embed in the signed JWT (defence-in-depth).
+        # The JWT itself is delivered as an httpOnly cookie so JS cannot read it;
+        # the CSRF token is exposed via /api/me for the client to echo back in
+        # the X-CSRF-Token header on mutating requests.
         csrf_token = generate_csrf_token()
         access_token = create_access_token(data={"sub": username, "csrf_token": csrf_token})
-        return {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "csrf_token": csrf_token,  # Also return CSRF token separately for convenience
-            "user": {"username": username, "is_admin": user.get("is_admin", False)},
-        }
+
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,
+            secure=COOKIE_SECURE,
+            samesite="strict",
+            max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            path="/",
+        )
+
+        return {"user": {"username": username, "is_admin": user.get("is_admin", False)}}
     except HTTPException:
         raise
     except Exception as e:
@@ -252,7 +279,17 @@ async def login(request: Request, username: str = Form(...), password: str = For
         import traceback
 
         traceback.print_exc()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Login failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Login failed: {str(e)}",
+        )
+
+
+@app.post("/api/logout")
+async def logout(response: Response):
+    """Clear the auth cookie. No auth required — clearing an already-invalid cookie is harmless."""
+    response.delete_cookie("access_token", path="/")
+    return {"ok": True}
 
 
 @app.get("/api/me")
@@ -1176,13 +1213,19 @@ def get_user_for_download(token: Optional[str] = Query(None), request: Request =
         except (JWTError, Exception):
             pass
 
-    # Fall back to Bearer header
+    # Fall back to Bearer header (legacy vanilla UI) or access_token cookie (cookie-auth UI)
     if request:
+        candidates = []
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
-            bearer_token = auth_header[7:]
+            candidates.append(auth_header[7:])
+        cookie_token = request.cookies.get("access_token")
+        if cookie_token:
+            candidates.append(cookie_token)
+
+        for candidate in candidates:
             try:
-                payload = jwt.decode(bearer_token, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
+                payload = jwt.decode(candidate, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
                 username = payload.get("sub")
                 if username:
                     users = load_users()
@@ -1196,7 +1239,6 @@ def get_user_for_download(token: Optional[str] = Query(None), request: Request =
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Authentication required",
-        headers={"WWW-Authenticate": "Bearer"},
     )
 
 
