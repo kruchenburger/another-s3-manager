@@ -102,12 +102,13 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 | `DATA_DIR`                        | No       | `./data` (native), `/app/data` (Docker) | Data dir (SQLite DB + runtime data) |
 | `RATE_LIMIT_ENABLED`              | No       | `true`          | Enable per-IP rate limiting (slowapi) |
 | `RATE_LIMIT_PROXY_HEADER`         | No       | unset           | Real-client-IP header behind a proxy (e.g. `X-Forwarded-For`) |
+| `COOKIE_SECURE`                   | No       | `true`          | `Secure` flag on auth cookie. MUST be `false` on local HTTP, else browser drops the cookie |
 
 ## Features
 
 - Multiple AWS account support (assume_role, profiles, direct credentials)
 - S3-compatible services (MinIO, R2, Wasabi)
-- JWT authentication with CSRF protection
+- JWT authentication via `httpOnly + Secure + SameSite=Strict` cookie + CSRF protection (`X-CSRF-Token` from `/api/me`)
 - Automatic refresh of expired credentials
 - Granular per-role, per-bucket access control
 - Per-IP rate limiting (slowapi via SlowAPIASGIMiddleware): single 100/min limit on all endpoints. Login brute-force defense via existing username-based ban (3 fails → 1h ban).

@@ -1032,16 +1032,9 @@ function downloadFile(fileName) {
         const path = currentPath ? `${currentPath}/${fileName}` : fileName;
         const roleParam = currentRole ? `&role=${encodeURIComponent(currentRole)}` : '';
 
-        // Get auth token for the download request
-        const token = getAuthToken();
-        if (!token) {
-            showError('Not authenticated');
-            return;
-        }
-
-        // Create direct download link with token in URL parameter
-        // This allows browser to handle download immediately without buffering
-        const url = `/api/buckets/${currentBucket}/download?path=${encodeURIComponent(path)}${roleParam}&token=${encodeURIComponent(token)}`;
+        // Direct download link — browser sends the httpOnly auth cookie automatically
+        // for same-origin GET requests. No token needs to be passed in the URL.
+        const url = `/api/buckets/${currentBucket}/download?path=${encodeURIComponent(path)}${roleParam}`;
 
         // Create link and trigger download - browser will handle it directly
         // This opens download dialog immediately and streams file without buffering
