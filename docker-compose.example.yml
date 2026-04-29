@@ -1,47 +1,71 @@
-version: '3.8'
+# Self-hoster template — copy this to docker-compose.yml on a server, fill in JWT_SECRET_KEY,
+# and run `docker compose up -d`. Pulls a published image from GHCR — no source needed.
+#
+# To pin a specific version, replace `latest` with a tag (e.g. `0.2.0`).
+#
+# AWS credentials are NOT required to start the app. Configure roles via the admin UI
+# (config.json), use a mounted ~/.aws profile, or attach an IAM role to your host.
+#
+# To use the local source instead of a published image, see docker-compose.yml in the repo.
 
 services:
-  s3-manager:
+  app:
     image: ghcr.io/kruchenburger/another-s3-manager:latest
-    container_name: s3-manager
+    container_name: another-s3-manager
     ports:
       - "8080:8080"
     environment:
-      # REQUIRED: Generate with: python -c 'import secrets; print(secrets.token_urlsafe(32))'
-      - JWT_SECRET_KEY=your-secret-key-here-change-in-production
+      # REQUIRED. Generate with: python -c 'import secrets; print(secrets.token_urlsafe(32))'
+      JWT_SECRET_KEY: change-me-to-a-long-random-secret
 
-      # Optional: Server configuration
-      - PORT=8080
-      - UVICORN_HOST=0.0.0.0
-      - LOG_LEVEL=info
+      # Initial admin password (created on first boot if no users exist).
+      ADMIN_PASSWORD: change_me_pls
 
-      # Optional: AWS credentials (if not using IAM role or AWS config files)
-      # - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      # - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      # - AWS_REGION=${AWS_REGION}
+      # Where the SQLite database, config.json, and any legacy users.json/bans.json live.
+      DATA_DIR: /app/data
 
-      # Optional: Application configuration
-      - ADMIN_PASSWORD=change_me_pls
-      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=180
-      - ITEMS_PER_PAGE=200
-      - DISABLE_DELETION=false
-      - MAX_FILE_SIZE=104857600
-      - ENABLE_LAZY_LOADING=true
-      - DATA_DIR=/app/data
+      # Path to the role/bucket configuration. The app creates this file automatically
+      # if missing — you can also edit roles via the admin UI.
+      S3_FILE_MANAGER_CONFIG: /app/data/config.json
+
+      # Per-IP rate limiting (per .claude/rules/api-security.md):
+      # 5/min for /api/login, 30/min for mutating endpoints, 100/min for reads.
+      RATE_LIMIT_ENABLED: "true"
+
+      # Set when running behind a reverse proxy (Cloudflare, nginx, traefik, etc.)
+      # so rate limits apply to the real client IP. Common values: X-Forwarded-For,
+      # CF-Connecting-IP. Leave unset for direct exposure.
+      # RATE_LIMIT_PROXY_HEADER: X-Forwarded-For
+
+      # Optional tuning:
+      # JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 180
+      # ITEMS_PER_PAGE: 200
+      # MAX_FILE_SIZE: 104857600
+      # DISABLE_DELETION: "false"
+      # ENABLE_LAZY_LOADING: "true"
+      # LOG_LEVEL: info
+
+      # Optional: AWS credentials baked in. Prefer ~/.aws mount or IAM role for prod.
+      # AWS_ACCESS_KEY_ID: ...
+      # AWS_SECRET_ACCESS_KEY: ...
+      # AWS_REGION: eu-central-1
     volumes:
-      # Mount config file (optional - can be created via web UI)
-      - ./config.json:/app/config.json
+      # Persist SQLite + config across container restarts.
+      # Named volume (recommended): Docker initializes it with image-layer ownership,
+      # so the non-root user 'app' (uid 1001) can write without manual chown.
+      - app-data:/app/data
 
-      # Mount data directory for persistent user data and bans
-      - ./data:/app/data
+      # Bind-mount alternative — replace the line above with:
+      #   - ./data:/app/data
+      # WARNING: on Linux you must `mkdir -p data && sudo chown 1001:1001 data` first,
+      # otherwise the non-root container user can't write to it. Named volume avoids this.
 
-      # Optional: Mount AWS credentials if using profiles
-      # - ~/.aws:/root/.aws:ro
+      # Optional: mount your AWS profile so SSO/profile-typed roles in config.json work.
+      # On Linux/macOS:
+      # - ${HOME}/.aws:/home/app/.aws:ro
+      # On Windows (Docker Desktop): substitute ${USERPROFILE}/.aws
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/app-info')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 5s
+    # Healthcheck is defined in the image (Dockerfile).
 
+volumes:
+  app-data:

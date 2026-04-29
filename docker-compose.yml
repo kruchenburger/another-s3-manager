@@ -1,3 +1,14 @@
+# Local dev stack — builds the image from source and bind-mounts ./data for SQLite + config.json persistence.
+# For a self-host quick start without cloning the repo, see docker-compose.example.yml.
+#
+# Default port 8080 — this app is standalone (not co-deployed with other kruchenburger
+# services). Override with APP_PORT=9000 if 8080 is in use.
+#
+# IMPORTANT for Linux hosts: the container runs as non-root user `app` (uid 1001).
+# Before first `docker compose up`, prepare ./data with the right ownership:
+#   mkdir -p data && sudo chown 1001:1001 data
+# Without this step SQLite write fails on Linux. macOS / Windows Docker Desktop
+# handle UID translation transparently — no chown needed there.
 services:
   app:
     build:
@@ -8,17 +19,10 @@ services:
       - "${APP_PORT:-8080}:8080"
     env_file: .env
     environment:
-      - PORT=8080
       - UVICORN_HOST=0.0.0.0
       - DATA_DIR=/app/data
       - S3_FILE_MANAGER_CONFIG=/app/data/config.json
     volumes:
       - ./data:/app/data
-      - ./src:/app/src
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 5s
+    # Healthcheck is defined in the Dockerfile; no override needed here.
