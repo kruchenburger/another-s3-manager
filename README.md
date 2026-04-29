@@ -54,6 +54,23 @@ Role types: `default`, `profile`, `assume_role`, `credentials`. Any role can inc
 | `MAX_FILE_SIZE` | Max upload size in bytes | `104857600` (100 MB) |
 | `DISABLE_DELETION` | Disable delete operations | `false` |
 | `ITEMS_PER_PAGE` | Files per page | `200` |
+| `RATE_LIMIT_ENABLED` | Enable per-IP rate limiting | `true` |
+| `RATE_LIMIT_PROXY_HEADER` | Header carrying real client IP behind a proxy (e.g. `X-Forwarded-For`) | unset |
+
+## Rate Limiting
+
+Per-IP limits enforced via [slowapi](https://github.com/laurentS/slowapi):
+
+- `POST /api/login` — **5/minute** (brute-force defense, layered with the ban-on-failed-logins logic)
+- All other mutating endpoints (POST/PUT/DELETE) — **30/minute**
+- Read endpoints (GET) — **100/minute**
+
+Exceeding a limit returns `429 Too Many Requests` with `Retry-After`,
+`X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers.
+
+Behind a reverse proxy (Cloudflare, nginx, etc.), set `RATE_LIMIT_PROXY_HEADER` to
+the header carrying the real client IP. Otherwise all requests appear to come from
+the proxy and share one quota.
 
 ## Storage
 

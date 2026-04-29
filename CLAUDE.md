@@ -22,6 +22,7 @@ another-s3-manager/
 │       ├── constants.py      # App constants, paths
 │       ├── database.py       # SQLAlchemy engine + session_scope()
 │       ├── models.py         # ORM models (User, Role, Ban)
+│       ├── rate_limit.py    # slowapi limiter (per-IP, in-memory)
 │       ├── s3_client.py      # S3 client, role management
 │       ├── users.py          # User management (SQLite via SQLAlchemy)
 │       ├── utils.py          # Validation, sanitization
