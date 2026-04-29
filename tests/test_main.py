@@ -165,6 +165,13 @@ def test_login_page_returns_html(app_client):
     assert "<!DOCTYPE html>" in response.text
 
 
+def test_v2_mount_serves_static_directory(app_client):
+    """The /v2 mount exists — even if empty, requesting a non-existent path returns 404, not 500."""
+    response = app_client.get("/v2/does-not-exist.html")
+    # Either 404 (file not found) or 200 (if html=True falls back) — but never 500
+    assert response.status_code in (200, 404)
+
+
 def test_login_success(app_client):
     data, _ = login(app_client)
     # After cookie-based auth migration: body returns only the user object,

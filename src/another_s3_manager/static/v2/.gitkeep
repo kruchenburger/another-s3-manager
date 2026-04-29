@@ -1,0 +1,2 @@
+# Placeholder — Vite build output target for the React SPA (Phase 2+).
+# This directory is replaced at the cutover step (Phase 7) when the SPA moves to static/.

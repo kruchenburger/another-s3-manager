@@ -165,6 +165,10 @@ async def health():
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# /v2 mount — placeholder for the React SPA (populated in Phase 2 by the multi-stage Dockerfile).
+# During strangler-fig migration vanilla UI keeps serving /, /login, /admin.
+app.mount("/v2", StaticFiles(directory=str(STATIC_DIR / "v2"), html=True, check_dir=False), name="v2")
+
 
 # Clear S3 clients cache when config changes (hook into config module)
 def _on_config_change():
