@@ -3,6 +3,12 @@
 #
 # Default port 8080 — this app is standalone (not co-deployed with other kruchenburger
 # services). Override with APP_PORT=9000 if 8080 is in use.
+#
+# IMPORTANT for Linux hosts: the container runs as non-root user `app` (uid 1001).
+# Before first `docker compose up`, prepare ./data with the right ownership:
+#   mkdir -p data && sudo chown 1001:1001 data
+# Without this step SQLite write fails on Linux. macOS / Windows Docker Desktop
+# handle UID translation transparently — no chown needed there.
 services:
   app:
     build:

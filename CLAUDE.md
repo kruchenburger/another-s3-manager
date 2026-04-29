@@ -27,7 +27,7 @@ another-s3-manager/
 │       ├── users.py          # User management (SQLite via SQLAlchemy)
 │       ├── utils.py          # Validation, sanitization
 │       └── static/           # Frontend assets (HTML/JS/CSS)
-├── alembic/                  # Alembic migrations
+├── migrations/               # Alembic migrations (env.py + versions/)
 ├── alembic.ini
 ├── tests/                    # pytest tests
 ├── frontend/                 # React + Mantine scaffold (WIP)
@@ -97,9 +97,11 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 | `DISABLE_DELETION`                | No       | `false`         | Disable file deletion               |
 | `MAX_FILE_SIZE`                   | No       | `104857600`     | Max upload file size (bytes, 100MB) |
 | `ENABLE_LAZY_LOADING`             | No       | `true`          | Enable lazy loading for file lists  |
-| `AWS_REGION`                      | No       | `us-east-1`     | Default AWS region                  |
-| `S3_FILE_MANAGER_CONFIG`          | No       | `config.json`   | Path to config file                 |
-| `DATA_DIR`                        | No       | —               | Data dir (SQLite DB + runtime data) |
+| `AWS_REGION`                      | No       | from env        | Default AWS region                  |
+| `S3_FILE_MANAGER_CONFIG`          | No       | `./data/config.json` | Path to config file (under DATA_DIR by convention) |
+| `DATA_DIR`                        | No       | `./data` (native), `/app/data` (Docker) | Data dir (SQLite DB + runtime data) |
+| `RATE_LIMIT_ENABLED`              | No       | `true`          | Enable per-IP rate limiting (slowapi) |
+| `RATE_LIMIT_PROXY_HEADER`         | No       | unset           | Real-client-IP header behind a proxy (e.g. `X-Forwarded-For`) |
 
 ## Features
 

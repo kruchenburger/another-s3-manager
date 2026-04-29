@@ -51,7 +51,14 @@ services:
       # AWS_REGION: eu-central-1
     volumes:
       # Persist SQLite + config across container restarts.
-      - ./data:/app/data
+      # Named volume (recommended): Docker initializes it with image-layer ownership,
+      # so the non-root user 'app' (uid 1001) can write without manual chown.
+      - app-data:/app/data
+
+      # Bind-mount alternative — replace the line above with:
+      #   - ./data:/app/data
+      # WARNING: on Linux you must `mkdir -p data && sudo chown 1001:1001 data` first,
+      # otherwise the non-root container user can't write to it. Named volume avoids this.
 
       # Optional: mount your AWS profile so SSO/profile-typed roles in config.json work.
       # On Linux/macOS:
@@ -59,3 +66,6 @@ services:
       # On Windows (Docker Desktop): substitute ${USERPROFILE}/.aws
     restart: unless-stopped
     # Healthcheck is defined in the image (Dockerfile).
+
+volumes:
+  app-data:

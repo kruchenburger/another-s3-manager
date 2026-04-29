@@ -9,12 +9,17 @@ Works with **AWS S3**, **MinIO**, **Cloudflare R2**, **Wasabi**, and any S3-comp
 ```bash
 docker run -d -p 8080:8080 \
   -e JWT_SECRET_KEY=$(openssl rand -base64 32) \
-  -v $(pwd)/data:/app/data \
+  -v s3m-data:/app/data \
   ghcr.io/kruchenburger/another-s3-manager:latest
 ```
 
 Open `http://localhost:8080` and log in with `admin` / `change_me_pls`. Persistent state
-(SQLite DB, `config.json`, etc.) lives in `./data` on the host.
+(SQLite DB, `config.json`, etc.) lives in the `s3m-data` named Docker volume — works out
+of the box on Linux/macOS/Windows because Docker initializes named volumes with the
+image's user ownership (the container runs as non-root `app` / uid 1001).
+
+If you prefer a host-bind mount (`-v $(pwd)/data:/app/data`), on **Linux** you must
+`mkdir -p data && sudo chown 1001:1001 data` first or the non-root user can't write.
 
 For a `docker compose` setup see [`docker-compose.example.yml`](docker-compose.example.yml).
 

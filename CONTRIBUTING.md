@@ -49,8 +49,10 @@ CI runs all three on every PR — make them green locally first.
 ```bash
 docker compose up --build      # local dev stack (build from source)
 docker compose down            # stop
-docker compose down -v         # stop + delete the data volume (destroys SQLite!)
 ```
+
+`docker-compose.yml` uses a host bind mount (`./data:/app/data`), so SQLite + config
+survive `docker compose down`. To wipe state, delete the dir manually: `rm -rf data/`.
 
 For per-developer overrides (mounting `~/.aws` etc.), copy
 `docker-compose.override.example.yml` to `docker-compose.override.yml` (gitignored).
