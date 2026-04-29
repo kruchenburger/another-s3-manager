@@ -290,11 +290,7 @@ def test_logout_clears_cookie(app_client, monkeypatch):
     set_cookie = response.headers.get("set-cookie", "")
     assert "access_token=" in set_cookie
     # Cookie cleared via Max-Age=0 or expires in past
-    assert (
-        "Max-Age=0" in set_cookie
-        or "max-age=0" in set_cookie.lower()
-        or "expires=" in set_cookie.lower()
-    )
+    assert "Max-Age=0" in set_cookie or "max-age=0" in set_cookie.lower() or "expires=" in set_cookie.lower()
 
 
 def test_login_banned_user(app_client):
