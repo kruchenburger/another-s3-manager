@@ -36,7 +36,7 @@ from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Re
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
+from slowapi.middleware import SlowAPIASGIMiddleware
 
 import another_s3_manager.config as config_module
 from another_s3_manager.auth import (
@@ -56,8 +56,6 @@ from another_s3_manager.constants import (
     APP_DESCRIPTION,
     APP_NAME,
     APP_VERSION,
-    RATE_LIMIT_LOGIN,
-    RATE_LIMIT_MUTATING,
     STATIC_DIR,
 )
 from another_s3_manager.rate_limit import limiter
@@ -82,8 +80,11 @@ except ValueError as e:
 app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION)
 
 # Rate limiting (slowapi). Per-IP, in-memory backend. See rate_limit.py for key_func.
+# Use ASGI middleware (not BaseHTTPMiddleware-based SlowAPIMiddleware) — the latter
+# crashes when a handler returns a dict because of how it pre-injects headers.
+# ASGI middleware operates on raw response headers, no Response object inspection needed.
 app.state.limiter = limiter
-app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(SlowAPIASGIMiddleware)
 
 
 @app.exception_handler(RateLimitExceeded)
@@ -205,7 +206,6 @@ async def login_page():
 
 
 @app.post("/api/login")
-@limiter.limit(RATE_LIMIT_LOGIN)
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
     """Login endpoint"""
     try:
@@ -309,7 +309,6 @@ async def list_users(current_user: Dict[str, Any] = Depends(get_current_admin_us
 
 
 @app.post("/api/admin/users")
-@limiter.limit(RATE_LIMIT_MUTATING)
 async def create_user(
     request: Request,
     username: str = Form(...),
@@ -356,7 +355,6 @@ async def create_user(
 
 
 @app.put("/api/admin/users/{username}/password")
-@limiter.limit(RATE_LIMIT_MUTATING)
 async def update_user_password(
     request: Request,
     username: str,
@@ -384,7 +382,6 @@ async def update_user_password(
 
 
 @app.put("/api/admin/users/{username}")
-@limiter.limit(RATE_LIMIT_MUTATING)
 async def update_user(
     request: Request,
     username: str,
@@ -413,7 +410,6 @@ async def update_user(
 
 
 @app.put("/api/user/theme")
-@limiter.limit(RATE_LIMIT_MUTATING)
 async def update_user_theme(
     request: Request,
     theme: str = Body(..., embed=True, description="Theme preference: 'light' or 'dark' (auto only for initial state)"),
@@ -438,7 +434,6 @@ async def update_user_theme(
 
 
 @app.delete("/api/admin/users/{username}")
-@limiter.limit(RATE_LIMIT_MUTATING)
 async def delete_user(
     request: Request,
     username: str,
@@ -480,7 +475,6 @@ async def list_bans(current_user: Dict[str, Any] = Depends(get_current_admin_use
 
 
 @app.delete("/api/admin/bans/{username}")
-@limiter.limit(RATE_LIMIT_MUTATING)
 async def unban_user(
     request: Request,
     username: str,
@@ -633,7 +627,6 @@ async def export_config(current_user: Dict[str, Any] = Depends(get_current_user)
 
 
 @app.post("/api/config")
-@limiter.limit(RATE_LIMIT_MUTATING)
 async def update_config(
     request: Request,
     config: Dict[str, Any] = Body(...),
@@ -996,7 +989,6 @@ async def list_files(
 
 
 @app.post("/api/buckets/{bucket_name}/upload")
-@limiter.limit(RATE_LIMIT_MUTATING)
 async def upload_file(
     request: Request,
     bucket_name: str,
@@ -1280,7 +1272,6 @@ async def download_file(
 
 
 @app.delete("/api/buckets/{bucket_name}/files")
-@limiter.limit(RATE_LIMIT_MUTATING)
 async def delete_file(
     request: Request,
     bucket_name: str,

@@ -97,7 +97,10 @@ S3_VERIFY_SSL = True
 # limits are enforced per real client, not per proxy.
 RATE_LIMIT_PROXY_HEADER = os.getenv("RATE_LIMIT_PROXY_HEADER", "").strip() or None
 
-# Rate limit thresholds (per-IP, per-minute):
-RATE_LIMIT_LOGIN = "5/minute"  # brute-force defense (existing ban logic remains)
-RATE_LIMIT_MUTATING = "30/minute"  # POST/PUT/DELETE on user data, config, files
-RATE_LIMIT_READ = "100/minute"  # GET endpoints (buckets, files, app-info, health)
+# Per-IP rate limit applied to ALL endpoints via SlowAPIMiddleware default.
+# Per-endpoint overrides via @limiter.limit decorators are NOT used — they crash
+# at runtime with FastAPI handlers that return dicts (slowapi tries to inject
+# headers into the dict before FastAPI serializes it). See task 8 in backlog.
+# Login brute-force defense relies on the existing username-based ban logic
+# in auth.py:record_login_attempt.
+RATE_LIMIT_DEFAULT = "100/minute"
