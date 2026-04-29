@@ -64,8 +64,10 @@ def test_successful_login_does_not_crash_with_limiter_enabled(rate_limited_clien
     assert response.status_code == 200, (
         f"login crashed with rate limiter enabled: {response.status_code} {response.text[:200]}"
     )
+    # After cookie-based auth migration: JWT rides in an httpOnly cookie,
+    # body returns only the user object.
+    assert "access_token=" in response.headers.get("set-cookie", "")
     body = response.json()
-    assert "access_token" in body
     assert body["user"]["username"] == "admin"
 
 
