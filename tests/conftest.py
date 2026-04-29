@@ -168,6 +168,27 @@ def mock_boto3_client(mocker, fake_s3_client):
 
 
 @pytest.fixture
+def valid_user_dict():
+    """Plain user dict suitable for stubbing load_users in auth tests."""
+    from another_s3_manager.auth import hash_password
+
+    return {
+        "username": "testuser",
+        "password_hash": hash_password("testpass"),
+        "is_admin": False,
+        "theme": "auto",
+    }
+
+
+@pytest.fixture
+def valid_jwt_token(valid_user_dict):
+    """Signed JWT for the valid_user_dict identity, with a CSRF claim."""
+    from another_s3_manager.auth import create_access_token, generate_csrf_token
+
+    return create_access_token(data={"sub": valid_user_dict["username"], "csrf_token": generate_csrf_token()})
+
+
+@pytest.fixture
 def db_session(monkeypatch, tmp_path):
     """Fresh in-memory SQLite engine + tables. Patches the app's engine to use it."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path))

@@ -1176,13 +1176,19 @@ def get_user_for_download(token: Optional[str] = Query(None), request: Request =
         except (JWTError, Exception):
             pass
 
-    # Fall back to Bearer header
+    # Fall back to Bearer header (legacy vanilla UI) or access_token cookie (cookie-auth UI)
     if request:
+        candidates = []
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
-            bearer_token = auth_header[7:]
+            candidates.append(auth_header[7:])
+        cookie_token = request.cookies.get("access_token")
+        if cookie_token:
+            candidates.append(cookie_token)
+
+        for candidate in candidates:
             try:
-                payload = jwt.decode(bearer_token, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
+                payload = jwt.decode(candidate, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
                 username = payload.get("sub")
                 if username:
                     users = load_users()
@@ -1196,7 +1202,6 @@ def get_user_for_download(token: Optional[str] = Query(None), request: Request =
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Authentication required",
-        headers={"WWW-Authenticate": "Bearer"},
     )
 
 

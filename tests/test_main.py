@@ -123,8 +123,11 @@ def login(client, username="admin", password="admin123"):
     data = response.json()
     token = data["access_token"]
     csrf = data["csrf_token"]
+    # Cookie-based auth: stash JWT on the TestClient cookie jar so subsequent
+    # requests are authenticated via the access_token cookie. CSRF still
+    # travels in the X-CSRF-Token header.
+    client.cookies.set("access_token", token)
     headers = {
-        "Authorization": f"Bearer {token}",
         "X-CSRF-Token": csrf,
     }
     return data, headers
@@ -192,7 +195,8 @@ def test_get_current_user_info(app_client):
 
 def test_get_current_user_info_requires_auth(app_client):
     response = app_client.get("/api/me")
-    assert response.status_code == status.HTTP_403_FORBIDDEN
+    # Cookie-based auth: missing access_token cookie -> 401 Not authenticated
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 def test_get_app_info(app_client):
@@ -212,15 +216,13 @@ def test_admin_page(app_client):
 def test_list_users_requires_admin(app_client):
     create_user("user", is_admin=False)
     data, headers = login(app_client)
-    # create non-admin token
+    # create non-admin token; switch the active cookie to the regular user
     create_user("regular", is_admin=False)
     response = app_client.post("/api/login", data={"username": "regular", "password": "password"})
     assert response.status_code == status.HTTP_200_OK
     regular_data = response.json()
-    regular_headers = {
-        "Authorization": f"Bearer {regular_data['access_token']}",
-    }
-    resp = app_client.get("/api/admin/users", headers=regular_headers)
+    app_client.cookies.set("access_token", regular_data["access_token"])
+    resp = app_client.get("/api/admin/users")
     assert resp.status_code == status.HTTP_403_FORBIDDEN
 
 
@@ -293,8 +295,8 @@ def test_update_user_theme(app_client):
     app_client.post("/api/login", data={"username": "themer", "password": "password"})
     login_response = app_client.post("/api/login", data={"username": "themer", "password": "password"})
     data = login_response.json()
+    app_client.cookies.set("access_token", data["access_token"])
     headers = {
-        "Authorization": f"Bearer {data['access_token']}",
         "X-CSRF-Token": data["csrf_token"],
     }
     response = app_client.put(
@@ -349,8 +351,8 @@ def test_get_config_regular_user(app_client):
     create_user("viewer", is_admin=False)
     login_response = app_client.post("/api/login", data={"username": "viewer", "password": "password"})
     data = login_response.json()
-    headers = {"Authorization": f"Bearer {data['access_token']}"}
-    response = app_client.get("/api/config", headers=headers)
+    app_client.cookies.set("access_token", data["access_token"])
+    response = app_client.get("/api/config")
     assert response.status_code == status.HTTP_200_OK
     assert "roles" in response.json()
 
@@ -367,8 +369,8 @@ def test_export_config_requires_admin(app_client):
     create_user("viewer", is_admin=False)
     login_response = app_client.post("/api/login", data={"username": "viewer", "password": "password"})
     data = login_response.json()
-    headers = {"Authorization": f"Bearer {data['access_token']}"}
-    response = app_client.get("/api/config/export", headers=headers)
+    app_client.cookies.set("access_token", data["access_token"])
+    response = app_client.get("/api/config/export")
     assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
@@ -580,8 +582,8 @@ def test_update_user_theme_invalid_value(app_client):
     create_user("themer", is_admin=False)
     login_response = app_client.post("/api/login", data={"username": "themer", "password": "password"})
     data = login_response.json()
+    app_client.cookies.set("access_token", data["access_token"])
     headers = {
-        "Authorization": f"Bearer {data['access_token']}",
         "X-CSRF-Token": data["csrf_token"],
     }
     response = app_client.put(
@@ -627,8 +629,8 @@ def test_get_config_regular_user_no_roles(app_client):
     create_user("limited", is_admin=False, allowed_roles=[])
     login_response = app_client.post("/api/login", data={"username": "limited", "password": "password"})
     data = login_response.json()
-    headers = {"Authorization": f"Bearer {data['access_token']}"}
-    response = app_client.get("/api/config", headers=headers)
+    app_client.cookies.set("access_token", data["access_token"])
+    response = app_client.get("/api/config")
     assert response.status_code == status.HTTP_200_OK
     assert response.json()["roles"] == []
 
@@ -721,8 +723,8 @@ def test_update_config_requires_admin(app_client):
     create_user("viewer", is_admin=False)
     login_response = app_client.post("/api/login", data={"username": "viewer", "password": "password"})
     info = login_response.json()
+    app_client.cookies.set("access_token", info["access_token"])
     headers = {
-        "Authorization": f"Bearer {info['access_token']}",
         "X-CSRF-Token": info["csrf_token"],
     }
     response = app_client.post(
