@@ -105,24 +105,23 @@
          </div>
     </div>
     <script>
-        // Check if already logged in
-        const token = localStorage.getItem('access_token');
-        if (token) {
-            // Verify token is still valid
-            fetch('/api/me', {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            })
+        // Check if already logged in (cookie-based: ask the server).
+        fetch('/api/me', { credentials: 'include' })
             .then(response => {
                 if (response.ok) {
-                    window.location.replace('/');
+                    return response.json().then(me => {
+                        // Refresh CSRF + user info in sessionStorage and redirect.
+                        sessionStorage.setItem('csrf_token', me.csrf_token || '');
+                        sessionStorage.setItem('username', me.username);
+                        sessionStorage.setItem('is_admin', String(me.is_admin));
+                        sessionStorage.setItem('user', JSON.stringify(me));
+                        window.location.replace('/');
+                    });
                 }
             })
             .catch(() => {
-                localStorage.removeItem('access_token');
+                // Not authenticated — stay on login page.
             });
-        }
 
         async function handleLogin(event) {
             event.preventDefault();
@@ -136,17 +135,23 @@
 
                 const response = await fetch('/api/login', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    credentials: 'include'  // ensure browser stores the auth cookie
                 });
 
                 if (response.ok) {
-                    const data = await response.json();
-                    localStorage.setItem('access_token', data.access_token);
-                    localStorage.setItem('user', JSON.stringify(data.user));
-                    // Store CSRF token
-                    if (data.csrf_token) {
-                        localStorage.setItem('csrf_token', data.csrf_token);
+                    // Cookie is now set by the server. Fetch /api/me to grab CSRF + user info.
+                    const meResponse = await fetch('/api/me', { credentials: 'include' });
+                    if (!meResponse.ok) {
+                        showError('Login succeeded but failed to load user info');
+                        return;
                     }
+                    const me = await meResponse.json();
+                    // CSRF token is NOT a credential — fine to keep in sessionStorage.
+                    sessionStorage.setItem('csrf_token', me.csrf_token || '');
+                    sessionStorage.setItem('username', me.username);
+                    sessionStorage.setItem('is_admin', String(me.is_admin));
+                    sessionStorage.setItem('user', JSON.stringify(me));
                     window.location.replace('/');
                 } else {
                     let errorMessage = 'Login failed';
@@ -166,8 +171,13 @@
         }
 
         function showError(message) {
+            // Use safe DOM construction to avoid XSS — error messages may contain server-supplied text.
             const errorDiv = document.getElementById('error-message');
-            errorDiv.innerHTML = `<div class="error">${message}</div>`;
+            errorDiv.textContent = '';
+            const inner = document.createElement('div');
+            inner.className = 'error';
+            inner.textContent = message;
+            errorDiv.appendChild(inner);
         }
     </script>
 </body>
