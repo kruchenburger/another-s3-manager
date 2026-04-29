@@ -1,0 +1,20 @@
+# Per-developer compose overrides — copy this to docker-compose.override.yml and adjust.
+# docker-compose.override.yml is gitignored (see .gitignore). Compose auto-loads it
+# on top of docker-compose.yml without any extra flags.
+#
+# Common use case: mount your host AWS config/credentials so SSO/profile-typed roles
+# in config.json resolve inside the container. Refresh expired SSO tokens on the host
+# with: aws sso login --profile <name> — the container picks up the new token via the
+# read-only volume mount, no restart needed.
+#
+# Pick the line for your OS — Linux/macOS use ${HOME}, Windows uses ${USERPROFILE}.
+# Mount target is /home/app/.aws because the container runs as non-root user `app`.
+
+services:
+  app:
+    volumes:
+      # Linux / macOS:
+      - ${HOME}/.aws:/home/app/.aws:ro
+
+      # Windows (Docker Desktop) — comment the line above and uncomment this one:
+      # - ${USERPROFILE}/.aws:/home/app/.aws:ro

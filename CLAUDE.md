@@ -4,9 +4,9 @@ Lightweight web UI for managing files in S3 and S3-compatible storage.
 
 ## Stack
 
-- **Backend**: Python 3.13+, FastAPI, Boto3, JWT auth
+- **Backend**: Python 3.13+, FastAPI, Boto3, JWT auth, slowapi rate limiting
 - **Frontend**: Vanilla HTML/JS/CSS (migration to React + Mantine in progress)
-- **Deployment**: Docker, Docker Compose, Kubernetes (Helm)
+- **Deployment**: Docker, Docker Compose, Kubernetes (chart hosted at [github.com/kruchenburger/helm](https://github.com/kruchenburger/helm) — in progress)
 - **Package manager**: uv
 
 ## Structure
@@ -108,3 +108,33 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 - JWT authentication with CSRF protection
 - Automatic refresh of expired credentials
 - Granular per-role, per-bucket access control
+- Per-IP rate limiting (slowapi): login 5/min, mutating 30/min, reads 100/min
+
+## Deployment
+
+### Local dev
+
+```bash
+# Native (no Docker — fastest iteration, hot reload via uvicorn if needed)
+JWT_SECRET_KEY=dev-secret uv run python -m another_s3_manager.main
+
+# Docker compose (full integration test with the production image)
+docker compose up --build
+```
+
+`docker-compose.yml` builds from source and bind-mounts `./data` for SQLite + config persistence.
+
+For per-developer overrides (e.g. mounting host `~/.aws` for SSO profiles), copy
+`docker-compose.override.example.yml` to `docker-compose.override.yml` (gitignored, auto-loaded).
+
+### Self-host
+
+Use `docker-compose.example.yml` — pulls a published image from GHCR, no source clone needed.
+Copy to a server, set `JWT_SECRET_KEY`, run.
+
+### Kubernetes
+
+Container is k8s-ready: read-only `config.json` mount via ConfigMap is supported
+(`config.py:is_config_writable()` handles RO gracefully), SQLite DB lives under `DATA_DIR`
+(mount a PVC), secrets via env. Helm charts for kruchenburger services live in a separate
+repo: [github.com/kruchenburger/helm](https://github.com/kruchenburger/helm) (in progress).

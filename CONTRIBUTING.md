@@ -1,69 +1,61 @@
 # Contributing to Another S3 Manager
 
-Thank you for your interest in contributing to Another S3 Manager! This document provides guidelines and instructions for contributing.
+Thanks for your interest! Here's how to get a working dev setup and submit changes.
 
-## Getting Started
+## Setup
 
-1. Fork the repository
-2. Clone your fork: `git clone https://github.com/your-username/another-s3-manager.git`
-3. Create a new branch: `git checkout -b feature/your-feature-name`
-4. Make your changes
-5. Test your changes
-6. Commit your changes: `git commit -m "Add: description of changes"`
-7. Push to your fork: `git push origin feature/your-feature-name`
-8. Open a Pull Request
+Requires Python 3.13+ and [uv](https://github.com/astral-sh/uv).
 
-## Development Setup
-
-### Using Python
-
-**Important:** Always use a virtual environment to isolate project dependencies.
-
-#### With uv (Recommended)
-
-1. Install [uv](https://github.com/astral-sh/uv) (if not already installed):
 ```bash
-# macOS/Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Clone your fork
+git clone https://github.com/your-username/another-s3-manager.git
+cd another-s3-manager
 
-# Windows
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+# Install all dependencies (runtime + dev: pytest, ruff, moto, etc.)
+uv sync --all-extras
+
+# Copy the env template and set a random JWT_SECRET_KEY
+cp .env.example .env
+# Edit .env — at minimum set JWT_SECRET_KEY (generate one with:
+# python -c 'import secrets; print(secrets.token_urlsafe(32))')
+
+# Run the server
+uv run python -m another_s3_manager.main
+
+# Open http://localhost:8080 — log in as admin / change_me_pls
 ```
 
-2. Create and activate a virtual environment:
-```bash
-# Create virtual environment
-python -m venv venv
+State (SQLite DB, `config.json`) lives in `./data` by default. To wipe and start fresh,
+`rm -rf data/`.
 
-# Activate virtual environment
-# On macOS/Linux:
-source venv/bin/activate
-# On Windows:
-venv\Scripts\activate
+## Make changes, run checks
+
+```bash
+uv run ruff check .            # lint
+uv run ruff format --check .   # format check (use `format .` to auto-fix)
+uv run pytest --cov            # unit + integration tests
 ```
 
-3. Install dependencies:
+CI runs all three on every PR — make them green locally first.
+
+## Branches and commits
+
+- Branch from `main`: `git checkout -b <type>/<short-description>` (e.g. `fix/login-csrf-mismatch`)
+- Conventional Commits: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`
+- Open a PR against `main` (or the active `release/*` branch if one is open)
+
+## Docker
+
 ```bash
-uv pip install ".[dev]"
+docker compose up --build      # local dev stack (build from source)
+docker compose down            # stop
+docker compose down -v         # stop + delete the data volume (destroys SQLite!)
 ```
 
-#### With pip
+For per-developer overrides (mounting `~/.aws` etc.), copy
+`docker-compose.override.example.yml` to `docker-compose.override.yml` (gitignored).
 
-1. Create and activate a virtual environment:
-```bash
-# Create virtual environment
-python -m venv venv
+## Reporting bugs
 
-# Activate virtual environment
-# On macOS/Linux:
-source venv/bin/activate
-# On Windows:
-venv\Scripts\activate
-```
-
-2. Install dependencies:
-```bash
-pip install ".[dev]"
-```
-
-3. Set up environment variables (create `.env`
+Open an issue with: what you tried, what you expected, what happened, and the relevant
+logs (redact any secrets). Reproductions in `docker compose` form are most helpful.

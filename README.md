@@ -9,11 +9,14 @@ Works with **AWS S3**, **MinIO**, **Cloudflare R2**, **Wasabi**, and any S3-comp
 ```bash
 docker run -d -p 8080:8080 \
   -e JWT_SECRET_KEY=$(openssl rand -base64 32) \
-  -v s3m-data:/app/data \
+  -v $(pwd)/data:/app/data \
   ghcr.io/kruchenburger/another-s3-manager:latest
 ```
 
-Open `http://localhost:8080` and log in with `admin` / `change_me_pls`.
+Open `http://localhost:8080` and log in with `admin` / `change_me_pls`. Persistent state
+(SQLite DB, `config.json`, etc.) lives in `./data` on the host.
+
+For a `docker compose` setup see [`docker-compose.example.yml`](docker-compose.example.yml).
 
 ## Features
 
@@ -87,30 +90,38 @@ DB schema is managed via Alembic. Migrations run at startup
 
 ## Docker Compose
 
-```yaml
-services:
-  s3-manager:
-    image: ghcr.io/kruchenburger/another-s3-manager:latest
-    ports: ["8080:8080"]
-    environment:
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-    volumes:
-      - ./config.json:/app/config.json
-      - s3m-data:/app/data
-    restart: unless-stopped
+Two compose files ship with the repo:
 
-volumes:
-  s3m-data:
-```
+- [`docker-compose.yml`](docker-compose.yml) — local dev. Builds the image from source,
+  bind-mounts `./data` for persistence.
+- [`docker-compose.example.yml`](docker-compose.example.yml) — self-host template. Pulls a
+  published image from GHCR. Copy this onto a server, set `JWT_SECRET_KEY`, run.
+
+For per-developer overrides (mounting `~/.aws` for SSO profiles, custom volumes, etc.)
+copy [`docker-compose.override.example.yml`](docker-compose.override.example.yml) to
+`docker-compose.override.yml` (gitignored, auto-loaded by compose).
+
+## Kubernetes
+
+The container is Kubernetes-ready: read-only `config.json` mount via ConfigMap is supported,
+SQLite DB lives under `DATA_DIR` (mount a PVC there), and secrets like `JWT_SECRET_KEY` come
+from env. Helm charts for kruchenburger services live in a separate repo —
+[github.com/kruchenburger/helm](https://github.com/kruchenburger/helm) (in progress).
 
 ## Development
 
 ```bash
-uv sync                  # install dependencies
+uv sync --all-extras     # install dependencies (including dev: ruff, pytest, moto)
 uv run pytest --cov      # run tests
 uv run ruff check .      # lint
 uv run ruff format .     # format
+```
+
+Local server (no Docker):
+
+```bash
+JWT_SECRET_KEY=dev-secret uv run python -m another_s3_manager.main
+# Persists SQLite + config.json under ./data (per .env.example)
 ```
 
 ## IAM Policy
