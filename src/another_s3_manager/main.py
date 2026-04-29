@@ -281,6 +281,13 @@ async def login(
         )
 
 
+@app.post("/api/logout")
+async def logout(response: Response):
+    """Clear the auth cookie. No auth required — clearing an already-invalid cookie is harmless."""
+    response.delete_cookie("access_token", path="/")
+    return {"ok": True}
+
+
 @app.get("/api/me")
 async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Get current user information"""

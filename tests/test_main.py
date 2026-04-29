@@ -247,6 +247,49 @@ def test_login_wrong_password_no_cookie(app_client, monkeypatch):
     assert "access_token=" not in response.headers.get("set-cookie", "")
 
 
+def test_logout_clears_cookie(app_client, monkeypatch):
+    """POST /api/logout returns ok and Set-Cookie that clears access_token."""
+    # Seed admin
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-pw-12345")
+    from another_s3_manager.auth import hash_password
+    from another_s3_manager.users import save_users
+
+    save_users(
+        {
+            "users": [
+                {
+                    "username": "admin",
+                    "password_hash": hash_password("test-pw-12345"),
+                    "is_admin": True,
+                    "allowed_roles": [],
+                    "theme": "auto",
+                }
+            ]
+        }
+    )
+
+    # Log in to get the cookie
+    login = app_client.post(
+        "/api/login",
+        data={"username": "admin", "password": "test-pw-12345"},
+    )
+    assert login.status_code == 200
+
+    # Logout
+    response = app_client.post("/api/logout")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "access_token=" in set_cookie
+    # Cookie cleared via Max-Age=0 or expires in past
+    assert (
+        "Max-Age=0" in set_cookie
+        or "max-age=0" in set_cookie.lower()
+        or "expires=" in set_cookie.lower()
+    )
+
+
 def test_login_banned_user(app_client):
     auth_module = reload_auth_module()
     for _ in range(auth_module.MAX_LOGIN_ATTEMPTS):
