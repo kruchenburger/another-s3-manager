@@ -10,7 +10,7 @@ from fastapi import Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from another_s3_manager.constants import RATE_LIMIT_PROXY_HEADER, RATE_LIMIT_READ
+from another_s3_manager.constants import RATE_LIMIT_DEFAULT, RATE_LIMIT_PROXY_HEADER
 
 
 def _client_ip(request: Request) -> str:
@@ -30,16 +30,19 @@ def _client_ip(request: Request) -> str:
     return get_remote_address(request)
 
 
-# Default limit covers all endpoints (mostly reads). Mutating endpoints + /api/login
-# override with stricter limits via @limiter.limit(...) decorators in main.py.
+# Single per-IP limit applied to ALL endpoints via SlowAPIMiddleware.
+# We do NOT use @limiter.limit(...) decorators on individual endpoints — they crash
+# at runtime when handlers return dicts (FastAPI serializes those into JSONResponse
+# only AFTER the decorator runs, and the decorator demands a Response). Middleware
+# operates AFTER FastAPI serialization, so it works fine.
 # Disabled in tests via RATE_LIMIT_ENABLED=false to allow direct endpoint calls
 # with mocked Request objects.
 # headers_enabled + retry_after="delta-seconds" → 429 responses get Retry-After (seconds)
-# and X-RateLimit-Limit/Remaining/Reset headers, which the React UI uses for countdown UX.
+# and X-RateLimit-Limit/Remaining/Reset headers for client-side countdown UX.
 _enabled = os.getenv("RATE_LIMIT_ENABLED", "true").lower() != "false"
 limiter = Limiter(
     key_func=_client_ip,
-    default_limits=[RATE_LIMIT_READ],
+    default_limits=[RATE_LIMIT_DEFAULT],
     enabled=_enabled,
     headers_enabled=True,
     retry_after="delta-seconds",

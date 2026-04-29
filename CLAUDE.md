@@ -110,7 +110,7 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 - JWT authentication with CSRF protection
 - Automatic refresh of expired credentials
 - Granular per-role, per-bucket access control
-- Per-IP rate limiting (slowapi): login 5/min, mutating 30/min, reads 100/min
+- Per-IP rate limiting (slowapi via SlowAPIASGIMiddleware): single 100/min limit on all endpoints. Login brute-force defense via existing username-based ban (3 fails → 1h ban).
 
 ## Deployment
 

@@ -67,13 +67,10 @@ Role types: `default`, `profile`, `assume_role`, `credentials`. Any role can inc
 
 ## Rate Limiting
 
-Per-IP limits enforced via [slowapi](https://github.com/laurentS/slowapi):
+Per-IP rate limit (default **100/minute**, all endpoints) via [slowapi](https://github.com/laurentS/slowapi).
+Login brute-force defense relies on the existing username-based ban: 3 failed attempts → 1 hour ban.
 
-- `POST /api/login` — **5/minute** (brute-force defense, layered with the ban-on-failed-logins logic)
-- All other mutating endpoints (POST/PUT/DELETE) — **30/minute**
-- Read endpoints (GET) — **100/minute**
-
-Exceeding a limit returns `429 Too Many Requests` with `Retry-After`,
+Exceeding the limit returns `429 Too Many Requests` with `Retry-After`,
 `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers.
 
 Behind a reverse proxy (Cloudflare, nginx, etc.), set `RATE_LIMIT_PROXY_HEADER` to
