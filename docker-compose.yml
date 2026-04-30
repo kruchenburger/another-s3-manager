@@ -1,15 +1,24 @@
-# Local dev stack — builds the image from source and bind-mounts ./data for SQLite + config.json persistence.
-# For a self-host quick start without cloning the repo, see docker-compose.example.yml.
+# Local dev stack — builds the image from source and bind-mounts ./data so SQLite
+# + config.json + any uploaded files live next to the repo (visible in your IDE,
+# easy to back up, easy to wipe with `rm -rf data`).
 #
-# Default port 8080 — this app is standalone (not co-deployed with other kruchenburger
-# services). Override with APP_PORT=9000 if 8080 is in use.
+# Quick start (one command after `cp .env.example .env` + paste a JWT key):
+#   docker compose up --build
 #
-# IMPORTANT for Linux hosts: the container runs as non-root user `app` (uid 1001).
-# Before first `docker compose up`, prepare ./data with the right ownership:
-#   mkdir -p data && sudo chown 1001:1001 data
-# Without this step SQLite write fails on Linux. macOS / Windows Docker Desktop
-# handle UID translation transparently — no chown needed there.
+# For self-host (server, no source clone), see docker-compose.example.yml.
+#
+# Override port with APP_PORT=9000 if 8080 is in use.
 services:
+  # One-shot init: ensures ./data is writable by the non-root user (uid 1001) inside
+  # the app container. Without this, bind-mount writes fail on Linux and inconsistently
+  # on Windows. Runs to completion before `app` starts; takes <1 second on a primed host.
+  init-data:
+    image: alpine:3
+    command: chown -R 1001:1001 /data
+    volumes:
+      - ./data:/data
+    restart: "no"
+
   app:
     build:
       context: .
@@ -22,7 +31,16 @@ services:
       - UVICORN_HOST=0.0.0.0
       - DATA_DIR=/app/data
       - S3_FILE_MANAGER_CONFIG=/app/data/config.json
+      # Local HTTP — without this the browser drops the auth cookie.
+      - COOKIE_SECURE=false
     volumes:
       - ./data:/app/data
+      # Optional: mount your AWS profile so SSO/profile-typed roles in config.json work.
+      # Uncomment the line for your OS:
+      # - ${HOME}/.aws:/home/app/.aws:ro          # Linux / macOS
+      # - ${USERPROFILE}/.aws:/home/app/.aws:ro   # Windows (Docker Desktop)
+    depends_on:
+      init-data:
+        condition: service_completed_successfully
     restart: unless-stopped
     # Healthcheck is defined in the Dockerfile; no override needed here.
