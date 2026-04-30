@@ -11,6 +11,10 @@ os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 # Disable slowapi rate limiting in tests — many tests call endpoint funcs directly
 # with mocked Request objects, which slowapi rejects. Enabled via env in production.
 os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
+# TestClient talks to "http://testserver" which is not HTTPS — Set-Cookie with the
+# Secure flag is dropped by the cookie jar, breaking every cookie-auth test.
+# Mirror the local-dev convention: tests run over plain HTTP, so disable Secure.
+os.environ.setdefault("COOKIE_SECURE", "false")
 
 
 def _default_config() -> Dict[str, Any]:
