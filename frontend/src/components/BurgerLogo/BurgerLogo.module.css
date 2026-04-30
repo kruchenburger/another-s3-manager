@@ -1,0 +1,9 @@
+/* prefers-reduced-motion overrides — GSAP also reads this, but CSS guarantees
+   no transform happens during initial render before GSAP attaches. */
+@media (prefers-reduced-motion: reduce) {
+  .container * {
+    transform: none !important;
+    animation: none !important;
+    transition: none !important;
+  }
+}
