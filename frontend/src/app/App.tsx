@@ -1,11 +1,14 @@
-import { MantineProvider } from "@mantine/core";
-import "@mantine/core/styles.css";
-import { theme } from "./theme";
+import { RouterProvider } from "react-router-dom";
+import { AppProviders } from "@/app/providers";
+import { ErrorBoundary } from "@/components/ErrorBoundary/ErrorBoundary";
+import { router } from "@/app/router";
 
 export function App() {
   return (
-    <MantineProvider theme={theme} defaultColorScheme="auto">
-      <div>Another S3 Manager — React frontend (WIP)</div>
-    </MantineProvider>
+    <ErrorBoundary>
+      <AppProviders>
+        <RouterProvider router={router} />
+      </AppProviders>
+    </ErrorBoundary>
   );
 }

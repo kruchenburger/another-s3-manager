@@ -79,6 +79,39 @@ JWT_SECRET_KEY=dev-secret uv run python -m another_s3_manager.main
 docker compose up --build
 ```
 
+### Frontend Development
+
+```bash
+# Install JS deps (one-time, after each pull that touches frontend/package.json)
+cd frontend && npm install
+
+# Dev server with hot reload (proxies /api → http://localhost:8080)
+cd frontend && npm run dev   # opens on http://localhost:5173
+
+# Production build → bundles into ../src/another_s3_manager/static/v2/
+cd frontend && npm run build
+
+# Unit tests (Vitest)
+cd frontend && npm test
+
+# Type check
+cd frontend && npm run lint
+```
+
+Local dev requires both servers: backend on `8080` (FastAPI) + Vite on `5173`.
+Vite proxies `/api` → backend, so the React app talks to the real backend during
+dev. For production-like testing, run `npm run build` then visit
+`http://localhost:8080/v2/` (the FastAPI app serves the bundle directly).
+
+**`COOKIE_SECURE=false` is required when running locally over HTTP** — without it
+the browser drops the auth cookie.
+
+### Strangler-fig migration
+
+The vanilla UI (`/`, `/login`, `/admin`) and the React SPA (`/v2/*`) coexist
+during the migration. Each release adds more pages to `/v2/`; the vanilla UI is
+removed only after `/v2/` has full feature parity (Phase 7).
+
 ## Versioning
 
 Version is derived from git tag via `APP_VERSION` env var. In local development — `dev`.
