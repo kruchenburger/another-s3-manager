@@ -3,7 +3,7 @@ import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import classes from "./BurgerLogo.module.css";
 
-export type BurgerLogoMode = "loader" | "idle" | "error" | "notfound" | "crash";
+export type BurgerLogoMode = "static" | "loader" | "idle" | "error" | "notfound" | "crash";
 
 interface BurgerLogoProps {
   size?: number;
@@ -25,8 +25,9 @@ const prefersReducedMotion =
  * Files-as-filling concept: slate bun + 3 amber file plates + slate bun + seeds.
  *
  * Modes:
+ *  - static   — no animation at all (header icon, repeated renders)
  *  - loader   — assemble → if ready: bounce-complete; else: disassemble + loop
- *  - idle     — assemble → gentle breathing scale yoyo
+ *  - idle     — one-time assemble + settle (no looping yoyo)
  *  - error    — assemble → shake (used by 403 ForbiddenPage)
  *  - notfound — assemble → tilt 12° + drop 8px ("oops" effect, used by 404)
  *  - crash    — assemble → random scatter (3 variants) → gentle floating, +Replay (used by 500)
@@ -49,6 +50,10 @@ export function BurgerLogo({
 
   useGSAP(
     () => {
+      // static mode: no animation, ever. Used in repeated places (header icon)
+      // where animation would be distracting.
+      if (mode === "static") return;
+
       if (prefersReducedMotion) {
         if (mode === "loader") onCompleteRef.current?.();
         return;
@@ -108,6 +113,8 @@ export function BurgerLogo({
       }
 
       if (mode === "idle") {
+        // One-time assemble, then settle. No looping yoyo — the breathing animation
+        // turned out to be distracting on a hero element rather than charming.
         const tl = gsap.timeline();
         tl.set(layers, { y: -60, opacity: 0 });
         tl.to(layers, {
@@ -117,17 +124,6 @@ export function BurgerLogo({
           stagger: 0.12,
           ease: "back.out(1.7)",
         });
-        tl.to(
-          container,
-          {
-            scale: 1.05,
-            duration: 1.5,
-            yoyo: true,
-            repeat: -1,
-            ease: "sine.inOut",
-          },
-          "+=0.3",
-        );
         return;
       }
 
