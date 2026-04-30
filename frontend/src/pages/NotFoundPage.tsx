@@ -1,0 +1,18 @@
+import { Button, Container, Stack, Text, Title } from "@mantine/core";
+import { Link } from "react-router-dom";
+import { BurgerLogo } from "@/components/BurgerLogo/BurgerLogo";
+
+export function NotFoundPage() {
+  return (
+    <Container size="sm" py="xl">
+      <Stack align="center" gap="md">
+        <BurgerLogo size={64} />
+        <Title order={2}>Page not found</Title>
+        <Text c="dimmed">The page you were looking for doesn't exist (or moved).</Text>
+        <Button component={Link} to="/">
+          Back to home
+        </Button>
+      </Stack>
+    </Container>
+  );
+}
