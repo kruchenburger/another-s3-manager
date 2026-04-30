@@ -49,3 +49,13 @@ bans.json
 .DS_Store
 Thumbs.db
 
+# Frontend dev artifacts — only what the Dockerfile needs is copied (package.json, package-lock.json, src/, configs, index.html)
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+frontend/tests/
+frontend/.tsbuild-node/
+frontend/*.tsbuildinfo
+
