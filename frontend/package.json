@@ -9,14 +9,14 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "lint": "tsc -b --noEmit"
+    "lint": "tsc -b"
   },
   "dependencies": {
     "@mantine/core": "^8.0.0",
-    "@mantine/hooks": "^8.0.0",
-    "@mantine/form": "^8.0.0",
-    "@mantine/notifications": "^8.0.0",
     "@mantine/dropzone": "^8.0.0",
+    "@mantine/form": "^8.0.0",
+    "@mantine/hooks": "^8.0.0",
+    "@mantine/notifications": "^8.0.0",
     "@tabler/icons-react": "^3.20.0",
     "@tanstack/react-query": "^5.60.0",
     "gsap": "^3.12.5",
@@ -31,6 +31,7 @@
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.0",
+    "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
