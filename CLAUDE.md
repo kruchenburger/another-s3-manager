@@ -151,17 +151,25 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 ### Local dev
 
 ```bash
-# Native (no Docker — fastest iteration, hot reload via uvicorn if needed)
-JWT_SECRET_KEY=dev-secret uv run python -m another_s3_manager.main
+# One-time setup
+cp .env.example .env
+# Edit .env, paste output of: python -c 'import secrets; print(secrets.token_urlsafe(32))'
 
-# Docker compose (full integration test with the production image)
+# Run (every time)
 docker compose up --build
 ```
 
-`docker-compose.yml` builds from source and bind-mounts `./data` for SQLite + config persistence.
+`docker-compose.yml` bind-mounts `./data` so SQLite DB, config, and uploads stay
+visible in your IDE. An `init-data` sidecar fixes ownership for the non-root app
+container before startup — no manual `chown` needed.
 
-For per-developer overrides (e.g. mounting host `~/.aws` for SSO profiles), copy
-`docker-compose.override.example.yml` to `docker-compose.override.yml` (gitignored, auto-loaded).
+For native dev (no Docker, fastest iteration):
+```bash
+JWT_SECRET_KEY=dev-secret uv run python -m another_s3_manager.main
+```
+
+To mount your host `~/.aws` for SSO profiles, uncomment one of the optional
+volume lines in `docker-compose.yml` (Linux/macOS or Windows variant).
 
 ### Self-host
 
