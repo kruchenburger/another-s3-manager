@@ -1,5 +1,5 @@
 import { ActionIcon, useMantineColorScheme } from "@mantine/core";
-import { IconMoon, IconSun } from "@tabler/icons-react";
+import { Moon, Sun } from "lucide-react";
 
 export function ThemeToggle() {
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
@@ -12,7 +12,7 @@ export function ThemeToggle() {
       onClick={toggleColorScheme}
       aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
     >
-      {isDark ? <IconSun size={18} /> : <IconMoon size={18} />}
+      {isDark ? <Sun size={18} /> : <Moon size={18} />}
     </ActionIcon>
   );
 }
