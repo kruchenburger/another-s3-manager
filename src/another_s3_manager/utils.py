@@ -22,15 +22,21 @@ def sanitize_path(path: str) -> str:
     if not path:
         return ""
 
-    # Remove leading/trailing slashes and normalize
-    path = path.strip().strip("/")
-
-    # Check for path traversal attempts
+    # Check for path traversal attempts BEFORE stripping slashes so that a
+    # leading `/` is caught rather than silently removed.
     if ".." in path or path.startswith("/"):
         raise ValueError("Invalid path: path traversal not allowed")
 
-    # Check for invalid characters (basic validation)
-    if re.search(r'[<>:"|?*\x00-\x1f]', path):
+    # Remove leading/trailing whitespace and trailing slashes (leading `/` was
+    # already rejected above).
+    path = path.strip().strip("/")
+
+    # Block only what's actually dangerous in S3-key context:
+    # - `\x00-\x1f` ASCII control chars (never valid in S3 keys; indicate injection)
+    # - `\x7f` DEL char (same)
+    # S3 keys legitimately contain `:`, `#`, `?`, `&`, `=`, `+`, `%`, spaces, unicode, emoji.
+    # Path-traversal protection (`..`, leading `/`) lives in the check above.
+    if re.search(r"[\x00-\x1f\x7f]", path):
         raise ValueError("Invalid path: contains invalid characters")
 
     return path
