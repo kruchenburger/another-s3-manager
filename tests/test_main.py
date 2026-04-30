@@ -165,11 +165,36 @@ def test_login_page_returns_html(app_client):
     assert "<!DOCTYPE html>" in response.text
 
 
-def test_v2_mount_serves_static_directory(app_client):
-    """The /v2 mount exists — even if empty, requesting a non-existent path returns 404, not 500."""
-    response = app_client.get("/v2/does-not-exist.html")
-    # Either 404 (file not found) or 200 (if html=True falls back) — but never 500
-    assert response.status_code in (200, 404)
+def test_v2_spa_fallback_serves_index_for_unknown_paths(app_client, tmp_path, monkeypatch):
+    """REGRESSION: deep-linking into the React SPA (e.g. /v2/login, /v2/r/aws-prod/b/images)
+    must serve index.html so React Router can take over. Without the SPA fallback route,
+    StaticFiles returns 404 because no such file exists on disk."""
+    # Seed a fake index.html so the fallback has something to return
+    from another_s3_manager.constants import STATIC_DIR
+
+    v2_dir = STATIC_DIR / "v2"
+    v2_dir.mkdir(parents=True, exist_ok=True)
+    index_file = v2_dir / "index.html"
+    created = not index_file.exists()
+    if created:
+        index_file.write_text("<!DOCTYPE html><html><head></head><body><div id='root'></div></body></html>")
+
+    try:
+        # Direct deep-link should serve index.html (not 404)
+        response = app_client.get("/v2/login")
+        assert response.status_code == 200, f"deep-link /v2/login returned {response.status_code}"
+        assert "<div id='root'>" in response.text or '<div id="root">' in response.text
+
+        # Bare /v2 (no trailing slash) should also work
+        response = app_client.get("/v2")
+        assert response.status_code == 200
+
+        # Nested deep-link
+        response = app_client.get("/v2/r/aws-prod/b/images/p/2026/photos")
+        assert response.status_code == 200
+    finally:
+        if created:
+            index_file.unlink()
 
 
 def test_login_success(app_client):

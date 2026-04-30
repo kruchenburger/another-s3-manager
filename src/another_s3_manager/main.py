@@ -165,9 +165,30 @@ async def health():
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# /v2 mount — placeholder for the React SPA (populated in Phase 2 by the multi-stage Dockerfile).
+# /v2 mount — React SPA (built by frontend/, bundled into static/v2/ by the multi-stage Dockerfile).
 # During strangler-fig migration vanilla UI keeps serving /, /login, /admin.
-app.mount("/v2", StaticFiles(directory=str(STATIC_DIR / "v2"), html=True, check_dir=False), name="v2")
+#
+# StaticFiles only serves real files on disk — but a SPA needs ANY /v2/* URL
+# (e.g. /v2/login, /v2/r/aws-prod/b/images) to fall back to index.html so the
+# React Router can take over. Without this, deep-linking and browser refresh
+# inside the SPA returns 404. See: https://github.com/encode/starlette/issues/437
+app.mount("/v2/assets", StaticFiles(directory=str(STATIC_DIR / "v2" / "assets"), check_dir=False), name="v2_assets")
+
+
+@app.get("/v2/{full_path:path}", response_class=HTMLResponse)
+async def serve_v2_spa(full_path: str):
+    """SPA fallback: any /v2/* URL serves index.html. React Router handles the rest."""
+    index_file = STATIC_DIR / "v2" / "index.html"
+    if not index_file.exists():
+        raise HTTPException(status_code=404, detail="React SPA not built yet")
+    with open(index_file, "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+
+@app.get("/v2", response_class=HTMLResponse)
+async def serve_v2_root():
+    """Bare /v2 (no trailing slash) — same as /v2/ → index.html."""
+    return await serve_v2_spa("")
 
 
 # Clear S3 clients cache when config changes (hook into config module)
