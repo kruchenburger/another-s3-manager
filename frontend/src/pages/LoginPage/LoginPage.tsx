@@ -48,7 +48,7 @@ export function LoginPage() {
     <div className={classes.shell}>
       <Card className={classes.card} padding="xl">
         <div className={classes.brand}>
-          <BurgerLogo size={48} />
+          <BurgerLogo size={96} mode="idle" />
           <Title order={3}>Another S3 Manager</Title>
         </div>
         <form onSubmit={handleSubmit}>
