@@ -94,17 +94,3 @@ DEFAULT_ITEMS_PER_PAGE = 200
 # S3 settings
 S3_USE_SSL = True
 S3_VERIFY_SSL = True
-
-# Rate limiting — header name to read client IP from when behind a reverse proxy.
-# Unset (default) → use direct socket address (correct for local Docker without proxy).
-# Behind Cloudflare / nginx / etc → set to "X-Forwarded-For" or "CF-Connecting-IP" so
-# limits are enforced per real client, not per proxy.
-RATE_LIMIT_PROXY_HEADER = os.getenv("RATE_LIMIT_PROXY_HEADER", "").strip() or None
-
-# Per-IP rate limit applied to ALL endpoints via SlowAPIMiddleware default.
-# Per-endpoint overrides via @limiter.limit decorators are NOT used — they crash
-# at runtime with FastAPI handlers that return dicts (slowapi tries to inject
-# headers into the dict before FastAPI serializes it). See task 8 in backlog.
-# Login brute-force defense relies on the existing username-based ban logic
-# in auth.py:record_login_attempt.
-RATE_LIMIT_DEFAULT = "100/minute"

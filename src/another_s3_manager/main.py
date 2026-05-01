@@ -35,8 +35,6 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIASGIMiddleware
 
 import another_s3_manager.config as config_module
 from another_s3_manager.auth import (
@@ -60,7 +58,6 @@ from another_s3_manager.constants import (
     COOKIE_SECURE,
     STATIC_DIR,
 )
-from another_s3_manager.rate_limit import limiter
 from another_s3_manager.s3_client import clear_s3_clients_cache, execute_with_s3_retry
 from another_s3_manager.users import (
     load_bans,
@@ -81,27 +78,11 @@ except ValueError as e:
 
 app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION)
 
-# Rate limiting (slowapi). Per-IP, in-memory backend. See rate_limit.py for key_func.
-# Use ASGI middleware (not BaseHTTPMiddleware-based SlowAPIMiddleware) — the latter
-# crashes when a handler returns a dict because of how it pre-injects headers.
-# ASGI middleware operates on raw response headers, no Response object inspection needed.
-app.state.limiter = limiter
-app.add_middleware(SlowAPIASGIMiddleware)
-
-
-@app.exception_handler(RateLimitExceeded)
-async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
-    """Return 429 in our `{"detail": ...}` shape and inject slowapi's Retry-After + X-RateLimit-* headers."""
-    response = JSONResponse(
-        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        content={"detail": f"Rate limit exceeded: {exc.detail}"},
-    )
-    # slowapi computes the headers when the limit trips and stashes them on request.state
-    view_rate_limit = getattr(request.state, "view_rate_limit", None)
-    if view_rate_limit is not None:
-        request.app.state.limiter._inject_headers(response, view_rate_limit)
-    return response
-
+# No application-level rate limiting. Brute-force defense lives in the
+# username-based ban (auth.record_login_attempt: 3 fails → 1h ban, admins exempt).
+# For production deployments expecting public exposure, put the app behind
+# Cloudflare Access / WAF (or any reverse proxy with auth) — that is the right
+# layer for IP-level rate limiting and DoS protection.
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -188,8 +169,7 @@ async def serve_v2_spa(full_path: str):
     - If a real file exists at static/v2/<full_path>, serve it (correct content-type).
     - Otherwise serve index.html so React Router takes over the URL.
 
-    Files are read fully into memory and returned via Response (not FileResponse)
-    because SlowAPIASGIMiddleware truncates streaming responses at ~64KB.
+    Files are read fully into memory and returned via Response (not FileResponse).
     SPA bundles are tiny enough (~600KB) that this is fine.
     """
     import mimetypes

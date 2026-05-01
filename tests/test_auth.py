@@ -268,6 +268,39 @@ def test_record_login_attempt_ban(tmp_path):
     assert bans["user"]["banned_until"] > time.time()
 
 
+def test_record_login_attempt_admin_is_never_banned(tmp_path):
+    """Admins must be exempt from the brute-force auto-ban: the `admin` username
+    is predictable, and a drive-by attacker could otherwise lock the only admin
+    out of the system. Brute-force defense for admins is the deployment layer's
+    job (Cloudflare Access / WAF / strong password / 2FA)."""
+    auth = reload_auth()
+    users = reload_users()
+    users.save_bans({})
+    users.create_user(username="root", password_hash="h", is_admin=True)
+
+    # Hammer the admin account with way more than the threshold.
+    for _ in range(auth.MAX_LOGIN_ATTEMPTS * 3):
+        auth.record_login_attempt("root", success=False)
+
+    bans = users.load_bans()
+    assert "root" not in bans, "admin account must not be auto-banned"
+
+
+def test_record_login_attempt_non_admin_still_banned_with_admin_exemption(tmp_path):
+    """The admin exemption must not leak to non-admin users: non-admins are
+    still banned per the existing rules."""
+    auth = reload_auth()
+    users = reload_users()
+    users.save_bans({})
+    users.create_user(username="alice", password_hash="h", is_admin=False)
+
+    for _ in range(auth.MAX_LOGIN_ATTEMPTS):
+        auth.record_login_attempt("alice", success=False)
+
+    bans = users.load_bans()
+    assert "alice" in bans
+
+
 def test_record_login_attempt_success_resets(tmp_path):
     auth = reload_auth()
     auth.record_login_attempt("user", success=False)

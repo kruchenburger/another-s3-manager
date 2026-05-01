@@ -8,9 +8,6 @@ import pytest
 # Ensure required environment variables exist for modules that import on load
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
-# Disable slowapi rate limiting in tests — many tests call endpoint funcs directly
-# with mocked Request objects, which slowapi rejects. Enabled via env in production.
-os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
 # TestClient talks to "http://testserver" which is not HTTPS — Set-Cookie with the
 # Secure flag is dropped by the cookie jar, breaking every cookie-auth test.
 # Mirror the local-dev convention: tests run over plain HTTP, so disable Secure.
@@ -86,14 +83,9 @@ def app_client(monkeypatch):
     from fastapi.testclient import TestClient
 
     import another_s3_manager.main as main
-    import another_s3_manager.rate_limit as rate_limit_module
 
     # Reload main to ensure it picks up the isolated environment
-    importlib.reload(rate_limit_module)
     importlib.reload(main)
-
-    # Reset the (just-reloaded) limiter so each test starts with a clean counter
-    main.app.state.limiter.reset()
 
     client = TestClient(main.app)
     return client
