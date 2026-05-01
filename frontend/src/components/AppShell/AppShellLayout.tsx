@@ -4,6 +4,8 @@ import { useDisclosure } from "@mantine/hooks";
 import { Outlet } from "react-router-dom";
 import { AppHeader } from "@/components/AppShell/AppHeader";
 import { Sidebar } from "@/components/Sidebar/Sidebar";
+import { WelcomeToast } from "@/components/Onboarding/WelcomeToast";
+import { SpotlightTour } from "@/components/Onboarding/SpotlightTour";
 
 const COLLAPSED_KEY = "sidebar:collapsed";
 
@@ -27,34 +29,38 @@ export function AppShellLayout() {
   const openTour = () => setTourOpen(true);
 
   return (
-    <AppShell
-      header={{ height: 60 }}
-      navbar={{
-        width: collapsed ? 60 : 260,
-        breakpoint: "sm",
-        collapsed: { mobile: !navOpened },
-      }}
-      padding="md"
-    >
-      <AppShell.Header
-        style={{
-          background: "light-dark(rgba(255, 255, 255, 0.6), rgba(26, 33, 46, 0.6))",
-          backdropFilter: "blur(12px)",
-          WebkitBackdropFilter: "blur(12px)",
+    <>
+      <AppShell
+        header={{ height: 60 }}
+        navbar={{
+          width: collapsed ? 60 : 260,
+          breakpoint: "sm",
+          collapsed: { mobile: !navOpened },
         }}
+        padding="md"
       >
-        <AppHeader navOpened={navOpened} onNavToggle={toggleNav} onOpenTour={openTour} />
-      </AppShell.Header>
-      <AppShell.Navbar p={0}>
-        <Sidebar
-          collapsed={collapsed}
-          onToggleCollapsed={toggleCollapsed}
-          onOpenTour={openTour}
-        />
-      </AppShell.Navbar>
-      <AppShell.Main onClick={closeNav}>
-        <Outlet context={{ tourOpen, setTourOpen }} />
-      </AppShell.Main>
-    </AppShell>
+        <AppShell.Header
+          style={{
+            background: "light-dark(rgba(255, 255, 255, 0.6), rgba(26, 33, 46, 0.6))",
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
+          }}
+        >
+          <AppHeader navOpened={navOpened} onNavToggle={toggleNav} onOpenTour={openTour} />
+        </AppShell.Header>
+        <AppShell.Navbar p={0}>
+          <Sidebar
+            collapsed={collapsed}
+            onToggleCollapsed={toggleCollapsed}
+            onOpenTour={openTour}
+          />
+        </AppShell.Navbar>
+        <AppShell.Main onClick={closeNav}>
+          <Outlet context={{ tourOpen, setTourOpen }} />
+        </AppShell.Main>
+      </AppShell>
+      <WelcomeToast onOpenTour={() => setTourOpen(true)} />
+      <SpotlightTour open={tourOpen} onClose={() => setTourOpen(false)} />
+    </>
   );
 }
