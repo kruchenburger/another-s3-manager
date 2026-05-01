@@ -5,10 +5,9 @@ import { ErrorPage } from "@/pages/ErrorPage";
 import { HomePage } from "@/pages/HomePage";
 import { LoginPage } from "@/pages/LoginPage/LoginPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
+import { RolePage } from "@/pages/RolePage";
+import { BucketPage } from "@/pages/BucketPage";
 
-// basename "/v2" matches the FastAPI mount in main.py.
-// All client URLs in the app are written without the /v2 prefix; the router
-// adds it transparently.
 export const router = createBrowserRouter(
   [
     {
@@ -24,9 +23,9 @@ export const router = createBrowserRouter(
           element: <AppShellLayout />,
           children: [
             { path: "/", element: <HomePage /> },
-            // Phase 3+ feature routes nest here:
-            //   { path: "/buckets", element: <BucketsPage /> },
-            //   { path: "/admin/*", element: <AdminLayout />, children: [...] },
+            { path: "/r/:roleId", element: <RolePage /> },
+            { path: "/r/:roleId/b/:bucket", element: <BucketPage /> },
+            { path: "/r/:roleId/b/:bucket/p/*", element: <BucketPage /> },
           ],
         },
       ],
