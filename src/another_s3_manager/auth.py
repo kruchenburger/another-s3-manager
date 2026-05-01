@@ -2,6 +2,7 @@
 Authentication and authorization module
 """
 
+import logging
 import os
 import secrets
 import time
@@ -18,6 +19,8 @@ from another_s3_manager.constants import (
     JWT_ALGORITHM,
     MAX_LOGIN_ATTEMPTS,
 )
+
+logger = logging.getLogger(__name__)
 
 # Initialize password context with bcrypt, fallback to pbkdf2_sha256 if bcrypt fails
 try:
@@ -222,8 +225,10 @@ def record_login_attempt(username: str, success: bool) -> None:
             )
             if user_record and user_record.get("is_admin"):
                 # Admin — log the burst but don't ban.
-                print(
-                    f"WARNING: {user_attempts['failed_count']} failed login attempts for admin '{username}' (not banning)"
+                logger.warning(
+                    "%d failed login attempts for admin '%s' (not banning)",
+                    user_attempts["failed_count"],
+                    username,
                 )
                 return
 
@@ -235,4 +240,4 @@ def record_login_attempt(username: str, success: bool) -> None:
                 "reason": "Too many failed login attempts",
             }
             save_bans(bans)
-            print(f"User {username} banned until {datetime.fromtimestamp(banned_until)}")
+            logger.warning("User %s banned until %s", username, datetime.fromtimestamp(banned_until))

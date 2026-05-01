@@ -14,7 +14,7 @@
     {
       "name": "Production Profile",
       "type": "profile",
-      "profile_name": "jet-prod",
+      "profile_name": "prod",
       "description": "Production account using AWS profile"
     },
     {

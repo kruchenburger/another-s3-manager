@@ -1,4 +1,3 @@
-import builtins
 import importlib
 import time
 from datetime import timedelta
@@ -432,21 +431,18 @@ def test_verify_csrf_token_missing_expected(monkeypatch):
     assert exc.value.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_record_login_attempt_logs(monkeypatch):
+def test_record_login_attempt_logs(caplog):
     auth = reload_auth()
     users = reload_users()
     users.save_bans({})
+    # User must exist for the ban FK to be honored
+    users.create_user(username="noisy", password_hash="h")
 
-    messages = []
+    with caplog.at_level("WARNING", logger="another_s3_manager.auth"):
+        for _ in range(auth.MAX_LOGIN_ATTEMPTS):
+            auth.record_login_attempt("noisy", success=False)
 
-    def fake_print(message):
-        messages.append(message)
-
-    monkeypatch.setattr(builtins, "print", fake_print)
-    for _ in range(auth.MAX_LOGIN_ATTEMPTS):
-        auth.record_login_attempt("noisy", success=False)
-
-    assert any("User noisy banned" in msg for msg in messages)
+    assert any("User noisy banned" in record.getMessage() for record in caplog.records)
 
 
 def test_get_current_user_reads_from_cookie(monkeypatch, valid_jwt_token, valid_user_dict):

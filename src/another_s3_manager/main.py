@@ -130,6 +130,15 @@ async def startup() -> None:
         logger.warning("JSON migration failed; DB is still usable", exc_info=True)
         # Don't exit — DB is still usable, admin can investigate
 
+    # Warn loudly if the default admin password is in use. Combined with
+    # admin-exempt-from-ban (auth.record_login_attempt) and no IP rate limiting,
+    # leaving this default open exposes the admin account to unimpeded brute-force.
+    if os.getenv("ADMIN_PASSWORD", "change_me_pls") == "change_me_pls":
+        logger.warning(
+            "ADMIN_PASSWORD is the default 'change_me_pls'. CHANGE IT before exposing this app — "
+            "admin is exempt from auto-ban and there is no application-level rate limit on /api/login."
+        )
+
 
 # Exception handler to ensure all errors return JSON
 @app.exception_handler(HTTPException)
@@ -306,14 +315,14 @@ async def login(
         return {"user": {"username": username, "is_admin": user.get("is_admin", False)}}
     except HTTPException:
         raise
-    except Exception as e:
-        # Log the error for debugging
-        import traceback
-
-        traceback.print_exc()
+    except Exception:
+        # Log the full exception server-side; never echo str(e) back to the client
+        # (SQLAlchemy errors include SQL text + table names, requests / boto / etc
+        # may include URLs, credentials, or internal paths).
+        logger.exception("Login failed unexpectedly for username=%s", username)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Login failed: {str(e)}",
+            detail="Login failed",
         )
 
 
