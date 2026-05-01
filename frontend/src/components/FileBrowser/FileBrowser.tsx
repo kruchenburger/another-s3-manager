@@ -1,13 +1,16 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useCallback } from "react";
 import { Center, Loader, Stack } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { useNavigate, useParams } from "react-router-dom";
 import { useFiles } from "@/features/files/hooks/useFiles";
 import { useDelete } from "@/features/files/hooks/useDelete";
+import { useUpload } from "@/features/files/hooks/useUpload";
 import { buildDownloadUrl } from "@/features/files/api/filesApi";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { joinPath, decodePath } from "@/utils/pathUtils";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
+import { UploadDropZone } from "@/components/Upload/UploadDropZone";
+import { UploadProgress, type UploadProgressItem } from "@/components/Upload/UploadProgress";
 import { FileBrowserHeader } from "./FileBrowserHeader";
 import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
@@ -22,12 +25,14 @@ export function FileBrowser() {
 
   const { data, isLoading } = useFiles(bucket, roleId, pathFromUrl);
   const deleteMutation = useDelete();
+  const uploadMutation = useUpload();
   const { mode, setMode } = useDisplayMode(roleId, bucket);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const pendingDelete = useRef<string[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filteredFiles = useMemo(() => {
     if (!data?.files) return [];
@@ -128,6 +133,77 @@ export function FileBrowser() {
     }
   };
 
+  const handleUpload = useCallback(
+    async (files: File[]) => {
+      const items: UploadProgressItem[] = files.map((f) => ({ name: f.name, status: "pending" }));
+
+      const notifId = notifications.show({
+        message: <UploadProgress items={items} />,
+        autoClose: false,
+        withCloseButton: false,
+      });
+
+      const updated = [...items];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        updated[i] = { ...updated[i], status: "uploading" };
+        notifications.update({
+          id: notifId,
+          message: <UploadProgress items={updated} />,
+          autoClose: false,
+          withCloseButton: false,
+        });
+        try {
+          const key = pathFromUrl ? `${pathFromUrl}/${file.name}` : file.name;
+          await uploadMutation.mutateAsync({
+            bucket,
+            role: roleId,
+            key,
+            file,
+            currentPath: pathFromUrl,
+          });
+          updated[i] = { ...updated[i], status: "done" };
+        } catch (e) {
+          updated[i] = {
+            ...updated[i],
+            status: "error",
+            error: e instanceof Error ? e.message : "unknown error",
+          };
+        }
+        notifications.update({
+          id: notifId,
+          message: <UploadProgress items={updated} />,
+          autoClose: false,
+          withCloseButton: false,
+        });
+      }
+
+      // Final summary toast
+      const allDone = updated.every((u) => u.status === "done");
+      const doneCount = updated.filter((u) => u.status === "done").length;
+      notifications.update({
+        id: notifId,
+        message: allDone
+          ? `Uploaded ${updated.length} file${updated.length === 1 ? "" : "s"}`
+          : `${doneCount}/${updated.length} files uploaded`,
+        color: allDone ? "green" : "yellow",
+        autoClose: 5000,
+        withCloseButton: true,
+      });
+    },
+    [bucket, roleId, pathFromUrl, uploadMutation],
+  );
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length > 0) handleUpload(files);
+    e.target.value = "";
+  };
+
   if (isLoading) {
     return (
       <Center py="xl">
@@ -149,9 +225,14 @@ export function FileBrowser() {
         selectedCount={selected.size}
         onBulkDelete={() => requestDelete(Array.from(selected))}
         onBulkCopyUrl={handleBulkCopyUrl}
-        onUploadClick={() => {
-          notifications.show({ message: "Use drag-and-drop to upload (file input wiring in next task)" });
-        }}
+        onUploadClick={handleUploadClick}
+      />
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileInput}
+        multiple
+        style={{ display: "none" }}
       />
       <Stack gap="md" data-tour="file-list">
         {filteredFiles.length === 0 ? (
@@ -181,6 +262,7 @@ export function FileBrowser() {
           />
         )}
       </Stack>
+      <UploadDropZone currentPath={pathFromUrl} onDrop={handleUpload} active />
       <ConfirmDeleteModal
         opened={confirmOpen}
         onClose={() => setConfirmOpen(false)}
