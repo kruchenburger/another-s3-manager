@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from "react-router-dom";
-import { Card, SimpleGrid, Stack, Text, Title } from "@mantine/core";
+import { Card, SimpleGrid, Stack, Text, Title, UnstyledButton } from "@mantine/core";
 import { Database } from "lucide-react";
 import { useBuckets } from "@/features/files/hooks/useBuckets";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
@@ -27,19 +27,18 @@ export function RolePage() {
       <Text c="dimmed">Pick a bucket to browse files.</Text>
       <SimpleGrid cols={{ base: 1, sm: 2, md: 3, lg: 4 }} spacing="md">
         {buckets.map((bucket) => (
-          <Card
+          <UnstyledButton
             key={bucket}
-            withBorder
-            shadow="sm"
-            padding="lg"
-            style={{ cursor: "pointer" }}
             onClick={() => navigate(`/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(bucket)}`)}
+            aria-label={`Open bucket ${bucket}`}
           >
-            <Stack align="center" gap="sm">
-              <Database size={48} color="var(--mantine-color-amber-6)" />
-              <Text fw={600}>{bucket}</Text>
-            </Stack>
-          </Card>
+            <Card withBorder shadow="sm" padding="lg">
+              <Stack align="center" gap="sm">
+                <Database size={48} color="var(--mantine-color-amber-6)" />
+                <Text fw={600}>{bucket}</Text>
+              </Stack>
+            </Card>
+          </UnstyledButton>
         ))}
       </SimpleGrid>
     </Stack>

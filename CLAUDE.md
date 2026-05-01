@@ -42,7 +42,7 @@ another-s3-manager/
 
 - SQLAlchemy 2.0 (sync) + Alembic for migrations
 - SQLite at `<DATA_DIR>/another_s3_manager.db`
-- Tables: `users`, `user_roles` (junction), `bans` (FK → users with CASCADE)
+- Tables: `users` (incl. `tour_seen_v1` flag for one-time onboarding), `user_roles` (junction), `bans` (FK → users with CASCADE)
 - Module: `database.py` (engine + `session_scope()`), `models.py` (ORM)
 - Auto-migration from `users.json` / `bans.json` on first startup (legacy files renamed to `*.migrated.bak`)
 
@@ -96,7 +96,15 @@ cd frontend && npm test
 
 # Type check
 cd frontend && npm run lint
+
+# E2E tests (Playwright) — requires `docker compose up` running on port 8080
+cd frontend && npx playwright test
 ```
+
+**Playwright E2E does NOT auto-start the backend** (no `webServer` in
+`playwright.config.ts`). Run `docker compose up --build -d` first, otherwise
+all E2E tests fail with connection refused. Override target via
+`E2E_BASE_URL=http://otherhost:port npx playwright test`.
 
 Local dev requires both servers: backend on `8080` (FastAPI) + Vite on `5173`.
 Vite proxies `/api` → backend, so the React app talks to the real backend during
@@ -151,6 +159,19 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 - Automatic refresh of expired credentials
 - Granular per-role, per-bucket access control
 - Per-IP rate limiting (slowapi via SlowAPIASGIMiddleware): single 100/min limit on all endpoints. Login brute-force defense via existing username-based ban (3 fails → 1h ban).
+- React SPA on `/v2/*`: collapsible sidebar with role/bucket tree, file browser (table+grid toggle, hover actions, bulk delete, drag-drop upload, preview modal), one-time onboarding tour persisted via `tour_seen_v1` user flag.
+
+### React API surface
+
+The React SPA consumes existing backend endpoints plus a small set added for SPA UX:
+
+- `GET /api/me` — extended to include `tour_seen_v1: bool` and `allowed_roles: string[]`
+- `PUT /api/user/tour-seen` — marks the onboarding tour as seen (idempotent, CSRF-protected)
+- `GET /api/buckets?role=...` — list buckets (already existed)
+- `GET /api/buckets/{b}/files?path=...&role=...` — list files (already existed)
+- `POST /api/buckets/{b}/upload` — single-file multipart upload (already existed)
+- `DELETE /api/buckets/{b}/files?path=...&role=...` — file or folder delete (already existed)
+- `GET /api/buckets/{b}/download?path=...&role=...` — streamed download (already existed)
 
 ## Deployment
 

@@ -3,8 +3,18 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { MantineProvider, Table } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 import { FileRow } from "@/components/FileBrowser/FileRow";
+import type { FileEntry } from "@/types/api";
 
-function renderRow(file: any, callbacks: any = {}) {
+type RowCallbacks = Partial<{
+  onToggleSelect: (name: string) => void;
+  onNavigate: (name: string) => void;
+  onDownload: (name: string) => void;
+  onCopyUrl: (name: string) => void;
+  onPreview: (name: string) => void;
+  onDelete: (name: string) => void;
+}>;
+
+function renderRow(file: FileEntry, callbacks: RowCallbacks = {}) {
   const props = {
     file,
     index: 0,

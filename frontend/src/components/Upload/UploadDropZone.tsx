@@ -26,7 +26,15 @@ export function UploadDropZone({ currentPath, onDrop, active = true }: UploadDro
       });
     };
 
-    const handleDragLeave = () => {
+    const handleDragLeave = (e: DragEvent) => {
+      // dragleave with relatedTarget=null means the cursor left the browser
+      // window entirely. Force-reset the counter so the overlay doesn't get
+      // stuck if the user cancels a drag by leaving the window.
+      if (e.relatedTarget === null) {
+        setCounter(0);
+        setIsDragging(false);
+        return;
+      }
       setCounter((c) => {
         const next = Math.max(0, c - 1);
         if (next === 0) setIsDragging(false);

@@ -530,15 +530,18 @@ async def mark_tour_seen(
     current_user: Dict[str, Any] = Depends(get_current_user),
     csrf_verified: bool = Depends(verify_csrf_token),
 ):
-    """Mark the onboarding tour as seen for the current user (idempotent)."""
-    users = load_users()
-    user = next((u for u in users.get("users", []) if u.get("username") == current_user.get("username")), None)
+    """Mark the onboarding tour as seen for the current user (idempotent).
 
-    if not user:
+    Uses update_user (single SQL UPDATE inside session_scope) instead of the
+    load_users → mutate dict → save_users pattern, so it doesn't race with
+    concurrent updates to the same user (e.g. theme change firing in parallel).
+    """
+    from another_s3_manager.users import update_user
+
+    try:
+        update_user(current_user.get("username"), tour_seen_v1=True)
+    except ValueError:
         raise HTTPException(status_code=404, detail="User not found")
-
-    user["tour_seen_v1"] = True
-    save_users(users)
 
     return {"tour_seen_v1": True}
 

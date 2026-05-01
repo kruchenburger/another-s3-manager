@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { Anchor } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useTourSeen } from "@/features/auth/hooks/useTourSeen";
@@ -18,20 +19,22 @@ export function WelcomeToast({ onOpenTour }: WelcomeToastProps) {
       message: (
         <span>
           Tap{" "}
-          <a
-            onClick={onOpenTour}
-            style={{ cursor: "pointer", textDecoration: "underline" }}
-          >
+          <Anchor component="button" type="button" onClick={onOpenTour}>
             here
-          </a>
+          </Anchor>
           {" "}for a quick tour.
         </span>
       ),
       autoClose: 8000,
     });
-    // Mark seen optimistically — don't show again on subsequent renders this session
+    // Fire-and-forget: invalidates /api/me on success so subsequent renders
+    // see tour_seen_v1=true and skip the early-exit branch above.
+    // `tourSeen` is intentionally NOT in deps — the mutation result is a fresh
+    // object every render, and including it would re-fire this effect 2-4
+    // times before the cache invalidation lands.
     tourSeen.mutate();
-  }, [me, onOpenTour, tourSeen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me, onOpenTour]);
 
   return null;
 }
