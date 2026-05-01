@@ -810,6 +810,41 @@ def test_me_returns_allowed_roles(app_client, monkeypatch):
     assert body["allowed_roles"] == ["aws-prod", "r2-cdn"]
 
 
+def test_me_admin_returns_all_config_roles(app_client, mocker):
+    """Admins should see every role defined in config.json, regardless of
+    the per-user `allowed_roles` field. The React sidebar relies on this
+    to show admins the full role tree without an extra /api/config call."""
+    config_data = {
+        "roles": [
+            {"name": "aws-prod", "type": "default"},
+            {"name": "r2-cdn", "type": "credentials"},
+            {"name": "wasabi-archive", "type": "profile"},
+        ],
+    }
+    mocker.patch("another_s3_manager.main.load_config", return_value=config_data)
+
+    _, _ = login(app_client)  # admin login (admin user has allowed_roles=[])
+
+    me_response = app_client.get("/api/me")
+    assert me_response.status_code == status.HTTP_200_OK
+    body = me_response.json()
+    assert body["is_admin"] is True
+    assert body["allowed_roles"] == ["aws-prod", "r2-cdn", "wasabi-archive"]
+
+
+def test_me_admin_with_empty_config_returns_empty_roles(app_client, mocker):
+    """Admin with no roles in config gets an empty list — must not crash."""
+    mocker.patch("another_s3_manager.main.load_config", return_value={"roles": []})
+
+    _, _ = login(app_client)
+
+    me_response = app_client.get("/api/me")
+    assert me_response.status_code == status.HTTP_200_OK
+    body = me_response.json()
+    assert body["is_admin"] is True
+    assert body["allowed_roles"] == []
+
+
 def test_delete_user_cannot_delete_self(app_client):
     _, headers = login(app_client)
     response = app_client.delete("/api/admin/users/admin", headers=headers)
