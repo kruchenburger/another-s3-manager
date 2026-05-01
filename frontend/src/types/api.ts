@@ -13,6 +13,7 @@ export interface MeResponse {
   tour_seen_v1: boolean;
   app_name: string;
   app_version: string;
+  allowed_roles: string[];
 }
 
 export interface AppInfo {

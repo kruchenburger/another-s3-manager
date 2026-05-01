@@ -353,6 +353,7 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
         "csrf_token": current_user.get("csrf_token"),  # Return CSRF token for client
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
         "tour_seen_v1": current_user.get("tour_seen_v1", False),  # Return onboarding tour seen flag
+        "allowed_roles": current_user.get("allowed_roles", []),  # Return user's allowed roles for sidebar
         "app_name": APP_NAME,  # Return app name for client
         "app_version": APP_VERSION,
     }
