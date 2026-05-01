@@ -11,7 +11,7 @@ export function AppHeader() {
   return (
     <Group h="100%" px="md" justify="space-between">
       <Group gap="sm">
-        <BurgerLogo size={32} />
+        <BurgerLogo size={32} mode="static" />
         <Title order={4}>{appName}</Title>
       </Group>
       <Group gap="sm">

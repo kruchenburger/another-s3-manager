@@ -165,9 +165,61 @@ async def health():
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# /v2 mount — placeholder for the React SPA (populated in Phase 2 by the multi-stage Dockerfile).
+# /v2 React SPA (built by frontend/, bundled into static/v2/ by the multi-stage Dockerfile).
 # During strangler-fig migration vanilla UI keeps serving /, /login, /admin.
-app.mount("/v2", StaticFiles(directory=str(STATIC_DIR / "v2"), html=True, check_dir=False), name="v2")
+#
+# Single catch-all route: real files (JS/CSS/images under /v2/assets, favicon, etc.)
+# are served via FileResponse; everything else falls back to index.html so React Router
+# can handle client-side navigation. Avoids mount-vs-route ordering bugs in Starlette
+# (see https://github.com/encode/starlette/issues/437).
+_V2_DIR = STATIC_DIR / "v2"
+
+
+@app.get("/v2", response_class=HTMLResponse)
+@app.get("/v2/", response_class=HTMLResponse)
+async def serve_v2_root():
+    """Bare /v2 → index.html."""
+    return await serve_v2_spa("")
+
+
+@app.get("/v2/{full_path:path}")
+async def serve_v2_spa(full_path: str):
+    """SPA-aware static handler:
+    - If a real file exists at static/v2/<full_path>, serve it (correct content-type).
+    - Otherwise serve index.html so React Router takes over the URL.
+
+    Files are read fully into memory and returned via Response (not FileResponse)
+    because SlowAPIASGIMiddleware truncates streaming responses at ~64KB.
+    SPA bundles are tiny enough (~600KB) that this is fine.
+    """
+    import mimetypes
+
+    from fastapi import Response
+
+    # Block path traversal at the route level too (sanitize_path is for S3 keys, not local FS)
+    if ".." in full_path or full_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if full_path:
+        candidate = _V2_DIR / full_path
+        # Resolve to absolute path and verify it stays within _V2_DIR (defense-in-depth)
+        try:
+            candidate_resolved = candidate.resolve()
+            v2_resolved = _V2_DIR.resolve()
+            if v2_resolved in candidate_resolved.parents and candidate.is_file():
+                content_type, _ = mimetypes.guess_type(str(candidate))
+                if not content_type:
+                    content_type = "application/octet-stream"
+                return Response(content=candidate.read_bytes(), media_type=content_type)
+        except (OSError, ValueError):
+            pass  # fall through to index.html
+
+    # SPA fallback
+    index_file = _V2_DIR / "index.html"
+    if not index_file.exists():
+        raise HTTPException(status_code=404, detail="React SPA not built yet")
+    with open(index_file, "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
 
 
 # Clear S3 clients cache when config changes (hook into config module)

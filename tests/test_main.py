@@ -165,11 +165,36 @@ def test_login_page_returns_html(app_client):
     assert "<!DOCTYPE html>" in response.text
 
 
-def test_v2_mount_serves_static_directory(app_client):
-    """The /v2 mount exists — even if empty, requesting a non-existent path returns 404, not 500."""
-    response = app_client.get("/v2/does-not-exist.html")
-    # Either 404 (file not found) or 200 (if html=True falls back) — but never 500
-    assert response.status_code in (200, 404)
+def test_v2_spa_fallback_serves_index_for_unknown_paths(app_client, tmp_path, monkeypatch):
+    """REGRESSION: deep-linking into the React SPA (e.g. /v2/login, /v2/r/aws-prod/b/images)
+    must serve index.html so React Router can take over. Without the SPA fallback route,
+    StaticFiles returns 404 because no such file exists on disk."""
+    # Seed a fake index.html so the fallback has something to return
+    from another_s3_manager.constants import STATIC_DIR
+
+    v2_dir = STATIC_DIR / "v2"
+    v2_dir.mkdir(parents=True, exist_ok=True)
+    index_file = v2_dir / "index.html"
+    created = not index_file.exists()
+    if created:
+        index_file.write_text("<!DOCTYPE html><html><head></head><body><div id='root'></div></body></html>")
+
+    try:
+        # Direct deep-link should serve index.html (not 404)
+        response = app_client.get("/v2/login")
+        assert response.status_code == 200, f"deep-link /v2/login returned {response.status_code}"
+        assert "<div id='root'>" in response.text or '<div id="root">' in response.text
+
+        # Bare /v2 (no trailing slash) should also work
+        response = app_client.get("/v2")
+        assert response.status_code == 200
+
+        # Nested deep-link
+        response = app_client.get("/v2/r/aws-prod/b/images/p/2026/photos")
+        assert response.status_code == 200
+    finally:
+        if created:
+            index_file.unlink()
 
 
 def test_login_success(app_client):
@@ -1210,3 +1235,39 @@ def test_startup_runs_migrations_and_json_import(monkeypatch, tmp_path):
     from another_s3_manager.users import get_user_by_username
 
     assert get_user_by_username("imported") is not None
+
+
+def test_download_file_with_colon_in_key(app_client, mocker):
+    """REGRESSION: files with `:` in S3 key (e.g. ISO timestamps) must be downloadable.
+    Previously sanitize_path rejected `:` outright, breaking download/delete for these keys."""
+    key_with_colon = "logs/2026-04-30T15:00:00.log"
+    file_content = b"hello from a colon-named file"
+
+    # Build a mock S3 response whose Body.read() supports the chunk_size argument
+    # used by the streaming generator in download_file().
+    body_mock = mocker.MagicMock()
+    # First call returns the full content; second signals EOF.
+    body_mock.read.side_effect = [file_content, b""]
+    s3_mock = mocker.MagicMock()
+    s3_mock.get_object.return_value = {
+        "Body": body_mock,
+        "ContentType": "text/plain",
+    }
+
+    def mock_execute_with_s3_retry(role_name, callback):
+        return callback(s3_mock)
+
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+
+    # Login to obtain session cookie + CSRF token
+    _, headers = login(app_client)
+
+    # Download via API — query param carries the literal key (TestClient handles URL encoding).
+    # The key point of this test is that sanitize_path no longer rejects the `:` character.
+    response = app_client.get(
+        "/api/buckets/test-bucket/download",
+        params={"path": key_with_colon},
+        headers=headers,
+    )
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text[:200]}"
+    assert response.content == file_content

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Alert, Button, Card, PasswordInput, Stack, TextInput, Title } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { IconAlertCircle } from "@tabler/icons-react";
+import { AlertCircle } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useLogin } from "@/features/auth/hooks/useLogin";
 import { useMe } from "@/features/auth/hooks/useMe";
@@ -48,13 +48,13 @@ export function LoginPage() {
     <div className={classes.shell}>
       <Card className={classes.card} padding="xl">
         <div className={classes.brand}>
-          <BurgerLogo size={48} />
+          <BurgerLogo size={96} mode="idle" />
           <Title order={3}>Another S3 Manager</Title>
         </div>
         <form onSubmit={handleSubmit}>
           <Stack gap="md">
             {login.isError && (
-              <Alert color="red" icon={<IconAlertCircle size={16} />}>
+              <Alert color="red" icon={<AlertCircle size={16} />}>
                 {getErrorMessage(login.error)}
               </Alert>
             )}
