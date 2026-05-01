@@ -352,6 +352,7 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
         "is_admin": current_user.get("is_admin", False),
         "csrf_token": current_user.get("csrf_token"),  # Return CSRF token for client
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
+        "tour_seen_v1": current_user.get("tour_seen_v1", False),  # Return onboarding tour seen flag
         "app_name": APP_NAME,  # Return app name for client
         "app_version": APP_VERSION,
     }
@@ -520,6 +521,25 @@ async def update_user_theme(
     save_users(users)
 
     return {"message": f"Theme updated to {theme}", "theme": theme}
+
+
+@app.put("/api/user/tour-seen")
+async def mark_tour_seen(
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Mark the onboarding tour as seen for the current user (idempotent)."""
+    users = load_users()
+    user = next((u for u in users.get("users", []) if u.get("username") == current_user.get("username")), None)
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user["tour_seen_v1"] = True
+    save_users(users)
+
+    return {"tour_seen_v1": True}
 
 
 @app.delete("/api/admin/users/{username}")
