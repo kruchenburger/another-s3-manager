@@ -112,6 +112,12 @@ The vanilla UI (`/`, `/login`, `/admin`) and the React SPA (`/v2/*`) coexist
 during the migration. Each release adds more pages to `/v2/`; the vanilla UI is
 removed only after `/v2/` has full feature parity (Phase 7).
 
+`/v2/*` is served by a single catch-all FastAPI route in `main.py` (not a
+`StaticFiles` mount). The route serves real files when they exist and falls back
+to `index.html` so React Router handles client-side navigation. Files are loaded
+into memory and returned via `Response` (not `FileResponse`) — `SlowAPIASGIMiddleware`
+truncates streamed responses at ~64KB, which broke the SPA bundle.
+
 ## Versioning
 
 Version is derived from git tag via `APP_VERSION` env var. In local development — `dev`.

@@ -22,14 +22,17 @@ def sanitize_path(path: str) -> str:
     if not path:
         return ""
 
+    # Strip surrounding whitespace BEFORE traversal check so " /etc/passwd"
+    # (leading-space + slash) doesn't bypass the startswith("/") guard.
+    path = path.strip()
+
     # Check for path traversal attempts BEFORE stripping slashes so that a
     # leading `/` is caught rather than silently removed.
     if ".." in path or path.startswith("/"):
         raise ValueError("Invalid path: path traversal not allowed")
 
-    # Remove leading/trailing whitespace and trailing slashes (leading `/` was
-    # already rejected above).
-    path = path.strip().strip("/")
+    # Strip trailing slashes (leading `/` was already rejected above).
+    path = path.strip("/")
 
     # Block only what's actually dangerous in S3-key context:
     # - `\x00-\x1f` ASCII control chars (never valid in S3 keys; indicate injection)

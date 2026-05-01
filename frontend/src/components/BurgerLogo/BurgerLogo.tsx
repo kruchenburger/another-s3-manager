@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { Center } from "@mantine/core";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import classes from "./BurgerLogo.module.css";
@@ -239,16 +240,13 @@ export function BurgerLogo({
   );
 
   return (
-    <div
+    <Center
       ref={containerRef}
       className={classes.container}
-      style={{
-        width: size,
-        height: size,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
+      display="inline-flex"
+      // Numeric size has no Mantine prop equivalent (w/h take spacing tokens or strings),
+      // so width/height stay inline. Layout (display/align/justify) goes through Center.
+      style={{ width: size, height: size }}
     >
       <svg
         width={size}
@@ -291,6 +289,6 @@ export function BurgerLogo({
           </linearGradient>
         </defs>
       </svg>
-    </div>
+    </Center>
   );
 }

@@ -32,6 +32,18 @@ def test_sanitize_path_raises_on_traversal():
         sanitize_path("../secret.txt")
 
 
+def test_sanitize_path_blocks_leading_slash_with_whitespace():
+    """REGRESSION: ' /etc/passwd' (space + slash) must NOT bypass the leading-`/` guard.
+    Previously whitespace was stripped AFTER the startswith check, leaving the slash
+    to be silently removed by strip('/')."""
+    with pytest.raises(ValueError, match="path traversal not allowed"):
+        sanitize_path(" /etc/passwd")
+    with pytest.raises(ValueError, match="path traversal not allowed"):
+        sanitize_path("\t/etc/passwd")
+    with pytest.raises(ValueError, match="path traversal not allowed"):
+        sanitize_path("  /folder/file.txt")
+
+
 def test_sanitize_path_raises_on_invalid_chars():
     # `<` and `>` are valid in S3 keys — only ASCII control chars are blocked.
     # Verify that a genuine control char still raises.
