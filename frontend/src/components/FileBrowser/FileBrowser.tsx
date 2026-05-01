@@ -9,6 +9,7 @@ import { buildDownloadUrl } from "@/features/files/api/filesApi";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { joinPath, decodePath } from "@/utils/pathUtils";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
+import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
 import { UploadProgress, type UploadProgressItem } from "@/components/Upload/UploadProgress";
 import { FileBrowserHeader } from "./FileBrowserHeader";
@@ -77,8 +78,21 @@ export function FileBrowser() {
     }
   };
 
-  const handlePreview = (_name: string) => {
-    notifications.show({ color: "yellow", message: "Preview coming in next task" });
+  const [previewState, setPreviewState] = useState<{
+    filename: string;
+    url: string;
+    size: number;
+  } | null>(null);
+
+  const handlePreview = (name: string) => {
+    const fileEntry = data?.files.find((f) => f.name === name);
+    if (!fileEntry || fileEntry.is_directory) return;
+    const fullPath = joinPath(pathFromUrl, name);
+    setPreviewState({
+      filename: name,
+      url: buildDownloadUrl(bucket, roleId, fullPath),
+      size: fileEntry.size,
+    });
   };
 
   const requestDelete = (names: string[]) => {
@@ -270,6 +284,15 @@ export function FileBrowser() {
         items={pendingDelete.current}
         loading={deleteMutation.isPending}
       />
+      {previewState && (
+        <PreviewModal
+          opened={!!previewState}
+          onClose={() => setPreviewState(null)}
+          filename={previewState.filename}
+          url={previewState.url}
+          size={previewState.size}
+        />
+      )}
     </>
   );
 }
