@@ -347,13 +347,20 @@ async def logout(response: Response):
 @app.get("/api/me")
 async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Get current user information"""
+    is_admin = current_user.get("is_admin", False)
+    # Admins can access every role in the config — surface the full list so the
+    # React sidebar matches admin permissions without an extra /api/config call.
+    if is_admin:
+        allowed_roles = [r["name"] for r in load_config().get("roles", []) if r.get("name")]
+    else:
+        allowed_roles = current_user.get("allowed_roles", [])
     return {
         "username": current_user.get("username"),
-        "is_admin": current_user.get("is_admin", False),
+        "is_admin": is_admin,
         "csrf_token": current_user.get("csrf_token"),  # Return CSRF token for client
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
         "tour_seen_v1": current_user.get("tour_seen_v1", False),  # Return onboarding tour seen flag
-        "allowed_roles": current_user.get("allowed_roles", []),  # Return user's allowed roles for sidebar
+        "allowed_roles": allowed_roles,
         "app_name": APP_NAME,  # Return app name for client
         "app_version": APP_VERSION,
     }
