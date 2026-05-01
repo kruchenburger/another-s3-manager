@@ -352,6 +352,8 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
         "is_admin": current_user.get("is_admin", False),
         "csrf_token": current_user.get("csrf_token"),  # Return CSRF token for client
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
+        "tour_seen_v1": current_user.get("tour_seen_v1", False),  # Return onboarding tour seen flag
+        "allowed_roles": current_user.get("allowed_roles", []),  # Return user's allowed roles for sidebar
         "app_name": APP_NAME,  # Return app name for client
         "app_version": APP_VERSION,
     }
@@ -520,6 +522,28 @@ async def update_user_theme(
     save_users(users)
 
     return {"message": f"Theme updated to {theme}", "theme": theme}
+
+
+@app.put("/api/user/tour-seen")
+async def mark_tour_seen(
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Mark the onboarding tour as seen for the current user (idempotent).
+
+    Uses update_user (single SQL UPDATE inside session_scope) instead of the
+    load_users → mutate dict → save_users pattern, so it doesn't race with
+    concurrent updates to the same user (e.g. theme change firing in parallel).
+    """
+    from another_s3_manager.users import update_user
+
+    try:
+        update_user(current_user.get("username"), tour_seen_v1=True)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {"tour_seen_v1": True}
 
 
 @app.delete("/api/admin/users/{username}")

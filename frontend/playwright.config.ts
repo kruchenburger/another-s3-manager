@@ -1,20 +1,17 @@
 import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
-  testDir: "./tests",
-  fullyParallel: true,
+  testDir: "./tests/e2e",
+  fullyParallel: false, // tests share the same backend DB; run sequentially to avoid races
   retries: process.env.CI ? 2 : 0,
+  workers: 1,
   use: {
-    baseURL: "http://localhost:5173",
+    baseURL: process.env.E2E_BASE_URL ?? "http://localhost:8080",
     trace: "on-first-retry",
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "mobile", use: { ...devices["Pixel 5"] } },
+    // mobile project disabled for Phase 3b — re-enable in Phase 7 with mobile-specific specs
   ],
-  webServer: {
-    command: "npm run dev",
-    url: "http://localhost:5173",
-    reuseExistingServer: !process.env.CI,
-  },
+  // No webServer: assume `docker compose up` is run by the developer or CI before `npm run test:e2e`
 });

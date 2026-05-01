@@ -13,6 +13,9 @@ export default mergeConfig(
       globals: true,
       setupFiles: ["./src/setupTests.ts"],
       css: true,
+      // Only unit + component tests. E2E (Playwright) tests live under tests/e2e/
+      // and are run via `npm run test:e2e`.
+      include: ["tests/unit/**/*.test.{ts,tsx}", "tests/component/**/*.test.{ts,tsx}"],
     },
   }),
 );
