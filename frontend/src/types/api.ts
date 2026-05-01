@@ -10,6 +10,7 @@ export interface MeResponse {
   is_admin: boolean;
   csrf_token: string;
   theme: Theme;
+  tour_seen_v1: boolean;
   app_name: string;
   app_version: string;
 }
@@ -22,4 +23,19 @@ export interface AppInfo {
 
 export interface LoginResponse {
   user: User;
+}
+
+export type BucketList = string[];
+
+export interface FileEntry {
+  name: string;
+  is_directory: boolean;
+  size: number;
+  last_modified?: string; // ISO string, only for files
+}
+
+export interface FileListResponse {
+  files: FileEntry[];
+  path: string;
+  total_count: number;
 }
