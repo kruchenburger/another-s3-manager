@@ -3,10 +3,12 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useForm } from "@mantine/form";
 import { useAdminConfig, useSaveConfig } from "@/features/admin/hooks/useAdminConfig";
+import { toWritableConfig } from "@/features/admin/api/configShape";
+import { stripIrrelevantFields } from "@/features/admin/api/roleShape";
 import { RoleFormFields } from "@/components/Admin/RoleFormFields";
 import { runWithToasts } from "@/utils/mutationToast";
 import { notifications } from "@mantine/notifications";
-import type { AppRole } from "@/types/api";
+import type { AppConfig, AppRole } from "@/types/api";
 
 const REDACTED = "***REDACTED***";
 
@@ -28,17 +30,47 @@ export function RoleNewPage() {
     } as AppRole,
     validate: {
       name: (v) => (!v || v.trim().length === 0 ? "Required" : null),
+      profile_name: (v, values) =>
+        values.type === "profile" && (!v || v.trim().length === 0)
+          ? "Required for profile type"
+          : null,
+      role_arn: (v, values) =>
+        values.type === "assume_role" && (!v || v.trim().length === 0)
+          ? "Required for assume_role type"
+          : null,
+      access_key_id: (v, values) =>
+        (values.type === "credentials" || values.type === "s3_compatible") &&
+        (!v || v.trim().length === 0)
+          ? "Required"
+          : null,
+      secret_access_key: (v, values) =>
+        (values.type === "credentials" || values.type === "s3_compatible") &&
+        (!v || v.trim().length === 0)
+          ? "Required"
+          : null,
+      endpoint_url: (v, values) =>
+        values.type === "s3_compatible" && (!v || v.trim().length === 0)
+          ? "Required for s3_compatible type"
+          : null,
     },
   });
 
   const goNext = (): void => {
-    // Step 1 → name+type validation
+    // Step 1 → validate name (type has a default and can't be cleared).
+    // Don't run full form.validate() here — that would also flag still-empty
+    // credential fields whose Step 2 inputs the user hasn't seen yet.
     if (active === 0) {
-      const result = form.validate();
-      if (result.hasErrors) return;
+      const nameResult = form.validateField("name");
+      if (nameResult.hasError) return;
       // For "default" type, skip step 2 (no credentials needed)
       setActive(form.values.type === "default" ? 2 : 1);
       return;
+    }
+    if (active === 1) {
+      // Validate credential fields before reaching Review (server returns 400
+      // if anything required for the chosen type is missing — fail-fast in UI).
+      const result = form.validate();
+      if (result.hasErrors) return;
     }
     setActive((a) => Math.min(a + 1, 2));
   };
@@ -62,8 +94,13 @@ export function RoleNewPage() {
       setActive(0);
       return;
     }
-    const newRole = { ...form.values };
-    const updated = { ...config, roles: [...config.roles, newRole] };
+    // Drop any fields not applicable to the chosen type — prevents stale
+    // credentials from a prior type selection leaking into the saved role.
+    const newRole = stripIrrelevantFields(form.values);
+    const updated: AppConfig = {
+      ...toWritableConfig(config),
+      roles: [...config.roles, newRole],
+    };
     runWithToasts(
       save,
       updated,

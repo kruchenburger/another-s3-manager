@@ -4,11 +4,13 @@ import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useForm } from "@mantine/form";
 import { useAdminConfig, useSaveConfig } from "@/features/admin/hooks/useAdminConfig";
+import { toWritableConfig } from "@/features/admin/api/configShape";
+import { stripIrrelevantFields } from "@/features/admin/api/roleShape";
 import { RoleFormFields } from "@/components/Admin/RoleFormFields";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { runWithToasts } from "@/utils/mutationToast";
 import { getErrorMessage } from "@/utils/apiError";
-import type { AppRole } from "@/types/api";
+import type { AppConfig, AppRole } from "@/types/api";
 
 export function RoleEditPage() {
   const { roleName } = useParams<{ roleName: string }>();
@@ -68,9 +70,12 @@ export function RoleEditPage() {
           ? values.secret_access_key
           : existing.secret_access_key,
     };
-    const next = {
-      ...config,
-      roles: config.roles.map((r) => (r.name === decoded ? merged : r)),
+    // Strip fields that don't apply to the role's current type (avoids
+    // persisting stale credentials e.g. when type was changed mid-edit).
+    const cleaned = stripIrrelevantFields(merged);
+    const next: AppConfig = {
+      ...toWritableConfig(config),
+      roles: config.roles.map((r) => (r.name === decoded ? cleaned : r)),
     };
     runWithToasts(save, next, `Role ${values.name} saved`, () => navigate("/admin/roles"));
   });

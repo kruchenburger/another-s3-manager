@@ -169,6 +169,62 @@ describe("RoleNewPage", () => {
     expect(screen.queryByRole("button", { name: /save role/i })).not.toBeInTheDocument();
   });
 
+  it("blocks Next from Step 2 (Credentials) when required field is missing", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderWizard();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
+    );
+    // Pick credentials type, fill name, advance to Step 2
+    fireEvent.click(screen.getByRole("radio", { name: /^credentials/i }));
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "TestCred" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    // Step 2 fields visible but empty
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    // Should NOT advance to Review — Save button must not appear
+    expect(screen.queryByRole("button", { name: /save role/i })).not.toBeInTheDocument();
+    // Validation errors visible
+    expect(screen.getAllByText("Required").length).toBeGreaterThan(0);
+  });
+
+  it("does not persist credential fields when role type is default (stale fields stripped)", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+    renderWizard();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
+    );
+    // Pick credentials, fill name + secrets
+    fireEvent.click(screen.getByRole("radio", { name: /^credentials/i }));
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "TestStale" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(/^access key id/i), { target: { value: "STALE_KEY" } });
+    fireEvent.change(screen.getByLabelText(/^secret access key/i), { target: { value: "STALE_SECRET" } });
+    // Go back, switch to default
+    fireEvent.click(screen.getByRole("button", { name: /previous/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: /^default/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /^default/i }));
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /save role/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /save role/i }));
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
+    const newRole = submitted.roles.find((r) => r.name === "TestStale")!;
+    expect(newRole.type).toBe("default");
+    expect(newRole.access_key_id).toBeUndefined();
+    expect(newRole.secret_access_key).toBeUndefined();
+  });
+
   it("masks secret_access_key in the Review JSON preview", async () => {
     vi.mocked(getConfig).mockResolvedValue(baseConfig);
     renderWizard();
