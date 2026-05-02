@@ -10,8 +10,8 @@ import { NotFoundPage } from "@/pages/NotFoundPage";
 import { RolePage } from "@/pages/RolePage";
 import { BucketPage } from "@/pages/BucketPage";
 import { BansPage } from "@/pages/admin/BansPage";
-import { ConfigPage } from "@/pages/admin/ConfigPage";
 import { RolesPage } from "@/pages/admin/RolesPage";
+import { SettingsPage } from "@/pages/admin/SettingsPage";
 import { UsersPage } from "@/pages/admin/UsersPage";
 
 export const router = createBrowserRouter(
@@ -43,7 +43,7 @@ export const router = createBrowserRouter(
                 { path: "/admin/users", element: <UsersPage /> },
                 { path: "/admin/bans", element: <BansPage /> },
                 { path: "/admin/roles", element: <RolesPage /> },
-                { path: "/admin/config", element: <ConfigPage /> },
+                { path: "/admin/settings", element: <SettingsPage /> },
               ],
             },
           ],

@@ -1,6 +1,7 @@
 import { apiRequest } from "@/hooks/useApiClient";
 import type {
   AdminUsersResponse,
+  AppConfig,
   Ban,
   CreateUserPayload,
   UpdateUserPayload,
@@ -13,6 +14,7 @@ import type {
  *   - PUT password reset uses Body(..., embed=True) → JSON here
  *   - DELETE → no body
  *   - GET /api/admin/bans (see main.py:563) → JSON response { bans: [...] }
+ *   - /api/config GET/POST → JSON in both directions
  *
  * If you add an endpoint, check main.py to confirm which convention applies.
  */
@@ -92,4 +94,16 @@ export async function resetUserPassword(
       body: JSON.stringify({ password: newPassword }),
     },
   );
+}
+
+export async function getConfig(): Promise<AppConfig> {
+  return apiRequest<AppConfig>("/api/config");
+}
+
+export async function saveConfig(config: AppConfig): Promise<void> {
+  await apiRequest<void>("/api/config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
 }

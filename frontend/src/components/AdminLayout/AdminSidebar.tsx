@@ -15,7 +15,7 @@ const accountsItems: NavItem[] = [
 
 const infrastructureItems: NavItem[] = [
   { label: "Roles", to: "/admin/roles", icon: <Drama size={16} /> },
-  { label: "Config", to: "/admin/config", icon: <Settings size={16} /> },
+  { label: "Settings", to: "/admin/settings", icon: <Settings size={16} /> },
 ];
 
 function SectionHeader({ children }: { children: string }) {
