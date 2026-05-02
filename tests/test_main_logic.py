@@ -809,7 +809,7 @@ async def test_list_buckets_boto_error(monkeypatch, reload_main):
     with pytest.raises(HTTPException) as exc:
         await main.list_buckets(None, {"is_admin": True})
     assert exc.value.status_code == 403
-    assert "Allowed Buckets" in exc.value.detail
+    assert "permission to list all buckets" in exc.value.detail
 
 
 @pytest.mark.asyncio

@@ -1025,12 +1025,14 @@ async def list_buckets(
             else 0
         )
         if error_code in {"AccessDenied", "Forbidden"} or http_status == 403:
+            # Generic message: this role's credentials cannot list all buckets.
+            # Frontend layers the role-appropriate CTA on top — admins get an
+            # "open admin to fix" button, non-admins get "contact administrator".
             raise HTTPException(
                 status_code=403,
                 detail=(
                     "Your credentials don't have permission to list all buckets. "
-                    "This is normal for scoped tokens (R2, MinIO, AWS IAM with bucket-scoped policies). "
-                    "Edit this role and fill in 'Allowed Buckets' with the bucket names you want to access."
+                    "This is normal for scoped tokens (R2, MinIO, AWS IAM with bucket-scoped policies)."
                 ),
             )
 

@@ -880,8 +880,8 @@ def test_get_config_regular_user_no_roles(app_client):
 
 def test_list_buckets_access_denied_returns_friendly_403(app_client, mocker):
     """When ListBuckets fails with AccessDenied (e.g. R2 bucket-scoped tokens, AWS IAM
-    bucket-scoped policies), the API must return 403 with actionable guidance pointing
-    the user to the role's "Allowed Buckets" field — not a raw 500 boto error."""
+    bucket-scoped policies), the API must return 403 with a generic explanation —
+    not a raw 500 boto error. The frontend layers role-appropriate CTAs on top."""
 
     def mock_execute_with_s3_retry(role_name, callback):
         raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListBuckets")
@@ -891,7 +891,7 @@ def test_list_buckets_access_denied_returns_friendly_403(app_client, mocker):
     response = app_client.get("/api/buckets", headers=headers)
     assert response.status_code == status.HTTP_403_FORBIDDEN
     detail = response.json()["detail"]
-    assert "Allowed Buckets" in detail
+    assert "permission to list all buckets" in detail
     assert "scoped" in detail.lower()
 
 
