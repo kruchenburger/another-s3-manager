@@ -40,3 +40,10 @@ export interface FileListResponse {
   path: string;
   total_count: number;
 }
+
+export interface Ban {
+  username: string;
+  banned_until: number; // unix epoch seconds
+  banned_at: number;
+  reason: string;
+}
