@@ -1,5 +1,5 @@
 import { Avatar, Menu, Text, UnstyledButton, Group } from "@mantine/core";
-import { LogOut, User } from "lucide-react";
+import { LogOut, Shield, User } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useLogout } from "@/features/auth/hooks/useLogout";
@@ -24,7 +24,7 @@ export function UserMenu() {
       <Menu.Target>
         <UnstyledButton aria-label="User menu">
           <Group gap="xs">
-            <Avatar color="cheese" radius="xl" size="sm">
+            <Avatar color="amber" radius="xl" size="sm">
               {initial}
             </Avatar>
             <Text size="sm" fw={500} visibleFrom="sm">
@@ -38,6 +38,14 @@ export function UserMenu() {
         <Menu.Item leftSection={<User size={14} />} disabled>
           {me.is_admin ? "Administrator" : "User"}
         </Menu.Item>
+        {me.is_admin && (
+          <Menu.Item
+            leftSection={<Shield size={14} />}
+            onClick={() => navigate("/admin/users")}
+          >
+            Admin Console
+          </Menu.Item>
+        )}
         <Menu.Divider />
         <Menu.Item color="red" leftSection={<LogOut size={14} />} onClick={handleLogout}>
           Logout

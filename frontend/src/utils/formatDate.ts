@@ -7,20 +7,25 @@ const WEEK = 7 * DAY;
 export function formatDate(iso: string): string {
   const then = new Date(iso).getTime();
   const now = Date.now();
-  const diff = now - then;
+  const diffMs = now - then;
+  const future = diffMs < 0;
+  const diff = Math.abs(diffMs);
 
-  if (diff < MINUTE) return "just now";
+  if (diff < MINUTE) return future ? "in less than a minute" : "just now";
   if (diff < HOUR) {
     const m = Math.floor(diff / MINUTE);
-    return m === 1 ? "1 minute ago" : `${m} minutes ago`;
+    const word = m === 1 ? "minute" : "minutes";
+    return future ? `in ${m} ${word}` : `${m} ${word} ago`;
   }
   if (diff < DAY) {
     const h = Math.floor(diff / HOUR);
-    return h === 1 ? "1 hour ago" : `${h} hours ago`;
+    const word = h === 1 ? "hour" : "hours";
+    return future ? `in ${h} ${word}` : `${h} ${word} ago`;
   }
   if (diff < WEEK) {
     const d = Math.floor(diff / DAY);
-    return d === 1 ? "1 day ago" : `${d} days ago`;
+    const word = d === 1 ? "day" : "days";
+    return future ? `in ${d} ${word}` : `${d} ${word} ago`;
   }
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }

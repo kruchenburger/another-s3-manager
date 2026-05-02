@@ -484,6 +484,15 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Self-demote guard: an admin cannot remove their own admin rights through this
+    # endpoint. Frontend disables the toggle on the current-user row, but enforce
+    # server-side too (defence in depth, e.g. against a hand-crafted curl request).
+    if username == current_user.get("username") and is_admin is False:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You can't remove your own admin rights.",
+        )
+
     # Update fields if provided
     if is_admin is not None:
         user["is_admin"] = is_admin

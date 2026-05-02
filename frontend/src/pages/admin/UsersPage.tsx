@@ -1,0 +1,239 @@
+import { Badge, Button, Group, Stack, Table, Title, Tooltip } from "@mantine/core";
+import { KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { useMe } from "@/features/auth/hooks/useMe";
+import {
+  useAdminUsers,
+  useCreateUser,
+  useDeleteUser,
+  useResetUserPassword,
+  useUpdateUser,
+} from "@/features/admin/hooks/useAdminUsers";
+import {
+  UserDrawer,
+  type UserDrawerCreatePayload,
+  type UserDrawerEditPayload,
+} from "@/components/Admin/UserDrawer";
+import { ResetPasswordModal } from "@/components/Admin/ResetPasswordModal";
+import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
+import { EmptyState } from "@/components/EmptyState/EmptyState";
+import { getErrorMessage } from "@/utils/apiError";
+import { runWithToasts } from "@/utils/mutationToast";
+import type { AdminUser } from "@/types/api";
+
+export function UsersPage() {
+  const { data: me } = useMe();
+  const { data: usersResponse, isLoading, error } = useAdminUsers();
+  const createUser = useCreateUser();
+  const updateUser = useUpdateUser();
+  const deleteUser = useDeleteUser();
+  const resetPwd = useResetUserPassword();
+
+  const [drawerMode, setDrawerMode] = useState<"create" | "edit" | null>(null);
+  const [editTarget, setEditTarget] = useState<AdminUser | undefined>();
+  const [resetTarget, setResetTarget] = useState<AdminUser | undefined>();
+  const [deleteTarget, setDeleteTarget] = useState<AdminUser | undefined>();
+
+  if (isLoading) return null;
+
+  if (error) {
+    return (
+      <EmptyState
+        tone="warning"
+        title="Couldn't load users"
+        description={getErrorMessage(error)}
+      />
+    );
+  }
+
+  const users = usersResponse?.users ?? [];
+  const availableRoles = usersResponse?.available_roles ?? [];
+  const currentUsername = me?.username ?? "";
+
+  const onCreateSubmit = (payload: UserDrawerCreatePayload): void => {
+    const username = payload.username;
+    runWithToasts(
+      createUser,
+      {
+        username,
+        password: payload.password,
+        is_admin: payload.is_admin,
+        allowed_roles: payload.allowed_roles,
+      },
+      `User ${username} created`,
+      () => setDrawerMode(null),
+    );
+  };
+
+  const onEditSubmit = (payload: UserDrawerEditPayload): void => {
+    const username = payload.username;
+    runWithToasts(
+      updateUser,
+      {
+        username,
+        payload: {
+          is_admin: payload.is_admin,
+          allowed_roles: payload.allowed_roles,
+        },
+      },
+      `User ${username} updated`,
+      () => {
+        setDrawerMode(null);
+        setEditTarget(undefined);
+      },
+    );
+  };
+
+  const onConfirmDelete = (): void => {
+    if (!deleteTarget) return;
+    const username = deleteTarget.username;
+    runWithToasts(deleteUser, username, `User ${username} deleted`, () =>
+      setDeleteTarget(undefined),
+    );
+  };
+
+  const onResetSubmit = (newPassword: string): void => {
+    if (!resetTarget) return;
+    const username = resetTarget.username;
+    runWithToasts(
+      resetPwd,
+      { username, newPassword },
+      `Password reset for ${username}`,
+      () => setResetTarget(undefined),
+    );
+  };
+
+  return (
+    <Stack gap="md">
+      <Group justify="space-between" align="center">
+        <Title order={2}>Users</Title>
+        <Button
+          leftSection={<Plus size={16} />}
+          onClick={() => {
+            setEditTarget(undefined);
+            setDrawerMode("create");
+          }}
+        >
+          Add user
+        </Button>
+      </Group>
+
+      <Table highlightOnHover striped="even" verticalSpacing="xs">
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th>Username</Table.Th>
+            <Table.Th w={100}>Admin</Table.Th>
+            <Table.Th>Roles</Table.Th>
+            <Table.Th w={200}>Actions</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {users.map((u) => {
+            const isSelf = u.username === currentUsername;
+            return (
+              <Table.Tr key={u.username}>
+                <Table.Td>{u.username}</Table.Td>
+                <Table.Td>
+                  {u.is_admin && <Badge color="amber">admin</Badge>}
+                </Table.Td>
+                <Table.Td>
+                  <Group gap={4}>
+                    {u.allowed_roles.map((r) => (
+                      <Badge key={r} variant="light" size="sm">
+                        {r}
+                      </Badge>
+                    ))}
+                  </Group>
+                </Table.Td>
+                <Table.Td>
+                  <Group gap={4}>
+                    <Tooltip label="Edit">
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        aria-label={`Edit ${u.username}`}
+                        onClick={() => {
+                          setEditTarget(u);
+                          setDrawerMode("edit");
+                        }}
+                      >
+                        <Pencil size={14} />
+                      </Button>
+                    </Tooltip>
+                    <Tooltip
+                      label={
+                        isSelf
+                          ? "Use 'Change my password' in the user menu"
+                          : "Reset password"
+                      }
+                    >
+                      <span>
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          aria-label={`Reset password for ${u.username}`}
+                          disabled={isSelf}
+                          onClick={() => setResetTarget(u)}
+                        >
+                          <KeyRound size={14} />
+                        </Button>
+                      </span>
+                    </Tooltip>
+                    <Tooltip
+                      label={isSelf ? "You can't delete yourself" : "Delete"}
+                    >
+                      <span>
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="red"
+                          aria-label={`Delete ${u.username}`}
+                          disabled={isSelf}
+                          onClick={() => setDeleteTarget(u)}
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      </span>
+                    </Tooltip>
+                  </Group>
+                </Table.Td>
+              </Table.Tr>
+            );
+          })}
+        </Table.Tbody>
+      </Table>
+
+      <UserDrawer
+        opened={drawerMode !== null}
+        mode={drawerMode ?? "create"}
+        initialUser={editTarget}
+        currentUsername={currentUsername}
+        availableRoles={availableRoles}
+        onClose={() => {
+          setDrawerMode(null);
+          setEditTarget(undefined);
+        }}
+        onSubmit={(p) =>
+          p.mode === "create" ? onCreateSubmit(p) : onEditSubmit(p)
+        }
+        loading={createUser.isPending || updateUser.isPending}
+      />
+
+      <ResetPasswordModal
+        opened={resetTarget !== undefined}
+        username={resetTarget?.username}
+        onClose={() => setResetTarget(undefined)}
+        onSubmit={onResetSubmit}
+        loading={resetPwd.isPending}
+      />
+
+      <ConfirmDeleteModal
+        opened={deleteTarget !== undefined}
+        onClose={() => setDeleteTarget(undefined)}
+        onConfirm={onConfirmDelete}
+        items={deleteTarget ? [deleteTarget.username] : []}
+        loading={deleteUser.isPending}
+      />
+    </Stack>
+  );
+}

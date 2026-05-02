@@ -40,3 +40,65 @@ export interface FileListResponse {
   path: string;
   total_count: number;
 }
+
+export interface Ban {
+  username: string;
+  banned_until: number; // unix epoch seconds
+  banned_at: number;
+  reason: string;
+}
+
+export interface AdminUser {
+  username: string;
+  is_admin: boolean;
+  allowed_roles: string[];
+  // created_at: not currently rendered — backend returns it but frontend
+  // doesn't display it. Add back with a "Created" column when wanted.
+}
+
+export interface AdminUsersResponse {
+  users: AdminUser[];
+  available_roles: string[];
+}
+
+export interface CreateUserPayload {
+  username: string;
+  password: string;
+  is_admin: boolean;
+  allowed_roles: string[];
+}
+
+export interface UpdateUserPayload {
+  is_admin?: boolean;
+  allowed_roles?: string[];
+}
+
+export interface AppRole {
+  name: string;
+  type: "default" | "profile" | "assume_role" | "credentials" | "s3_compatible";
+  description?: string;
+  // Type-specific fields (most are optional depending on type):
+  profile_name?: string;
+  role_arn?: string;
+  access_key_id?: string;
+  secret_access_key?: string;
+  region?: string;
+  endpoint_url?: string;
+  use_ssl?: boolean;
+  verify_ssl?: boolean;
+  addressing_style?: "auto" | "virtual" | "path";
+  allowed_buckets?: string[];
+}
+
+export interface AppConfig {
+  roles: AppRole[];
+  default_role?: string;
+  items_per_page: number;
+  enable_lazy_loading: boolean;
+  max_file_size: number;
+  disable_deletion: boolean;
+  auto_inline_extensions?: string[];
+  data_dir?: string;
+  is_read_only?: boolean;
+  current_role?: string;
+}

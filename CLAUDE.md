@@ -2,6 +2,8 @@
 
 Lightweight web UI for managing files in S3 and S3-compatible storage.
 
+> **This is a public repository.** Never commit, push, or include in PR descriptions / commit messages / issue bodies any absolute paths from a developer's local filesystem (e.g. `D:\...`, `/Users/...`, `C:\...`, `/home/...`). Specs and plans for this project live out-of-repo per `.claude/rules/specs-and-plans.md` — when referencing them in a PR description, use only the **relative tail** (e.g. `specs/2026-05-02-foo-design.md (out-of-repo)`), never the full absolute path. Personal directory structure leaking into a public repo is a privacy issue and looks unprofessional.
+
 ## Stack
 
 - **Backend**: Python 3.13+, FastAPI, Boto3, JWT auth (cookie-based), per-username ban for brute-force defense
@@ -158,6 +160,7 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 - Brute-force defense: per-username ban (3 failed attempts → 1h ban). **Admins exempt** to avoid DoS on the predictable `admin` username — admin protection must come from deployment layer (see "Production deployment" in README).
 - No application-level IP rate limit. Production exposure expects an authenticated reverse proxy (Cloudflare Access, Tunnel, WAF) — that's the right layer for IP-based throttling.
 - React SPA on `/v2/*`: collapsible sidebar with role/bucket tree, file browser (table+grid toggle, hover actions, bulk delete, drag-drop upload, preview modal), one-time onboarding tour persisted via `tour_seen_v1` user flag.
+- React admin pages on `/v2/admin/*`: separate AdminLayout with grouped sidebar (ACCOUNTS: Users / Bans, INFRASTRUCTURE: Roles / Settings) reachable from "Admin Console" in UserMenu. Users page (CRUD + reset password + self-protect for delete/demote/reset). Bans page (view + unban). Roles page (table + create wizard with type-conditional credential fields + edit form, secret_access_key preserve-on-blank). Settings page (typed global settings with read-only k8s ConfigMap mode, MB↔bytes conversion preserves byte-precision when MB field unchanged). Backend endpoints unchanged from Phase 1; React pages reuse them via TanStack Query plus a small `update_user` self-demote guard.
 
 ### React API surface
 
@@ -170,6 +173,15 @@ The React SPA consumes existing backend endpoints plus a small set added for SPA
 - `POST /api/buckets/{b}/upload` — single-file multipart upload (already existed)
 - `DELETE /api/buckets/{b}/files?path=...&role=...` — file or folder delete (already existed)
 - `GET /api/buckets/{b}/download?path=...&role=...` — streamed download (already existed)
+- `GET /api/admin/users` — list users with available roles (returns `{users, available_roles}`)
+- `POST /api/admin/users` — create user (multipart Form)
+- `PUT /api/admin/users/{u}` — update user (multipart Form, blocks self-demote)
+- `DELETE /api/admin/users/{u}` — delete user (blocks self-delete)
+- `PUT /api/admin/users/{u}/password` — admin-reset another user's password (JSON `{password}`)
+- `GET /api/admin/bans` — list active bans (returns `{bans}`)
+- `DELETE /api/admin/bans/{u}` — unban user
+- `GET /api/config` — read whole config including derived `data_dir` / `current_role` / `is_read_only` (response-only)
+- `POST /api/config` — write config; React strips derived fields via `toWritableConfig()` to avoid persisting runtime values
 
 ## Deployment
 
