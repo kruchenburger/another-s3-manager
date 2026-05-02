@@ -11,9 +11,11 @@ import {
 import { useForm } from "@mantine/form";
 import { useEffect } from "react";
 import { useAdminConfig, useSaveConfig } from "@/features/admin/hooks/useAdminConfig";
+import { toWritableConfig } from "@/features/admin/api/configShape";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { runWithToasts } from "@/utils/mutationToast";
 import { getErrorMessage } from "@/utils/apiError";
+import type { AppConfig } from "@/types/api";
 
 const MB = 1024 * 1024;
 
@@ -67,8 +69,8 @@ export function SettingsPage() {
   const roleOptions = config.roles.map((r) => ({ value: r.name, label: r.name }));
 
   const onSubmit = form.onSubmit((values) => {
-    const next: typeof config = {
-      ...config,
+    const next: AppConfig = {
+      ...toWritableConfig(config),
       default_role: values.default_role || undefined,
       items_per_page: values.items_per_page,
       disable_deletion: values.disable_deletion,
@@ -114,7 +116,7 @@ export function SettingsPage() {
           />
           <Switch
             label="Disable deletion"
-            description="When on, all delete operations return 403 server-side."
+            description="When on, S3 file/folder delete operations return 403 server-side. Admin actions (deleting users, removing bans, deleting roles) are NOT affected."
             disabled={readOnly}
             {...form.getInputProps("disable_deletion", { type: "checkbox" })}
           />

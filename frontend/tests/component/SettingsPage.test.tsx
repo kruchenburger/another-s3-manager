@@ -123,4 +123,24 @@ describe("SettingsPage", () => {
       expect(screen.getByText(/couldn't load settings/i)).toBeInTheDocument(),
     );
   });
+
+  it("does NOT send derived fields (data_dir, current_role, is_read_only) on save", async () => {
+    vi.mocked(getConfig).mockResolvedValue({
+      ...baseConfig,
+      data_dir: "/data",
+      current_role: "Default",
+      is_read_only: false,
+    });
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /save settings/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    const submitted = vi.mocked(saveConfig).mock.calls[0]![0] as unknown as Record<string, unknown>;
+    expect("data_dir" in submitted).toBe(false);
+    expect("current_role" in submitted).toBe(false);
+    expect("is_read_only" in submitted).toBe(false);
+  });
 });

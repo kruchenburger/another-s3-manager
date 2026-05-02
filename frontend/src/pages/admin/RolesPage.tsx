@@ -3,11 +3,12 @@ import { Plus, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAdminConfig, useSaveConfig } from "@/features/admin/hooks/useAdminConfig";
+import { toWritableConfig } from "@/features/admin/api/configShape";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { runWithToasts } from "@/utils/mutationToast";
 import { getErrorMessage } from "@/utils/apiError";
-import type { AppRole } from "@/types/api";
+import type { AppConfig, AppRole } from "@/types/api";
 
 export function RolesPage() {
   const { data: config, isLoading, error } = useAdminConfig();
@@ -50,7 +51,10 @@ export function RolesPage() {
   const onConfirmDelete = (): void => {
     if (!deleteTarget) return;
     const targetName = deleteTarget.name;
-    const next = { ...config, roles: config.roles.filter((r) => r.name !== targetName) };
+    const next: AppConfig = {
+      ...toWritableConfig(config),
+      roles: config.roles.filter((r) => r.name !== targetName),
+    };
     runWithToasts(save, next, `Role ${targetName} deleted`, () => setDeleteTarget(undefined));
   };
 
