@@ -1,4 +1,3 @@
-import builtins
 import importlib
 import time
 from datetime import timedelta
@@ -268,6 +267,39 @@ def test_record_login_attempt_ban(tmp_path):
     assert bans["user"]["banned_until"] > time.time()
 
 
+def test_record_login_attempt_admin_is_never_banned(tmp_path):
+    """Admins must be exempt from the brute-force auto-ban: the `admin` username
+    is predictable, and a drive-by attacker could otherwise lock the only admin
+    out of the system. Brute-force defense for admins is the deployment layer's
+    job (Cloudflare Access / WAF / strong password / 2FA)."""
+    auth = reload_auth()
+    users = reload_users()
+    users.save_bans({})
+    users.create_user(username="root", password_hash="h", is_admin=True)
+
+    # Hammer the admin account with way more than the threshold.
+    for _ in range(auth.MAX_LOGIN_ATTEMPTS * 3):
+        auth.record_login_attempt("root", success=False)
+
+    bans = users.load_bans()
+    assert "root" not in bans, "admin account must not be auto-banned"
+
+
+def test_record_login_attempt_non_admin_still_banned_with_admin_exemption(tmp_path):
+    """The admin exemption must not leak to non-admin users: non-admins are
+    still banned per the existing rules."""
+    auth = reload_auth()
+    users = reload_users()
+    users.save_bans({})
+    users.create_user(username="alice", password_hash="h", is_admin=False)
+
+    for _ in range(auth.MAX_LOGIN_ATTEMPTS):
+        auth.record_login_attempt("alice", success=False)
+
+    bans = users.load_bans()
+    assert "alice" in bans
+
+
 def test_record_login_attempt_success_resets(tmp_path):
     auth = reload_auth()
     auth.record_login_attempt("user", success=False)
@@ -399,21 +431,18 @@ def test_verify_csrf_token_missing_expected(monkeypatch):
     assert exc.value.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_record_login_attempt_logs(monkeypatch):
+def test_record_login_attempt_logs(caplog):
     auth = reload_auth()
     users = reload_users()
     users.save_bans({})
+    # User must exist for the ban FK to be honored
+    users.create_user(username="noisy", password_hash="h")
 
-    messages = []
+    with caplog.at_level("WARNING", logger="another_s3_manager.auth"):
+        for _ in range(auth.MAX_LOGIN_ATTEMPTS):
+            auth.record_login_attempt("noisy", success=False)
 
-    def fake_print(message):
-        messages.append(message)
-
-    monkeypatch.setattr(builtins, "print", fake_print)
-    for _ in range(auth.MAX_LOGIN_ATTEMPTS):
-        auth.record_login_attempt("noisy", success=False)
-
-    assert any("User noisy banned" in msg for msg in messages)
+    assert any("User noisy banned" in record.getMessage() for record in caplog.records)
 
 
 def test_get_current_user_reads_from_cookie(monkeypatch, valid_jwt_token, valid_user_dict):

@@ -62,21 +62,7 @@ Role types: `default`, `profile`, `assume_role`, `credentials`. Any role can inc
 | `MAX_FILE_SIZE` | Max upload size in bytes | `104857600` (100 MB) |
 | `DISABLE_DELETION` | Disable delete operations | `false` |
 | `ITEMS_PER_PAGE` | Files per page | `200` |
-| `RATE_LIMIT_ENABLED` | Enable per-IP rate limiting | `true` |
-| `RATE_LIMIT_PROXY_HEADER` | Header carrying real client IP behind a proxy (e.g. `X-Forwarded-For`) | unset |
 | `COOKIE_SECURE` | Auth cookie `Secure` flag — set to `false` for local HTTP, `true` for HTTPS prod | `true` |
-
-## Rate Limiting
-
-Per-IP rate limit (default **100/minute**, all endpoints) via [slowapi](https://github.com/laurentS/slowapi).
-Login brute-force defense relies on the existing username-based ban: 3 failed attempts → 1 hour ban.
-
-Exceeding the limit returns `429 Too Many Requests` with `Retry-After`,
-`X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers.
-
-Behind a reverse proxy (Cloudflare, nginx, etc.), set `RATE_LIMIT_PROXY_HEADER` to
-the header carrying the real client IP. Otherwise all requests appear to come from
-the proxy and share one quota.
 
 ## Authentication
 
@@ -87,6 +73,32 @@ via `X-CSRF-Token` header on mutating requests; the CSRF token comes from
 
 For local HTTP development, set `COOKIE_SECURE=false` or the browser will
 silently drop the cookie (Secure flag requires HTTPS).
+
+### Brute-force defense
+
+Failed logins for non-admin accounts are tracked per username: **3 failed
+attempts within 1 hour → account is banned for 1 hour**. Admins are exempt
+(the `admin` username is predictable, and a drive-by attacker could otherwise
+lock the only admin out of the system).
+
+There is **no application-level IP rate limit** — for production exposure,
+put the app behind a reverse proxy that handles rate-limiting and (optionally)
+SSO. See [Production deployment](#production-deployment) below.
+
+## Production deployment
+
+This app is an admin tool, not a public SaaS. The recommended deployment is
+**behind an authenticated reverse proxy**:
+
+- **Cloudflare Tunnel + Access** — zero-trust SSO (Google, GitHub, email magic
+  link) gates `/login` before the request reaches the app. The login form is
+  invisible to unauthenticated visitors. Free tier covers small teams.
+- **nginx / Traefik / Caddy with basic-auth or OIDC** — same idea, self-hosted.
+- **Cloudflare WAF rule** — if you cannot put SSO in front, add a WAF rule
+  rate-limiting `POST /api/login` at the edge (e.g. 10/minute per IP).
+
+For self-hosting on a single machine without external traffic, bind to
+`127.0.0.1` and use SSH tunnels or a local-only reverse proxy.
 
 ## Storage
 

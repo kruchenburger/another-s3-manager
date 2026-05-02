@@ -4,7 +4,7 @@ Lightweight web UI for managing files in S3 and S3-compatible storage.
 
 ## Stack
 
-- **Backend**: Python 3.13+, FastAPI, Boto3, JWT auth, slowapi rate limiting
+- **Backend**: Python 3.13+, FastAPI, Boto3, JWT auth (cookie-based), per-username ban for brute-force defense
 - **Frontend**: Vanilla HTML/JS/CSS (migration to React + Mantine in progress)
 - **Deployment**: Docker, Docker Compose, Kubernetes (chart hosted at [github.com/kruchenburger/helm](https://github.com/kruchenburger/helm) — in progress)
 - **Package manager**: uv
@@ -22,7 +22,6 @@ another-s3-manager/
 │       ├── constants.py      # App constants, paths
 │       ├── database.py       # SQLAlchemy engine + session_scope()
 │       ├── models.py         # ORM models (User, Role, Ban)
-│       ├── rate_limit.py    # slowapi limiter (per-IP, in-memory)
 │       ├── s3_client.py      # S3 client, role management
 │       ├── users.py          # User management (SQLite via SQLAlchemy)
 │       ├── utils.py          # Validation, sanitization
@@ -123,8 +122,8 @@ removed only after `/v2/` has full feature parity (Phase 7).
 `/v2/*` is served by a single catch-all FastAPI route in `main.py` (not a
 `StaticFiles` mount). The route serves real files when they exist and falls back
 to `index.html` so React Router handles client-side navigation. Files are loaded
-into memory and returned via `Response` (not `FileResponse`) — `SlowAPIASGIMiddleware`
-truncates streamed responses at ~64KB, which broke the SPA bundle.
+into memory and returned via `Response` (not `FileResponse`) — kept as a small
+defensive choice; SPA bundles are <1MB so the cost is negligible.
 
 ## Versioning
 
@@ -147,8 +146,6 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 | `AWS_REGION`                      | No       | from env        | Default AWS region                  |
 | `S3_FILE_MANAGER_CONFIG`          | No       | `./data/config.json` | Path to config file (under DATA_DIR by convention) |
 | `DATA_DIR`                        | No       | `./data` (native), `/app/data` (Docker) | Data dir (SQLite DB + runtime data) |
-| `RATE_LIMIT_ENABLED`              | No       | `true`          | Enable per-IP rate limiting (slowapi) |
-| `RATE_LIMIT_PROXY_HEADER`         | No       | unset           | Real-client-IP header behind a proxy (e.g. `X-Forwarded-For`) |
 | `COOKIE_SECURE`                   | No       | `true`          | `Secure` flag on auth cookie. MUST be `false` on local HTTP, else browser drops the cookie |
 
 ## Features
@@ -158,7 +155,8 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 - JWT authentication via `httpOnly + Secure + SameSite=Strict` cookie + CSRF protection (`X-CSRF-Token` from `/api/me`)
 - Automatic refresh of expired credentials
 - Granular per-role, per-bucket access control
-- Per-IP rate limiting (slowapi via SlowAPIASGIMiddleware): single 100/min limit on all endpoints. Login brute-force defense via existing username-based ban (3 fails → 1h ban).
+- Brute-force defense: per-username ban (3 failed attempts → 1h ban). **Admins exempt** to avoid DoS on the predictable `admin` username — admin protection must come from deployment layer (see "Production deployment" in README).
+- No application-level IP rate limit. Production exposure expects an authenticated reverse proxy (Cloudflare Access, Tunnel, WAF) — that's the right layer for IP-based throttling.
 - React SPA on `/v2/*`: collapsible sidebar with role/bucket tree, file browser (table+grid toggle, hover actions, bulk delete, drag-drop upload, preview modal), one-time onboarding tour persisted via `tour_seen_v1` user flag.
 
 ### React API surface

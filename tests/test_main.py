@@ -319,11 +319,15 @@ def test_logout_clears_cookie(app_client, monkeypatch):
 
 
 def test_login_banned_user(app_client):
+    """Non-admins get auto-banned after MAX_LOGIN_ATTEMPTS failures and the
+    /api/login endpoint then refuses with 403. (Admins are exempt — see
+    test_auth.test_record_login_attempt_admin_is_never_banned.)"""
     auth_module = reload_auth_module()
+    create_user("alice", password="alice-pw", is_admin=False)
     for _ in range(auth_module.MAX_LOGIN_ATTEMPTS):
-        auth_module.record_login_attempt("admin", success=False)
-    assert auth_module.check_ban("admin") is True
-    response = app_client.post("/api/login", data={"username": "admin", "password": "admin123"})
+        auth_module.record_login_attempt("alice", success=False)
+    assert auth_module.check_ban("alice") is True
+    response = app_client.post("/api/login", data={"username": "alice", "password": "alice-pw"})
     assert response.status_code == status.HTTP_403_FORBIDDEN
 
 

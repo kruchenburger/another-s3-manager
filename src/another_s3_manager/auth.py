@@ -2,6 +2,7 @@
 Authentication and authorization module
 """
 
+import logging
 import os
 import secrets
 import time
@@ -18,6 +19,8 @@ from another_s3_manager.constants import (
     JWT_ALGORITHM,
     MAX_LOGIN_ATTEMPTS,
 )
+
+logger = logging.getLogger(__name__)
 
 # Initialize password context with bcrypt, fallback to pbkdf2_sha256 if bcrypt fails
 try:
@@ -181,11 +184,18 @@ def check_ban(username: str) -> bool:
 
 
 def record_login_attempt(username: str, success: bool) -> None:
-    """Record a login attempt and ban user if too many failures."""
+    """Record a login attempt and ban user if too many failures.
+
+    Admins are exempt from auto-ban: the `admin` username is predictable, and a
+    drive-by attacker could lock the only admin out of the system with three
+    wrong-password requests. Brute-force defense for admin accounts must come
+    from the deployment layer (Cloudflare Access / WAF / strong password / 2FA),
+    not from auto-ban.
+    """
     # Import here to avoid circular dependency
     from datetime import datetime
 
-    from another_s3_manager.users import load_bans, save_bans
+    from another_s3_manager.users import load_bans, load_users, save_bans
 
     if username not in _login_attempts:
         _login_attempts[username] = {"attempts": [], "failed_count": 0}
@@ -207,8 +217,21 @@ def record_login_attempt(username: str, success: bool) -> None:
         user_attempts["attempts"].append(current_time)
         user_attempts["failed_count"] = len(user_attempts["attempts"])
 
-        # Ban if too many failures
+        # Ban if too many failures — but never ban an admin (DoS-on-admin protection).
         if user_attempts["failed_count"] >= MAX_LOGIN_ATTEMPTS:
+            user_record = next(
+                (u for u in load_users().get("users", []) if u.get("username") == username),
+                None,
+            )
+            if user_record and user_record.get("is_admin"):
+                # Admin — log the burst but don't ban.
+                logger.warning(
+                    "%d failed login attempts for admin '%s' (not banning)",
+                    user_attempts["failed_count"],
+                    username,
+                )
+                return
+
             bans = load_bans()
             banned_until = current_time + (BAN_DURATION_MINUTES * 60)
             bans[username] = {
@@ -217,4 +240,4 @@ def record_login_attempt(username: str, success: bool) -> None:
                 "reason": "Too many failed login attempts",
             }
             save_bans(bans)
-            print(f"User {username} banned until {datetime.fromtimestamp(banned_until)}")
+            logger.warning("User %s banned until %s", username, datetime.fromtimestamp(banned_until))

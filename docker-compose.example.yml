@@ -28,15 +28,6 @@ services:
       # if missing — you can also edit roles via the admin UI.
       S3_FILE_MANAGER_CONFIG: /app/data/config.json
 
-      # Per-IP rate limiting (per .claude/rules/api-security.md):
-      # 5/min for /api/login, 30/min for mutating endpoints, 100/min for reads.
-      RATE_LIMIT_ENABLED: "true"
-
-      # Set when running behind a reverse proxy (Cloudflare, nginx, traefik, etc.)
-      # so rate limits apply to the real client IP. Common values: X-Forwarded-For,
-      # CF-Connecting-IP. Leave unset for direct exposure.
-      # RATE_LIMIT_PROXY_HEADER: X-Forwarded-For
-
       # Optional tuning:
       # JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 180
       # ITEMS_PER_PAGE: 200
