@@ -2,6 +2,8 @@
 
 Lightweight web UI for managing files in S3 and S3-compatible storage.
 
+> **This is a public repository.** Never commit, push, or include in PR descriptions / commit messages / issue bodies any absolute paths from a developer's local filesystem (e.g. `D:\...`, `/Users/...`, `C:\...`, `/home/...`). Specs and plans for this project live out-of-repo per `.claude/rules/specs-and-plans.md` — when referencing them in a PR description, use only the **relative tail** (e.g. `specs/2026-05-02-foo-design.md (out-of-repo)`), never the full absolute path. Personal directory structure leaking into a public repo is a privacy issue and looks unprofessional.
+
 ## Stack
 
 - **Backend**: Python 3.13+, FastAPI, Boto3, JWT auth (cookie-based), per-username ban for brute-force defense
