@@ -47,3 +47,28 @@ export interface Ban {
   banned_at: number;
   reason: string;
 }
+
+export interface AdminUser {
+  username: string;
+  is_admin: boolean;
+  allowed_roles: string[];
+  // created_at: not currently rendered — backend returns it but frontend
+  // doesn't display it. Add back with a "Created" column when wanted.
+}
+
+export interface AdminUsersResponse {
+  users: AdminUser[];
+  available_roles: string[];
+}
+
+export interface CreateUserPayload {
+  username: string;
+  password: string;
+  is_admin: boolean;
+  allowed_roles: string[];
+}
+
+export interface UpdateUserPayload {
+  is_admin?: boolean;
+  allowed_roles?: string[];
+}

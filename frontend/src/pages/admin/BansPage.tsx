@@ -1,10 +1,10 @@
 import { Button, Group, Modal, Stack, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
-import { notifications } from "@mantine/notifications";
 import { useAdminBans, useUnbanUser } from "@/features/admin/hooks/useAdminBans";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { formatDate } from "@/utils/formatDate";
 import { getErrorMessage } from "@/utils/apiError";
+import { runWithToasts } from "@/utils/mutationToast";
 
 export function BansPage() {
   const { data: bans, isLoading, error } = useAdminBans();
@@ -35,15 +35,9 @@ export function BansPage() {
   const handleConfirm = (): void => {
     if (!target) return;
     const username = target;
-    unban.mutate(username, {
-      onSuccess: () => {
-        notifications.show({ message: `Unbanned ${username}`, color: "green" });
-        setTarget(null);
-      },
-      onError: (e) => {
-        notifications.show({ message: getErrorMessage(e), color: "red" });
-      },
-    });
+    runWithToasts(unban, username, `Unbanned ${username}`, () =>
+      setTarget(null),
+    );
   };
 
   return (

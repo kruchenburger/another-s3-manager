@@ -19,6 +19,21 @@ if (typeof globalThis.localStorage === "undefined" || typeof (globalThis.localSt
   });
 }
 
+// jsdom doesn't implement ResizeObserver, but Mantine's ScrollArea (used by
+// Drawer/Modal/Popover) calls it. Stub a no-op shim so tests can render those.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  class ResizeObserverShim {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    writable: true,
+    configurable: true,
+    value: ResizeObserverShim,
+  });
+}
+
 // jsdom doesn't implement matchMedia, but Mantine + our BurgerLogo (and many
 // component-test-friendly libs) call it during render. Stub a no-op shim that
 // always reports "doesn't match" so reduced-motion paths pick the animated branch.
