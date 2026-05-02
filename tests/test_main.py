@@ -1397,3 +1397,31 @@ def test_download_file_with_colon_in_key(app_client, mocker):
     )
     assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text[:200]}"
     assert response.content == file_content
+
+
+def test_admin_cannot_demote_self(app_client):
+    """An admin trying to set their own is_admin=False must be rejected."""
+    _, headers = login(app_client)  # logged in as admin (default seeded admin)
+    response = app_client.put(
+        "/api/admin/users/admin",
+        data={"is_admin": "false", "allowed_roles": ""},
+        headers=headers,
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "own admin rights" in response.json()["detail"].lower()
+
+
+def test_admin_can_demote_other_admin(app_client):
+    """Defensive: the self-demote guard must NOT block demoting OTHER admins."""
+    create_user("co_admin", is_admin=True, allowed_roles=[])
+    _, headers = login(app_client)
+    response = app_client.put(
+        "/api/admin/users/co_admin",
+        data={"is_admin": "false", "allowed_roles": ""},
+        headers=headers,
+    )
+    assert response.status_code == status.HTTP_200_OK
+    # Verify the other admin really lost the flag
+    users_module = reload_users_module()
+    co = next(u for u in users_module.load_users()["users"] if u["username"] == "co_admin")
+    assert co["is_admin"] is False
