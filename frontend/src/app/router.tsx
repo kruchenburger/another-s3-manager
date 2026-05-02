@@ -1,4 +1,6 @@
 import { createBrowserRouter } from "react-router-dom";
+import { AdminGuard } from "@/components/AdminLayout/AdminGuard";
+import { AdminLayout } from "@/components/AdminLayout/AdminLayout";
 import { AppShellLayout } from "@/components/AppShell/AppShellLayout";
 import { AuthGuard } from "@/components/AuthGuard/AuthGuard";
 import { ErrorPage } from "@/pages/ErrorPage";
@@ -7,6 +9,10 @@ import { LoginPage } from "@/pages/LoginPage/LoginPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { RolePage } from "@/pages/RolePage";
 import { BucketPage } from "@/pages/BucketPage";
+import { BansPage } from "@/pages/admin/BansPage";
+import { ConfigPage } from "@/pages/admin/ConfigPage";
+import { RolesPage } from "@/pages/admin/RolesPage";
+import { UsersPage } from "@/pages/admin/UsersPage";
 
 export const router = createBrowserRouter(
   [
@@ -26,6 +32,20 @@ export const router = createBrowserRouter(
             { path: "/r/:roleId", element: <RolePage /> },
             { path: "/r/:roleId/b/:bucket", element: <BucketPage /> },
             { path: "/r/:roleId/b/:bucket/p/*", element: <BucketPage /> },
+          ],
+        },
+        {
+          element: <AdminGuard />,
+          children: [
+            {
+              element: <AdminLayout />,
+              children: [
+                { path: "/admin/users", element: <UsersPage /> },
+                { path: "/admin/bans", element: <BansPage /> },
+                { path: "/admin/roles", element: <RolesPage /> },
+                { path: "/admin/config", element: <ConfigPage /> },
+              ],
+            },
           ],
         },
       ],

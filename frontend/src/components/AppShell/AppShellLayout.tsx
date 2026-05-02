@@ -9,7 +9,14 @@ import { SpotlightTour } from "@/components/Onboarding/SpotlightTour";
 
 const COLLAPSED_KEY = "sidebar:collapsed";
 
-export function AppShellLayout() {
+interface AppShellLayoutProps {
+  /** Render slot for the main area. Falls back to React Router's <Outlet /> when omitted. */
+  children?: React.ReactNode;
+  /** Navbar slot. Defaults to the file-browser <Sidebar />; admin shell overrides this. */
+  navbar?: React.ReactNode;
+}
+
+export function AppShellLayout({ children, navbar }: AppShellLayoutProps = {}) {
   const [navOpened, { toggle: toggleNav, close: closeNav }] = useDisclosure(false);
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
@@ -49,14 +56,16 @@ export function AppShellLayout() {
           <AppHeader navOpened={navOpened} onNavToggle={toggleNav} onOpenTour={openTour} />
         </AppShell.Header>
         <AppShell.Navbar p={0}>
-          <Sidebar
-            collapsed={collapsed}
-            onToggleCollapsed={toggleCollapsed}
-            onOpenTour={openTour}
-          />
+          {navbar ?? (
+            <Sidebar
+              collapsed={collapsed}
+              onToggleCollapsed={toggleCollapsed}
+              onOpenTour={openTour}
+            />
+          )}
         </AppShell.Navbar>
         <AppShell.Main onClick={closeNav}>
-          <Outlet context={{ tourOpen, setTourOpen }} />
+          {children ?? <Outlet context={{ tourOpen, setTourOpen }} />}
         </AppShell.Main>
       </AppShell>
       <WelcomeToast onOpenTour={() => setTourOpen(true)} />
