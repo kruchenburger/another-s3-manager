@@ -9,6 +9,7 @@ import { LoginPage } from "@/pages/LoginPage/LoginPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { RolePage } from "@/pages/RolePage";
 import { BucketPage } from "@/pages/BucketPage";
+import { ChangePasswordPage } from "@/pages/ChangePasswordPage";
 import { BansPage } from "@/pages/admin/BansPage";
 import { RoleEditPage } from "@/pages/admin/RoleEditPage";
 import { RoleNewPage } from "@/pages/admin/RoleNewPage";
@@ -34,6 +35,7 @@ export const router = createBrowserRouter(
             { path: "/r/:roleId", element: <RolePage /> },
             { path: "/r/:roleId/b/:bucket", element: <BucketPage /> },
             { path: "/r/:roleId/b/:bucket/p/*", element: <BucketPage /> },
+            { path: "/change-password", element: <ChangePasswordPage /> },
           ],
         },
         {

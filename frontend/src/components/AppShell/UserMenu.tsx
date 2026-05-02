@@ -1,5 +1,5 @@
 import { Avatar, Menu, Text, UnstyledButton, Group } from "@mantine/core";
-import { LogOut, Shield, User } from "lucide-react";
+import { KeyRound, LogOut, Shield, User } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useLogout } from "@/features/auth/hooks/useLogout";
@@ -37,6 +37,12 @@ export function UserMenu() {
         <Menu.Label>Signed in as {me.username}</Menu.Label>
         <Menu.Item leftSection={<User size={14} />} disabled>
           {me.is_admin ? "Administrator" : "User"}
+        </Menu.Item>
+        <Menu.Item
+          leftSection={<KeyRound size={14} />}
+          onClick={() => navigate("/change-password")}
+        >
+          Change my password
         </Menu.Item>
         {me.is_admin && (
           <Menu.Item
