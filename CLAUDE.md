@@ -158,6 +158,7 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 - Brute-force defense: per-username ban (3 failed attempts → 1h ban). **Admins exempt** to avoid DoS on the predictable `admin` username — admin protection must come from deployment layer (see "Production deployment" in README).
 - No application-level IP rate limit. Production exposure expects an authenticated reverse proxy (Cloudflare Access, Tunnel, WAF) — that's the right layer for IP-based throttling.
 - React SPA on `/v2/*`: collapsible sidebar with role/bucket tree, file browser (table+grid toggle, hover actions, bulk delete, drag-drop upload, preview modal), one-time onboarding tour persisted via `tour_seen_v1` user flag.
+- React admin pages on `/v2/admin/*`: separate AdminLayout with grouped sidebar (ACCOUNTS: Users / Bans, INFRASTRUCTURE: Roles / Settings) reachable from "Admin Console" in UserMenu. Users page (CRUD + reset password + self-protect for delete/demote/reset). Bans page (view + unban). Roles page (table + create wizard with type-conditional credential fields + edit form, secret_access_key preserve-on-blank). Settings page (typed global settings with read-only k8s ConfigMap mode, MB↔bytes conversion preserves byte-precision when MB field unchanged). Backend endpoints unchanged from Phase 1; React pages reuse them via TanStack Query plus a small `update_user` self-demote guard.
 
 ### React API surface
 
