@@ -173,6 +173,15 @@ The React SPA consumes existing backend endpoints plus a small set added for SPA
 - `POST /api/buckets/{b}/upload` — single-file multipart upload (already existed)
 - `DELETE /api/buckets/{b}/files?path=...&role=...` — file or folder delete (already existed)
 - `GET /api/buckets/{b}/download?path=...&role=...` — streamed download (already existed)
+- `GET /api/admin/users` — list users with available roles (returns `{users, available_roles}`)
+- `POST /api/admin/users` — create user (multipart Form)
+- `PUT /api/admin/users/{u}` — update user (multipart Form, blocks self-demote)
+- `DELETE /api/admin/users/{u}` — delete user (blocks self-delete)
+- `PUT /api/admin/users/{u}/password` — admin-reset another user's password (JSON `{password}`)
+- `GET /api/admin/bans` — list active bans (returns `{bans}`)
+- `DELETE /api/admin/bans/{u}` — unban user
+- `GET /api/config` — read whole config including derived `data_dir` / `current_role` / `is_read_only` (response-only)
+- `POST /api/config` — write config; React strips derived fields via `toWritableConfig()` to avoid persisting runtime values
 
 ## Deployment
 

@@ -50,7 +50,7 @@ export function BansPage() {
             <Table.Th>Username</Table.Th>
             <Table.Th>Banned until</Table.Th>
             <Table.Th>Reason</Table.Th>
-            <Table.Th style={{ width: 120 }}>Actions</Table.Th>
+            <Table.Th w={120}>Actions</Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>

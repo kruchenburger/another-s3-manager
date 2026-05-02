@@ -8,19 +8,23 @@ import type {
 } from "@/types/api";
 
 /**
- * Backend convention for /api/admin/users (see main.py:376-560):
- *   - GET → JSON response { users: [...], available_roles: [...] }
- *   - POST/PUT (create + update) use FastAPI Form(...) → multipart/form-data here
- *   - PUT password reset uses Body(..., embed=True) → JSON here
- *   - DELETE → no body
- *   - GET /api/admin/bans (see main.py:563) → JSON response { bans: [...] }
- *   - /api/config GET/POST → JSON in both directions
+ * Backend conventions for the admin endpoints consumed here. Cross-reference
+ * by FastAPI decorator (line numbers rot — endpoint paths don't):
+ *   - GET  @app.get("/api/admin/users")    → JSON { users: [...], available_roles: [...] }
+ *   - POST @app.post("/api/admin/users")   → FastAPI Form(...) (multipart) here
+ *   - PUT  @app.put("/api/admin/users/{username}") → Form(...) (multipart) here
+ *   - PUT  @app.put("/api/admin/users/{username}/password") → Body(..., embed=True) (JSON)
+ *   - DELETE @app.delete("/api/admin/users/{username}") → no body
+ *   - GET  @app.get("/api/admin/bans")     → JSON { bans: [...] }
+ *   - DELETE @app.delete("/api/admin/bans/{username}") → no body
+ *   - GET/POST @app.get/@app.post("/api/config") → JSON in both directions
  *
- * If you add an endpoint, check main.py to confirm which convention applies.
+ * If you add an endpoint, grep main.py for the decorator string to confirm
+ * which body convention applies.
  */
 
 // Backend wraps the array in { bans: Ban[] } (see src/another_s3_manager/main.py
-// list_bans handler). Unwrap here so callers get a flat array.
+// `@app.get("/api/admin/bans")` handler). Unwrap here so callers get a flat array.
 interface BansResponse {
   bans: Ban[];
 }
@@ -46,7 +50,8 @@ export async function listUsers(): Promise<AdminUsersResponse> {
 }
 
 export async function createUser(payload: CreateUserPayload): Promise<void> {
-  // Backend uses Form(...) fields — multipart, not JSON. See main.py:398-441.
+  // Backend uses FastAPI Form(...) fields (multipart, not JSON). See main.py
+  // `@app.post("/api/admin/users")` create_user handler.
   const body = new FormData();
   body.append("username", payload.username);
   body.append("password", payload.password);
@@ -59,7 +64,8 @@ export async function updateUser(
   username: string,
   payload: UpdateUserPayload,
 ): Promise<void> {
-  // Backend uses Form(...) fields. See main.py:471-496.
+  // Backend uses FastAPI Form(...) fields (multipart). See main.py
+  // `@app.put("/api/admin/users/{username}")` update_user handler.
   const body = new FormData();
   if (payload.is_admin !== undefined) {
     body.append("is_admin", String(payload.is_admin));
@@ -85,7 +91,7 @@ export async function resetUserPassword(
   newPassword: string,
 ): Promise<void> {
   // Backend uses JSON body with field "password" via Body(..., embed=True).
-  // See main.py:444-468.
+  // See main.py `@app.put("/api/admin/users/{username}/password")` handler.
   await apiRequest<void>(
     `/api/admin/users/${encodeURIComponent(username)}/password`,
     {
