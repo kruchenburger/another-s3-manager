@@ -878,13 +878,32 @@ def test_get_config_regular_user_no_roles(app_client):
     assert response.json()["roles"] == []
 
 
-def test_list_buckets_handles_error(app_client, mocker):
-    _, headers = login(app_client)
+def test_list_buckets_access_denied_returns_friendly_403(app_client, mocker):
+    """When ListBuckets fails with AccessDenied (e.g. R2 bucket-scoped tokens, AWS IAM
+    bucket-scoped policies), the API must return 403 with a generic explanation —
+    not a raw 500 boto error. The frontend layers role-appropriate CTAs on top."""
 
     def mock_execute_with_s3_retry(role_name, callback):
         raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListBuckets")
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    _, headers = login(app_client)
+    response = app_client.get("/api/buckets", headers=headers)
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    detail = response.json()["detail"]
+    assert "permission to list all buckets" in detail
+    assert "scoped" in detail.lower()
+
+
+def test_list_buckets_other_client_error_still_returns_500(app_client, mocker):
+    """Non-403 boto errors should still surface as 500 — the friendly-error path
+    is specifically for 'cannot list buckets' permission failures, not generic ones."""
+
+    def mock_execute_with_s3_retry(role_name, callback):
+        raise ClientError({"Error": {"Code": "InternalError", "Message": "boom"}}, "ListBuckets")
+
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    _, headers = login(app_client)
     response = app_client.get("/api/buckets", headers=headers)
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
