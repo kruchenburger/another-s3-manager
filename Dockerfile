@@ -25,12 +25,13 @@ RUN groupadd --gid 1001 app && \
     useradd --uid 1001 --gid 1001 --create-home --home-dir /home/app app
 
 WORKDIR /app
+ENV APP_PKG=/app/.venv/lib/python3.13/site-packages/another_s3_manager
 COPY --from=builder /app/.venv .venv
 COPY alembic.ini .
 COPY migrations/ migrations/
-COPY src/ src/
-# React SPA bundle lives at /app/src/another_s3_manager/static/v2/ (mounted by FastAPI as /v2).
-COPY --from=frontend-builder /build/dist/ src/another_s3_manager/static/v2/
+# SPA bundle goes into the installed package (Stage 2 uses --no-editable, so the
+# app imports from the wheel under .venv, not from /app/src/).
+COPY --from=frontend-builder /build/dist/ ${APP_PKG}/static/v2/
 
 RUN mkdir -p /app/data && chown -R app:app /app/data /app
 
