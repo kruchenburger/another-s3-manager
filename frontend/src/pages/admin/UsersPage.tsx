@@ -163,7 +163,7 @@ export function UsersPage() {
                     <Tooltip
                       label={
                         isSelf
-                          ? "Use 'Change my password' in the user menu"
+                          ? "Use 'Change password' in the user menu"
                           : "Reset password"
                       }
                     >

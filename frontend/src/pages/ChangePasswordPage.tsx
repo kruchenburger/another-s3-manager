@@ -30,7 +30,7 @@ export function ChangePasswordPage() {
   return (
     <Container size="xs" py="xl">
       <Stack gap="md">
-        <Title order={2}>Change my password</Title>
+        <Title order={2}>Change password</Title>
         <form onSubmit={form.onSubmit(handleSubmit)}>
           <Stack gap="md">
             <PasswordInput
