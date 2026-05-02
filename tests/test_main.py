@@ -1425,3 +1425,95 @@ def test_admin_can_demote_other_admin(app_client):
     users_module = reload_users_module()
     co = next(u for u in users_module.load_users()["users"] if u["username"] == "co_admin")
     assert co["is_admin"] is False
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/me/password — self-service password change
+# ---------------------------------------------------------------------------
+
+
+def test_change_my_password_success(app_client):
+    """Happy path: user changes own password, old fails, new works."""
+    create_user("alice", password="oldpass")
+    # Login as alice and grab CSRF
+    login_resp = app_client.post("/api/login", data={"username": "alice", "password": "oldpass"})
+    assert login_resp.status_code == status.HTTP_200_OK
+    csrf = app_client.get("/api/me").json()["csrf_token"]
+    headers = {"X-CSRF-Token": csrf}
+
+    # Change password
+    response = app_client.put(
+        "/api/me/password",
+        json={"current_password": "oldpass", "new_password": "newpass"},
+        headers=headers,
+    )
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json() == {"ok": True}
+
+    # Logout (clear cookie jar)
+    app_client.post("/api/logout")
+    app_client.cookies.clear()
+
+    # Old password no longer works
+    bad = app_client.post("/api/login", data={"username": "alice", "password": "oldpass"})
+    assert bad.status_code == status.HTTP_401_UNAUTHORIZED
+
+    # New password works
+    good = app_client.post("/api/login", data={"username": "alice", "password": "newpass"})
+    assert good.status_code == status.HTTP_200_OK
+
+
+def test_change_my_password_wrong_current(app_client):
+    """Wrong current_password → 401 with detail mentioning 'current password'."""
+    create_user("bob", password="bobpass")
+    login_resp = app_client.post("/api/login", data={"username": "bob", "password": "bobpass"})
+    assert login_resp.status_code == status.HTTP_200_OK
+    csrf = app_client.get("/api/me").json()["csrf_token"]
+    headers = {"X-CSRF-Token": csrf}
+
+    response = app_client.put(
+        "/api/me/password",
+        json={"current_password": "wrong", "new_password": "newpass"},
+        headers=headers,
+    )
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "current password" in response.json()["detail"].lower()
+
+
+def test_change_my_password_same_password(app_client):
+    """new_password equal to current_password → 400 with detail mentioning 'differ'."""
+    create_user("carol", password="samepass")
+    login_resp = app_client.post("/api/login", data={"username": "carol", "password": "samepass"})
+    assert login_resp.status_code == status.HTTP_200_OK
+    csrf = app_client.get("/api/me").json()["csrf_token"]
+    headers = {"X-CSRF-Token": csrf}
+
+    response = app_client.put(
+        "/api/me/password",
+        json={"current_password": "samepass", "new_password": "samepass"},
+        headers=headers,
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "differ" in response.json()["detail"].lower()
+
+
+def test_change_my_password_unauthenticated(app_client):
+    """No auth cookie → 401 (get_current_user runs before CSRF check)."""
+    response = app_client.put(
+        "/api/me/password",
+        json={"current_password": "x", "new_password": "y"},
+    )
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+def test_change_my_password_no_csrf(app_client):
+    """Logged in but no X-CSRF-Token header → 403."""
+    create_user("dave", password="davepass")
+    login_resp = app_client.post("/api/login", data={"username": "dave", "password": "davepass"})
+    assert login_resp.status_code == status.HTTP_200_OK
+
+    response = app_client.put(
+        "/api/me/password",
+        json={"current_password": "davepass", "new_password": "newpass"},
+    )
+    assert response.status_code == status.HTTP_403_FORBIDDEN
