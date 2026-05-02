@@ -1,16 +1,42 @@
 import { useNavigate, useParams } from "react-router-dom";
-import { Card, SimpleGrid, Stack, Text, Title, UnstyledButton } from "@mantine/core";
-import { Database } from "lucide-react";
+import { Button, Card, SimpleGrid, Stack, Text, Title, UnstyledButton } from "@mantine/core";
+import { Database, Settings } from "lucide-react";
 import { useBuckets } from "@/features/files/hooks/useBuckets";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
+import { ApiError, getErrorMessage } from "@/utils/apiError";
 
 export function RolePage() {
   const params = useParams<{ roleId: string }>();
   const roleId = decodeURIComponent(params.roleId ?? "");
   const navigate = useNavigate();
-  const { data: buckets, isLoading } = useBuckets(roleId);
+  const { data: buckets, isLoading, error } = useBuckets(roleId);
 
   if (isLoading) return null;
+
+  // 403 from /api/buckets means the role's credentials cannot list all buckets
+  // (R2, MinIO scoped tokens, AWS IAM with bucket-scoped policies). The backend
+  // returns a friendly message; we surface it with a CTA back to the admin form
+  // so the user can fill in "Allowed Buckets" without leaving the v2 SPA flow.
+  if (error instanceof ApiError && error.status === 403) {
+    return (
+      <EmptyState
+        tone="warning"
+        title="Cannot list buckets for this role"
+        description={getErrorMessage(error)}
+        cta={
+          <Button
+            component="a"
+            href="/admin"
+            leftSection={<Settings size={16} />}
+            variant="filled"
+            color="amber"
+          >
+            Open admin to fix
+          </Button>
+        }
+      />
+    );
+  }
 
   if (!buckets || buckets.length === 0) {
     return (

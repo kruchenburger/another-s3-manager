@@ -585,10 +585,10 @@
                             </div>
                         </div>
                         <div class="form-group">
-                            <label for="role-allowed-buckets">Allowed Buckets (optional):</label>
-                            <input type="text" id="role-allowed-buckets" placeholder="e.g., bucket1,bucket2,bucket3">
+                            <label for="role-allowed-buckets">Allowed Buckets:</label>
+                            <input type="text" id="role-allowed-buckets" placeholder="e.g., bucket1, bucket2, bucket3">
                             <small style="display: block; margin-top: 5px; color: var(--text-secondary); font-size: 0.9em;">
-                                💡 Comma-separated list of bucket names. If specified, only these buckets will be available (no s3:ListAllMyBuckets permission needed). Leave empty to list all buckets.
+                                Comma-separated list of bucket names. <strong>Required for R2 and other scoped tokens</strong> that cannot list all buckets. Leave empty only if your credentials have permission to list every bucket in the account.
                             </small>
                         </div>
                         <div class="form-group">

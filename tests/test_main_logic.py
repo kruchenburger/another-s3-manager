@@ -782,6 +782,9 @@ async def test_list_files_s3_error(monkeypatch, reload_main):
 
 @pytest.mark.asyncio
 async def test_list_buckets_boto_error(monkeypatch, reload_main):
+    """AccessDenied on ListBuckets returns a friendly 403 pointing the user to the
+    role's "Allowed Buckets" field (R2 / scoped IAM tokens). Generic boto errors
+    still map to 500 — see test_list_buckets_generic_boto_error_returns_500 below."""
     main = reload_main
 
     config_data = {
@@ -805,8 +808,8 @@ async def test_list_buckets_boto_error(monkeypatch, reload_main):
 
     with pytest.raises(HTTPException) as exc:
         await main.list_buckets(None, {"is_admin": True})
-    assert exc.value.status_code == 500
-    assert "Failed to list buckets" in exc.value.detail
+    assert exc.value.status_code == 403
+    assert "Allowed Buckets" in exc.value.detail
 
 
 @pytest.mark.asyncio

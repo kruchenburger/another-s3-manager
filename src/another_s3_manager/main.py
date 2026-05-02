@@ -1015,6 +1015,25 @@ async def list_buckets(
         logger.error(f"Configuration error when listing buckets: {error_msg}", exc_info=True)
         raise HTTPException(status_code=400, detail=error_msg)
     except (ClientError, BotoCoreError) as e:
+        # Detect "credentials cannot list all buckets" — common for R2, MinIO scoped tokens,
+        # AWS IAM with bucket-scoped policies. Return 403 with actionable guidance pointing
+        # the user to the role's "Allowed Buckets" field instead of a raw S3 error.
+        error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") and e.response else ""
+        http_status = (
+            e.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
+            if hasattr(e, "response") and e.response
+            else 0
+        )
+        if error_code in {"AccessDenied", "Forbidden"} or http_status == 403:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Your credentials don't have permission to list all buckets. "
+                    "This is normal for scoped tokens (R2, MinIO, AWS IAM with bucket-scoped policies). "
+                    "Edit this role and fill in 'Allowed Buckets' with the bucket names you want to access."
+                ),
+            )
+
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to list buckets: {error_message}")
     except Exception as e:
