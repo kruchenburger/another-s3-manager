@@ -35,6 +35,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 import another_s3_manager.config as config_module
 from another_s3_manager.auth import (
@@ -466,6 +467,54 @@ async def update_user_password(
     save_users(users)
 
     return {"message": f"Password updated successfully for user {username}"}
+
+
+class ChangePasswordRequest(BaseModel):
+    """Body for self-service password change at PUT /api/me/password."""
+
+    current_password: str = Field(..., min_length=1, description="The user's current password")
+    new_password: str = Field(..., min_length=1, description="The new password to set")
+
+
+@app.put("/api/me/password")
+async def change_my_password(
+    payload: ChangePasswordRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Self-service password change.
+
+    Requires the user's current password in addition to a valid auth cookie + CSRF
+    token, so an attacker who steals the cookie still cannot lock the user out
+    without also knowing the current password.
+    """
+    # Re-fetch the password hash from storage — current_user dict from the JWT
+    # path doesn't carry it (and shouldn't).
+    username = current_user.get("username")
+    users = load_users()
+    user = next((u for u in users.get("users", []) if u.get("username") == username), None)
+    if not user:
+        # Defensive: should be unreachable since get_current_user already resolved the user.
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+    if not verify_password(payload.current_password, user.get("password_hash", "")):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect",
+        )
+
+    if payload.current_password == payload.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must differ from the current one",
+        )
+
+    # Local import to avoid the top-level name collision with the admin
+    # update_user endpoint defined below.
+    from another_s3_manager.users import update_user as users_update_user
+
+    users_update_user(username, password_hash=hash_password(payload.new_password))
+    return {"ok": True}
 
 
 @app.put("/api/admin/users/{username}")

@@ -1,5 +1,5 @@
 import { apiRequest } from "@/hooks/useApiClient";
-import type { LoginResponse, MeResponse } from "@/types/api";
+import type { ChangeMyPasswordPayload, LoginResponse, MeResponse } from "@/types/api";
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
   const body = new FormData();
@@ -19,4 +19,12 @@ export async function fetchMe(): Promise<MeResponse> {
 
 export async function markTourSeen(): Promise<void> {
   await apiRequest<void>("/api/user/tour-seen", { method: "PUT" });
+}
+
+export async function changeMyPassword(payload: ChangeMyPasswordPayload): Promise<void> {
+  await apiRequest<void>("/api/me/password", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 }
