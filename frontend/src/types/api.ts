@@ -102,3 +102,8 @@ export interface AppConfig {
   is_read_only?: boolean;
   current_role?: string;
 }
+
+export interface ChangeMyPasswordPayload {
+  current_password: string;
+  new_password: string;
+}
