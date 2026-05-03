@@ -572,8 +572,11 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Coerce only when the form value is a non-empty string. An empty value
+    # ("is_admin=") would otherwise fall through `is not None` and silently
+    # demote the target user, since str("").lower() != "true" → False.
     is_admin: Optional[bool] = None
-    if is_admin_raw is not None:
+    if is_admin_raw is not None and str(is_admin_raw) != "":
         is_admin = str(is_admin_raw).lower() == "true"
 
     # Self-demote guard: an admin cannot remove their own admin rights through this

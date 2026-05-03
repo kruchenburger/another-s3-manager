@@ -1554,3 +1554,24 @@ def test_admin_can_partially_update_user_omitting_roles(app_client):
     alice = next(u for u in users if u["username"] == "alice")
     assert alice["is_admin"] is True
     assert alice["allowed_roles"] == ["RoleA"], "roles must be preserved when key absent"
+
+
+def test_admin_empty_is_admin_field_does_not_demote_target(app_client):
+    """Regression: PUT /api/admin/users/{u} with is_admin= (empty value) must NOT
+    silently demote the target. FastAPI form parsing returns empty string (not None)
+    for an empty multipart field, so a naive `is not None` guard wrongly evaluates
+    str("") .lower() != "true" → False and clears admin rights for ANY non-self
+    administrator. This was a curl/Postman exploit before the fix.
+    """
+    create_user("other_admin", password="OldPass123", is_admin=True, allowed_roles=[])
+    _, headers = login(app_client)
+    response = app_client.put(
+        "/api/admin/users/other_admin",
+        data={"is_admin": "", "allowed_roles": ""},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    users = app_client.get("/api/admin/users", headers=headers).json()["users"]
+    other = next(u for u in users if u["username"] == "other_admin")
+    assert other["is_admin"] is True, "target admin must NOT be demoted on empty is_admin="
