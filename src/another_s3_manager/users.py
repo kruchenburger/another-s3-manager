@@ -100,8 +100,14 @@ def save_users(users_data: Dict[str, Any]) -> None:
                 existing.is_admin = user_dict.get("is_admin", False)
                 existing.theme = user_dict.get("theme", "auto")
                 existing.tour_seen_v1 = user_dict.get("tour_seen_v1", False)
-                # Replace roles atomically
+                # Replace roles atomically.
+                # Flush after clear() so the orphan DELETEs hit the DB before
+                # the new INSERTs — otherwise a no-op edit (set Default → clear,
+                # or set Default → set Default) collides on the
+                # uq_user_role(user_id, role_name) UNIQUE constraint because
+                # SQLAlchemy emits INSERTs before processing the orphan-disconnect.
                 existing.roles.clear()
+                session.flush()
                 for role_name in user_dict.get("allowed_roles", []):
                     existing.roles.append(UserRole(role_name=role_name))
             else:

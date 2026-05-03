@@ -301,3 +301,40 @@ def test_get_available_roles_handles_import_error(monkeypatch):
         assert users.get_available_roles() == []
     finally:
         importlib.reload(users)
+
+
+def test_save_users_set_then_clear_role_no_unique_violation(db_session):
+    """Regression: setting a role then clearing it must not violate uq_user_role.
+
+    SQLAlchemy's delete-orphan cascade emits INSERTs before processing orphan
+    disconnects, so without an intermediate flush after roles.clear() the
+    no-op edit (admin: ['Default'] -> ['Default'] -> []) fails on the
+    UNIQUE(user_id, role_name) constraint when SQLAlchemy tries to re-insert
+    the same row on the second pass.
+    """
+    from another_s3_manager.users import load_users, save_users
+
+    save_users(
+        {
+            "users": [
+                {
+                    "username": "alice",
+                    "password_hash": "h",
+                    "is_admin": False,
+                    "allowed_roles": ["Default"],
+                    "theme": "auto",
+                },
+            ]
+        }
+    )
+
+    # Re-set the same role (no-op): used to fail with UNIQUE violation
+    users = load_users()
+    save_users(users)
+    assert load_users()["users"][0]["allowed_roles"] == ["Default"]
+
+    # Now clear: also previously failed
+    users = load_users()
+    users["users"][0]["allowed_roles"] = []
+    save_users(users)
+    assert load_users()["users"][0]["allowed_roles"] == []
