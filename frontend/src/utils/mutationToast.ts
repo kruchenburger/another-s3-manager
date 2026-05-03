@@ -25,13 +25,22 @@ export function runWithToasts<TArgs>(
 ): void {
   mutation.mutate(args, {
     onSuccess: () => {
-      notifications.show({ message: successMessage, color: "green" });
+      // autoClose: false on success too — admin actions are infrequent and
+      // important, the user should explicitly dismiss to confirm they read
+      // what changed. Avoids race conditions where parent re-renders during
+      // mutation invalidation can collapse the Mantine notification portal
+      // before the timer fires.
+      notifications.show({
+        title: "Success",
+        message: successMessage,
+        color: "green",
+        autoClose: false,
+      });
       onSuccess?.();
     },
     onError: (e) => {
-      // autoClose: false — error toasts default-disappear in 4s which is too
-      // fast to read, especially when the message is long or the user is
-      // mid-action. The user dismisses manually via the X.
+      // autoClose: false — error toasts must stay until dismissed; the
+      // user often needs the text to take corrective action.
       notifications.show({
         title: "Error",
         message: getErrorMessage(e),
