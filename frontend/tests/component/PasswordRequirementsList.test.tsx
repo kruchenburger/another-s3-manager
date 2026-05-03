@@ -79,4 +79,10 @@ describe("meetsPolicy", () => {
     };
     expect(meetsPolicy("", zero)).toBe(true);
   });
+
+  it("counts Unicode letters (Cyrillic, etc.) toward upper/lower rules — matches backend semantics", () => {
+    expect(meetsPolicy("Стронг123", DEFAULT_POLICY)).toBe(true);
+    expect(meetsPolicy("стронг123", DEFAULT_POLICY)).toBe(false); // no uppercase letter
+    expect(meetsPolicy("СТРОНГ123", DEFAULT_POLICY)).toBe(false); // no lowercase letter
+  });
 });

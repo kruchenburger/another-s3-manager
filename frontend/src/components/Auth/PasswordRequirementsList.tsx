@@ -15,33 +15,34 @@ function evaluate(password: string, policy: PasswordPolicy): Requirement[] {
       met: password.length >= policy.password_min_length,
     });
   }
+  // Unicode-aware character classes via \p{...} regex with /u flag, matching
+  // the backend's Python str.isupper/.islower/.isdigit semantics. Avoids the
+  // "Стронг123 fails uppercase rule on the client but passes on the server"
+  // mismatch.
   if (policy.password_min_uppercase > 0) {
-    // ASCII-only on the client. Backend uses Python's Unicode-aware
-    // .isupper() and remains source of truth for non-ASCII users.
-    const count = [...password].filter((c) => c >= "A" && c <= "Z").length;
+    const count = (password.match(/\p{Lu}/gu) || []).length;
     reqs.push({
       label: `At least ${policy.password_min_uppercase} uppercase letter${policy.password_min_uppercase === 1 ? "" : "s"}`,
       met: count >= policy.password_min_uppercase,
     });
   }
   if (policy.password_min_lowercase > 0) {
-    const count = [...password].filter((c) => c >= "a" && c <= "z").length;
+    const count = (password.match(/\p{Ll}/gu) || []).length;
     reqs.push({
       label: `At least ${policy.password_min_lowercase} lowercase letter${policy.password_min_lowercase === 1 ? "" : "s"}`,
       met: count >= policy.password_min_lowercase,
     });
   }
   if (policy.password_min_digits > 0) {
-    const count = [...password].filter((c) => c >= "0" && c <= "9").length;
+    const count = (password.match(/\p{N}/gu) || []).length;
     reqs.push({
       label: `At least ${policy.password_min_digits} digit${policy.password_min_digits === 1 ? "" : "s"}`,
       met: count >= policy.password_min_digits,
     });
   }
   if (policy.password_min_special > 0) {
-    const count = [...password].filter(
-      (c) => !((c >= "A" && c <= "Z") || (c >= "a" && c <= "z") || (c >= "0" && c <= "9")),
-    ).length;
+    // Special = anything not letter, not number. Matches backend `not c.isalnum()`.
+    const count = (password.match(/[^\p{L}\p{N}]/gu) || []).length;
     reqs.push({
       label: `At least ${policy.password_min_special} special character${policy.password_min_special === 1 ? "" : "s"}`,
       met: count >= policy.password_min_special,
