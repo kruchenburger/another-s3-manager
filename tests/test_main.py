@@ -1518,3 +1518,39 @@ def test_change_my_password_no_csrf(app_client):
         json={"current_password": "davepass", "new_password": "newpass"},
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+def test_admin_can_clear_user_allowed_roles(app_client):
+    """Regression: PUT /api/admin/users/{u} with allowed_roles= must clear all roles.
+
+    FastAPI's `Optional[str] = Form(None)` coerces empty form values to None,
+    making it impossible to distinguish 'field omitted' from 'field present
+    but empty'. The endpoint reads request.form() directly and treats
+    presence-of-key as 'client wants to set roles'.
+    """
+    create_user("alice", password="OldPass123", is_admin=False, allowed_roles=["RoleA", "RoleB"])
+    _, headers = login(app_client)
+    response = app_client.put(
+        "/api/admin/users/alice",
+        data={"is_admin": "false", "allowed_roles": ""},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    users = app_client.get("/api/admin/users", headers=headers).json()["users"]
+    alice = next(u for u in users if u["username"] == "alice")
+    assert alice["allowed_roles"] == [], f"expected [], got {alice['allowed_roles']}"
+
+
+def test_admin_can_partially_update_user_omitting_roles(app_client):
+    """If allowed_roles key is absent, existing roles must be preserved."""
+    create_user("alice", password="OldPass123", is_admin=False, allowed_roles=["RoleA"])
+    _, headers = login(app_client)
+    # Send only is_admin, no allowed_roles field at all
+    response = app_client.put("/api/admin/users/alice", data={"is_admin": "true"}, headers=headers)
+    assert response.status_code == 200
+
+    users = app_client.get("/api/admin/users", headers=headers).json()["users"]
+    alice = next(u for u in users if u["username"] == "alice")
+    assert alice["is_admin"] is True
+    assert alice["allowed_roles"] == ["RoleA"], "roles must be preserved when key absent"

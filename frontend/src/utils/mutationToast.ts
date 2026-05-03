@@ -29,7 +29,15 @@ export function runWithToasts<TArgs>(
       onSuccess?.();
     },
     onError: (e) => {
-      notifications.show({ message: getErrorMessage(e), color: "red" });
+      // autoClose: false — error toasts default-disappear in 4s which is too
+      // fast to read, especially when the message is long or the user is
+      // mid-action. The user dismisses manually via the X.
+      notifications.show({
+        title: "Error",
+        message: getErrorMessage(e),
+        color: "red",
+        autoClose: false,
+      });
     },
   });
 }

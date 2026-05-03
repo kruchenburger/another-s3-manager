@@ -549,17 +549,32 @@ async def change_my_password(
 async def update_user(
     request: Request,
     username: str,
-    is_admin: Optional[bool] = Form(None),
-    allowed_roles: Optional[str] = Form(None, description="Comma-separated list of allowed role names"),
     current_user: Dict[str, Any] = Depends(get_current_admin_user),
     csrf_verified: bool = Depends(verify_csrf_token),
 ):
-    """Update user permissions (admin only)"""
+    """Update user permissions (admin only).
+
+    Reads multipart form fields manually via request.form() instead of
+    `is_admin: Optional[str] = Form(None)` because FastAPI coerces an
+    EMPTY field value to None, making it impossible to distinguish
+    "field omitted" from "field present but empty" — which broke
+    "clear all roles for a user" (the empty string fell through the
+    `if allowed_roles is not None` guard and the row never updated).
+    """
+    form = await request.form()
+
+    is_admin_raw = form.get("is_admin")
+    allowed_roles_raw = form.get("allowed_roles")
+
     users = load_users()
     user = next((u for u in users.get("users", []) if u.get("username") == username), None)
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    is_admin: Optional[bool] = None
+    if is_admin_raw is not None:
+        is_admin = str(is_admin_raw).lower() == "true"
 
     # Self-demote guard: an admin cannot remove their own admin rights through this
     # endpoint. Frontend disables the toggle on the current-user row, but enforce
@@ -570,12 +585,14 @@ async def update_user(
             detail="You can't remove your own admin rights.",
         )
 
-    # Update fields if provided
     if is_admin is not None:
         user["is_admin"] = is_admin
 
-    if allowed_roles is not None:
-        roles_list = [r.strip() for r in allowed_roles.split(",") if r.strip()] if allowed_roles else []
+    # Presence of the form key means the client wants to set roles — possibly
+    # to an empty list. Absence means leave the field alone.
+    if "allowed_roles" in form:
+        raw = str(allowed_roles_raw or "")
+        roles_list = [r.strip() for r in raw.split(",") if r.strip()]
         user["allowed_roles"] = roles_list
 
     save_users(users)
