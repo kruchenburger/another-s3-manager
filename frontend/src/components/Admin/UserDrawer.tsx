@@ -169,11 +169,20 @@ export function UserDrawer({
             label="Allowed roles"
             description="Roles this user can access. Empty = no roles."
             data={availableRoles}
-            // Open the dropdown upward so it doesn't cover the Save button
-            // (TagsInput sits just above Save in this drawer; without this
-            // a long role list pushes the autocomplete over the action).
-            comboboxProps={{ withinPortal: true, position: "top-start" }}
+            // Dropdown opens downward by default; portal keeps it from being
+            // clipped by the drawer. Save button sits just below — the user
+            // scrolls the drawer to reach it when the dropdown is open with
+            // many roles.
+            comboboxProps={{ withinPortal: true }}
             maxDropdownHeight={220}
+            // Cap the pill area so 15+ selected roles don't blow up the
+            // input vertically. Pills wrap onto multiple rows but the
+            // container scrolls instead of pushing other fields away.
+            styles={{
+              inputField: { minWidth: 60 },
+              pillsList: { maxHeight: 96, overflowY: "auto" },
+              pill: { fontSize: 12 },
+            }}
             {...form.getInputProps("allowed_roles")}
           />
           <Button
