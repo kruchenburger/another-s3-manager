@@ -111,8 +111,22 @@ export function UserDrawer({
           ? "Create user"
           : `Edit user ${initialUser?.username ?? ""}`
       }
+      // Make the drawer body a flex column so the form can stretch and the
+      // Save button can stick to the bottom regardless of dropdown height.
+      // `calc(100% - 60px)` accounts for the Mantine Drawer header height
+      // (Drawer body's `height: 100%` would otherwise overflow the viewport
+      // because the header sits in the same column).
+      styles={{
+        body: {
+          display: "flex",
+          flexDirection: "column",
+          height: "calc(100% - 60px)",
+          overflow: "hidden",
+        },
+      }}
     >
       <form
+        style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
         onSubmit={form.onSubmit((values) => {
           if (mode === "create") {
             onSubmit({
@@ -132,7 +146,7 @@ export function UserDrawer({
           }
         })}
       >
-        <Stack gap="md">
+        <Stack gap="md" style={{ flex: 1, overflowY: "auto", paddingRight: 4 }}>
           <TextInput
             label="Username"
             required
@@ -169,15 +183,13 @@ export function UserDrawer({
             label="Allowed roles"
             description="Roles this user can access. Empty = no roles."
             data={availableRoles}
-            // Dropdown opens downward by default; portal keeps it from being
-            // clipped by the drawer. Save button sits just below — the user
-            // scrolls the drawer to reach it when the dropdown is open with
-            // many roles.
+            // Dropdown opens downward via portal so it isn't clipped by the
+            // drawer; pill area is height-capped so 15+ selected roles
+            // don't balloon the input. The Save button below this control
+            // is pinned to the drawer bottom (see sticky footer markup) so
+            // a long dropdown never hides it.
             comboboxProps={{ withinPortal: true }}
             maxDropdownHeight={220}
-            // Cap the pill area so 15+ selected roles don't blow up the
-            // input vertically. Pills wrap onto multiple rows but the
-            // container scrolls instead of pushing other fields away.
             styles={{
               inputField: { minWidth: 60 },
               pillsList: { maxHeight: 96, overflowY: "auto" },
@@ -185,14 +197,23 @@ export function UserDrawer({
             }}
             {...form.getInputProps("allowed_roles")}
           />
+        </Stack>
+        <div
+          style={{
+            paddingTop: 12,
+            marginTop: 12,
+            borderTop: "1px solid var(--mantine-color-default-border)",
+          }}
+        >
           <Button
             type="submit"
             loading={loading}
             disabled={mode === "create" && !policy && !policyFailed}
+            fullWidth
           >
             {mode === "create" ? "Create user" : "Save changes"}
           </Button>
-        </Stack>
+        </div>
       </form>
     </Drawer>
   );
