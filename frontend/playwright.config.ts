@@ -4,7 +4,7 @@ import { defineConfig, devices } from "@playwright/test";
  * E2E env contract:
  * - E2E_BASE_URL          Base URL of the app (default http://localhost:8080)
  * - E2E_ADMIN_USERNAME    Admin user for login (default 'admin')
- * - E2E_ADMIN_PASSWORD    Admin password (default 'test')
+ * - E2E_ADMIN_PASSWORD    Admin password (default 'TestPass1' — policy-compliant)
  * - E2E_MINIO_ROLE        Role name in config that points to MinIO (default 'MinIO-e2e')
  * - E2E_MINIO_BUCKET      Bucket name with seeded fixtures (default 'e2e-test')
  *
@@ -29,5 +29,7 @@ export default defineConfig({
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
     // mobile project disabled for Phase 3b — re-enable in Phase 7 with mobile-specific specs
   ],
-  // No webServer: assume `docker compose up` is run by the developer or CI before `npm run test:e2e`
+  // No webServer: backend must be started before Playwright runs.
+  // Locally: `docker compose -f docker-compose.yml -f docker-compose.minio.yml up`.
+  // CI (.github/workflows/ci.yml `e2e` job): backend started via `nohup uv run ... &`.
 });

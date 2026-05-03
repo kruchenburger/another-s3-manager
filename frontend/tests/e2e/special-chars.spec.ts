@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 const ADMIN_USER = process.env.E2E_ADMIN_USERNAME ?? "admin";
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "test";
+const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "TestPass1";
 const ROLE = process.env.E2E_MINIO_ROLE ?? "MinIO-e2e";
 const BUCKET = process.env.E2E_MINIO_BUCKET ?? "e2e-test";
 const SPECIAL_NAME = "test:colon#hash?question.txt";
@@ -15,15 +15,28 @@ async function login(page: import("@playwright/test").Page): Promise<void> {
 }
 
 test.describe("Special characters in S3 keys", () => {
-  test("file with : # ? in name renders, downloads, deletes", async ({ page }) => {
+  test("file with : # ? in name uploads, renders, downloads, deletes", async ({ page }) => {
     await login(page);
     await page.goto(`/v2/r/${ROLE}/b/${BUCKET}`);
 
     await page.locator("table").waitFor();
 
+    // Upload the special-chars file ourselves via in-memory buffer.
+    // This makes the test idempotent (works on retry without re-seeding) and
+    // sidesteps the NTFS limitation that prevents committing a fixture file
+    // with ':' '?' in its name (Windows forbids those chars).
+    const fileChooserPromise = page.waitForEvent("filechooser");
+    await page.locator('[data-tour="upload-btn"]').click();
+    const fileChooser = await fileChooserPromise;
+    await fileChooser.setFiles({
+      name: SPECIAL_NAME,
+      mimeType: "text/plain",
+      buffer: Buffer.from("special chars regression fixture"),
+    });
+
     // Scope all interactions to the row so per-row buttons resolve unambiguously.
     const row = page.locator("tr").filter({ hasText: SPECIAL_NAME });
-    await expect(row).toBeVisible({ timeout: 10_000 });
+    await expect(row).toBeVisible({ timeout: 15_000 });
 
     // Download — verify the browser download triggers (the hard part is the URL encoding).
     // Chrome sanitizes ':' and '?' to '_' in the saved filename, so we check for the

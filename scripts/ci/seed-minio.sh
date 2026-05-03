@@ -1,7 +1,10 @@
 #!/bin/sh
 # Idempotent: safe to run multiple times. Seeds the e2e-test bucket on MinIO
 # with fixture files for the Playwright E2E specs.
-set -e
+# -e: fail fast on any error. -u: catch typos in env-var names early
+# (every variable below has a default, but unset vars from the env layer
+# would otherwise expand to empty string and fail with a confusing mc error).
+set -eu
 
 MC_HOST="${MC_HOST:-http://minio:9000}"
 MINIO_USER="${MINIO_USER:-minioadmin}"

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 const ADMIN_USER = process.env.E2E_ADMIN_USERNAME ?? "admin";
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "test";
+const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "TestPass1";
 const ROLE = process.env.E2E_MINIO_ROLE ?? "MinIO-e2e";
 const BUCKET = process.env.E2E_MINIO_BUCKET ?? "e2e-test";
 
