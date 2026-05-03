@@ -24,6 +24,11 @@ const baseConfig = {
   disable_deletion: false,
   auto_inline_extensions: [],
   is_read_only: false,
+  password_min_length: 8,
+  password_min_uppercase: 0,
+  password_min_lowercase: 0,
+  password_min_digits: 0,
+  password_min_special: 0,
 };
 
 function renderPage() {
