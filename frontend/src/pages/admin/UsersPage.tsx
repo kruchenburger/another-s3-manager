@@ -1,6 +1,6 @@
 import { Badge, Button, Group, Stack, Table, Title, Tooltip } from "@mantine/core";
 import { KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMe } from "@/features/auth/hooks/useMe";
 import {
   useAdminUsers,
@@ -33,6 +33,13 @@ export function UsersPage() {
   const [editTarget, setEditTarget] = useState<AdminUser | undefined>();
   const [resetTarget, setResetTarget] = useState<AdminUser | undefined>();
   const [deleteTarget, setDeleteTarget] = useState<AdminUser | undefined>();
+  // Remember the last open mode so the drawer keeps its layout during the
+  // close-animation (~250ms) instead of flipping to "create" via the
+  // `?? "create"` fallback in the JSX.
+  const lastDrawerMode = useRef<"create" | "edit" | null>(null);
+  useEffect(() => {
+    if (drawerMode !== null) lastDrawerMode.current = drawerMode;
+  }, [drawerMode]);
 
   if (isLoading) return null;
 
@@ -205,7 +212,11 @@ export function UsersPage() {
 
       <UserDrawer
         opened={drawerMode !== null}
-        mode={drawerMode ?? "create"}
+        // Keep the last open mode while the drawer slides out — flipping to
+        // "create" via `?? "create"` would briefly render the password input
+        // + requirements list during the ~250ms close animation, flashing
+        // red between Administrator and Allowed roles.
+        mode={drawerMode ?? lastDrawerMode.current ?? "create"}
         initialUser={editTarget}
         currentUsername={currentUsername}
         availableRoles={availableRoles}

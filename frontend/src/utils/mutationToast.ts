@@ -25,16 +25,12 @@ export function runWithToasts<TArgs>(
 ): void {
   mutation.mutate(args, {
     onSuccess: () => {
-      // autoClose: false on success too — admin actions are infrequent and
-      // important, the user should explicitly dismiss to confirm they read
-      // what changed. Avoids race conditions where parent re-renders during
-      // mutation invalidation can collapse the Mantine notification portal
-      // before the timer fires.
+      // Default Mantine autoClose (~4s): success messages are short and
+      // disposable; the table refresh is the real confirmation.
       notifications.show({
         title: "Success",
         message: successMessage,
         color: "green",
-        autoClose: false,
       });
       onSuccess?.();
     },
