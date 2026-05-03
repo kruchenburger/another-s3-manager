@@ -5,6 +5,7 @@ import json
 import pytest
 
 from another_s3_manager.utils import validate_password
+from tests.test_main import create_user, login
 
 # Sensible default policy used in most cases
 DEFAULT_POLICY = {
@@ -183,3 +184,86 @@ def test_migration_preserves_existing_password_policy_values(isolated_config):
     assert cfg["password_min_lowercase"] == 0
     assert cfg["password_min_digits"] == 0
     assert cfg["password_min_special"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — wired endpoints (Task 3)
+# ---------------------------------------------------------------------------
+
+
+def test_change_my_password_rejects_weak_password(app_client):
+    """PUT /api/me/password returns 422 with structured detail when policy fails."""
+    create_user("alice", password="OldPass123", is_admin=False)
+    _, headers = login(app_client, username="alice", password="OldPass123")
+    response = app_client.put(
+        "/api/me/password",
+        json={"current_password": "OldPass123", "new_password": "weak"},
+        headers=headers,
+    )
+    assert response.status_code == 422, response.text
+    body = response.json()
+    detail = body["detail"]
+    assert detail["error"] == "Password does not meet policy"
+    assert isinstance(detail["failed_requirements"], list)
+    assert any("password_min_length" in f for f in detail["failed_requirements"])
+
+
+def test_change_my_password_accepts_strong_password(app_client):
+    """A password meeting all default-policy requirements still works."""
+    create_user("alice", password="OldPass123", is_admin=False)
+    _, headers = login(app_client, username="alice", password="OldPass123")
+    response = app_client.put(
+        "/api/me/password",
+        json={"current_password": "OldPass123", "new_password": "NewPass456"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_admin_create_user_rejects_weak_password(app_client):
+    """POST /api/admin/users returns 422 when the password fails policy."""
+    _, headers = login(app_client)
+    response = app_client.post(
+        "/api/admin/users",
+        data={"username": "weakpw", "password": "weak", "is_admin": "false"},
+        headers=headers,
+    )
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["error"] == "Password does not meet policy"
+
+
+def test_admin_create_user_accepts_strong_password(app_client):
+    """A strong password creates the user successfully."""
+    _, headers = login(app_client)
+    response = app_client.post(
+        "/api/admin/users",
+        data={"username": "strongpw", "password": "Strong123", "is_admin": "false"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_admin_reset_user_password_rejects_weak(app_client):
+    """PUT /api/admin/users/{u}/password returns 422 when password fails policy."""
+    create_user("victim", password="OldPass123", is_admin=False)
+    _, headers = login(app_client)
+    response = app_client.put(
+        "/api/admin/users/victim/password",
+        json={"password": "weak"},
+        headers=headers,
+    )
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["error"] == "Password does not meet policy"
+
+
+def test_admin_reset_user_password_accepts_strong(app_client):
+    create_user("victim", password="OldPass123", is_admin=False)
+    _, headers = login(app_client)
+    response = app_client.put(
+        "/api/admin/users/victim/password",
+        json={"password": "NewStrong456"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text

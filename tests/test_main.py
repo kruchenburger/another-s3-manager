@@ -389,7 +389,7 @@ def test_create_user(app_client):
         "/api/admin/users",
         data={
             "username": "newuser",
-            "password": "newpassword",
+            "password": "NewPassword1",
             "is_admin": "true",
             "allowed_roles": "Default",
         },
@@ -420,7 +420,7 @@ def test_update_user_password(app_client):
     _, headers = login(app_client)
     response = app_client.put(
         "/api/admin/users/changeme/password",
-        json={"password": "newpass"},
+        json={"password": "NewPass123"},
         headers=headers,
     )
     assert response.status_code == status.HTTP_200_OK
@@ -682,7 +682,8 @@ def test_login_handles_unexpected_error(app_client, mocker):
 
 def test_create_user_truncates_long_password(app_client):
     _, headers = login(app_client)
-    long_password = "x" * 100
+    # Strong prefix (upper, lower, digit, 8+ chars) + filler to exceed 72 bytes
+    long_password = "Strong1A" + "x" * 92
     response = app_client.post(
         "/api/admin/users",
         data={"username": "truncate", "password": long_password},
@@ -1434,9 +1435,9 @@ def test_admin_can_demote_other_admin(app_client):
 
 def test_change_my_password_success(app_client):
     """Happy path: user changes own password, old fails, new works."""
-    create_user("alice", password="oldpass")
+    create_user("alice", password="OldPass123")
     # Login as alice and grab CSRF
-    login_resp = app_client.post("/api/login", data={"username": "alice", "password": "oldpass"})
+    login_resp = app_client.post("/api/login", data={"username": "alice", "password": "OldPass123"})
     assert login_resp.status_code == status.HTTP_200_OK
     csrf = app_client.get("/api/me").json()["csrf_token"]
     headers = {"X-CSRF-Token": csrf}
@@ -1444,7 +1445,7 @@ def test_change_my_password_success(app_client):
     # Change password
     response = app_client.put(
         "/api/me/password",
-        json={"current_password": "oldpass", "new_password": "newpass"},
+        json={"current_password": "OldPass123", "new_password": "NewPass456"},
         headers=headers,
     )
     assert response.status_code == status.HTTP_200_OK, response.text
@@ -1455,11 +1456,11 @@ def test_change_my_password_success(app_client):
     app_client.cookies.clear()
 
     # Old password no longer works
-    bad = app_client.post("/api/login", data={"username": "alice", "password": "oldpass"})
+    bad = app_client.post("/api/login", data={"username": "alice", "password": "OldPass123"})
     assert bad.status_code == status.HTTP_401_UNAUTHORIZED
 
     # New password works
-    good = app_client.post("/api/login", data={"username": "alice", "password": "newpass"})
+    good = app_client.post("/api/login", data={"username": "alice", "password": "NewPass456"})
     assert good.status_code == status.HTTP_200_OK
 
 

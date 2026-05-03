@@ -66,7 +66,13 @@ from another_s3_manager.users import (
     save_bans,
     save_users,
 )
-from another_s3_manager.utils import format_boto_error, format_content_disposition, sanitize_bucket_name, sanitize_path
+from another_s3_manager.utils import (
+    format_boto_error,
+    format_content_disposition,
+    sanitize_bucket_name,
+    sanitize_path,
+    validate_password,
+)
 
 # Validate required environment variables at startup
 try:
@@ -230,6 +236,22 @@ def save_config_with_cache_clear(config: Dict[str, Any], skip_migration: bool = 
 
 # Update config module's save_config to use our wrapper
 config_module.save_config = save_config_with_cache_clear
+
+
+def _enforce_password_policy(password: str) -> None:
+    """Reject the request if the password fails the configured policy.
+
+    Raises HTTPException(422) with a structured detail so the frontend can
+    render per-requirement checkmarks. Loads the policy from the cached
+    config (no file IO unless the cache is cold).
+    """
+    config = config_module.load_config(force_reload=False)
+    failures = validate_password(password, config)
+    if failures:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "Password does not meet policy", "failed_requirements": failures},
+        )
 
 
 # ============================================================================
@@ -413,6 +435,8 @@ async def create_user(
     if any(u.get("username") == username for u in users.get("users", [])):
         raise HTTPException(status_code=400, detail="User already exists")
 
+    _enforce_password_policy(password)
+
     # Hash password
     password_bytes = password.encode("utf-8")
     if len(password_bytes) > 72:
@@ -459,6 +483,8 @@ async def update_user_password(
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    _enforce_password_policy(password)
 
     # Hash password using auth module
     hashed_password = hash_password(password)
@@ -508,6 +534,8 @@ async def change_my_password(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="New password must differ from the current one",
         )
+
+    _enforce_password_policy(payload.new_password)
 
     # Local import to avoid the top-level name collision with the admin
     # update_user endpoint defined below.
