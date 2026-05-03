@@ -11,6 +11,11 @@ import {
 import { useForm } from "@mantine/form";
 import { useEffect } from "react";
 import type { AdminUser } from "@/types/api";
+import { usePasswordPolicy } from "@/features/auth/hooks/usePasswordPolicy";
+import {
+  PasswordRequirementsList,
+  meetsPolicy,
+} from "@/components/Auth/PasswordRequirementsList";
 
 export type UserDrawerMode = "create" | "edit";
 
@@ -59,6 +64,8 @@ export function UserDrawer({
     initialUser !== undefined &&
     initialUser.username === currentUsername;
 
+  const { data: policy, isError: policyFailed } = usePasswordPolicy();
+
   const form = useForm({
     initialValues: {
       username: "",
@@ -71,8 +78,11 @@ export function UserDrawer({
         mode === "create" && (!v || v.length < 3 || /\s/.test(v))
           ? "3+ chars, no spaces"
           : null,
-      password: (v) =>
-        mode === "create" && (!v || v.length < 8) ? "8+ chars" : null,
+      password: (v) => {
+        if (mode !== "create") return null;
+        if (!policy) return v && v.length > 0 ? null : "Required";
+        return meetsPolicy(v, policy) ? null : "Password does not meet policy";
+      },
     },
   });
 
@@ -130,11 +140,19 @@ export function UserDrawer({
             {...form.getInputProps("username")}
           />
           {mode === "create" && (
-            <PasswordInput
-              label="Password"
-              required
-              {...form.getInputProps("password")}
-            />
+            <Stack gap={4}>
+              <PasswordInput
+                label="Password"
+                required
+                {...form.getInputProps("password")}
+              />
+              {policy && (
+                <PasswordRequirementsList
+                  password={form.values.password}
+                  policy={policy}
+                />
+              )}
+            </Stack>
           )}
           <Tooltip
             label="You can't remove your own admin rights."
@@ -153,7 +171,11 @@ export function UserDrawer({
             data={availableRoles}
             {...form.getInputProps("allowed_roles")}
           />
-          <Button type="submit" loading={loading}>
+          <Button
+            type="submit"
+            loading={loading}
+            disabled={mode === "create" && !policy && !policyFailed}
+          >
             {mode === "create" ? "Create user" : "Save changes"}
           </Button>
         </Stack>
