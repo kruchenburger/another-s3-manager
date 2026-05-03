@@ -169,6 +169,11 @@ export function UserDrawer({
             label="Allowed roles"
             description="Roles this user can access. Empty = no roles."
             data={availableRoles}
+            // Open the dropdown upward so it doesn't cover the Save button
+            // (TagsInput sits just above Save in this drawer; without this
+            // a long role list pushes the autocomplete over the action).
+            comboboxProps={{ withinPortal: true, position: "top-start" }}
+            maxDropdownHeight={220}
             {...form.getInputProps("allowed_roles")}
           />
           <Button
