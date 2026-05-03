@@ -107,6 +107,42 @@ cd frontend && npx playwright test
 all E2E tests fail with connection refused. Override target via
 `E2E_BASE_URL=http://otherhost:port npx playwright test`.
 
+#### E2E specs that need a real S3 backend (MinIO)
+
+`upload-delete.spec.ts` and `special-chars.spec.ts` exercise file
+upload/download/delete against a live S3-compatible endpoint. To run them
+locally, start an extra MinIO sidecar alongside the app:
+
+```bash
+# Bring up app + MinIO + auto-seeded e2e-test bucket
+docker compose -f docker-compose.yml -f docker-compose.minio.yml up --build -d
+
+# One-time: register the MinIO-e2e role in data/config.json (or via the admin UI)
+docker compose exec -T app python -c "
+import json
+from another_s3_manager.config import load_config, save_config
+cfg = load_config(force_reload=True)
+if not any(r['name'] == 'MinIO-e2e' for r in cfg.get('roles', [])):
+    cfg.setdefault('roles', []).append({
+        'name': 'MinIO-e2e',
+        'type': 's3_compatible',
+        'access_key_id': 'minioadmin',
+        'secret_access_key': 'minioadmin',
+        'endpoint_url': 'http://minio:9000',
+        'addressing_style': 'path',
+        'allowed_buckets': ['e2e-test'],
+    })
+    save_config(cfg)
+"
+
+# Run the two specs
+cd frontend && npx playwright test upload-delete.spec.ts special-chars.spec.ts
+```
+
+CI runs the same setup via `.github/workflows/ci.yml` `e2e` job — MinIO
+booted with `docker run` (so we control the `server /data` CMD that GHA
+`services:` can't override), seeded by the same `scripts/ci/seed-minio.sh`.
+
 Local dev requires both servers: backend on `8080` (FastAPI) + Vite on `5173`.
 Vite proxies `/api` → backend, so the React app talks to the real backend during
 dev. For production-like testing, run `npm run build` then visit
