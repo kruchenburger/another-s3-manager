@@ -755,6 +755,11 @@ async def get_config(
             "auto_inline_extensions": config.get("auto_inline_extensions", []),
             "data_dir": str(get_data_dir()),  # Return current DATA_DIR value (read-only)
             "is_read_only": not is_config_writable(),
+            "password_min_length": config.get("password_min_length", 0),
+            "password_min_uppercase": config.get("password_min_uppercase", 0),
+            "password_min_lowercase": config.get("password_min_lowercase", 0),
+            "password_min_digits": config.get("password_min_digits", 0),
+            "password_min_special": config.get("password_min_special", 0),
         }
         return safe_config
 
@@ -916,6 +921,27 @@ async def update_config(
                 config["auto_inline_extensions"] = current_config["auto_inline_extensions"]
             else:
                 config["auto_inline_extensions"] = []
+
+        # Password policy fields: validate range when provided, preserve when omitted.
+        for field in (
+            "password_min_length",
+            "password_min_uppercase",
+            "password_min_lowercase",
+            "password_min_digits",
+            "password_min_special",
+        ):
+            if field in config:
+                try:
+                    val = int(config[field])
+                except (ValueError, TypeError):
+                    raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+                if val < 0 or val > 50:
+                    raise HTTPException(status_code=400, detail=f"{field} must be between 0 and 50")
+                config[field] = val
+            else:
+                preserved = load_config(force_reload=False).get(field)
+                if preserved is not None:
+                    config[field] = preserved
 
         # Validate roles and preserve existing secret_access_key if not provided
         current_config = load_config(force_reload=False)

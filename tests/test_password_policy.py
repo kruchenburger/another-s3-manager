@@ -267,3 +267,51 @@ def test_admin_reset_user_password_accepts_strong(app_client):
         headers=headers,
     )
     assert response.status_code == 200, response.text
+
+
+def test_get_config_includes_password_policy_fields(app_client):
+    """GET /api/config returns the 5 policy fields so frontend can render the checklist."""
+    _, headers = login(app_client)
+    response = app_client.get("/api/config", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    for field in (
+        "password_min_length",
+        "password_min_uppercase",
+        "password_min_lowercase",
+        "password_min_digits",
+        "password_min_special",
+    ):
+        assert field in body, f"GET /api/config missing {field}"
+
+
+def test_post_config_persists_password_policy_fields(app_client):
+    """POST /api/config saves the 5 policy fields and they round-trip via GET."""
+    _, headers = login(app_client)
+    payload = {
+        "roles": [{"name": "Default", "type": "default"}],
+        "password_min_length": 10,
+        "password_min_uppercase": 2,
+        "password_min_lowercase": 1,
+        "password_min_digits": 1,
+        "password_min_special": 1,
+    }
+    response = app_client.post("/api/config", json=payload, headers=headers)
+    assert response.status_code == 200, response.text
+
+    fresh = app_client.get("/api/config", headers=headers).json()
+    assert fresh["password_min_length"] == 10
+    assert fresh["password_min_uppercase"] == 2
+    assert fresh["password_min_special"] == 1
+
+
+def test_post_config_rejects_out_of_range_policy(app_client):
+    """POST /api/config returns 400 for policy values outside [0, 50]."""
+    _, headers = login(app_client)
+    payload = {
+        "roles": [{"name": "Default", "type": "default"}],
+        "password_min_length": 100,
+    }
+    response = app_client.post("/api/config", json=payload, headers=headers)
+    assert response.status_code == 400, response.text
+    assert "password_min_length" in response.json()["detail"]
