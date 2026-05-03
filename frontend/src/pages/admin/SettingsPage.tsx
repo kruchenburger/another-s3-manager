@@ -6,6 +6,7 @@ import {
   Stack,
   Switch,
   TagsInput,
+  Text,
   Title,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
@@ -31,6 +32,11 @@ export function SettingsPage() {
       enable_lazy_loading: true,
       max_file_size_mb: 100,
       auto_inline_extensions: [] as string[],
+      password_min_length: 8,
+      password_min_uppercase: 1,
+      password_min_lowercase: 1,
+      password_min_digits: 1,
+      password_min_special: 0,
     },
   });
 
@@ -43,6 +49,11 @@ export function SettingsPage() {
       enable_lazy_loading: config.enable_lazy_loading,
       max_file_size_mb: Math.round(config.max_file_size / MB),
       auto_inline_extensions: config.auto_inline_extensions ?? [],
+      password_min_length: config.password_min_length,
+      password_min_uppercase: config.password_min_uppercase,
+      password_min_lowercase: config.password_min_lowercase,
+      password_min_digits: config.password_min_digits,
+      password_min_special: config.password_min_special,
     };
     // setInitialValues so form.isDirty() correctly reports which fields the
     // user has actually modified (vs. fields populated from server data).
@@ -81,6 +92,11 @@ export function SettingsPage() {
         ? values.max_file_size_mb * MB
         : config.max_file_size,
       auto_inline_extensions: values.auto_inline_extensions,
+      password_min_length: values.password_min_length,
+      password_min_uppercase: values.password_min_uppercase,
+      password_min_lowercase: values.password_min_lowercase,
+      password_min_digits: values.password_min_digits,
+      password_min_special: values.password_min_special,
     };
     runWithToasts(save, next, "Settings saved");
   });
@@ -138,6 +154,59 @@ export function SettingsPage() {
             description="Files with these extensions render inline in the preview modal. e.g. txt, md, json"
             disabled={readOnly}
             {...form.getInputProps("auto_inline_extensions")}
+          />
+          <Title order={3} mt="md">
+            Password policy
+          </Title>
+          <Text size="sm" c="dimmed">
+            Enforced when a user changes their own password or an admin
+            creates/resets another user&apos;s password. Set any value to 0 to
+            disable that requirement. Existing passwords are not re-validated.
+          </Text>
+          <NumberInput
+            label="Minimum length"
+            description="Set to 0 to disable"
+            min={0}
+            max={50}
+            step={1}
+            disabled={readOnly}
+            {...form.getInputProps("password_min_length")}
+          />
+          <NumberInput
+            label="Minimum uppercase letters"
+            description="Set to 0 to disable"
+            min={0}
+            max={50}
+            step={1}
+            disabled={readOnly}
+            {...form.getInputProps("password_min_uppercase")}
+          />
+          <NumberInput
+            label="Minimum lowercase letters"
+            description="Set to 0 to disable"
+            min={0}
+            max={50}
+            step={1}
+            disabled={readOnly}
+            {...form.getInputProps("password_min_lowercase")}
+          />
+          <NumberInput
+            label="Minimum digits"
+            description="Set to 0 to disable"
+            min={0}
+            max={50}
+            step={1}
+            disabled={readOnly}
+            {...form.getInputProps("password_min_digits")}
+          />
+          <NumberInput
+            label="Minimum special characters"
+            description="Set to 0 to disable"
+            min={0}
+            max={50}
+            step={1}
+            disabled={readOnly}
+            {...form.getInputProps("password_min_special")}
           />
           {!readOnly && (
             <Button type="submit" loading={save.isPending}>

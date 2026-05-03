@@ -224,3 +224,55 @@ def format_content_disposition(filename: str) -> str:
 
     # Use RFC 5987 format: filename="fallback"; filename*=UTF-8''encoded
     return f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{utf8_filename}"
+
+
+def validate_password(password: str, policy: dict) -> list[str]:
+    """Validate a password against the configured policy.
+
+    Args:
+        password: The plaintext password to check.
+        policy: A dict with optional keys password_min_length, password_min_uppercase,
+                password_min_lowercase, password_min_digits, password_min_special.
+                Missing keys are treated as 0 (not required).
+
+    Returns:
+        List of human-readable failure strings. Empty list means the password
+        meets every required minimum.
+
+    Notes:
+        - 0 for any field disables that requirement.
+        - Length is total len(password) including any whitespace.
+        - "Special" = any character that is not a letter or digit (spaces count).
+        - Letter classes follow Python's str.isupper / str.islower (Unicode-aware).
+    """
+    failures: list[str] = []
+
+    min_length = policy.get("password_min_length", 0)
+    if min_length > 0 and len(password) < min_length:
+        failures.append(f"password_min_length: need {min_length}, got {len(password)}")
+
+    min_upper = policy.get("password_min_uppercase", 0)
+    if min_upper > 0:
+        upper_count = sum(1 for c in password if c.isupper())
+        if upper_count < min_upper:
+            failures.append(f"password_min_uppercase: need {min_upper}, got {upper_count}")
+
+    min_lower = policy.get("password_min_lowercase", 0)
+    if min_lower > 0:
+        lower_count = sum(1 for c in password if c.islower())
+        if lower_count < min_lower:
+            failures.append(f"password_min_lowercase: need {min_lower}, got {lower_count}")
+
+    min_digits = policy.get("password_min_digits", 0)
+    if min_digits > 0:
+        digit_count = sum(1 for c in password if c.isdigit())
+        if digit_count < min_digits:
+            failures.append(f"password_min_digits: need {min_digits}, got {digit_count}")
+
+    min_special = policy.get("password_min_special", 0)
+    if min_special > 0:
+        special_count = sum(1 for c in password if not c.isalnum())
+        if special_count < min_special:
+            failures.append(f"password_min_special: need {min_special}, got {special_count}")
+
+    return failures

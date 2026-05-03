@@ -25,11 +25,24 @@ export function runWithToasts<TArgs>(
 ): void {
   mutation.mutate(args, {
     onSuccess: () => {
-      notifications.show({ message: successMessage, color: "green" });
+      // Default Mantine autoClose (~4s): success messages are short and
+      // disposable; the table refresh is the real confirmation.
+      notifications.show({
+        title: "Success",
+        message: successMessage,
+        color: "green",
+      });
       onSuccess?.();
     },
     onError: (e) => {
-      notifications.show({ message: getErrorMessage(e), color: "red" });
+      // autoClose: false — error toasts must stay until dismissed; the
+      // user often needs the text to take corrective action.
+      notifications.show({
+        title: "Error",
+        message: getErrorMessage(e),
+        color: "red",
+        autoClose: false,
+      });
     },
   });
 }

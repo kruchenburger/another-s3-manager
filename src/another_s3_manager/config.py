@@ -73,6 +73,23 @@ def _migrate_config() -> bool:
     if "auto_inline_extensions" not in _config_cache:
         _config_cache["auto_inline_extensions"] = []
         config_modified = True
+    # Password policy defaults — added Phase 4d. Conservative baseline:
+    # require length+uppercase+lowercase+digit, leave special opt-in.
+    if "password_min_length" not in _config_cache:
+        _config_cache["password_min_length"] = 8
+        config_modified = True
+    if "password_min_uppercase" not in _config_cache:
+        _config_cache["password_min_uppercase"] = 1
+        config_modified = True
+    if "password_min_lowercase" not in _config_cache:
+        _config_cache["password_min_lowercase"] = 1
+        config_modified = True
+    if "password_min_digits" not in _config_cache:
+        _config_cache["password_min_digits"] = 1
+        config_modified = True
+    if "password_min_special" not in _config_cache:
+        _config_cache["password_min_special"] = 0
+        config_modified = True
     # Note: data_dir is not migrated automatically - it should be set explicitly if needed
     # Note: default_role is optional and not migrated automatically - it should be set explicitly if needed
 
@@ -90,6 +107,11 @@ def _get_default_config() -> Dict[str, Any]:
         "max_file_size": int(os.getenv("MAX_FILE_SIZE", str(DEFAULT_MAX_FILE_SIZE))),
         "disable_deletion": False,
         "auto_inline_extensions": [],
+        "password_min_length": 8,
+        "password_min_uppercase": 1,
+        "password_min_lowercase": 1,
+        "password_min_digits": 1,
+        "password_min_special": 0,
     }
 
 

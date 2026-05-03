@@ -389,7 +389,7 @@ def test_create_user(app_client):
         "/api/admin/users",
         data={
             "username": "newuser",
-            "password": "newpassword",
+            "password": "NewPassword1",
             "is_admin": "true",
             "allowed_roles": "Default",
         },
@@ -420,7 +420,7 @@ def test_update_user_password(app_client):
     _, headers = login(app_client)
     response = app_client.put(
         "/api/admin/users/changeme/password",
-        json={"password": "newpass"},
+        json={"password": "NewPass123"},
         headers=headers,
     )
     assert response.status_code == status.HTTP_200_OK
@@ -682,7 +682,8 @@ def test_login_handles_unexpected_error(app_client, mocker):
 
 def test_create_user_truncates_long_password(app_client):
     _, headers = login(app_client)
-    long_password = "x" * 100
+    # Strong prefix (upper, lower, digit, 8+ chars) + filler to exceed 72 bytes
+    long_password = "Strong1A" + "x" * 92
     response = app_client.post(
         "/api/admin/users",
         data={"username": "truncate", "password": long_password},
@@ -1434,9 +1435,9 @@ def test_admin_can_demote_other_admin(app_client):
 
 def test_change_my_password_success(app_client):
     """Happy path: user changes own password, old fails, new works."""
-    create_user("alice", password="oldpass")
+    create_user("alice", password="OldPass123")
     # Login as alice and grab CSRF
-    login_resp = app_client.post("/api/login", data={"username": "alice", "password": "oldpass"})
+    login_resp = app_client.post("/api/login", data={"username": "alice", "password": "OldPass123"})
     assert login_resp.status_code == status.HTTP_200_OK
     csrf = app_client.get("/api/me").json()["csrf_token"]
     headers = {"X-CSRF-Token": csrf}
@@ -1444,7 +1445,7 @@ def test_change_my_password_success(app_client):
     # Change password
     response = app_client.put(
         "/api/me/password",
-        json={"current_password": "oldpass", "new_password": "newpass"},
+        json={"current_password": "OldPass123", "new_password": "NewPass456"},
         headers=headers,
     )
     assert response.status_code == status.HTTP_200_OK, response.text
@@ -1455,11 +1456,11 @@ def test_change_my_password_success(app_client):
     app_client.cookies.clear()
 
     # Old password no longer works
-    bad = app_client.post("/api/login", data={"username": "alice", "password": "oldpass"})
+    bad = app_client.post("/api/login", data={"username": "alice", "password": "OldPass123"})
     assert bad.status_code == status.HTTP_401_UNAUTHORIZED
 
     # New password works
-    good = app_client.post("/api/login", data={"username": "alice", "password": "newpass"})
+    good = app_client.post("/api/login", data={"username": "alice", "password": "NewPass456"})
     assert good.status_code == status.HTTP_200_OK
 
 
@@ -1517,3 +1518,60 @@ def test_change_my_password_no_csrf(app_client):
         json={"current_password": "davepass", "new_password": "newpass"},
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+def test_admin_can_clear_user_allowed_roles(app_client):
+    """Regression: PUT /api/admin/users/{u} with allowed_roles= must clear all roles.
+
+    FastAPI's `Optional[str] = Form(None)` coerces empty form values to None,
+    making it impossible to distinguish 'field omitted' from 'field present
+    but empty'. The endpoint reads request.form() directly and treats
+    presence-of-key as 'client wants to set roles'.
+    """
+    create_user("alice", password="OldPass123", is_admin=False, allowed_roles=["RoleA", "RoleB"])
+    _, headers = login(app_client)
+    response = app_client.put(
+        "/api/admin/users/alice",
+        data={"is_admin": "false", "allowed_roles": ""},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    users = app_client.get("/api/admin/users", headers=headers).json()["users"]
+    alice = next(u for u in users if u["username"] == "alice")
+    assert alice["allowed_roles"] == [], f"expected [], got {alice['allowed_roles']}"
+
+
+def test_admin_can_partially_update_user_omitting_roles(app_client):
+    """If allowed_roles key is absent, existing roles must be preserved."""
+    create_user("alice", password="OldPass123", is_admin=False, allowed_roles=["RoleA"])
+    _, headers = login(app_client)
+    # Send only is_admin, no allowed_roles field at all
+    response = app_client.put("/api/admin/users/alice", data={"is_admin": "true"}, headers=headers)
+    assert response.status_code == 200
+
+    users = app_client.get("/api/admin/users", headers=headers).json()["users"]
+    alice = next(u for u in users if u["username"] == "alice")
+    assert alice["is_admin"] is True
+    assert alice["allowed_roles"] == ["RoleA"], "roles must be preserved when key absent"
+
+
+def test_admin_empty_is_admin_field_does_not_demote_target(app_client):
+    """Regression: PUT /api/admin/users/{u} with is_admin= (empty value) must NOT
+    silently demote the target. FastAPI form parsing returns empty string (not None)
+    for an empty multipart field, so a naive `is not None` guard wrongly evaluates
+    str("") .lower() != "true" → False and clears admin rights for ANY non-self
+    administrator. This was a curl/Postman exploit before the fix.
+    """
+    create_user("other_admin", password="OldPass123", is_admin=True, allowed_roles=[])
+    _, headers = login(app_client)
+    response = app_client.put(
+        "/api/admin/users/other_admin",
+        data={"is_admin": "", "allowed_roles": ""},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    users = app_client.get("/api/admin/users", headers=headers).json()["users"]
+    other = next(u for u in users if u["username"] == "other_admin")
+    assert other["is_admin"] is True, "target admin must NOT be demoted on empty is_admin="

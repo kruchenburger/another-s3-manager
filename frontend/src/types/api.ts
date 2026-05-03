@@ -90,6 +90,14 @@ export interface AppRole {
   allowed_buckets?: string[];
 }
 
+export interface PasswordPolicy {
+  password_min_length: number;
+  password_min_uppercase: number;
+  password_min_lowercase: number;
+  password_min_digits: number;
+  password_min_special: number;
+}
+
 export interface AppConfig {
   roles: AppRole[];
   default_role?: string;
@@ -101,6 +109,11 @@ export interface AppConfig {
   data_dir?: string;
   is_read_only?: boolean;
   current_role?: string;
+  password_min_length: number;
+  password_min_uppercase: number;
+  password_min_lowercase: number;
+  password_min_digits: number;
+  password_min_special: number;
 }
 
 export interface ChangeMyPasswordPayload {

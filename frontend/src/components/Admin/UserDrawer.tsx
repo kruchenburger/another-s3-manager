@@ -11,6 +11,11 @@ import {
 import { useForm } from "@mantine/form";
 import { useEffect } from "react";
 import type { AdminUser } from "@/types/api";
+import { usePasswordPolicy } from "@/features/auth/hooks/usePasswordPolicy";
+import {
+  PasswordRequirementsList,
+  meetsPolicy,
+} from "@/components/Auth/PasswordRequirementsList";
 
 export type UserDrawerMode = "create" | "edit";
 
@@ -59,6 +64,8 @@ export function UserDrawer({
     initialUser !== undefined &&
     initialUser.username === currentUsername;
 
+  const { data: policy, isError: policyFailed } = usePasswordPolicy();
+
   const form = useForm({
     initialValues: {
       username: "",
@@ -71,8 +78,11 @@ export function UserDrawer({
         mode === "create" && (!v || v.length < 3 || /\s/.test(v))
           ? "3+ chars, no spaces"
           : null,
-      password: (v) =>
-        mode === "create" && (!v || v.length < 8) ? "8+ chars" : null,
+      password: (v) => {
+        if (mode !== "create") return null;
+        if (!policy) return v && v.length > 0 ? null : "Required";
+        return meetsPolicy(v, policy) ? null : "Password does not meet policy";
+      },
     },
   });
 
@@ -101,8 +111,22 @@ export function UserDrawer({
           ? "Create user"
           : `Edit user ${initialUser?.username ?? ""}`
       }
+      // Make the drawer body a flex column so the form can stretch and the
+      // Save button can stick to the bottom regardless of dropdown height.
+      // `calc(100% - 60px)` accounts for the Mantine Drawer header height
+      // (Drawer body's `height: 100%` would otherwise overflow the viewport
+      // because the header sits in the same column).
+      styles={{
+        body: {
+          display: "flex",
+          flexDirection: "column",
+          height: "calc(100% - 60px)",
+          overflow: "hidden",
+        },
+      }}
     >
       <form
+        style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
         onSubmit={form.onSubmit((values) => {
           if (mode === "create") {
             onSubmit({
@@ -122,7 +146,7 @@ export function UserDrawer({
           }
         })}
       >
-        <Stack gap="md">
+        <Stack gap="md" style={{ flex: 1, overflowY: "auto", paddingRight: 4 }}>
           <TextInput
             label="Username"
             required
@@ -130,11 +154,19 @@ export function UserDrawer({
             {...form.getInputProps("username")}
           />
           {mode === "create" && (
-            <PasswordInput
-              label="Password"
-              required
-              {...form.getInputProps("password")}
-            />
+            <Stack gap={4}>
+              <PasswordInput
+                label="Password"
+                required
+                {...form.getInputProps("password")}
+              />
+              {policy && (
+                <PasswordRequirementsList
+                  password={form.values.password}
+                  policy={policy}
+                />
+              )}
+            </Stack>
           )}
           <Tooltip
             label="You can't remove your own admin rights."
@@ -151,12 +183,37 @@ export function UserDrawer({
             label="Allowed roles"
             description="Roles this user can access. Empty = no roles."
             data={availableRoles}
+            // Dropdown opens downward via portal so it isn't clipped by the
+            // drawer; pill area is height-capped so 15+ selected roles
+            // don't balloon the input. The Save button below this control
+            // is pinned to the drawer bottom (see sticky footer markup) so
+            // a long dropdown never hides it.
+            comboboxProps={{ withinPortal: true }}
+            maxDropdownHeight={220}
+            styles={{
+              inputField: { minWidth: 60 },
+              pillsList: { maxHeight: 96, overflowY: "auto" },
+              pill: { fontSize: 12 },
+            }}
             {...form.getInputProps("allowed_roles")}
           />
-          <Button type="submit" loading={loading}>
+        </Stack>
+        <div
+          style={{
+            paddingTop: 12,
+            marginTop: 12,
+            borderTop: "1px solid var(--mantine-color-default-border)",
+          }}
+        >
+          <Button
+            type="submit"
+            loading={loading}
+            disabled={mode === "create" && !policy && !policyFailed}
+            fullWidth
+          >
             {mode === "create" ? "Create user" : "Save changes"}
           </Button>
-        </Stack>
+        </div>
       </form>
     </Drawer>
   );

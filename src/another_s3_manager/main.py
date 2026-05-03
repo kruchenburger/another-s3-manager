@@ -66,7 +66,13 @@ from another_s3_manager.users import (
     save_bans,
     save_users,
 )
-from another_s3_manager.utils import format_boto_error, format_content_disposition, sanitize_bucket_name, sanitize_path
+from another_s3_manager.utils import (
+    format_boto_error,
+    format_content_disposition,
+    sanitize_bucket_name,
+    sanitize_path,
+    validate_password,
+)
 
 # Validate required environment variables at startup
 try:
@@ -230,6 +236,22 @@ def save_config_with_cache_clear(config: Dict[str, Any], skip_migration: bool = 
 
 # Update config module's save_config to use our wrapper
 config_module.save_config = save_config_with_cache_clear
+
+
+def _enforce_password_policy(password: str) -> None:
+    """Reject the request if the password fails the configured policy.
+
+    Raises HTTPException(422) with a structured detail so the frontend can
+    render per-requirement checkmarks. Loads the policy from the cached
+    config (no file IO unless the cache is cold).
+    """
+    config = config_module.load_config(force_reload=False)
+    failures = validate_password(password, config)
+    if failures:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "Password does not meet policy", "failed_requirements": failures},
+        )
 
 
 # ============================================================================
@@ -413,6 +435,8 @@ async def create_user(
     if any(u.get("username") == username for u in users.get("users", [])):
         raise HTTPException(status_code=400, detail="User already exists")
 
+    _enforce_password_policy(password)
+
     # Hash password
     password_bytes = password.encode("utf-8")
     if len(password_bytes) > 72:
@@ -459,6 +483,8 @@ async def update_user_password(
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    _enforce_password_policy(password)
 
     # Hash password using auth module
     hashed_password = hash_password(password)
@@ -509,6 +535,8 @@ async def change_my_password(
             detail="New password must differ from the current one",
         )
 
+    _enforce_password_policy(payload.new_password)
+
     # Local import to avoid the top-level name collision with the admin
     # update_user endpoint defined below.
     from another_s3_manager.users import update_user as users_update_user
@@ -521,17 +549,35 @@ async def change_my_password(
 async def update_user(
     request: Request,
     username: str,
-    is_admin: Optional[bool] = Form(None),
-    allowed_roles: Optional[str] = Form(None, description="Comma-separated list of allowed role names"),
     current_user: Dict[str, Any] = Depends(get_current_admin_user),
     csrf_verified: bool = Depends(verify_csrf_token),
 ):
-    """Update user permissions (admin only)"""
+    """Update user permissions (admin only).
+
+    Reads multipart form fields manually via request.form() instead of
+    `is_admin: Optional[str] = Form(None)` because FastAPI coerces an
+    EMPTY field value to None, making it impossible to distinguish
+    "field omitted" from "field present but empty" — which broke
+    "clear all roles for a user" (the empty string fell through the
+    `if allowed_roles is not None` guard and the row never updated).
+    """
+    form = await request.form()
+
+    is_admin_raw = form.get("is_admin")
+    allowed_roles_raw = form.get("allowed_roles")
+
     users = load_users()
     user = next((u for u in users.get("users", []) if u.get("username") == username), None)
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Coerce only when the form value is a non-empty string. An empty value
+    # ("is_admin=") would otherwise fall through `is not None` and silently
+    # demote the target user, since str("").lower() != "true" → False.
+    is_admin: Optional[bool] = None
+    if is_admin_raw is not None and str(is_admin_raw) != "":
+        is_admin = str(is_admin_raw).lower() == "true"
 
     # Self-demote guard: an admin cannot remove their own admin rights through this
     # endpoint. Frontend disables the toggle on the current-user row, but enforce
@@ -542,12 +588,14 @@ async def update_user(
             detail="You can't remove your own admin rights.",
         )
 
-    # Update fields if provided
     if is_admin is not None:
         user["is_admin"] = is_admin
 
-    if allowed_roles is not None:
-        roles_list = [r.strip() for r in allowed_roles.split(",") if r.strip()] if allowed_roles else []
+    # Presence of the form key means the client wants to set roles — possibly
+    # to an empty list. Absence means leave the field alone.
+    if "allowed_roles" in form:
+        raw = str(allowed_roles_raw or "")
+        roles_list = [r.strip() for r in raw.split(",") if r.strip()]
         user["allowed_roles"] = roles_list
 
     save_users(users)
@@ -727,6 +775,11 @@ async def get_config(
             "auto_inline_extensions": config.get("auto_inline_extensions", []),
             "data_dir": str(get_data_dir()),  # Return current DATA_DIR value (read-only)
             "is_read_only": not is_config_writable(),
+            "password_min_length": config.get("password_min_length", 0),
+            "password_min_uppercase": config.get("password_min_uppercase", 0),
+            "password_min_lowercase": config.get("password_min_lowercase", 0),
+            "password_min_digits": config.get("password_min_digits", 0),
+            "password_min_special": config.get("password_min_special", 0),
         }
         return safe_config
 
@@ -888,6 +941,27 @@ async def update_config(
                 config["auto_inline_extensions"] = current_config["auto_inline_extensions"]
             else:
                 config["auto_inline_extensions"] = []
+
+        # Password policy fields: validate range when provided, preserve when omitted.
+        for field in (
+            "password_min_length",
+            "password_min_uppercase",
+            "password_min_lowercase",
+            "password_min_digits",
+            "password_min_special",
+        ):
+            if field in config:
+                try:
+                    val = int(config[field])
+                except (ValueError, TypeError):
+                    raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+                if val < 0 or val > 50:
+                    raise HTTPException(status_code=400, detail=f"{field} must be between 0 and 50")
+                config[field] = val
+            else:
+                preserved = load_config(force_reload=False).get(field)
+                if preserved is not None:
+                    config[field] = preserved
 
         # Validate roles and preserve existing secret_access_key if not provided
         current_config = load_config(force_reload=False)

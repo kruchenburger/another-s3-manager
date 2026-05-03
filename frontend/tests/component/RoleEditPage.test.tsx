@@ -29,6 +29,11 @@ const baseConfig = {
   max_file_size: 100 * 1024 * 1024,
   disable_deletion: false,
   is_read_only: false,
+  password_min_length: 8,
+  password_min_uppercase: 0,
+  password_min_lowercase: 0,
+  password_min_digits: 0,
+  password_min_special: 0,
 };
 
 function renderEdit(roleName: string) {

@@ -24,6 +24,11 @@ const baseConfig = {
   disable_deletion: false,
   auto_inline_extensions: [],
   is_read_only: false,
+  password_min_length: 8,
+  password_min_uppercase: 0,
+  password_min_lowercase: 0,
+  password_min_digits: 0,
+  password_min_special: 0,
 };
 
 function renderPage() {
@@ -142,5 +147,37 @@ describe("SettingsPage", () => {
     expect("data_dir" in submitted).toBe(false);
     expect("current_role" in submitted).toBe(false);
     expect("is_read_only" in submitted).toBe(false);
+  });
+
+  it("renders the 5 password policy NumberInputs", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByLabelText(/minimum length/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText(/minimum uppercase letters/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/minimum lowercase letters/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/minimum digits/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/minimum special characters/i)).toBeInTheDocument();
+  });
+
+  it("includes the policy fields when saving", async () => {
+    vi.mocked(getConfig).mockResolvedValue({
+      ...baseConfig,
+      password_min_uppercase: 1,
+    });
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByLabelText(/minimum length/i)).toBeInTheDocument(),
+    );
+    // change min_length to 12
+    const minLength = screen.getByLabelText(/minimum length/i);
+    fireEvent.change(minLength, { target: { value: "12" } });
+    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    await waitFor(() => expect(saveConfig).toHaveBeenCalled());
+    const sentConfig = vi.mocked(saveConfig).mock.calls[0]![0];
+    expect(sentConfig.password_min_length).toBe(12);
+    expect(sentConfig.password_min_uppercase).toBe(1);
   });
 });

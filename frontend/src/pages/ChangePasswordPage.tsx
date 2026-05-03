@@ -2,17 +2,26 @@ import { Button, Container, PasswordInput, Stack, Title } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useNavigate } from "react-router-dom";
 import { useChangeMyPassword } from "@/features/auth/hooks/useChangeMyPassword";
+import { usePasswordPolicy } from "@/features/auth/hooks/usePasswordPolicy";
+import {
+  PasswordRequirementsList,
+  meetsPolicy,
+} from "@/components/Auth/PasswordRequirementsList";
 import { runWithToasts } from "@/utils/mutationToast";
 
 export function ChangePasswordPage() {
   const navigate = useNavigate();
   const mutation = useChangeMyPassword();
+  const { data: policy, isError: policyFailed } = usePasswordPolicy();
 
   const form = useForm({
     initialValues: { current: "", next: "", confirm: "" },
     validate: {
       current: (value) => (value.length === 0 ? "Required" : null),
-      next: (value) => (value.length < 8 ? "8+ characters" : null),
+      next: (value) => {
+        if (!policy) return null; // server is source of truth; let it through
+        return meetsPolicy(value, policy) ? null : "Password does not meet policy";
+      },
       confirm: (value, values) =>
         value === values.next ? null : "Does not match new password",
     },
@@ -43,6 +52,9 @@ export function ChangePasswordPage() {
               required
               {...form.getInputProps("next")}
             />
+            {policy && (
+              <PasswordRequirementsList password={form.values.next} policy={policy} />
+            )}
             <PasswordInput
               label="Confirm new password"
               required
@@ -52,6 +64,7 @@ export function ChangePasswordPage() {
               type="submit"
               color="amber"
               loading={mutation.isPending}
+              disabled={!policy && !policyFailed}
             >
               Change password
             </Button>

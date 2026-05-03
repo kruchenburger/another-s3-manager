@@ -21,5 +21,10 @@ export function toWritableConfig(config: AppConfig): AppConfig {
     max_file_size: config.max_file_size,
     disable_deletion: config.disable_deletion,
     auto_inline_extensions: config.auto_inline_extensions,
+    password_min_length: config.password_min_length,
+    password_min_uppercase: config.password_min_uppercase,
+    password_min_lowercase: config.password_min_lowercase,
+    password_min_digits: config.password_min_digits,
+    password_min_special: config.password_min_special,
   };
 }
