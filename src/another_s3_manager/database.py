@@ -8,10 +8,20 @@ import threading
 from contextlib import contextmanager
 from typing import Generator, Optional
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from another_s3_manager.constants import get_db_path
+
+
+@event.listens_for(Engine, "connect")
+def _enable_sqlite_fk(dbapi_connection, _connection_record):
+    # SQLite ships with FK enforcement OFF by default — we need it ON
+    # so DB-level ON DELETE CASCADE actually works.
+    if dbapi_connection.__class__.__module__.startswith("sqlite"):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 _engine: Optional[Engine] = None
 _SessionLocal: Optional[sessionmaker[Session]] = None

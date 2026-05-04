@@ -82,3 +82,49 @@ def test_get_engine_is_idempotent(monkeypatch, tmp_path):
     engine1 = database.get_engine()
     engine2 = database.get_engine()
     assert engine1 is engine2
+
+
+def test_sqlite_foreign_keys_pragma_is_enabled():
+    """Production engine must enable PRAGMA foreign_keys so DB-level CASCADE works."""
+    from sqlalchemy import text
+
+    from another_s3_manager.database import session_scope
+
+    with session_scope() as session:
+        result = session.execute(text("PRAGMA foreign_keys")).scalar()
+        assert result == 1, "FK enforcement should be ON for SQLite"
+
+
+def test_db_level_cascade_works_in_production_engine():
+    """Raw SQL DELETE on a user must cascade to api_tokens via ON DELETE CASCADE."""
+    import hashlib
+
+    from sqlalchemy import func, select, text
+
+    from another_s3_manager.database import session_scope
+    from another_s3_manager.models import ApiToken, User
+
+    with session_scope() as session:
+        user = User(username="raw_cascade_user", password_hash="x", is_admin=False)
+        session.add(user)
+        session.flush()
+        user_id = user.id
+        session.add(
+            ApiToken(
+                user_id=user_id,
+                token_hash=hashlib.sha256(b"raw_test").hexdigest(),
+                name="raw_t",
+                is_read_only=True,
+                max_read_bytes=1024,
+            )
+        )
+
+    # Bypass ORM — emit raw SQL DELETE
+    with session_scope() as session:
+        session.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+
+    with session_scope() as session:
+        remaining = session.execute(
+            select(func.count(ApiToken.id)).where(ApiToken.user_id == user_id)
+        ).scalar_one()
+        assert remaining == 0, "Raw SQL DELETE on user should cascade to api_tokens"
