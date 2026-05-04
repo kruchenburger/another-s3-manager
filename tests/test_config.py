@@ -190,3 +190,35 @@ def test_get_config_value_env_string(monkeypatch):
     config = reload_config()
     value = config.get_config_value("missing", default="default", env_var="STRING_VALUE")
     assert value == "text"
+
+
+def test_default_config_includes_mcp_fields():
+    from another_s3_manager.config import _get_default_config
+    cfg = _get_default_config()
+    assert cfg["mcp_enabled"] is True
+    assert cfg["mcp_disable_writes"] is False
+    assert cfg["mcp_text_extensions"] == []
+    assert cfg["mcp_global_max_read_bytes"] == 10_485_760
+
+
+def test_migrate_config_adds_mcp_fields_to_legacy_config(monkeypatch, tmp_path):
+    """A legacy config.json without MCP fields should get them auto-added on load."""
+    import json
+    from another_s3_manager import config as config_module
+
+    legacy = tmp_path / "config.json"
+    legacy.write_text(json.dumps({"roles": [], "items_per_page": 200}))
+    monkeypatch.setattr(config_module, "CONFIG_FILE", legacy)
+    config_module._config_cache = {}
+    config_module._config_mtime = 0
+
+    loaded = config_module.load_config(force_reload=True)
+    assert "mcp_enabled" in loaded
+    assert "mcp_disable_writes" in loaded
+    assert "mcp_text_extensions" in loaded
+    assert "mcp_global_max_read_bytes" in loaded
+    # Verify defaults are correct, not just presence
+    assert loaded["mcp_enabled"] is True
+    assert loaded["mcp_disable_writes"] is False
+    assert loaded["mcp_text_extensions"] == []
+    assert loaded["mcp_global_max_read_bytes"] == 10_485_760
