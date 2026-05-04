@@ -7,10 +7,13 @@ from another_s3_manager.logging_setup import configure_logging
 
 configure_logging()
 
+import base64
 import json
 import logging
 import os
+import secrets as _secrets
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -76,6 +79,13 @@ from another_s3_manager.utils import (
     sanitize_bucket_name,
     sanitize_path,
     validate_password,
+)
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+from another_s3_manager.metrics import (
+    REGISTRY,
+    http_request_duration_seconds,
+    http_requests_total,
 )
 
 # Validate required environment variables at startup
@@ -155,6 +165,51 @@ async def startup() -> None:
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+# HTTP metrics middleware — registered late so it sees the final response status
+# (after exception handlers have run and converted exceptions to proper HTTP responses).
+@app.middleware("http")
+async def _http_metrics(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration = time.perf_counter() - start
+    # path_template — bounded cardinality. Falls back to actual path on no-route 404.
+    route = request.scope.get("route")
+    path_template = route.path if route is not None else request.url.path
+    method = request.method
+    status_code = str(response.status_code)
+    http_requests_total.labels(method=method, path_template=path_template, status_code=status_code).inc()
+    http_request_duration_seconds.labels(method=method, path_template=path_template).observe(duration)
+    return response
+
+
+def _check_metrics_auth(request: Request) -> None:
+    """Enforce optional basic auth on /metrics. Open when METRICS_PASSWORD is unset."""
+    expected = os.getenv("METRICS_PASSWORD")
+    if not expected:
+        return  # endpoint is open
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("basic "):
+        raise HTTPException(
+            status_code=401,
+            detail="Basic auth required",
+            headers={"WWW-Authenticate": 'Basic realm="metrics"'},
+        )
+    try:
+        decoded = base64.b64decode(auth[6:]).decode()
+        username, password = decoded.split(":", 1)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Malformed basic auth")
+    if username != "metrics" or not _secrets.compare_digest(password, expected):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+@app.get("/metrics")
+async def metrics_endpoint(request: Request):
+    """Prometheus metrics exposition endpoint. Optional METRICS_PASSWORD basic auth."""
+    _check_metrics_auth(request)
+    return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
 # Health endpoint (no auth required)
