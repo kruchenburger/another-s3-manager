@@ -7,6 +7,7 @@ All permission decisions delegate to s3_client.py — single source of truth.
 import base64
 import binascii
 import hashlib
+import json
 import logging
 import time
 from contextvars import ContextVar
@@ -392,6 +393,28 @@ def _is_likely_text_sample(sample: bytes) -> bool:
 mcp = FastMCP("another-s3-manager", streamable_http_path="/")
 
 
+def _observe_response_size(tool: str, token: Any, payload: dict) -> dict:
+    """Record the JSON size of a tool's response payload as a Histogram sample.
+
+    Pass-through helper: returns `payload` unchanged so callers can `return
+    _observe_response_size(...)`. The serialization here is best-effort —
+    if json.dumps raises, we skip the observation rather than failing the call.
+
+    The bytes count is a proxy for the LLM-input-token cost the agent will pay
+    when it reinjects this result into its next prompt (≈4 bytes / token for
+    English text). token_id label lets ops see which Bearer is the heaviest.
+    """
+    try:
+        size = len(json.dumps(payload, default=str).encode("utf-8"))
+    except (TypeError, ValueError):
+        return payload
+    from another_s3_manager.metrics import mcp_tool_response_bytes
+
+    token_id = str(getattr(token, "id", "unknown"))
+    mcp_tool_response_bytes.labels(tool=tool, token_id=token_id).observe(size)
+    return payload
+
+
 # ------------------------------------------------------------------
 # list_roles — returns the intersection of user's allowed_roles and
 # role names defined in config (only what actually exists).
@@ -407,7 +430,7 @@ async def list_roles() -> dict:
         all_role_names = {r["name"] for r in config.get("roles", [])}
         visible = [r for r in user["allowed_roles"] if r in all_role_names]
         logger.info("mcp.list_roles", extra={"user": user["username"], "count": len(visible)})
-        return {"roles": visible}
+        return _observe_response_size("list_roles", token, {"roles": visible})
     except McpError as e:
         error_code = e.code
         raise
@@ -439,7 +462,7 @@ async def list_buckets(role: str) -> dict:
                 {"role": role, "allowed_roles": user["allowed_roles"]},
             )
         logger.info("mcp.list_buckets", extra={"user": user["username"], "role": role, "count": len(buckets)})
-        return {"buckets": buckets}
+        return _observe_response_size("list_buckets", token, {"buckets": buckets})
     except McpError as e:
         error_code = e.code
         raise
@@ -523,7 +546,7 @@ async def list_files(
                 "count": len(result["files"]),
             },
         )
-        return result
+        return _observe_response_size("list_files", token, result)
     except McpError as e:
         error_code = e.code
         raise
@@ -564,7 +587,9 @@ async def upload_file(role: str, bucket: str, path: str, content_base64: str) ->
             "mcp.upload_file",
             extra={"user": user["username"], "role": role, "bucket": bucket, "path": path, "size": len(content)},
         )
-        return {"ok": True, "bucket": bucket, "path": path, "size": len(content)}
+        return _observe_response_size(
+            "upload_file", token, {"ok": True, "bucket": bucket, "path": path, "size": len(content)}
+        )
     except McpError as e:
         error_code = e.code
         raise
@@ -601,7 +626,7 @@ async def delete_file(role: str, bucket: str, path: str) -> dict:
             "mcp.delete_file",
             extra={"user": user["username"], "role": role, "bucket": bucket, "path": path},
         )
-        return {"ok": True, "bucket": bucket, "path": path}
+        return _observe_response_size("delete_file", token, {"ok": True, "bucket": bucket, "path": path})
     except McpError as e:
         error_code = e.code
         raise
@@ -709,14 +734,18 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
                 "detection": decision,
             },
         )
-        return {
-            "content": content,
-            "encoding": "utf-8",
-            "size": size,
-            "detection": decision,
-            "bucket": bucket,
-            "path": path,
-        }
+        return _observe_response_size(
+            "read_file",
+            token,
+            {
+                "content": content,
+                "encoding": "utf-8",
+                "size": size,
+                "detection": decision,
+                "bucket": bucket,
+                "path": path,
+            },
+        )
     except McpError as e:
         error_code = e.code
         raise

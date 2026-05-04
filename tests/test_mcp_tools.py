@@ -602,3 +602,38 @@ async def test_upload_file_returns_invalid_input_on_malformed_base64(alice_user,
             content_base64="not-base64!!!@@@",
         )
     assert exc_info.value.code == "INVALID_INPUT"
+
+
+# ---------------------------------------------------------------------------
+# Response-bytes histogram (LLM-context proxy)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_roles_records_response_bytes_per_token(alice_user, tool_registry):
+    """mcp_tool_response_bytes{tool, token_id} must observe the JSON size after a successful tool call."""
+    from another_s3_manager import metrics
+
+    uid, plaintext = alice_user
+    # Find the token row to know its id (label value).
+    import hashlib
+
+    digest = hashlib.sha256(plaintext.encode()).hexdigest()
+    token_row = svc.find_active_token_by_hash(digest)
+    assert token_row is not None
+    token_id_label = str(token_row.id)
+
+    def count(tool: str, tid: str) -> float:
+        for sample in metrics.mcp_tool_response_bytes.collect()[0].samples:
+            if (
+                sample.name.endswith("_count")
+                and sample.labels.get("tool") == tool
+                and sample.labels.get("token_id") == tid
+            ):
+                return sample.value
+        return 0.0
+
+    before = count("list_roles", token_id_label)
+    await _call(tool_registry, "list_roles", _fake_request(plaintext))
+    after = count("list_roles", token_id_label)
+    assert after >= before + 1

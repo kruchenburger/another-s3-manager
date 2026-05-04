@@ -88,6 +88,22 @@ mcp_bytes_read_total = Counter(
     ["bucket"],
     registry=REGISTRY,
 )
+# Proxy for LLM input-token cost: how many bytes of JSON each MCP tool call
+# returned to the agent. Agents reinject this into their next prompt, so the
+# byte count is a reasonable proxy for "how much context this tool consumed"
+# (≈4 bytes/token for English text / JSON). token_id label lets ops see which
+# Bearer token is hottest. Cardinality cap: 6 tools × ~100 active tokens = ~600
+# series max in realistic deployments.
+mcp_tool_response_bytes = Histogram(
+    "mcp_tool_response_bytes",
+    "Size in bytes of the JSON response returned by an MCP tool call",
+    ["tool", "token_id"],
+    # Buckets sized for typical LLM-context consumption: <100 bytes (empty
+    # listings, OK responses), few KB (small reads, list_files), 10-100 KB
+    # (medium files, deep listings), 1-10 MB (large reads at the cap).
+    buckets=(100, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000),
+    registry=REGISTRY,
+)
 mcp_auth_failures_total = Counter(
     "mcp_auth_failures_total",
     "MCP authentication failures",
