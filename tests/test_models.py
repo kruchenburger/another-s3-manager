@@ -117,3 +117,44 @@ def test_updated_at_changes_on_update(session):
     session.commit()
     session.refresh(user)
     assert user.updated_at > original_updated
+
+
+def test_api_token_model_basic_columns():
+    """Verify ApiToken model has the columns the spec defines."""
+    from another_s3_manager.models import ApiToken
+
+    cols = {c.name for c in ApiToken.__table__.columns}
+    assert cols == {
+        "id", "user_id", "token_hash", "name",
+        "created_at", "last_used_at", "revoked_at",
+        "is_read_only", "max_read_bytes",
+    }
+
+
+def test_api_token_unique_user_name_constraint():
+    from another_s3_manager.models import ApiToken
+
+    constraint_names = {c.name for c in ApiToken.__table__.constraints}
+    assert "uq_api_token_user_name" in constraint_names
+
+
+def test_api_token_check_max_read_bytes_constraint():
+    from another_s3_manager.models import ApiToken
+
+    constraint_names = {c.name for c in ApiToken.__table__.constraints}
+    assert "ck_api_token_max_read_bytes_range" in constraint_names
+
+
+def test_api_token_user_relationship_cascade():
+    from another_s3_manager.models import User
+    rel = User.__mapper__.relationships["api_tokens"]
+    # delete-orphan semantics: deleting a User must delete their tokens
+    assert "delete-orphan" in rel.cascade
+
+
+def test_api_token_token_hash_indexed_unique():
+    """token_hash is the hot-path lookup column — must be indexed AND unique."""
+    from another_s3_manager.models import ApiToken
+    col = ApiToken.__table__.columns["token_hash"]
+    assert col.unique is True
+    assert col.index is True
