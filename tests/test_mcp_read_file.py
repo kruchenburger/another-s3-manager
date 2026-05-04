@@ -60,26 +60,13 @@ def _fake_request(plaintext: str) -> _FakeRequest:
 
 @pytest.fixture(scope="module")
 def tool_registry():
-    """Build get_mcp_app() once and extract tool callables by name."""
-    from unittest.mock import patch as _patch
+    """Extract MCP tool callables from the module-level FastMCP instance.
 
-    from mcp.server.fastmcp import FastMCP
+    See tests/test_mcp_tools.py for full rationale (Phase 5 lifespan refactor).
+    """
+    from another_s3_manager.mcp_server import mcp
 
-    captured_mcp: dict = {}
-    orig_init = FastMCP.__init__
-
-    def _patching_init(self, name, **kwargs):
-        orig_init(self, name, **kwargs)
-        captured_mcp["instance"] = self
-
-    with _patch.object(FastMCP, "__init__", _patching_init):
-        get_mcp_app()
-
-    mcp = captured_mcp["instance"]
-    tools = {}
-    for tool in mcp._tool_manager._tools.values():
-        tools[tool.name] = tool.fn
-    return tools
+    return {tool.name: tool.fn for tool in mcp._tool_manager._tools.values()}
 
 
 async def _call(tool_registry, name: str, request: _FakeRequest, **kwargs):

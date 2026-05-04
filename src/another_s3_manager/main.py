@@ -97,14 +97,6 @@ except ValueError as e:
     print("Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(32))'")
     sys.exit(1)
 
-app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION)
-
-# No application-level rate limiting. Brute-force defense lives in the
-# username-based ban (auth.record_login_attempt: 3 fails → 1h ban, admins exempt).
-# For production deployments expecting public exposure, put the app behind
-# Cloudflare Access / WAF (or any reverse proxy with auth) — that is the right
-# layer for IP-level rate limiting and DoS protection.
-
 # Set up logging
 logger = logging.getLogger(__name__)
 
@@ -128,15 +120,31 @@ def _run_alembic_upgrade() -> None:
     command.upgrade(cfg, "head")
 
 
-@app.on_event("startup")
-async def startup() -> None:
-    """Run DB migrations + import legacy JSON files if needed."""
+from contextlib import asynccontextmanager  # noqa: E402
+
+from another_s3_manager.mcp_server import mcp as _mcp_instance  # noqa: E402
+
+
+@asynccontextmanager
+async def lifespan(app_: FastAPI):
+    """App startup + MCP session manager lifecycle.
+
+    Phase 5 added MCP via FastMCP (SDK 1.12.x). FastMCP's session_manager
+    needs an async task group that's only created inside its run() context
+    manager — without entering it during startup, every request to /mcp/*
+    fails with 'Task group is not initialized.' (We learned the hard way.)
+
+    Migration from on_event('startup') to lifespan also resolves the
+    deprecation warning that's been firing since the FastAPI 0.136 bump.
+    """
+    # 1. DB migrations — must complete before any request hits a model
     try:
         _run_alembic_upgrade()
     except Exception:
         logger.critical("alembic upgrade failed", exc_info=True)
         raise
 
+    # 2. Legacy JSON → SQLite migration (idempotent)
     try:
         from another_s3_manager.migration import migrate_json_if_needed
 
@@ -149,16 +157,26 @@ async def startup() -> None:
         sys.exit(1)
     except Exception:
         logger.warning("JSON migration failed; DB is still usable", exc_info=True)
-        # Don't exit — DB is still usable, admin can investigate
 
-    # Warn loudly if the default admin password is in use. Combined with
-    # admin-exempt-from-ban (auth.record_login_attempt) and no IP rate limiting,
-    # leaving this default open exposes the admin account to unimpeded brute-force.
+    # 3. Default-password security warning
     if os.getenv("ADMIN_PASSWORD", "change_me_pls") == "change_me_pls":
         logger.warning(
             "ADMIN_PASSWORD is the default 'change_me_pls'. CHANGE IT before exposing this app — "
             "admin is exempt from auto-ban and there is no application-level rate limit on /api/login."
         )
+
+    # 4. Enter FastMCP session manager — REQUIRED for /mcp/* to work.
+    async with _mcp_instance.session_manager.run():
+        yield
+
+
+app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION, lifespan=lifespan)
+
+# No application-level rate limiting. Brute-force defense lives in the
+# username-based ban (auth.record_login_attempt: 3 fails → 1h ban, admins exempt).
+# For production deployments expecting public exposure, put the app behind
+# Cloudflare Access / WAF (or any reverse proxy with auth) — that is the right
+# layer for IP-level rate limiting and DoS protection.
 
 
 # Exception handler to ensure all errors return JSON

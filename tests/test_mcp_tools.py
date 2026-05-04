@@ -72,29 +72,21 @@ def _no_auth_request() -> _FakeRequest:
 
 @pytest.fixture(scope="module")
 def tool_registry():
-    """Build get_mcp_app() once and extract tool callables by name.
+    """Extract MCP tool callables from the module-level FastMCP instance.
 
     Returns a dict {tool_name: async_fn}.
+
+    Phase 5 lifespan refactor moved FastMCP from inside get_mcp_app() to
+    module level so the FastAPI lifespan handler can reach session_manager.
+    Tools are now registered at import time, so we just read them off
+    mcp_server.mcp directly.
+
     Note: scope="module" is safe because tool functions are pure closures;
     test isolation comes from _current_request (contextvar, per-coroutine).
     """
-    from mcp.server.fastmcp import FastMCP
+    from another_s3_manager.mcp_server import mcp
 
-    captured_mcp: dict = {}
-    orig_init = FastMCP.__init__
-
-    def _patching_init(self, name, **kwargs):
-        orig_init(self, name, **kwargs)
-        captured_mcp["instance"] = self
-
-    with patch.object(FastMCP, "__init__", _patching_init):
-        get_mcp_app()
-
-    mcp = captured_mcp["instance"]
-    tools = {}
-    for tool in mcp._tool_manager._tools.values():
-        tools[tool.name] = tool.fn
-    return tools
+    return {tool.name: tool.fn for tool in mcp._tool_manager._tools.values()}
 
 
 async def _call(tool_registry, name: str, request: _FakeRequest, **kwargs):

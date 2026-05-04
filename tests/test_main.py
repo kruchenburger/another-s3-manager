@@ -1349,11 +1349,18 @@ def test_startup_runs_migrations_and_json_import(monkeypatch, tmp_path):
         )
     )
 
-    import asyncio
+    # Phase 5 lifespan refactor: startup is now part of the FastAPI lifespan
+    # context manager rather than a standalone async function. Drive the same
+    # behavior by entering the lifespan via TestClient — TestClient runs the
+    # lifespan handler on enter (and exits it on close).
+    from fastapi.testclient import TestClient
 
-    from another_s3_manager.main import startup
+    from another_s3_manager.main import app
 
-    asyncio.run(startup())
+    with TestClient(app) as _client:
+        # Lifespan startup runs synchronously before this block executes;
+        # by the time we're here, alembic + JSON migration have completed.
+        pass
 
     # DB exists, has the imported user, JSON renamed
     assert (tmp_path / "another_s3_manager.db").exists()

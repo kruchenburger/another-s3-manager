@@ -364,306 +364,316 @@ def _is_likely_text_sample(sample: bytes) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# MCP app factory
+# FastMCP instance — must be created at module level (not inside a factory)
+# so that lifespan handlers can reach mcp.session_manager. FastMCP's
+# session_manager.run() context manager is the only way to initialize the
+# task group it needs to handle requests; it must be entered during the
+# Starlette/FastAPI lifespan event, not on demand at request time.
+#
+# See FastMCP.streamable_http_app docstring:
+#     "Use this in the lifespan context manager of your Starlette app"
 # ---------------------------------------------------------------------------
+
+import base64
+
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("another-s3-manager")
+
+# ------------------------------------------------------------------
+# list_roles — returns the intersection of user's allowed_roles and
+# role names defined in config (only what actually exists).
+# ------------------------------------------------------------------
+@mcp.tool()
+async def list_roles() -> dict:
+    """List role names accessible to the authenticated user."""
+    error_code = "none"
+    start = time.perf_counter()
+    try:
+        token, user = await authenticate_mcp_request(_get_current_request())
+        config = _config_module.load_config(force_reload=False)
+        all_role_names = {r["name"] for r in config.get("roles", [])}
+        visible = [r for r in user["allowed_roles"] if r in all_role_names]
+        logger.info("mcp.list_roles", extra={"user": user["username"], "count": len(visible)})
+        return {"roles": visible}
+    except McpError as e:
+        error_code = e.code
+        raise
+    except Exception:
+        error_code = "INTERNAL_ERROR"
+        logger.exception("mcp.list_roles.error")
+        raise McpError("INTERNAL_ERROR", "Internal server error")
+    finally:
+        mcp_tool_calls_total.labels(tool="list_roles", error_code=error_code).inc()
+        mcp_tool_duration_seconds.labels(tool="list_roles").observe(time.perf_counter() - start)
+
+# ------------------------------------------------------------------
+# list_buckets — lists buckets accessible via the given role.
+# ------------------------------------------------------------------
+@mcp.tool()
+async def list_buckets(role: str) -> dict:
+    """List buckets accessible via the given role."""
+    error_code = "none"
+    start = time.perf_counter()
+    try:
+        token, user = await authenticate_mcp_request(_get_current_request())
+        try:
+            buckets = _s3_client.list_buckets_for_role(role, user)
+        except PermissionError as e:
+            raise McpError(
+                "ROLE_NOT_ALLOWED",
+                str(e),
+                {"role": role, "allowed_roles": user["allowed_roles"]},
+            )
+        logger.info("mcp.list_buckets", extra={"user": user["username"], "role": role, "count": len(buckets)})
+        return {"buckets": buckets}
+    except McpError as e:
+        error_code = e.code
+        raise
+    except Exception:
+        error_code = "INTERNAL_ERROR"
+        logger.exception("mcp.list_buckets.error")
+        raise McpError("INTERNAL_ERROR", "Internal server error")
+    finally:
+        mcp_tool_calls_total.labels(tool="list_buckets", error_code=error_code).inc()
+        mcp_tool_duration_seconds.labels(tool="list_buckets").observe(time.perf_counter() - start)
+
+# ------------------------------------------------------------------
+# list_files — lists files at a path within a bucket.
+# ------------------------------------------------------------------
+@mcp.tool()
+async def list_files(role: str, bucket: str, path: str = "") -> dict:
+    """List files at a path within a bucket."""
+    error_code = "none"
+    start = time.perf_counter()
+    try:
+        token, user = await authenticate_mcp_request(_get_current_request())
+        try:
+            files = _s3_client.list_objects_for_role(role, bucket, path, user)
+        except PermissionError as e:
+            msg = str(e).lower()
+            if "bucket" in msg:
+                raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
+            raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
+        logger.info(
+            "mcp.list_files",
+            extra={"user": user["username"], "role": role, "bucket": bucket, "path": path, "count": len(files)},
+        )
+        return {"files": files}
+    except McpError as e:
+        error_code = e.code
+        raise
+    except Exception:
+        error_code = "INTERNAL_ERROR"
+        logger.exception("mcp.list_files.error")
+        raise McpError("INTERNAL_ERROR", "Internal server error")
+    finally:
+        mcp_tool_calls_total.labels(tool="list_files", error_code=error_code).inc()
+        mcp_tool_duration_seconds.labels(tool="list_files").observe(time.perf_counter() - start)
+
+# ------------------------------------------------------------------
+# upload_file — upload a file to a bucket. Content as base64.
+# WRITE TOOL: gated by assert_write_allowed.
+# ------------------------------------------------------------------
+@mcp.tool()
+async def upload_file(role: str, bucket: str, path: str, content_base64: str) -> dict:
+    """Upload a file to a bucket. Content must be base64-encoded."""
+    error_code = "none"
+    start = time.perf_counter()
+    try:
+        token, user = await authenticate_mcp_request(_get_current_request())
+        config = _config_module.load_config(force_reload=False)
+        assert_write_allowed(token, "upload_file", config)
+        try:
+            content = base64.b64decode(content_base64, validate=True)
+        except (binascii.Error, ValueError) as e:
+            raise McpError("INVALID_INPUT", f"content_base64 is not valid base64: {e}", {"tool": "upload_file"})
+        try:
+            _s3_client.put_object_for_role(role, bucket, path, content, user)
+        except PermissionError as e:
+            msg = str(e).lower()
+            if "bucket" in msg:
+                raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
+            raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
+        logger.info(
+            "mcp.upload_file",
+            extra={"user": user["username"], "role": role, "bucket": bucket, "path": path, "size": len(content)},
+        )
+        return {"ok": True, "bucket": bucket, "path": path, "size": len(content)}
+    except McpError as e:
+        error_code = e.code
+        raise
+    except Exception:
+        error_code = "INTERNAL_ERROR"
+        logger.exception("mcp.upload_file.error")
+        raise McpError("INTERNAL_ERROR", "Internal server error")
+    finally:
+        mcp_tool_calls_total.labels(tool="upload_file", error_code=error_code).inc()
+        mcp_tool_duration_seconds.labels(tool="upload_file").observe(time.perf_counter() - start)
+
+# ------------------------------------------------------------------
+# delete_file — delete a file from a bucket.
+# WRITE TOOL: gated by assert_write_allowed.
+# ------------------------------------------------------------------
+@mcp.tool()
+async def delete_file(role: str, bucket: str, path: str) -> dict:
+    """Delete a file from a bucket."""
+    error_code = "none"
+    start = time.perf_counter()
+    try:
+        token, user = await authenticate_mcp_request(_get_current_request())
+        config = _config_module.load_config(force_reload=False)
+        assert_write_allowed(token, "delete_file", config)
+        try:
+            _s3_client.delete_object_for_role(role, bucket, path, user)
+        except PermissionError as e:
+            msg = str(e).lower()
+            if "bucket" in msg:
+                raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
+            raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
+        logger.info(
+            "mcp.delete_file",
+            extra={"user": user["username"], "role": role, "bucket": bucket, "path": path},
+        )
+        return {"ok": True, "bucket": bucket, "path": path}
+    except McpError as e:
+        error_code = e.code
+        raise
+    except Exception:
+        error_code = "INTERNAL_ERROR"
+        logger.exception("mcp.delete_file.error")
+        raise McpError("INTERNAL_ERROR", "Internal server error")
+    finally:
+        mcp_tool_calls_total.labels(tool="delete_file", error_code=error_code).inc()
+        mcp_tool_duration_seconds.labels(tool="delete_file").observe(time.perf_counter() - start)
+
+# ------------------------------------------------------------------
+# read_file — download and return a text file from a bucket.
+# Uses HEAD-first pipeline: size check → classification → download.
+# AppFlow regression: S3 Content-Type metadata is IGNORED; classification
+# is driven by extension whitelist and UTF-8 sniffing only.
+# ------------------------------------------------------------------
+@mcp.tool()
+async def read_file(role: str, bucket: str, path: str, force_text: bool = False) -> dict:
+    """Download and return a text file from a bucket.
+
+    Performs HEAD first to avoid downloading large or binary files.
+    Set force_text=True to skip detection and use errors='replace' decoding.
+    """
+    error_code = "none"
+    start_t = time.perf_counter()
+    try:
+        token, user = await authenticate_mcp_request(_get_current_request())
+        config = _config_module.load_config(force_reload=False)
+        effective_max = min(
+            token.max_read_bytes,
+            config.get("mcp_global_max_read_bytes", 10_485_760),
+        )
+
+        try:
+            size = _s3_client.head_object_for_role(role, bucket, path, user)
+        except FileNotFoundError:
+            raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
+        except PermissionError as e:
+            if "bucket" in str(e).lower():
+                raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
+            raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
+
+        if size > effective_max:
+            raise McpError(
+                "FILE_TOO_LARGE",
+                f"File size {size} exceeds limit {effective_max}",
+                {"size": size, "max_read_bytes": effective_max},
+            )
+
+        ext: str | None = None
+        if force_text:
+            decision = "forced"
+        else:
+            kind, ext = _classify_text(path, config)
+            if kind == "binary:known":
+                raise McpError(
+                    "BINARY_CONTENT",
+                    f"File appears binary (size {size}, ext .{ext}). Use force_text=true if you know better.",
+                    {"bucket": bucket, "path": path, "size": size, "ext": ext, "hint": "force_text=true"},
+                )
+            elif kind == "text:extension":
+                decision = "extension"
+            elif kind == "text:extensionless":
+                decision = "extensionless"
+            else:  # sniff
+                sample = _s3_client.read_object_range_for_role(role, bucket, path, 0, 8191, user)
+                if _is_likely_text_sample(sample):
+                    decision = "sniffed"
+                else:
+                    raise McpError(
+                        "BINARY_CONTENT",
+                        f"File appears binary (size {size}). Use force_text=true if you know better.",
+                        {"bucket": bucket, "path": path, "size": size, "ext": ext, "hint": "force_text=true"},
+                    )
+
+        raw = _s3_client.read_object_for_role(role, bucket, path, user)
+        mcp_bytes_read_total.labels(bucket=bucket).inc(len(raw))
+
+        # Strip UTF-8 BOM silently if present.
+        if raw.startswith(b"\xef\xbb\xbf"):
+            raw = raw[3:]
+
+        if force_text:
+            content = raw.decode("utf-8", errors="replace")
+        else:
+            try:
+                content = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                raise McpError(
+                    "BINARY_CONTENT",
+                    f"File could not be decoded as UTF-8 (size {size}). Use force_text=true.",
+                    {"bucket": bucket, "path": path, "size": size, "hint": "force_text=true"},
+                )
+
+        logger.info(
+            "mcp.read_file",
+            extra={
+                "user": user["username"],
+                "role": role,
+                "bucket": bucket,
+                "path": path,
+                "size": size,
+                "detection": decision,
+            },
+        )
+        return {
+            "content": content,
+            "encoding": "utf-8",
+            "size": size,
+            "detection": decision,
+            "bucket": bucket,
+            "path": path,
+        }
+    except McpError as e:
+        error_code = e.code
+        raise
+    except Exception:
+        error_code = "INTERNAL_ERROR"
+        logger.exception("mcp.read_file.error")
+        raise McpError("INTERNAL_ERROR", "Internal server error")
+    finally:
+        mcp_tool_calls_total.labels(tool="read_file", error_code=error_code).inc()
+        mcp_tool_duration_seconds.labels(tool="read_file").observe(time.perf_counter() - start_t)
+
+
+# ---------------------------------------------------------------------------
+# Module-level ASGI app — mounted on FastAPI at /mcp.
+# Wrapping with _RequestCaptureMiddleware lets tool bodies pull the HTTP
+# request out of contextvars to read the Authorization header.
+# ---------------------------------------------------------------------------
+mcp_asgi_app = _RequestCaptureMiddleware(mcp.streamable_http_app())
 
 
 def get_mcp_app() -> Any:
-    """Return the ASGI app for the MCP sub-app, mountable on FastAPI at /mcp.
+    """Backwards-compatible accessor for the wrapped MCP ASGI app.
 
-    Uses FastMCP (MCP SDK 1.12.4) which handles Streamable HTTP transport,
-    tool registration, and dispatch internally via @mcp.tool() decorators.
-
-    The returned app is wrapped in _RequestCaptureMiddleware so that each
-    tool body can retrieve the current HTTP request (and its Authorization
-    header) via _get_current_request().
+    Tests and main.py use this; tests can call it any number of times
+    without creating a new FastMCP instance (which would re-register tools).
     """
-    import base64
-
-    from mcp.server.fastmcp import FastMCP
-
-    mcp = FastMCP("another-s3-manager")
-
-    # ------------------------------------------------------------------
-    # list_roles — returns the intersection of user's allowed_roles and
-    # role names defined in config (only what actually exists).
-    # ------------------------------------------------------------------
-    @mcp.tool()
-    async def list_roles() -> dict:
-        """List role names accessible to the authenticated user."""
-        error_code = "none"
-        start = time.perf_counter()
-        try:
-            token, user = await authenticate_mcp_request(_get_current_request())
-            config = _config_module.load_config(force_reload=False)
-            all_role_names = {r["name"] for r in config.get("roles", [])}
-            visible = [r for r in user["allowed_roles"] if r in all_role_names]
-            logger.info("mcp.list_roles", extra={"user": user["username"], "count": len(visible)})
-            return {"roles": visible}
-        except McpError as e:
-            error_code = e.code
-            raise
-        except Exception:
-            error_code = "INTERNAL_ERROR"
-            logger.exception("mcp.list_roles.error")
-            raise McpError("INTERNAL_ERROR", "Internal server error")
-        finally:
-            mcp_tool_calls_total.labels(tool="list_roles", error_code=error_code).inc()
-            mcp_tool_duration_seconds.labels(tool="list_roles").observe(time.perf_counter() - start)
-
-    # ------------------------------------------------------------------
-    # list_buckets — lists buckets accessible via the given role.
-    # ------------------------------------------------------------------
-    @mcp.tool()
-    async def list_buckets(role: str) -> dict:
-        """List buckets accessible via the given role."""
-        error_code = "none"
-        start = time.perf_counter()
-        try:
-            token, user = await authenticate_mcp_request(_get_current_request())
-            try:
-                buckets = _s3_client.list_buckets_for_role(role, user)
-            except PermissionError as e:
-                raise McpError(
-                    "ROLE_NOT_ALLOWED",
-                    str(e),
-                    {"role": role, "allowed_roles": user["allowed_roles"]},
-                )
-            logger.info("mcp.list_buckets", extra={"user": user["username"], "role": role, "count": len(buckets)})
-            return {"buckets": buckets}
-        except McpError as e:
-            error_code = e.code
-            raise
-        except Exception:
-            error_code = "INTERNAL_ERROR"
-            logger.exception("mcp.list_buckets.error")
-            raise McpError("INTERNAL_ERROR", "Internal server error")
-        finally:
-            mcp_tool_calls_total.labels(tool="list_buckets", error_code=error_code).inc()
-            mcp_tool_duration_seconds.labels(tool="list_buckets").observe(time.perf_counter() - start)
-
-    # ------------------------------------------------------------------
-    # list_files — lists files at a path within a bucket.
-    # ------------------------------------------------------------------
-    @mcp.tool()
-    async def list_files(role: str, bucket: str, path: str = "") -> dict:
-        """List files at a path within a bucket."""
-        error_code = "none"
-        start = time.perf_counter()
-        try:
-            token, user = await authenticate_mcp_request(_get_current_request())
-            try:
-                files = _s3_client.list_objects_for_role(role, bucket, path, user)
-            except PermissionError as e:
-                msg = str(e).lower()
-                if "bucket" in msg:
-                    raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
-                raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
-            logger.info(
-                "mcp.list_files",
-                extra={"user": user["username"], "role": role, "bucket": bucket, "path": path, "count": len(files)},
-            )
-            return {"files": files}
-        except McpError as e:
-            error_code = e.code
-            raise
-        except Exception:
-            error_code = "INTERNAL_ERROR"
-            logger.exception("mcp.list_files.error")
-            raise McpError("INTERNAL_ERROR", "Internal server error")
-        finally:
-            mcp_tool_calls_total.labels(tool="list_files", error_code=error_code).inc()
-            mcp_tool_duration_seconds.labels(tool="list_files").observe(time.perf_counter() - start)
-
-    # ------------------------------------------------------------------
-    # upload_file — upload a file to a bucket. Content as base64.
-    # WRITE TOOL: gated by assert_write_allowed.
-    # ------------------------------------------------------------------
-    @mcp.tool()
-    async def upload_file(role: str, bucket: str, path: str, content_base64: str) -> dict:
-        """Upload a file to a bucket. Content must be base64-encoded."""
-        error_code = "none"
-        start = time.perf_counter()
-        try:
-            token, user = await authenticate_mcp_request(_get_current_request())
-            config = _config_module.load_config(force_reload=False)
-            assert_write_allowed(token, "upload_file", config)
-            try:
-                content = base64.b64decode(content_base64, validate=True)
-            except (binascii.Error, ValueError) as e:
-                raise McpError("INVALID_INPUT", f"content_base64 is not valid base64: {e}", {"tool": "upload_file"})
-            try:
-                _s3_client.put_object_for_role(role, bucket, path, content, user)
-            except PermissionError as e:
-                msg = str(e).lower()
-                if "bucket" in msg:
-                    raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
-                raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
-            logger.info(
-                "mcp.upload_file",
-                extra={"user": user["username"], "role": role, "bucket": bucket, "path": path, "size": len(content)},
-            )
-            return {"ok": True, "bucket": bucket, "path": path, "size": len(content)}
-        except McpError as e:
-            error_code = e.code
-            raise
-        except Exception:
-            error_code = "INTERNAL_ERROR"
-            logger.exception("mcp.upload_file.error")
-            raise McpError("INTERNAL_ERROR", "Internal server error")
-        finally:
-            mcp_tool_calls_total.labels(tool="upload_file", error_code=error_code).inc()
-            mcp_tool_duration_seconds.labels(tool="upload_file").observe(time.perf_counter() - start)
-
-    # ------------------------------------------------------------------
-    # delete_file — delete a file from a bucket.
-    # WRITE TOOL: gated by assert_write_allowed.
-    # ------------------------------------------------------------------
-    @mcp.tool()
-    async def delete_file(role: str, bucket: str, path: str) -> dict:
-        """Delete a file from a bucket."""
-        error_code = "none"
-        start = time.perf_counter()
-        try:
-            token, user = await authenticate_mcp_request(_get_current_request())
-            config = _config_module.load_config(force_reload=False)
-            assert_write_allowed(token, "delete_file", config)
-            try:
-                _s3_client.delete_object_for_role(role, bucket, path, user)
-            except PermissionError as e:
-                msg = str(e).lower()
-                if "bucket" in msg:
-                    raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
-                raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
-            logger.info(
-                "mcp.delete_file",
-                extra={"user": user["username"], "role": role, "bucket": bucket, "path": path},
-            )
-            return {"ok": True, "bucket": bucket, "path": path}
-        except McpError as e:
-            error_code = e.code
-            raise
-        except Exception:
-            error_code = "INTERNAL_ERROR"
-            logger.exception("mcp.delete_file.error")
-            raise McpError("INTERNAL_ERROR", "Internal server error")
-        finally:
-            mcp_tool_calls_total.labels(tool="delete_file", error_code=error_code).inc()
-            mcp_tool_duration_seconds.labels(tool="delete_file").observe(time.perf_counter() - start)
-
-    # ------------------------------------------------------------------
-    # read_file — download and return a text file from a bucket.
-    # Uses HEAD-first pipeline: size check → classification → download.
-    # AppFlow regression: S3 Content-Type metadata is IGNORED; classification
-    # is driven by extension whitelist and UTF-8 sniffing only.
-    # ------------------------------------------------------------------
-    @mcp.tool()
-    async def read_file(role: str, bucket: str, path: str, force_text: bool = False) -> dict:
-        """Download and return a text file from a bucket.
-
-        Performs HEAD first to avoid downloading large or binary files.
-        Set force_text=True to skip detection and use errors='replace' decoding.
-        """
-        error_code = "none"
-        start_t = time.perf_counter()
-        try:
-            token, user = await authenticate_mcp_request(_get_current_request())
-            config = _config_module.load_config(force_reload=False)
-            effective_max = min(
-                token.max_read_bytes,
-                config.get("mcp_global_max_read_bytes", 10_485_760),
-            )
-
-            try:
-                size = _s3_client.head_object_for_role(role, bucket, path, user)
-            except FileNotFoundError:
-                raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
-            except PermissionError as e:
-                if "bucket" in str(e).lower():
-                    raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
-                raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
-
-            if size > effective_max:
-                raise McpError(
-                    "FILE_TOO_LARGE",
-                    f"File size {size} exceeds limit {effective_max}",
-                    {"size": size, "max_read_bytes": effective_max},
-                )
-
-            ext: str | None = None
-            if force_text:
-                decision = "forced"
-            else:
-                kind, ext = _classify_text(path, config)
-                if kind == "binary:known":
-                    raise McpError(
-                        "BINARY_CONTENT",
-                        f"File appears binary (size {size}, ext .{ext}). Use force_text=true if you know better.",
-                        {"bucket": bucket, "path": path, "size": size, "ext": ext, "hint": "force_text=true"},
-                    )
-                elif kind == "text:extension":
-                    decision = "extension"
-                elif kind == "text:extensionless":
-                    decision = "extensionless"
-                else:  # sniff
-                    sample = _s3_client.read_object_range_for_role(role, bucket, path, 0, 8191, user)
-                    if _is_likely_text_sample(sample):
-                        decision = "sniffed"
-                    else:
-                        raise McpError(
-                            "BINARY_CONTENT",
-                            f"File appears binary (size {size}). Use force_text=true if you know better.",
-                            {"bucket": bucket, "path": path, "size": size, "ext": ext, "hint": "force_text=true"},
-                        )
-
-            raw = _s3_client.read_object_for_role(role, bucket, path, user)
-            mcp_bytes_read_total.labels(bucket=bucket).inc(len(raw))
-
-            # Strip UTF-8 BOM silently if present.
-            if raw.startswith(b"\xef\xbb\xbf"):
-                raw = raw[3:]
-
-            if force_text:
-                content = raw.decode("utf-8", errors="replace")
-            else:
-                try:
-                    content = raw.decode("utf-8")
-                except UnicodeDecodeError:
-                    raise McpError(
-                        "BINARY_CONTENT",
-                        f"File could not be decoded as UTF-8 (size {size}). Use force_text=true.",
-                        {"bucket": bucket, "path": path, "size": size, "hint": "force_text=true"},
-                    )
-
-            logger.info(
-                "mcp.read_file",
-                extra={
-                    "user": user["username"],
-                    "role": role,
-                    "bucket": bucket,
-                    "path": path,
-                    "size": size,
-                    "detection": decision,
-                },
-            )
-            return {
-                "content": content,
-                "encoding": "utf-8",
-                "size": size,
-                "detection": decision,
-                "bucket": bucket,
-                "path": path,
-            }
-        except McpError as e:
-            error_code = e.code
-            raise
-        except Exception:
-            error_code = "INTERNAL_ERROR"
-            logger.exception("mcp.read_file.error")
-            raise McpError("INTERNAL_ERROR", "Internal server error")
-        finally:
-            mcp_tool_calls_total.labels(tool="read_file", error_code=error_code).inc()
-            mcp_tool_duration_seconds.labels(tool="read_file").observe(time.perf_counter() - start_t)
-
-    asgi_app = mcp.streamable_http_app()
-    return _RequestCaptureMiddleware(asgi_app)
+    return mcp_asgi_app
