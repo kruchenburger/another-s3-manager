@@ -1575,3 +1575,60 @@ def test_admin_empty_is_admin_field_does_not_demote_target(app_client):
     users = app_client.get("/api/admin/users", headers=headers).json()["users"]
     other = next(u for u in users if u["username"] == "other_admin")
     assert other["is_admin"] is True, "target admin must NOT be demoted on empty is_admin="
+
+
+# ---------------------------------------------------------------------------
+# MCP config fields (Phase 5, Task 6)
+# ---------------------------------------------------------------------------
+
+
+def test_get_config_includes_mcp_fields(app_client):
+    """GET /api/config must expose all 4 MCP fields to the admin."""
+    _, headers = login(app_client)
+    resp = app_client.get("/api/config", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "mcp_enabled" in body
+    assert "mcp_disable_writes" in body
+    assert "mcp_text_extensions" in body
+    assert "mcp_global_max_read_bytes" in body
+
+
+def test_post_config_persists_mcp_fields(app_client):
+    """POST /api/config must accept and persist all 4 MCP fields."""
+    _, headers = login(app_client)
+    initial = app_client.get("/api/config", headers=headers).json()
+    initial["mcp_enabled"] = False
+    initial["mcp_disable_writes"] = True
+    initial["mcp_text_extensions"] = ["custom"]
+    initial["mcp_global_max_read_bytes"] = 2_097_152
+    resp = app_client.post("/api/config", json=initial, headers=headers)
+    assert resp.status_code == 200
+    after = app_client.get("/api/config", headers=headers).json()
+    assert after["mcp_enabled"] is False
+    assert after["mcp_disable_writes"] is True
+    assert after["mcp_text_extensions"] == ["custom"]
+    assert after["mcp_global_max_read_bytes"] == 2_097_152
+
+
+def test_post_config_validates_mcp_global_max_read_bytes_range(app_client):
+    """POST /api/config must reject mcp_global_max_read_bytes > 10MB."""
+    _, headers = login(app_client)
+    cfg = app_client.get("/api/config", headers=headers).json()
+    cfg["mcp_global_max_read_bytes"] = 999_999_999
+    resp = app_client.post("/api/config", json=cfg, headers=headers)
+    assert resp.status_code == 422
+
+
+def test_post_config_preserves_mcp_fields_when_omitted(app_client):
+    """POST /api/config without MCP fields must preserve previously saved values."""
+    _, headers = login(app_client)
+    cfg = app_client.get("/api/config", headers=headers).json()
+    cfg["mcp_enabled"] = False
+    app_client.post("/api/config", json=cfg, headers=headers)
+    # Submit same payload but without mcp_enabled key
+    minimal = {k: v for k, v in cfg.items() if k != "mcp_enabled"}
+    resp = app_client.post("/api/config", json=minimal, headers=headers)
+    assert resp.status_code == 200
+    after = app_client.get("/api/config", headers=headers).json()
+    assert after["mcp_enabled"] is False  # preserved from previous POST

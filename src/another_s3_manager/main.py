@@ -970,6 +970,11 @@ async def get_config(
             "password_min_lowercase": config.get("password_min_lowercase", 0),
             "password_min_digits": config.get("password_min_digits", 0),
             "password_min_special": config.get("password_min_special", 0),
+            # MCP server fields (Phase 5)
+            "mcp_enabled": config.get("mcp_enabled", True),
+            "mcp_disable_writes": config.get("mcp_disable_writes", False),
+            "mcp_text_extensions": config.get("mcp_text_extensions", []),
+            "mcp_global_max_read_bytes": config.get("mcp_global_max_read_bytes", 10_485_760),
         }
         return safe_config
 
@@ -1152,6 +1157,26 @@ async def update_config(
                 preserved = load_config(force_reload=False).get(field)
                 if preserved is not None:
                     config[field] = preserved
+
+        # MCP server fields (Phase 5): validate types/ranges when provided, preserve when omitted.
+        if "mcp_enabled" in config and not isinstance(config["mcp_enabled"], bool):
+            raise HTTPException(status_code=422, detail="mcp_enabled must be boolean")
+        if "mcp_disable_writes" in config and not isinstance(config["mcp_disable_writes"], bool):
+            raise HTTPException(status_code=422, detail="mcp_disable_writes must be boolean")
+        if "mcp_text_extensions" in config:
+            ext = config["mcp_text_extensions"]
+            if not isinstance(ext, list) or not all(isinstance(e, str) for e in ext):
+                raise HTTPException(status_code=422, detail="mcp_text_extensions must be list of strings")
+        if "mcp_global_max_read_bytes" in config:
+            v = config["mcp_global_max_read_bytes"]
+            # Explicitly reject booleans (bool is a subclass of int in Python)
+            if isinstance(v, bool) or not isinstance(v, int) or v < 1 or v > 10_485_760:
+                raise HTTPException(status_code=422, detail="mcp_global_max_read_bytes must be 1..10485760")
+        # Preserve MCP fields from current config when omitted in request
+        _current_cfg = load_config(force_reload=False)
+        for k in ("mcp_enabled", "mcp_disable_writes", "mcp_text_extensions", "mcp_global_max_read_bytes"):
+            if k not in config:
+                config[k] = _current_cfg.get(k)
 
         # Validate roles and preserve existing secret_access_key if not provided
         current_config = load_config(force_reload=False)
