@@ -41,9 +41,25 @@ Configure roles through the web UI (**Admin > Configure**) or by editing `config
 ```json
 {
   "roles": [
-    { "name": "AWS Production", "type": "assume_role", "role_arn": "arn:aws:iam::123456789012:role/S3Access" },
-    { "name": "Dev Account",    "type": "credentials", "access_key_id": "AKIA...", "secret_access_key": "..." },
-    { "name": "Local MinIO",    "type": "credentials", "access_key_id": "minioadmin", "secret_access_key": "minioadmin", "endpoint_url": "http://minio:9000", "path_style": true }
+    {
+      "name": "AWS Production",
+      "type": "assume_role",
+      "role_arn": "arn:aws:iam::123456789012:role/S3Access"
+    },
+    {
+      "name": "Dev Account",
+      "type": "credentials",
+      "access_key_id": "AKIA...",
+      "secret_access_key": "..."
+    },
+    {
+      "name": "Local MinIO",
+      "type": "credentials",
+      "access_key_id": "minioadmin",
+      "secret_access_key": "minioadmin",
+      "endpoint_url": "http://minio:9000",
+      "path_style": true
+    }
   ]
 }
 ```
@@ -52,17 +68,17 @@ Role types: `default`, `profile`, `assume_role`, `credentials`. Any role can inc
 
 ## Environment Variables
 
-| Variable | Description | Default |
-|---|---|---|
-| `JWT_SECRET_KEY` | **Required.** Secret for JWT tokens | — |
-| `ADMIN_PASSWORD` | Initial admin password | `change_me_pls` |
-| `PORT` | Server port | `8080` |
-| `AWS_REGION` | Default AWS region | from env |
-| `DATA_DIR` | Directory for SQLite DB and runtime data | `/app/data` |
-| `MAX_FILE_SIZE` | Max upload size in bytes | `104857600` (100 MB) |
-| `DISABLE_DELETION` | Disable delete operations | `false` |
-| `ITEMS_PER_PAGE` | Files per page | `200` |
-| `COOKIE_SECURE` | Auth cookie `Secure` flag — set to `false` for local HTTP, `true` for HTTPS prod | `true` |
+| Variable           | Description                                                                      | Default              |
+| ------------------ | -------------------------------------------------------------------------------- | -------------------- |
+| `JWT_SECRET_KEY`   | **Required.** Secret for JWT tokens                                              | —                    |
+| `ADMIN_PASSWORD`   | Initial admin password                                                           | `change_me_pls`      |
+| `PORT`             | Server port                                                                      | `8080`               |
+| `AWS_REGION`       | Default AWS region                                                               | from env             |
+| `DATA_DIR`         | Directory for SQLite DB and runtime data                                         | `/app/data`          |
+| `MAX_FILE_SIZE`    | Max upload size in bytes                                                         | `104857600` (100 MB) |
+| `DISABLE_DELETION` | Disable delete operations                                                        | `false`              |
+| `ITEMS_PER_PAGE`   | Files per page                                                                   | `200`                |
+| `COOKIE_SECURE`    | Auth cookie `Secure` flag — set to `false` for local HTTP, `true` for HTTPS prod | `true`               |
 
 ## Authentication
 
@@ -156,15 +172,29 @@ Minimum permissions needed:
 ```json
 {
   "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-    "Resource": "arn:aws:s3:::YOUR-BUCKET/*"
-  }]
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::YOUR-BUCKET/*"
+    }
+  ]
 }
 ```
 
 Add `s3:ListAllMyBuckets` on `*` if you don't want to manually specify allowed buckets per role.
+
+## MCP server (for AI agents)
+
+another-s3-manager exposes an MCP (Model Context Protocol) server at `/mcp`,
+allowing AI agents (Claude Desktop, Cursor, Codex) to interact with your S3
+storage using the same roles and permissions as the web UI.
+
+Quick start: log in → User menu → API tokens → create. Copy the plaintext
+token once, paste into your AI agent's MCP config.
+
+See [docs/mcp-setup.md](docs/mcp-setup.md) for client-specific configurations
+and security best practices.
 
 ## License
 
