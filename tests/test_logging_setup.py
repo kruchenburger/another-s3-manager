@@ -1,4 +1,5 @@
 """Tests for logging_setup module — verifies root logger is configured correctly."""
+
 import logging
 
 import pytest

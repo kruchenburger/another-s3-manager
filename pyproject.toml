@@ -53,6 +53,11 @@ ignore = ["E501"]
 [tool.ruff.lint.isort]
 known-first-party = ["another_s3_manager"]
 
+[tool.ruff.lint.per-file-ignores]
+# main.py calls configure_logging() before any other import on purpose so the
+# root logger is wired up before submodules create their loggers at import time.
+"src/another_s3_manager/main.py" = ["E402"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

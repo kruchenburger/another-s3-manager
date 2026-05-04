@@ -1,7 +1,7 @@
 """Tests for api_tokens service module."""
+
 import hashlib
 import time
-from datetime import datetime, timedelta, UTC
 
 import pytest
 
@@ -52,7 +52,10 @@ def test_create_token_enforces_per_user_limit(alice_user):
 
 
 def test_create_token_revoked_tokens_dont_count_toward_limit(alice_user):
-    tokens = [svc.create_token(alice_user, f"t{i}", is_read_only=True, max_read_bytes=1024)[0] for i in range(svc.PER_USER_TOKEN_LIMIT)]
+    tokens = [
+        svc.create_token(alice_user, f"t{i}", is_read_only=True, max_read_bytes=1024)[0]
+        for i in range(svc.PER_USER_TOKEN_LIMIT)
+    ]
     svc.revoke_token(tokens[0].id, by_user_id=alice_user, by_is_admin=False)
     # Should now succeed because one slot freed
     new_token, _ = svc.create_token(alice_user, "new", is_read_only=True, max_read_bytes=1024)
@@ -102,6 +105,7 @@ def test_touch_last_used_throttle_initial_write(alice_user):
     svc.touch_last_used(token.id, throttle_seconds=60)
     with session_scope() as session:
         from another_s3_manager.models import ApiToken
+
         refreshed = session.get(ApiToken, token.id)
         assert refreshed.last_used_at is not None
 
@@ -109,6 +113,7 @@ def test_touch_last_used_throttle_initial_write(alice_user):
 def test_touch_last_used_throttle_skips_within_window(alice_user):
     """Two touches within the throttle window: second is a no-op."""
     from another_s3_manager.models import ApiToken
+
     token, _ = svc.create_token(alice_user, "t", is_read_only=True, max_read_bytes=1024)
     svc.touch_last_used(token.id, throttle_seconds=60)
     with session_scope() as s:

@@ -79,20 +79,10 @@ class ApiToken(Base):
     )
     token_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=_utcnow
-    )
-    last_used_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    revoked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    is_read_only: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="1"
-    )
-    max_read_bytes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=1048576, server_default="1048576"
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_read_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    max_read_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=1048576, server_default="1048576")
 
     user: Mapped["User"] = relationship(back_populates="api_tokens")

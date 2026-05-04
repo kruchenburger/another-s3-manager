@@ -1,6 +1,4 @@
 """Tests for Prometheus metrics endpoint and registry definitions."""
-import pytest
-from fastapi.testclient import TestClient
 
 
 def test_metrics_endpoint_returns_prometheus_text(app_client):

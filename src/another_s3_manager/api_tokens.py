@@ -41,14 +41,10 @@ def create_token(
     """
     with session_scope() as session:
         active = session.execute(
-            select(func.count(ApiToken.id)).where(
-                and_(ApiToken.user_id == user_id, ApiToken.revoked_at.is_(None))
-            )
+            select(func.count(ApiToken.id)).where(and_(ApiToken.user_id == user_id, ApiToken.revoked_at.is_(None)))
         ).scalar_one()
         if active >= PER_USER_TOKEN_LIMIT:
-            raise ValueError(
-                f"Token limit reached ({PER_USER_TOKEN_LIMIT}). Revoke unused tokens first."
-            )
+            raise ValueError(f"Token limit reached ({PER_USER_TOKEN_LIMIT}). Revoke unused tokens first.")
         plaintext, digest = generate_token()
         token = ApiToken(
             user_id=user_id,
@@ -112,9 +108,7 @@ def find_active_token_by_hash(token_hash: str) -> Optional[ApiToken]:
     """Hot path. SELECT ... WHERE token_hash = :h AND revoked_at IS NULL."""
     with session_scope() as session:
         token = session.execute(
-            select(ApiToken).where(
-                and_(ApiToken.token_hash == token_hash, ApiToken.revoked_at.is_(None))
-            )
+            select(ApiToken).where(and_(ApiToken.token_hash == token_hash, ApiToken.revoked_at.is_(None)))
         ).scalar_one_or_none()
         if token is not None:
             session.expunge(token)
@@ -145,7 +139,5 @@ def touch_last_used(token_id: int, throttle_seconds: int = 60) -> None:
 def count_active_tokens_for_user(user_id: int) -> int:
     with session_scope() as session:
         return session.execute(
-            select(func.count(ApiToken.id)).where(
-                and_(ApiToken.user_id == user_id, ApiToken.revoked_at.is_(None))
-            )
+            select(func.count(ApiToken.id)).where(and_(ApiToken.user_id == user_id, ApiToken.revoked_at.is_(None)))
         ).scalar_one()

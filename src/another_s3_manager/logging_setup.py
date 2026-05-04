@@ -10,7 +10,6 @@ import logging.config
 import os
 import sys
 
-
 _VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
@@ -27,8 +26,7 @@ def configure_logging() -> None:
     # ValueError inside dictConfig which produces a confusing startup traceback.
     if log_level not in _VALID_LOG_LEVELS:
         print(
-            f"WARNING: LOG_LEVEL='{log_level}' is not a valid Python log level."
-            " Falling back to INFO.",
+            f"WARNING: LOG_LEVEL='{log_level}' is not a valid Python log level. Falling back to INFO.",
             file=sys.stderr,
         )
         log_level = "INFO"

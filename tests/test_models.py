@@ -4,7 +4,7 @@ import hashlib
 import time
 
 import pytest
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
@@ -126,9 +126,15 @@ def test_api_token_model_basic_columns():
 
     cols = {c.name for c in ApiToken.__table__.columns}
     assert cols == {
-        "id", "user_id", "token_hash", "name",
-        "created_at", "last_used_at", "revoked_at",
-        "is_read_only", "max_read_bytes",
+        "id",
+        "user_id",
+        "token_hash",
+        "name",
+        "created_at",
+        "last_used_at",
+        "revoked_at",
+        "is_read_only",
+        "max_read_bytes",
     }
 
 
@@ -148,6 +154,7 @@ def test_api_token_check_max_read_bytes_constraint():
 
 def test_api_token_user_relationship_cascade():
     from another_s3_manager.models import User
+
     rel = User.__mapper__.relationships["api_tokens"]
     # delete-orphan semantics: deleting a User must delete their tokens
     assert "delete-orphan" in rel.cascade
@@ -156,6 +163,7 @@ def test_api_token_user_relationship_cascade():
 def test_api_token_token_hash_indexed_unique():
     """token_hash is the hot-path lookup column — must be indexed AND unique."""
     from another_s3_manager.models import ApiToken
+
     col = ApiToken.__table__.columns["token_hash"]
     assert col.unique is True
     assert col.index is True
@@ -164,6 +172,7 @@ def test_api_token_token_hash_indexed_unique():
 def test_api_token_user_id_indexed():
     """user_id is the lookup column for list_tokens_for_user — must be indexed."""
     from another_s3_manager.models import ApiToken
+
     col = ApiToken.__table__.columns["user_id"]
     assert col.index is True
 
@@ -193,9 +202,7 @@ def test_api_token_cascades_when_user_deleted(session):
     session.delete(user)
     session.commit()
 
-    remaining = session.execute(
-        select(func.count(ApiToken.id)).where(ApiToken.id == token_id)
-    ).scalar_one()
+    remaining = session.execute(select(func.count(ApiToken.id)).where(ApiToken.id == token_id)).scalar_one()
     assert remaining == 0
 
 
@@ -208,13 +215,15 @@ def test_api_token_max_read_bytes_check_rejects_zero_and_above_ceiling(session):
 
     # Below range: 0 must be rejected
     with pytest.raises(IntegrityError):
-        session.add(ApiToken(
-            user_id=user_id,
-            token_hash=hashlib.sha256(b"check-below").hexdigest(),
-            name="below",
-            is_read_only=True,
-            max_read_bytes=0,
-        ))
+        session.add(
+            ApiToken(
+                user_id=user_id,
+                token_hash=hashlib.sha256(b"check-below").hexdigest(),
+                name="below",
+                is_read_only=True,
+                max_read_bytes=0,
+            )
+        )
         session.flush()
     session.rollback()
 
@@ -226,13 +235,15 @@ def test_api_token_max_read_bytes_check_rejects_zero_and_above_ceiling(session):
 
     # Above ceiling: 10_485_761 must be rejected
     with pytest.raises(IntegrityError):
-        session.add(ApiToken(
-            user_id=user_id,
-            token_hash=hashlib.sha256(b"check-above").hexdigest(),
-            name="above",
-            is_read_only=True,
-            max_read_bytes=10_485_761,
-        ))
+        session.add(
+            ApiToken(
+                user_id=user_id,
+                token_hash=hashlib.sha256(b"check-above").hexdigest(),
+                name="above",
+                is_read_only=True,
+                max_read_bytes=10_485_761,
+            )
+        )
         session.flush()
     session.rollback()
 
@@ -243,11 +254,13 @@ def test_api_token_max_read_bytes_check_rejects_zero_and_above_ceiling(session):
     user_id = user.id
 
     # Exactly at ceiling: 10_485_760 must succeed
-    session.add(ApiToken(
-        user_id=user_id,
-        token_hash=hashlib.sha256(b"check-ceiling").hexdigest(),
-        name="at-ceiling",
-        is_read_only=True,
-        max_read_bytes=10_485_760,
-    ))
+    session.add(
+        ApiToken(
+            user_id=user_id,
+            token_hash=hashlib.sha256(b"check-ceiling").hexdigest(),
+            name="at-ceiling",
+            is_read_only=True,
+            max_read_bytes=10_485_760,
+        )
+    )
     session.flush()  # must not raise

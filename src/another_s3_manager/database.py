@@ -24,6 +24,7 @@ def _enable_sqlite_fk(dbapi_connection, _connection_record):
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
+
 _engine: Optional[Engine] = None
 _SessionLocal: Optional[sessionmaker[Session]] = None
 _init_lock = threading.Lock()

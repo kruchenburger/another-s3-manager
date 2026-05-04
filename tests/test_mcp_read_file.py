@@ -179,9 +179,7 @@ async def test_binary_extension_raises_without_download(alice_user, tool_registr
     png_header = b"\x89PNG\r\n\x1a\n" + b"\x00" * 92
 
     mock_read = MagicMock()
-    with _patch_head(len(png_header)), patch(
-        "another_s3_manager.s3_client.read_object_for_role", mock_read
-    ):
+    with _patch_head(len(png_header)), patch("another_s3_manager.s3_client.read_object_for_role", mock_read):
         with pytest.raises(McpError) as exc_info:
             await _call(
                 tool_registry,
@@ -344,9 +342,11 @@ async def test_extensionless_text_basenames_readme(alice_user, tool_registry):
     content = b"# My Project\n\nDescription here.\n"
 
     mock_range = MagicMock()
-    with _patch_head(len(content)), patch(
-        "another_s3_manager.s3_client.read_object_range_for_role", mock_range
-    ), _patch_read(content):
+    with (
+        _patch_head(len(content)),
+        patch("another_s3_manager.s3_client.read_object_range_for_role", mock_range),
+        _patch_read(content),
+    ):
         result = await _call(
             tool_registry,
             "read_file",

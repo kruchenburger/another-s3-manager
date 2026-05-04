@@ -194,6 +194,7 @@ def test_get_config_value_env_string(monkeypatch):
 
 def test_default_config_includes_mcp_fields():
     from another_s3_manager.config import _get_default_config
+
     cfg = _get_default_config()
     assert cfg["mcp_enabled"] is True
     assert cfg["mcp_disable_writes"] is False
@@ -204,6 +205,7 @@ def test_default_config_includes_mcp_fields():
 def test_migrate_config_adds_mcp_fields_to_legacy_config(monkeypatch, tmp_path):
     """A legacy config.json without MCP fields should get them auto-added on load."""
     import json
+
     from another_s3_manager import config as config_module
 
     legacy = tmp_path / "config.json"
