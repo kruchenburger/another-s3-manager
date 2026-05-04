@@ -80,11 +80,17 @@ def list_all_tokens(include_revoked: bool = False) -> list[Tuple[ApiToken, User]
             stmt = stmt.where(ApiToken.revoked_at.is_(None))
         stmt = stmt.order_by(ApiToken.created_at.desc())
         rows = session.execute(stmt).all()
-        result: list[Tuple[ApiToken, User]] = []
-        for token, user in rows:
-            session.expunge(token)
-            session.expunge(user)
-            result.append((token, user))
+        # Materialize attributes BEFORE expunge_all so detached access works.
+        # We can't expunge token AND user separately when they share a session
+        # — expunging the token via its FK relationship cascades to the user
+        # in some configurations. Just expunge_all once at the end.
+        result: list[Tuple[ApiToken, User]] = list(rows)
+        for token, user in result:
+            # Force-load the columns the caller will read after expunge.
+            _ = (token.id, token.name, token.is_read_only, token.max_read_bytes,
+                 token.created_at, token.last_used_at, token.revoked_at)
+            _ = (user.id, user.username)
+        session.expunge_all()
         return result
 
 

@@ -140,3 +140,25 @@ def test_list_tokens_for_user_default_excludes_revoked(alice_user):
     assert len(active) == 1
     everything = svc.list_tokens_for_user(alice_user, include_revoked=True)
     assert len(everything) == 2
+
+
+def test_list_all_tokens_returns_detached_objects_safe_to_read(alice_user):
+    """Regression: list_all_tokens must return objects that are safely
+    readable AFTER the session closes. The previous implementation called
+    expunge(token) and expunge(user) separately, which raised
+    InvalidRequestError when the User was already loaded into the session
+    via the ApiToken.user relationship — they shared identity.
+
+    Symptom in production: GET /api/admin/tokens returned 500 and the admin
+    page rendered an empty list.
+    """
+    svc.create_token(alice_user, "list-all-test", is_read_only=True, max_read_bytes=1024)
+    rows = svc.list_all_tokens(include_revoked=False)
+    assert len(rows) >= 1
+    # Caller reads attributes outside any session — must not raise.
+    for token, user in rows:
+        # These attribute reads would raise DetachedInstanceError if the
+        # state wasn't materialized before expunge.
+        assert token.name
+        assert user.username
+        assert token.is_read_only is True or token.is_read_only is False
