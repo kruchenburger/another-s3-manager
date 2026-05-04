@@ -464,3 +464,43 @@ def test_admin_delete_token_non_admin_403(app_client):
     dave_csrf = _login(app_client, "dave", "davepass")
     resp = app_client.delete("/api/admin/tokens/1", headers={"X-CSRF-Token": dave_csrf})
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Timezone serialization (regression: SQLite drops tzinfo, frontend needs UTC marker)
+# ---------------------------------------------------------------------------
+
+
+def test_serialized_token_timestamps_carry_utc_marker(client_with_admin):
+    """Spec: every serialized timestamp must end with 'Z' or '+00:00' so the
+    browser parses it as UTC. SQLite strips tzinfo on storage, so naive
+    datetimes round-trip — _serialize_token must add the suffix back.
+    Without this, the UI showed 'Last used 2 hours ago' right after use on
+    a UTC+2 browser.
+    """
+    client, csrf = client_with_admin
+
+    # Create + read back a token; created_at should be UTC-marked.
+    create = client.post(
+        "/api/me/tokens",
+        json={"name": "tz-check", "is_read_only": True, "max_read_bytes": 1024},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert create.status_code == 200
+    body = create.json()
+    assert body["created_at"].endswith("Z") or body["created_at"].endswith("+00:00"), (
+        f"created_at='{body['created_at']}' must carry a UTC marker"
+    )
+    assert body["last_used_at"] is None
+    assert body["revoked_at"] is None
+
+    # last_used_at is set on the next MCP-style auth lookup; emulate via touch_last_used.
+    from another_s3_manager import api_tokens as svc
+    token_id = body["id"]
+    svc.touch_last_used(token_id, throttle_seconds=0)
+
+    listing = client.get("/api/me/tokens").json()
+    matched = next((t for t in listing["tokens"] if t["id"] == token_id), None)
+    assert matched is not None
+    assert matched["last_used_at"] is not None
+    assert matched["last_used_at"].endswith("Z") or matched["last_used_at"].endswith("+00:00")

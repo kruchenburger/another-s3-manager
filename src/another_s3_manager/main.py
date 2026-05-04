@@ -667,14 +667,27 @@ def _get_user_id_by_username(username: str) -> int:
 
 def _serialize_token(t, owner_username: Optional[str] = None) -> dict:
     """Serialize an ApiToken ORM row to a plain dict (no token_hash, no plaintext)."""
+    # SQLite drops tzinfo on storage even though our DateTime columns declare
+    # timezone=True; values come back naive. Since we always *write* UTC
+    # (api_tokens._utcnow → datetime.now(UTC)), force a 'Z' suffix on the
+    # serialized ISO so the browser parses it as UTC instead of local time.
+    # Without this, the React UI showed "Last used 2 hours ago" right after
+    # using a token from a UTC+2 browser.
+    def _iso_utc(d):
+        if d is None:
+            return None
+        if d.tzinfo is not None:
+            return d.isoformat()
+        return d.isoformat() + "Z"
+
     out = {
         "id": t.id,
         "name": t.name,
         "is_read_only": t.is_read_only,
         "max_read_bytes": t.max_read_bytes,
-        "created_at": t.created_at.isoformat() if t.created_at else None,
-        "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
-        "revoked_at": t.revoked_at.isoformat() if t.revoked_at else None,
+        "created_at": _iso_utc(t.created_at),
+        "last_used_at": _iso_utc(t.last_used_at),
+        "revoked_at": _iso_utc(t.revoked_at),
     }
     if owner_username is not None:
         out["owner_username"] = owner_username
