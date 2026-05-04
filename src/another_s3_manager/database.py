@@ -5,6 +5,7 @@ The engine is module-level (lazy-initialized) so callers don't pass it around.
 """
 
 import threading
+import time
 from contextlib import contextmanager
 from typing import Generator, Optional
 
@@ -28,6 +29,24 @@ _SessionLocal: Optional[sessionmaker[Session]] = None
 _init_lock = threading.Lock()
 
 
+def _register_query_metrics(engine: Engine) -> None:
+    """Emit app_db_query_duration_seconds for every SQLAlchemy query."""
+    from another_s3_manager.metrics import app_db_query_duration_seconds
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _q_start(conn, cursor, statement, parameters, context, executemany):  # noqa: ARG001
+        conn.info["_q_start"] = time.perf_counter()
+
+    @event.listens_for(engine, "after_cursor_execute")
+    def _q_end(conn, cursor, statement, parameters, context, executemany):  # noqa: ARG001
+        start = conn.info.pop("_q_start", time.perf_counter())
+        duration = time.perf_counter() - start
+        op = statement.lstrip().split(" ", 1)[0].upper() if statement else "OTHER"
+        if op not in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+            op = "OTHER"
+        app_db_query_duration_seconds.labels(operation=op).observe(duration)
+
+
 def get_engine() -> Engine:
     """Lazy-initialize the module-level engine. Thread-safe via double-checked locking."""
     global _engine, _SessionLocal
@@ -42,6 +61,7 @@ def get_engine() -> Engine:
                     future=True,
                 )
                 _SessionLocal = sessionmaker(bind=_engine, autocommit=False, autoflush=False, future=True)
+                _register_query_metrics(_engine)
     return _engine
 
 

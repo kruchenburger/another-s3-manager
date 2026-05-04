@@ -95,6 +95,25 @@ def test_sqlite_foreign_keys_pragma_is_enabled():
         assert result == 1, "FK enforcement should be ON for SQLite"
 
 
+def test_db_query_metric_records_select():
+    from another_s3_manager import metrics
+    from another_s3_manager.database import session_scope
+    from another_s3_manager.models import User
+    from sqlalchemy import select
+
+    def count(op: str) -> float:
+        for sample in metrics.app_db_query_duration_seconds.collect()[0].samples:
+            if sample.name.endswith("_count") and sample.labels.get("operation") == op:
+                return sample.value
+        return 0.0
+
+    before = count("SELECT")
+    with session_scope() as s:
+        s.execute(select(User).limit(1))
+    after = count("SELECT")
+    assert after >= before + 1
+
+
 def test_db_level_cascade_works_in_production_engine():
     """Raw SQL DELETE on a user must cascade to api_tokens via ON DELETE CASCADE."""
     import hashlib
