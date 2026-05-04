@@ -19,6 +19,7 @@ from another_s3_manager import api_tokens as token_svc
 from another_s3_manager import s3_client as _s3_client
 from another_s3_manager.metrics import (
     mcp_auth_failures_total,
+    mcp_bytes_read_total,
     mcp_tool_calls_total,
     mcp_tool_duration_seconds,
 )
@@ -170,6 +171,196 @@ async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
 
     token_svc.touch_last_used(token.id)
     return token, user_dict
+
+
+# ---------------------------------------------------------------------------
+# Text/binary classification constants and helpers for read_file
+# ---------------------------------------------------------------------------
+
+TEXT_EXTENSIONS_WHITELIST: frozenset[str] = frozenset(
+    {
+        "txt",
+        "md",
+        "rst",
+        "json",
+        "yaml",
+        "yml",
+        "toml",
+        "xml",
+        "html",
+        "htm",
+        "css",
+        "scss",
+        "less",
+        "csv",
+        "tsv",
+        "ndjson",
+        "jsonl",
+        "log",
+        "conf",
+        "cfg",
+        "ini",
+        "env",
+        "properties",
+        "py",
+        "js",
+        "ts",
+        "tsx",
+        "jsx",
+        "mjs",
+        "cjs",
+        "vue",
+        "svelte",
+        "sh",
+        "bash",
+        "zsh",
+        "fish",
+        "ps1",
+        "sql",
+        "go",
+        "rs",
+        "rb",
+        "java",
+        "kt",
+        "swift",
+        "c",
+        "cpp",
+        "h",
+        "hpp",
+        "lua",
+        "pl",
+        "pm",
+        "ex",
+        "exs",
+        "erl",
+        "hs",
+        "clj",
+        "scala",
+        "graphql",
+        "gql",
+        "proto",
+    }
+)
+
+EXTENSIONLESS_TEXT_BASENAMES: frozenset[str] = frozenset(
+    {
+        "readme",
+        "license",
+        "licence",
+        "copying",
+        "authors",
+        "changelog",
+        "news",
+        "dockerfile",
+        "makefile",
+        "rakefile",
+        "procfile",
+        "vagrantfile",
+        "gitignore",
+        "dockerignore",
+        "gitattributes",
+    }
+)
+
+UNKNOWN_OK_TO_SNIFF: frozenset[str] = frozenset({"data", "out", "dump", "bak"})
+
+KNOWN_BINARY_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        "png",
+        "jpg",
+        "jpeg",
+        "gif",
+        "webp",
+        "bmp",
+        "ico",
+        "svg",
+        "mp3",
+        "mp4",
+        "wav",
+        "ogg",
+        "flac",
+        "avi",
+        "mov",
+        "mkv",
+        "webm",
+        "zip",
+        "tar",
+        "gz",
+        "bz2",
+        "xz",
+        "7z",
+        "rar",
+        "pdf",
+        "doc",
+        "docx",
+        "xls",
+        "xlsx",
+        "ppt",
+        "pptx",
+        "odt",
+        "ods",
+        "odp",
+        "exe",
+        "dll",
+        "so",
+        "dylib",
+        "bin",
+        "iso",
+        "parquet",
+        "orc",
+        "avro",
+        "feather",
+        "pyc",
+        "class",
+        "o",
+        "a",
+    }
+)
+
+
+def _classify_text(path: str, config: dict) -> tuple[str, str | None]:
+    """Classify a file path as text or binary using extension and basename rules.
+
+    Returns (decision, ext) where decision is one of:
+    'text:extension' | 'text:extensionless' | 'binary:known' | 'sniff'
+    """
+    basename = path.split("/")[-1].lower()
+    ext = basename.rsplit(".", 1)[-1] if "." in basename else None
+    if basename in EXTENSIONLESS_TEXT_BASENAMES:
+        return "text:extensionless", None
+    if ext is not None:
+        custom = set(config.get("mcp_text_extensions", []))
+        if ext in TEXT_EXTENSIONS_WHITELIST or ext in custom:
+            return "text:extension", ext
+        if ext in KNOWN_BINARY_EXTENSIONS:
+            return "binary:known", ext
+        if ext in UNKNOWN_OK_TO_SNIFF:
+            return "sniff", ext
+        # Other unknown extension — sniff
+        return "sniff", ext
+    return "sniff", None
+
+
+def _is_likely_text_sample(sample: bytes) -> bool:
+    """Return True if the sample bytes appear to be valid UTF-8 text.
+
+    Rejects samples containing a NUL byte in the first 1KB (binary indicator).
+    Handles partial multibyte sequences at the end of the sample.
+    """
+    if b"\x00" in sample[:1024]:
+        return False
+    try:
+        sample.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        # Sample may end in the middle of a multibyte sequence — try trimming.
+        for cut in range(1, 4):
+            try:
+                sample[:-cut].decode("utf-8")
+                return True
+            except UnicodeDecodeError:
+                continue
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +550,120 @@ def get_mcp_app() -> Any:
         finally:
             mcp_tool_calls_total.labels(tool="delete_file", error_code=error_code).inc()
             mcp_tool_duration_seconds.labels(tool="delete_file").observe(time.perf_counter() - start)
+
+    # ------------------------------------------------------------------
+    # read_file — download and return a text file from a bucket.
+    # Uses HEAD-first pipeline: size check → classification → download.
+    # AppFlow regression: S3 Content-Type metadata is IGNORED; classification
+    # is driven by extension whitelist and UTF-8 sniffing only.
+    # ------------------------------------------------------------------
+    @mcp.tool()
+    async def read_file(role: str, bucket: str, path: str, force_text: bool = False) -> dict:
+        """Download and return a text file from a bucket.
+
+        Performs HEAD first to avoid downloading large or binary files.
+        Set force_text=True to skip detection and use errors='replace' decoding.
+        """
+        error_code = "none"
+        start_t = time.perf_counter()
+        try:
+            token, user = await authenticate_mcp_request(_get_current_request())
+            config = _config_module.load_config(force_reload=False)
+            effective_max = min(
+                token.max_read_bytes,
+                config.get("mcp_global_max_read_bytes", 10_485_760),
+            )
+
+            try:
+                size = _s3_client.head_object_for_role(role, bucket, path, user)
+            except FileNotFoundError:
+                raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
+            except PermissionError as e:
+                if "bucket" in str(e).lower():
+                    raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
+                raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
+
+            if size > effective_max:
+                raise McpError(
+                    "FILE_TOO_LARGE",
+                    f"File size {size} exceeds limit {effective_max}",
+                    {"size": size, "max_read_bytes": effective_max},
+                )
+
+            ext: str | None = None
+            if force_text:
+                decision = "forced"
+            else:
+                kind, ext = _classify_text(path, config)
+                if kind == "binary:known":
+                    raise McpError(
+                        "BINARY_CONTENT",
+                        f"File appears binary (size {size}, ext .{ext}). Use force_text=true if you know better.",
+                        {"bucket": bucket, "path": path, "size": size, "ext": ext, "hint": "force_text=true"},
+                    )
+                elif kind == "text:extension":
+                    decision = "extension"
+                elif kind == "text:extensionless":
+                    decision = "extensionless"
+                else:  # sniff
+                    sample = _s3_client.read_object_range_for_role(role, bucket, path, 0, 8191, user)
+                    if _is_likely_text_sample(sample):
+                        decision = "sniffed"
+                    else:
+                        raise McpError(
+                            "BINARY_CONTENT",
+                            f"File appears binary (size {size}). Use force_text=true if you know better.",
+                            {"bucket": bucket, "path": path, "size": size, "ext": ext, "hint": "force_text=true"},
+                        )
+
+            raw = _s3_client.read_object_for_role(role, bucket, path, user)
+            mcp_bytes_read_total.labels(bucket=bucket).inc(len(raw))
+
+            # Strip UTF-8 BOM silently if present.
+            if raw.startswith(b"\xef\xbb\xbf"):
+                raw = raw[3:]
+
+            if force_text:
+                content = raw.decode("utf-8", errors="replace")
+            else:
+                try:
+                    content = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    raise McpError(
+                        "BINARY_CONTENT",
+                        f"File could not be decoded as UTF-8 (size {size}). Use force_text=true.",
+                        {"bucket": bucket, "path": path, "size": size, "hint": "force_text=true"},
+                    )
+
+            logger.info(
+                "mcp.read_file",
+                extra={
+                    "user": user["username"],
+                    "role": role,
+                    "bucket": bucket,
+                    "path": path,
+                    "size": size,
+                    "detection": decision,
+                },
+            )
+            return {
+                "content": content,
+                "encoding": "utf-8",
+                "size": size,
+                "detection": decision,
+                "bucket": bucket,
+                "path": path,
+            }
+        except McpError as e:
+            error_code = e.code
+            raise
+        except Exception:
+            error_code = "INTERNAL_ERROR"
+            logger.exception("mcp.read_file.error")
+            raise McpError("INTERNAL_ERROR", "Internal server error")
+        finally:
+            mcp_tool_calls_total.labels(tool="read_file", error_code=error_code).inc()
+            mcp_tool_duration_seconds.labels(tool="read_file").observe(time.perf_counter() - start_t)
 
     asgi_app = mcp.streamable_http_app()
     return _RequestCaptureMiddleware(asgi_app)
