@@ -188,3 +188,58 @@ def test_write_allowed_details_include_tool_name():
     with pytest.raises(McpError) as exc_info:
         assert_write_allowed(token, "upload_file", {})
     assert exc_info.value.details.get("tool") == "upload_file"
+
+
+# ---------------------------------------------------------------------------
+# Admin role expansion (regression: admin tokens were getting empty allowed_roles)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def admin_user():
+    """Insert an admin user with NO explicit role assignments."""
+    with session_scope() as session:
+        u = User(username="admin_mcp", password_hash="x", is_admin=True)
+        session.add(u)
+        session.flush()
+        return u.id
+
+
+@pytest.mark.asyncio
+async def test_admin_token_sees_all_config_roles(admin_user, monkeypatch):
+    """Regression: an admin-issued token must inherit all roles from config,
+    matching the web UI's GET /api/me behavior. Previously the MCP auth
+    pipeline returned `allowed_roles=[]` for admins (since admins don't have
+    explicit role rows), which made list_roles return zero roles even for
+    admin-issued tokens.
+    """
+    from another_s3_manager import config as _cfg
+    from another_s3_manager import mcp_server as _mcp_module
+
+    fake_cfg = {"roles": [{"name": "MyR2"}, {"name": "Wasabi"}, {"name": "AwsProd"}]}
+    monkeypatch.setattr(_mcp_module._config_module, "load_config", lambda force_reload=False: fake_cfg)
+
+    _, plaintext = svc.create_token(admin_user, "t-admin", is_read_only=True, max_read_bytes=1024)
+    _, user_dict = await authenticate_mcp_request(_FakeRequest({"authorization": f"Bearer {plaintext}"}))
+    assert user_dict["is_admin"] is True
+    assert sorted(user_dict["allowed_roles"]) == ["AwsProd", "MyR2", "Wasabi"]
+
+
+@pytest.mark.asyncio
+async def test_non_admin_token_uses_explicit_role_assignments(alice_user, monkeypatch):
+    """Sanity check: non-admin tokens still get only their explicitly assigned roles."""
+    from another_s3_manager.models import UserRole
+
+    # Assign alice exactly one role
+    with session_scope() as session:
+        session.add(UserRole(user_id=alice_user, role_name="MyR2"))
+
+    from another_s3_manager import mcp_server as _mcp_module
+
+    fake_cfg = {"roles": [{"name": "MyR2"}, {"name": "Wasabi"}]}
+    monkeypatch.setattr(_mcp_module._config_module, "load_config", lambda force_reload=False: fake_cfg)
+
+    _, plaintext = svc.create_token(alice_user, "t-alice", is_read_only=True, max_read_bytes=1024)
+    _, user_dict = await authenticate_mcp_request(_FakeRequest({"authorization": f"Bearer {plaintext}"}))
+    assert user_dict["is_admin"] is False
+    assert user_dict["allowed_roles"] == ["MyR2"]

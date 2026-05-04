@@ -163,10 +163,20 @@ async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
         if u is None:
             mcp_auth_failures_total.labels(reason="invalid_token").inc()
             raise McpError("INVALID_TOKEN", "Token's user no longer exists")
+        # Admins implicitly have access to every role in config — same expansion
+        # the web UI does in GET /api/me. Without this, an admin-issued MCP
+        # token returns 0 roles via list_roles because the admin user's
+        # allowed_roles column is empty (admins manage roles, they don't get
+        # explicit assignments).
+        if u.is_admin:
+            cfg = _config_module.load_config(force_reload=False)
+            allowed_roles = [r["name"] for r in cfg.get("roles", []) if r.get("name")]
+        else:
+            allowed_roles = [r.role_name for r in u.roles]
         user_dict = {
             "username": u.username,
             "is_admin": u.is_admin,
-            "allowed_roles": [r.role_name for r in u.roles],
+            "allowed_roles": allowed_roles,
         }
 
     token_svc.touch_last_used(token.id)
