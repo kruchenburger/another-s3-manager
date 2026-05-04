@@ -158,3 +158,10 @@ def test_api_token_token_hash_indexed_unique():
     col = ApiToken.__table__.columns["token_hash"]
     assert col.unique is True
     assert col.index is True
+
+
+def test_api_token_user_id_indexed():
+    """user_id is the lookup column for list_tokens_for_user — must be indexed."""
+    from another_s3_manager.models import ApiToken
+    col = ApiToken.__table__.columns["user_id"]
+    assert col.index is True
