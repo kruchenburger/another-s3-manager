@@ -756,9 +756,7 @@ async def admin_create_token(
     from another_s3_manager.database import session_scope
 
     with session_scope() as _session:
-        user_exists = _session.execute(
-            select(UserModel.id).where(UserModel.id == payload.user_id)
-        ).scalar_one_or_none()
+        user_exists = _session.execute(select(UserModel.id).where(UserModel.id == payload.user_id)).scalar_one_or_none()
     if user_exists is None:
         raise HTTPException(status_code=404, detail=f"User with id {payload.user_id} not found")
     try:
@@ -1771,9 +1769,9 @@ async def download_file(
         if content_length:
             from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
 
-            s3_bytes_downloaded_total.labels(
-                role=safe_role_label(validated_role or "unknown"), bucket=bucket_name
-            ).inc(content_length)
+            s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket_name).inc(
+                content_length
+            )
         content_type = response.get("ContentType", "application/octet-stream")
         filename = path.split("/")[-1]  # Get filename from path
 

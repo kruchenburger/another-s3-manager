@@ -545,3 +545,392 @@ def test_execute_with_s3_retry_increments_error_counter_on_failure(monkeypatch):
         s3_client_mod.execute_with_s3_retry(unique_role, "head", lambda c: c.head_object())
     after = count(unique_role, "head", "error")
     assert after == before + 1
+
+
+# ---------------------------------------------------------------------------
+# Tests for permission-aware *_for_role helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_user(is_admin=False, allowed_roles=None):
+    """Create a minimal user_dict for testing."""
+    return {
+        "username": "testuser",
+        "is_admin": is_admin,
+        "allowed_roles": allowed_roles or [],
+    }
+
+
+# --- validate_role_access ---
+
+
+def test_validate_role_access_none_returns_none():
+    import another_s3_manager.s3_client as mod
+
+    assert mod.validate_role_access(None, _make_user()) is None
+
+
+def test_validate_role_access_admin_allows_any():
+    import another_s3_manager.s3_client as mod
+
+    assert mod.validate_role_access("AnyRole", _make_user(is_admin=True)) == "AnyRole"
+
+
+def test_validate_role_access_allowed_role():
+    import another_s3_manager.s3_client as mod
+
+    assert mod.validate_role_access("RoleA", _make_user(allowed_roles=["RoleA", "RoleB"])) == "RoleA"
+
+
+def test_validate_role_access_denied_raises_permission_error():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError, match="RoleX"):
+        mod.validate_role_access("RoleX", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- _validate_bucket_access ---
+
+
+def test_validate_bucket_access_passes_when_no_allowed_buckets(mocker):
+    """When role has no allowed_buckets, any bucket is permitted."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch.object(
+        mod,
+        "get_s3_client",
+        return_value=mocker.MagicMock(),
+    )
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    # Should not raise
+    mod._validate_bucket_access("RoleA", "any-bucket", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_validate_bucket_access_allowed_bucket(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["bucket-ok"]}]},
+    )
+    # Should not raise
+    mod._validate_bucket_access("RoleA", "bucket-ok", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_validate_bucket_access_denied_bucket(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["bucket-ok"]}]},
+    )
+    with pytest.raises(PermissionError, match="bucket-bad"):
+        mod._validate_bucket_access("RoleA", "bucket-bad", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_validate_bucket_access_denied_role(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    with pytest.raises(PermissionError):
+        mod._validate_bucket_access("RoleA", "bucket", _make_user(allowed_roles=[]))
+
+
+# --- list_buckets_for_role ---
+
+
+def test_list_buckets_for_role_returns_allowed_buckets(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["b1", "b2"]}]},
+    )
+    result = mod.list_buckets_for_role("RoleA", _make_user(allowed_roles=["RoleA"]))
+    assert result == ["b1", "b2"]
+
+
+def test_list_buckets_for_role_falls_back_to_s3(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.list_buckets.return_value = {"Buckets": [{"Name": "bucket-x"}]}
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    result = mod.list_buckets_for_role("RoleA", _make_user(allowed_roles=["RoleA"]))
+    assert result == ["bucket-x"]
+    fake_client.list_buckets.assert_called_once()
+
+
+def test_list_buckets_for_role_permission_denied():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.list_buckets_for_role("RoleX", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- list_objects_for_role ---
+
+
+def test_list_objects_for_role_returns_files(mocker):
+    """Returns sorted list of file-object dicts."""
+    import datetime
+
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    dt = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
+    fake_client = mocker.MagicMock()
+    fake_paginator = mocker.MagicMock()
+    fake_paginator.paginate.return_value = [
+        {
+            "Contents": [{"Key": "prefix/file.txt", "Size": 100, "LastModified": dt}],
+            "CommonPrefixes": [{"Prefix": "prefix/sub/"}],
+        }
+    ]
+    fake_client.get_paginator.return_value = fake_paginator
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    result = mod.list_objects_for_role("RoleA", "bucket", "prefix", _make_user(allowed_roles=["RoleA"]))
+    # Directory entries sort before files
+    assert result[0]["is_directory"] is True
+    assert result[0]["name"] == "sub"
+    assert result[1]["name"] == "file.txt"
+    assert result[1]["size"] == 100
+
+
+def test_list_objects_for_role_permission_denied_role():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.list_objects_for_role("RoleX", "bucket", "", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_list_objects_for_role_permission_denied_bucket(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["good"]}]},
+    )
+    with pytest.raises(PermissionError, match="bad-bucket"):
+        mod.list_objects_for_role("RoleA", "bad-bucket", "", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- head_object_for_role ---
+
+
+def test_head_object_for_role_returns_size(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.head_object.return_value = {"ContentLength": 42}
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    size = mod.head_object_for_role("RoleA", "bucket", "file.txt", _make_user(allowed_roles=["RoleA"]))
+    assert size == 42
+
+
+def test_head_object_for_role_not_found(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.head_object.side_effect = ClientError({"Error": {"Code": "404"}}, "HeadObject")
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    with pytest.raises(FileNotFoundError):
+        mod.head_object_for_role("RoleA", "bucket", "missing.txt", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_head_object_for_role_permission_denied():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.head_object_for_role("RoleX", "bucket", "f", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- read_object_for_role ---
+
+
+def test_read_object_for_role_returns_bytes(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_body = mocker.MagicMock()
+    fake_body.read.return_value = b"hello"
+    fake_client = mocker.MagicMock()
+    fake_client.get_object.return_value = {"Body": fake_body}
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    data = mod.read_object_for_role("RoleA", "bucket", "file.txt", _make_user(allowed_roles=["RoleA"]))
+    assert data == b"hello"
+
+
+def test_read_object_for_role_not_found(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.get_object.side_effect = ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    with pytest.raises(FileNotFoundError):
+        mod.read_object_for_role("RoleA", "bucket", "gone.txt", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_read_object_for_role_permission_denied():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.read_object_for_role("RoleX", "bucket", "f", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- read_object_range_for_role ---
+
+
+def test_read_object_range_for_role_returns_slice(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_body = mocker.MagicMock()
+    fake_body.read.return_value = b"hello"
+    fake_client = mocker.MagicMock()
+    fake_client.get_object.return_value = {"Body": fake_body}
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    data = mod.read_object_range_for_role("RoleA", "bucket", "file.txt", 0, 4, _make_user(allowed_roles=["RoleA"]))
+    assert data == b"hello"
+    _, kwargs = fake_client.get_object.call_args
+    assert kwargs["Range"] == "bytes=0-4"
+
+
+def test_read_object_range_for_role_not_found(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.get_object.side_effect = ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    with pytest.raises(FileNotFoundError):
+        mod.read_object_range_for_role("RoleA", "bucket", "gone.txt", 0, 100, _make_user(allowed_roles=["RoleA"]))
+
+
+# --- put_object_for_role ---
+
+
+def test_put_object_for_role_uploads(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    mod.put_object_for_role("RoleA", "bucket", "key.txt", b"data", _make_user(allowed_roles=["RoleA"]))
+    fake_client.put_object.assert_called_once()
+    _, kwargs = fake_client.put_object.call_args
+    assert kwargs["Bucket"] == "bucket"
+    assert kwargs["Key"] == "key.txt"
+    assert kwargs["Body"] == b"data"
+
+
+def test_put_object_for_role_permission_denied():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.put_object_for_role("RoleX", "bucket", "key", b"", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_put_object_for_role_denied_bucket(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["good"]}]},
+    )
+    with pytest.raises(PermissionError, match="bad"):
+        mod.put_object_for_role("RoleA", "bad", "key", b"", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- delete_object_for_role ---
+
+
+def test_delete_object_for_role_single_file(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    # No objects from paginator (triggers single delete_object path)
+    fake_paginator = mocker.MagicMock()
+    fake_paginator.paginate.return_value = []
+    fake_client.get_paginator.return_value = fake_paginator
+    fake_client.delete_object.return_value = {}
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    result = mod.delete_object_for_role("RoleA", "bucket", "file.txt", _make_user(allowed_roles=["RoleA"]))
+    assert result["count"] == 1
+    fake_client.delete_object.assert_called_once_with(Bucket="bucket", Key="file.txt")
+
+
+def test_delete_object_for_role_not_found(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_paginator = mocker.MagicMock()
+    fake_paginator.paginate.return_value = []
+    fake_client.get_paginator.return_value = fake_paginator
+    fake_client.delete_object.side_effect = ClientError({"Error": {"Code": "NoSuchKey"}}, "DeleteObject")
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    with pytest.raises(FileNotFoundError):
+        mod.delete_object_for_role("RoleA", "bucket", "gone.txt", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_delete_object_for_role_permission_denied():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.delete_object_for_role("RoleX", "bucket", "f", _make_user(allowed_roles=["RoleA"]))

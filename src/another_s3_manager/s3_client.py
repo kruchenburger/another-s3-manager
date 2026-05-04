@@ -665,3 +665,317 @@ def clear_s3_clients_cache() -> None:
     """Clear the S3 clients cache."""
     global _s3_clients_cache
     _s3_clients_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# Permission-aware helpers for both web routes and MCP tools
+# ---------------------------------------------------------------------------
+
+
+def validate_role_access(role_name: Optional[str], user_dict: Dict[str, Any]) -> Optional[str]:
+    """
+    Validate that user_dict permits using role_name.
+
+    Raises PermissionError (not HTTPException) — callers translate to the
+    appropriate boundary error (HTTP 403 or McpError).
+
+    Returns the validated role name, or None if role_name is None.
+    """
+    if role_name is None:
+        return None
+
+    # Admins have access to all roles.
+    if user_dict.get("is_admin", False):
+        return role_name
+
+    allowed_roles = user_dict.get("allowed_roles", [])
+    if role_name not in allowed_roles:
+        raise PermissionError(f"Access denied: You don't have permission to use role '{role_name}'")
+
+    return role_name
+
+
+def _validate_bucket_access(role: str, bucket: str, user_dict: Dict[str, Any]) -> None:
+    """
+    Validate role access and bucket access in one call.
+
+    Raises PermissionError if the user cannot use `role` OR if `bucket`
+    is not in the role's allowed_buckets (when that list is configured).
+    """
+    # Role-level check (raises PermissionError if not allowed).
+    validate_role_access(role, user_dict)
+
+    # Bucket-level check.
+    from another_s3_manager.config import load_config
+
+    config = load_config(force_reload=False)
+    roles = config.get("roles", [])
+    role_config = next((r for r in roles if r.get("name") == role), None)
+    if role_config is None:
+        # Role not found in config — s3_client.get_s3_client will raise ValueError later.
+        return
+    allowed_buckets = role_config.get("allowed_buckets")
+    if allowed_buckets and bucket not in allowed_buckets:
+        raise PermissionError(f"bucket '{bucket}' not in allowed_buckets for role '{role}'")
+
+
+def list_buckets_for_role(role: str, user_dict: Dict[str, Any]) -> list:
+    """
+    Return list of bucket names accessible via `role` for `user_dict`.
+
+    Raises PermissionError if the user cannot use `role`.
+    If the role has allowed_buckets configured, returns that list directly.
+    Otherwise lists all buckets via S3 (requires s3:ListAllMyBuckets).
+    """
+    validated_role = validate_role_access(role, user_dict)
+
+    from another_s3_manager.config import load_config
+
+    config = load_config(force_reload=False)
+    roles = config.get("roles", [])
+    role_config = (
+        next((r for r in roles if r.get("name") == validated_role), None)
+        if validated_role
+        else (roles[0] if roles else None)
+    )
+
+    if role_config and "allowed_buckets" in role_config and role_config["allowed_buckets"]:
+        allowed_buckets = role_config["allowed_buckets"]
+        if isinstance(allowed_buckets, list):
+            return allowed_buckets
+        raise ValueError("allowed_buckets must be a list")
+
+    def fetch_buckets(s3_client):
+        response = s3_client.list_buckets()
+        return [bucket["Name"] for bucket in response["Buckets"]]
+
+    return execute_with_s3_retry(validated_role, "list", fetch_buckets)
+
+
+def list_objects_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> list:
+    """
+    List objects in `bucket` under `path` for `role`.
+
+    Returns list of file-object dicts (same shape as /api/buckets/{b}/files).
+    Raises PermissionError on role/bucket access violation.
+    """
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    prefix = path + "/" if path else ""
+
+    def fetch_files(s3_client):
+        files = []
+        directories: set = set()
+
+        paginator = s3_client.get_paginator("list_objects_v2")
+        pages = paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/")
+
+        for page in pages:
+            if "CommonPrefixes" in page:
+                for prefix_obj in page["CommonPrefixes"]:
+                    dir_name = prefix_obj["Prefix"][len(prefix) :].rstrip("/")
+                    if dir_name and dir_name not in directories:
+                        directories.add(dir_name)
+                        files.append({"name": dir_name, "is_directory": True, "size": 0})
+
+            if "Contents" in page:
+                for obj in page["Contents"]:
+                    if obj["Key"].endswith("/") and obj["Size"] == 0:
+                        continue
+                    file_name = obj["Key"][len(prefix) :]
+                    if file_name:
+                        files.append(
+                            {
+                                "name": file_name,
+                                "is_directory": False,
+                                "size": obj["Size"],
+                                "last_modified": obj["LastModified"].isoformat(),
+                            }
+                        )
+
+        files.sort(key=lambda x: (not x["is_directory"], x["name"].lower()))
+        return files
+
+    return execute_with_s3_retry(validated_role, "list", fetch_files)
+
+
+def head_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> int:
+    """
+    Return the ContentLength (bytes) of an object in `bucket` at `path`.
+
+    Raises PermissionError on role/bucket access violation.
+    Raises FileNotFoundError if the object does not exist.
+    """
+    from botocore.exceptions import ClientError as _ClientError
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_head(s3_client):
+        try:
+            response = s3_client.head_object(Bucket=bucket, Key=path)
+            return response["ContentLength"]
+        except _ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+            if error_code in {"404", "NoSuchKey"}:
+                raise FileNotFoundError(f"Object '{path}' not found in bucket '{bucket}'") from e
+            raise
+
+    return execute_with_s3_retry(validated_role, "head", do_head)
+
+
+def read_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> bytes:
+    """
+    Download and return the full body of an object in `bucket` at `path`.
+
+    Raises PermissionError on role/bucket access violation.
+    Raises FileNotFoundError if the object does not exist.
+    Increments the s3_bytes_downloaded_total metric.
+    """
+    from botocore.exceptions import ClientError as _ClientError
+
+    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_get(s3_client):
+        try:
+            response = s3_client.get_object(Bucket=bucket, Key=path)
+            body: bytes = response["Body"].read()
+            s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
+                len(body)
+            )
+            return body
+        except _ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+            if error_code in {"404", "NoSuchKey"}:
+                raise FileNotFoundError(f"Object '{path}' not found in bucket '{bucket}'") from e
+            raise
+
+    return execute_with_s3_retry(validated_role, "get", do_get)
+
+
+def read_object_range_for_role(
+    role: str, bucket: str, path: str, start: int, end: int, user_dict: Dict[str, Any]
+) -> bytes:
+    """
+    Download and return a byte range of an object in `bucket` at `path`.
+
+    Uses boto3 Range parameter: bytes=start-end (inclusive).
+    Raises PermissionError on role/bucket access violation.
+    Raises FileNotFoundError if the object does not exist.
+    Increments the s3_bytes_downloaded_total metric for the returned slice size.
+    """
+    from botocore.exceptions import ClientError as _ClientError
+
+    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_get_range(s3_client):
+        try:
+            response = s3_client.get_object(Bucket=bucket, Key=path, Range=f"bytes={start}-{end}")
+            body: bytes = response["Body"].read()
+            s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
+                len(body)
+            )
+            return body
+        except _ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+            if error_code in {"404", "NoSuchKey"}:
+                raise FileNotFoundError(f"Object '{path}' not found in bucket '{bucket}'") from e
+            raise
+
+    return execute_with_s3_retry(validated_role, "get", do_get_range)
+
+
+def put_object_for_role(
+    role: str,
+    bucket: str,
+    path: str,
+    content: bytes,
+    user_dict: Dict[str, Any],
+    content_type: str = "application/octet-stream",
+    content_disposition: Optional[str] = None,
+) -> None:
+    """
+    Upload `content` to `bucket`/`path` using `role`.
+
+    Raises PermissionError on role/bucket access violation.
+    Increments the s3_bytes_uploaded_total metric on success.
+    """
+    from another_s3_manager.metrics import s3_bytes_uploaded_total, safe_role_label
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_put(s3_client):
+        put_params: Dict[str, Any] = {
+            "Bucket": bucket,
+            "Key": path,
+            "Body": content,
+            "ContentType": content_type,
+        }
+        if content_disposition:
+            put_params["ContentDisposition"] = content_disposition
+        s3_client.put_object(**put_params)
+        s3_bytes_uploaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
+            len(content)
+        )
+
+    execute_with_s3_retry(validated_role, "put", do_put)
+
+
+def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> dict:
+    """
+    Delete a file or recursively delete a directory from `bucket`.
+
+    `path` ending with "/" is treated as a directory (recursive delete).
+    Raises PermissionError on role/bucket access violation.
+    Raises FileNotFoundError if the object/directory does not exist.
+    Returns {"message": ..., "count": N}.
+    """
+    from botocore.exceptions import ClientError as _ClientError
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    is_directory = path.endswith("/")
+    prefix = path.rstrip("/")
+
+    def do_delete(s3_client):
+        deleted_count = 0
+        paginator = s3_client.get_paginator("list_objects_v2")
+        pages = paginator.paginate(Bucket=bucket, Prefix=prefix + ("/" if is_directory else ""))
+
+        objects_to_delete = []
+        for page in pages:
+            if "Contents" in page:
+                for obj in page["Contents"]:
+                    objects_to_delete.append({"Key": obj["Key"]})
+
+        if not is_directory and not objects_to_delete:
+            try:
+                s3_client.delete_object(Bucket=bucket, Key=prefix)
+                deleted_count = 1
+            except _ClientError as e:
+                error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+                if error_code in ("404", "NoSuchKey"):
+                    raise FileNotFoundError(f"File or directory '{path}' not found") from e
+                raise
+        else:
+            if objects_to_delete:
+                for i in range(0, len(objects_to_delete), 1000):
+                    batch = objects_to_delete[i : i + 1000]
+                    s3_client.delete_objects(Bucket=bucket, Delete={"Objects": batch, "Quiet": True})
+                    deleted_count += len(batch)
+
+        if deleted_count == 0:
+            raise FileNotFoundError(f"File or directory '{path}' not found")
+
+        return {"message": f"Successfully deleted {deleted_count} object(s)", "count": deleted_count}
+
+    return execute_with_s3_retry(validated_role, "delete", do_delete)
