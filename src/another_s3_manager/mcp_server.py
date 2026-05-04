@@ -4,6 +4,7 @@ Mounted as a FastAPI sub-app at /mcp via Streamable HTTP transport.
 All permission decisions delegate to s3_client.py — single source of truth.
 """
 
+import base64
 import binascii
 import hashlib
 import logging
@@ -12,6 +13,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
+from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 
 import another_s3_manager.config as _config_module
@@ -384,11 +386,11 @@ def _is_likely_text_sample(sample: bytes) -> bool:
 #     "Use this in the lifespan context manager of your Starlette app"
 # ---------------------------------------------------------------------------
 
-import base64
+# streamable_http_path="/" so that mounting on FastAPI as app.mount("/mcp", …)
+# produces the canonical /mcp endpoint instead of the awkward /mcp/mcp.
+# (FastMCP's default streamable_http_path is "/mcp", which double-prefixes.)
+mcp = FastMCP("another-s3-manager", streamable_http_path="/")
 
-from mcp.server.fastmcp import FastMCP
-
-mcp = FastMCP("another-s3-manager")
 
 # ------------------------------------------------------------------
 # list_roles — returns the intersection of user's allowed_roles and
@@ -416,6 +418,7 @@ async def list_roles() -> dict:
     finally:
         mcp_tool_calls_total.labels(tool="list_roles", error_code=error_code).inc()
         mcp_tool_duration_seconds.labels(tool="list_roles").observe(time.perf_counter() - start)
+
 
 # ------------------------------------------------------------------
 # list_buckets — lists buckets accessible via the given role.
@@ -448,18 +451,62 @@ async def list_buckets(role: str) -> dict:
         mcp_tool_calls_total.labels(tool="list_buckets", error_code=error_code).inc()
         mcp_tool_duration_seconds.labels(tool="list_buckets").observe(time.perf_counter() - start)
 
+
 # ------------------------------------------------------------------
 # list_files — lists files at a path within a bucket.
+#
+# Two modes:
+#   recursive=False (default): one level deep, returns sub-directories as
+#     {is_directory: true} entries. Use for browsing dir-by-dir.
+#   recursive=True: flat list of all keys under `path`, paginated via
+#     continuation_token. Use for counting/searching/processing whole subtrees
+#     without N+1 calls. Returns up to max_keys (default 1000, max 10000) per
+#     call; pass back next_continuation_token to get the next page.
 # ------------------------------------------------------------------
 @mcp.tool()
-async def list_files(role: str, bucket: str, path: str = "") -> dict:
-    """List files at a path within a bucket."""
+async def list_files(
+    role: str,
+    bucket: str,
+    path: str = "",
+    recursive: bool = False,
+    max_keys: int = 1000,
+    continuation_token: str | None = None,
+) -> dict:
+    """List files at a path within a bucket.
+
+    Args:
+        role: Role name (must be in user's allowed_roles).
+        bucket: Bucket name (must be in role's allowed_buckets if configured).
+        path: Prefix to scope the listing. "" = bucket root.
+        recursive: If True, returns flat list of all keys under path with
+            pagination. If False (default), one level deep with directory entries.
+        max_keys: Max keys per call when recursive=True. Default 1000, max 10000.
+        continuation_token: Pass back next_continuation_token from the previous
+            recursive call to get the next page.
+
+    Returns:
+        Non-recursive: {"files": [{name, is_directory, size, last_modified?}, ...]}
+        Recursive: {"files": [{key, size, last_modified}, ...],
+                    "is_truncated": bool, "next_continuation_token": str|null,
+                    "key_count": int}
+    """
     error_code = "none"
     start = time.perf_counter()
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         try:
-            files = _s3_client.list_objects_for_role(role, bucket, path, user)
+            if recursive:
+                # Normalize path → S3 prefix (no leading slash; trailing slash
+                # only if non-empty so we don't accidentally match other names).
+                prefix = path.strip("/")
+                if prefix:
+                    prefix += "/"
+                result = _s3_client.list_objects_recursive_for_role(
+                    role, bucket, prefix, user, max_keys=max_keys, continuation_token=continuation_token
+                )
+            else:
+                files = _s3_client.list_objects_for_role(role, bucket, path, user)
+                result = {"files": files}
         except PermissionError as e:
             msg = str(e).lower()
             if "bucket" in msg:
@@ -467,9 +514,16 @@ async def list_files(role: str, bucket: str, path: str = "") -> dict:
             raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
         logger.info(
             "mcp.list_files",
-            extra={"user": user["username"], "role": role, "bucket": bucket, "path": path, "count": len(files)},
+            extra={
+                "user": user["username"],
+                "role": role,
+                "bucket": bucket,
+                "path": path,
+                "recursive": recursive,
+                "count": len(result["files"]),
+            },
         )
-        return {"files": files}
+        return result
     except McpError as e:
         error_code = e.code
         raise
@@ -480,6 +534,7 @@ async def list_files(role: str, bucket: str, path: str = "") -> dict:
     finally:
         mcp_tool_calls_total.labels(tool="list_files", error_code=error_code).inc()
         mcp_tool_duration_seconds.labels(tool="list_files").observe(time.perf_counter() - start)
+
 
 # ------------------------------------------------------------------
 # upload_file — upload a file to a bucket. Content as base64.
@@ -521,6 +576,7 @@ async def upload_file(role: str, bucket: str, path: str, content_base64: str) ->
         mcp_tool_calls_total.labels(tool="upload_file", error_code=error_code).inc()
         mcp_tool_duration_seconds.labels(tool="upload_file").observe(time.perf_counter() - start)
 
+
 # ------------------------------------------------------------------
 # delete_file — delete a file from a bucket.
 # WRITE TOOL: gated by assert_write_allowed.
@@ -556,6 +612,7 @@ async def delete_file(role: str, bucket: str, path: str) -> dict:
     finally:
         mcp_tool_calls_total.labels(tool="delete_file", error_code=error_code).inc()
         mcp_tool_duration_seconds.labels(tool="delete_file").observe(time.perf_counter() - start)
+
 
 # ------------------------------------------------------------------
 # read_file — download and return a text file from a bucket.

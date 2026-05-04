@@ -213,7 +213,6 @@ async def test_admin_token_sees_all_config_roles(admin_user, monkeypatch):
     explicit role rows), which made list_roles return zero roles even for
     admin-issued tokens.
     """
-    from another_s3_manager import config as _cfg
     from another_s3_manager import mcp_server as _mcp_module
 
     fake_cfg = {"roles": [{"name": "MyR2"}, {"name": "Wasabi"}, {"name": "AwsProd"}]}

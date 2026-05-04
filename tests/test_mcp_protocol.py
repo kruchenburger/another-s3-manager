@@ -6,7 +6,7 @@ FastMCP's Streamable HTTP transport (MCP SDK 1.12) requires a task group that
 is initialized during the *sub-app's own* lifespan via ``session_manager.run()``.
 When the MCP app is mounted on the parent FastAPI app with ``app.mount("/mcp", ...)``,
 Starlette does NOT propagate the parent lifespan to the sub-app.  As a result,
-direct JSON-RPC requests (POST /mcp/mcp) crash with:
+direct JSON-RPC requests (POST /mcp) crash with:
 
     RuntimeError: Task group is not initialized. Make sure to use run().
 
@@ -19,7 +19,7 @@ What we CAN test end-to-end via TestClient without workarounds:
 
 1. The **kill-switch middleware** (registered on the parent app, runs before
    routing): POST/GET to /mcp/* → 503 when mcp_enabled=False.
-2. The **routing layer**: with kill-switch enabled, /mcp/mcp is reached (not
+2. The **routing layer**: with kill-switch enabled, /mcp is reached (not
    404), confirming the sub-app is correctly mounted at ``/mcp``.
 3. The **auth rejection** counter (mcp_auth_failures_total) via a direct call
    to ``authenticate_mcp_request`` in the context set up by
@@ -64,7 +64,7 @@ def test_mcp_kill_switch_returns_503_when_disabled(app_client, monkeypatch):
     _patch_config_mcp_disabled(monkeypatch, config_module)
 
     resp = app_client.post(
-        "/mcp/mcp",
+        "/mcp",
         headers={
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
@@ -83,7 +83,7 @@ def test_mcp_kill_switch_returns_503_when_disabled(app_client, monkeypatch):
 
 
 def test_mcp_endpoint_is_mounted_not_404():
-    """With the kill-switch inactive (default), GET /mcp/mcp must NOT return 404.
+    """With the kill-switch inactive (default), GET /mcp must NOT return 404.
 
     A 404 would mean the sub-app is not mounted.  We expect anything else:
     - 405 (method not allowed for GET on a POST-only route), or
@@ -103,7 +103,7 @@ def test_mcp_endpoint_is_mounted_not_404():
     # raise_server_exceptions=False: surface FastMCP task-group RuntimeError
     # as HTTP 500 instead of letting it propagate into the test process.
     client = TestClient(main.app, raise_server_exceptions=False)
-    resp = client.get("/mcp/mcp")
+    resp = client.get("/mcp")
 
     # 404 means the sub-app is not mounted at /mcp — that's the only failure
     # mode we care about here.  405 and 500 both mean the request reached the
@@ -121,7 +121,7 @@ async def test_mcp_auth_failure_increments_counter(alice_with_token):
     """Confirm that authenticate_mcp_request raises McpError(INVALID_TOKEN) and
     increments mcp_auth_failures_total when no Bearer token is supplied.
 
-    This test exercises the same auth layer that every HTTP request to /mcp/mcp
+    This test exercises the same auth layer that every HTTP request to /mcp
     goes through (via _RequestCaptureMiddleware → tool body → authenticate_mcp_request).
     It is protocol-adjacent: the auth function reads the HTTP request object
     exactly as it would in a real MCP call.

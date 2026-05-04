@@ -17,7 +17,6 @@ from another_s3_manager.mcp_server import (
     McpError,
     _current_request,
     _RequestCaptureMiddleware,
-    get_mcp_app,
 )
 from another_s3_manager.models import User, UserRole
 

@@ -800,6 +800,92 @@ def list_objects_for_role(role: str, bucket: str, path: str, user_dict: Dict[str
     return execute_with_s3_retry(validated_role, "list", fetch_files)
 
 
+def list_objects_recursive_for_role(
+    role: str,
+    bucket: str,
+    prefix: str,
+    user_dict: Dict[str, Any],
+    max_keys: int = 1000,
+    continuation_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List ALL objects under `prefix` recursively (no Delimiter), with pagination.
+
+    Designed for MCP agents that want to see/count an entire subtree without
+    walking it dir-by-dir (which would mean N+1 calls). Hard ceiling: 10000
+    keys per call (S3's own ListObjectsV2 limit).
+
+    Returns:
+        {
+            "files": [{key, size, last_modified}, ...],   # flat keys, no is_directory
+            "is_truncated": bool,
+            "next_continuation_token": str | None,        # pass back to continue
+            "key_count": int,                             # number returned this page
+        }
+
+    Note: `prefix` is used verbatim (no trailing slash injection); pass
+    "logs/2026/" to scope to that subtree, "" to scan from bucket root.
+    """
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    # S3's hard limit per ListObjectsV2 call is 1000; for larger pages, paginate.
+    # We cap MaxKeys here for safety so a single MCP call can't return more than
+    # 10k entries even if a future caller asks for it.
+    max_keys = max(1, min(max_keys, 10_000))
+
+    def fetch(s3_client) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "Bucket": bucket,
+            "Prefix": prefix,
+            "MaxKeys": min(max_keys, 1000),  # per-call cap
+        }
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+
+        files: list = []
+        next_token: Optional[str] = None
+        is_truncated = False
+
+        # Paginate up to max_keys total. Stop early once we have enough.
+        while True:
+            resp = s3_client.list_objects_v2(**kwargs)
+            for obj in resp.get("Contents", []) or []:
+                # Skip empty "directory marker" objects (key ends with /).
+                if obj["Key"].endswith("/") and obj["Size"] == 0:
+                    continue
+                files.append(
+                    {
+                        "key": obj["Key"],
+                        "size": obj["Size"],
+                        "last_modified": obj["LastModified"].isoformat(),
+                    }
+                )
+                if len(files) >= max_keys:
+                    break
+
+            if len(files) >= max_keys:
+                # Caller asked for at most max_keys; signal truncation if S3
+                # also has more or we cut mid-page.
+                is_truncated = bool(resp.get("IsTruncated")) or len(resp.get("Contents", []) or []) >= kwargs["MaxKeys"]
+                next_token = resp.get("NextContinuationToken") if is_truncated else None
+                break
+
+            if resp.get("IsTruncated"):
+                kwargs["ContinuationToken"] = resp["NextContinuationToken"]
+                continue
+
+            break
+
+        return {
+            "files": files,
+            "is_truncated": is_truncated,
+            "next_continuation_token": next_token,
+            "key_count": len(files),
+        }
+
+    return execute_with_s3_retry(validated_role, "list", fetch)
+
+
 def head_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> int:
     """
     Return the ContentLength (bytes) of an object in `bucket` at `path`.
