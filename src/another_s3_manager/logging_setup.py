@@ -11,6 +11,9 @@ import os
 import sys
 
 
+_VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
 def configure_logging() -> None:
     """Configure root logger from env vars LOG_LEVEL and LOG_FORMAT.
 
@@ -19,6 +22,23 @@ def configure_logging() -> None:
     """
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     log_format = os.getenv("LOG_FORMAT", "text").lower()
+
+    # Validate log level before passing to dictConfig — an invalid value raises
+    # ValueError inside dictConfig which produces a confusing startup traceback.
+    if log_level not in _VALID_LOG_LEVELS:
+        print(
+            f"WARNING: LOG_LEVEL='{log_level}' is not a valid Python log level."
+            " Falling back to INFO.",
+            file=sys.stderr,
+        )
+        log_level = "INFO"
+
+    # Clear existing root handlers to make this function idempotent.
+    # dictConfig does NOT remove handlers added by previous calls, so a
+    # double-call (e.g. import-time + test re-import) would duplicate output.
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
 
     if log_format == "json":
         formatter = {

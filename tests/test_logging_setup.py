@@ -8,12 +8,17 @@ from another_s3_manager.logging_setup import configure_logging
 
 @pytest.fixture(autouse=True)
 def _reset_logging():
-    """Reset root logger between tests to avoid handler leakage."""
-    yield
+    """Snapshot root logger state before each test, restore after."""
     root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+    yield
+    # Remove anything tests added; restore original handlers
     for h in list(root.handlers):
         root.removeHandler(h)
-    root.setLevel(logging.WARNING)
+    for h in saved_handlers:
+        root.addHandler(h)
+    root.setLevel(saved_level)
 
 
 def test_text_format_attaches_handler_at_info_level(monkeypatch):
@@ -52,3 +57,22 @@ def test_log_level_case_insensitive(monkeypatch):
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     configure_logging()
     assert logging.getLogger().level == logging.DEBUG
+
+
+def test_configure_logging_is_idempotent(monkeypatch):
+    """Calling configure_logging twice must not duplicate handlers."""
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    configure_logging()
+    first_count = len(logging.getLogger().handlers)
+    configure_logging()
+    second_count = len(logging.getLogger().handlers)
+    assert first_count == second_count == 1
+
+
+def test_invalid_log_level_falls_back_to_info(monkeypatch, capsys):
+    monkeypatch.setenv("LOG_LEVEL", "VERBOSE")
+    configure_logging()
+    assert logging.getLogger().level == logging.INFO
+    captured = capsys.readouterr()
+    assert "VERBOSE" in captured.err
+    assert "INFO" in captured.err
