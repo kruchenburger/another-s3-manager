@@ -91,7 +91,7 @@ export function CreateTokenModal({
             decimalScale={3}
             {...form.getInputProps("max_read_mb")}
           />
-          {slotFull ? (
+          {!adminMode && (slotFull ? (
             <Alert color="red" title={`Token limit reached (${limit})`}>
               Revoke unused tokens before creating new ones.
             </Alert>
@@ -99,12 +99,12 @@ export function CreateTokenModal({
             <Text size="sm" c="dimmed">
               Used {used} of {limit} token slots.
             </Text>
-          )}
+          ))}
           <Group justify="flex-end" mt="sm">
             <Button variant="subtle" onClick={onClose} disabled={loading}>
               Cancel
             </Button>
-            <Button type="submit" loading={loading} disabled={slotFull}>
+            <Button type="submit" loading={loading} disabled={!adminMode && slotFull}>
               Create
             </Button>
           </Group>

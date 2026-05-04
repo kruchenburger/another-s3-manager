@@ -26,11 +26,16 @@ export function TokenPlaintextModal({ opened, onClose, plaintext, noteForAdmin }
   const [snippetOpen, snippet] = useDisclosure(false);
   const [copied, setCopied] = useState(false);
 
+  // Note: url ends with a trailing slash (`/mcp/`) — Starlette's Mount route
+  // 307-redirects /mcp -> /mcp/ and not all MCP clients follow that redirect
+  // cleanly. Always advertise the canonical path. type: "http" is the
+  // Streamable HTTP transport hint required by VS Code and other clients.
   const mcpSnippet = JSON.stringify(
     {
       mcpServers: {
         "another-s3-manager": {
-          url: `${typeof window !== "undefined" ? window.location.origin : ""}/mcp`,
+          type: "http",
+          url: `${typeof window !== "undefined" ? window.location.origin : ""}/mcp/`,
           headers: { Authorization: `Bearer ${plaintext}` },
         },
       },

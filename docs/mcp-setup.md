@@ -54,7 +54,8 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
 {
   "mcpServers": {
     "another-s3-manager": {
-      "url": "https://your-app.example.com/mcp",
+      "type": "http",
+      "url": "https://your-app.example.com/mcp/",
       "headers": {
         "Authorization": "Bearer as3m_YOUR_TOKEN_HERE"
       }
@@ -62,6 +63,10 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
   }
 }
 ```
+
+Note: the URL must end with a trailing slash (`/mcp/`), and `"type": "http"`
+is required by clients that don't auto-detect Streamable HTTP transport
+(VS Code MCP, some SDK builds).
 
 Restart Claude Desktop. The tools should appear under the MCP icon.
 
@@ -73,7 +78,8 @@ Edit `~/.cursor/mcp.json` (or via Cursor settings → Extensions → MCP):
 {
   "mcpServers": {
     "another-s3-manager": {
-      "url": "https://your-app.example.com/mcp",
+      "type": "http",
+      "url": "https://your-app.example.com/mcp/",
       "headers": {
         "Authorization": "Bearer as3m_YOUR_TOKEN_HERE"
       }
