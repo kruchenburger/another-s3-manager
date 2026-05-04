@@ -115,6 +115,11 @@ export interface AppConfig {
   password_min_lowercase: number;
   password_min_digits: number;
   password_min_special: number;
+  // MCP server settings
+  mcp_enabled: boolean;
+  mcp_disable_writes: boolean;
+  mcp_text_extensions: string[];
+  mcp_global_max_read_bytes: number;
 }
 
 export interface ChangeMyPasswordPayload {

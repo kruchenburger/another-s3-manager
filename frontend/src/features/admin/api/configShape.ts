@@ -26,5 +26,10 @@ export function toWritableConfig(config: AppConfig): AppConfig {
     password_min_lowercase: config.password_min_lowercase,
     password_min_digits: config.password_min_digits,
     password_min_special: config.password_min_special,
+    // MCP server settings
+    mcp_enabled: config.mcp_enabled,
+    mcp_disable_writes: config.mcp_disable_writes,
+    mcp_text_extensions: config.mcp_text_extensions,
+    mcp_global_max_read_bytes: config.mcp_global_max_read_bytes,
   };
 }
