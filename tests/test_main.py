@@ -12,7 +12,7 @@ import pytest
 from botocore.exceptions import ClientError
 from fastapi import HTTPException, status
 
-from another_s3_manager.constants import APP_VERSION
+import another_s3_manager.constants as _constants_module
 
 
 def reload_main():
@@ -338,7 +338,7 @@ def test_get_current_user_info(app_client):
     data = response.json()
     assert data["username"] == "admin"
     assert data["is_admin"] is True
-    assert data["app_version"] == APP_VERSION
+    assert data["app_version"] == _constants_module.APP_VERSION
 
 
 def test_get_current_user_info_requires_auth(app_client):
@@ -352,7 +352,7 @@ def test_get_app_info(app_client):
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert "app_name" in data
-    assert data["app_version"] == APP_VERSION
+    assert data["app_version"] == _constants_module.APP_VERSION
 
 
 def test_admin_page(app_client):
