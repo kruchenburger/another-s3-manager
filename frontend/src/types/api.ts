@@ -49,6 +49,7 @@ export interface Ban {
 }
 
 export interface AdminUser {
+  id: number;
   username: string;
   is_admin: boolean;
   allowed_roles: string[];

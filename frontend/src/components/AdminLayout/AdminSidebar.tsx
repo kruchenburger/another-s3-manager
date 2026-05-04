@@ -1,5 +1,5 @@
 import { NavLink, Stack, Text } from "@mantine/core";
-import { ArrowLeft, Ban, Drama, Settings, Users } from "lucide-react";
+import { ArrowLeft, Ban, Drama, Key, Settings, Users } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 interface NavItem {
@@ -11,6 +11,7 @@ interface NavItem {
 const accountsItems: NavItem[] = [
   { label: "Users", to: "/admin/users", icon: <Users size={16} /> },
   { label: "Bans", to: "/admin/bans", icon: <Ban size={16} /> },
+  { label: "API Tokens", to: "/admin/api-tokens", icon: <Key size={16} /> },
 ];
 
 const infrastructureItems: NavItem[] = [

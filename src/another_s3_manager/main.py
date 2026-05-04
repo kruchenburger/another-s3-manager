@@ -74,6 +74,7 @@ from another_s3_manager.metrics import (
 )
 from another_s3_manager.s3_client import clear_s3_clients_cache, execute_with_s3_retry
 from another_s3_manager.users import (
+    get_users_for_admin,
     load_bans,
     load_users,
     save_bans,
@@ -472,22 +473,11 @@ async def admin_page():
 @app.get("/api/admin/users")
 async def list_users(current_user: Dict[str, Any] = Depends(get_current_admin_user)):
     """List all users (admin only)"""
-    users = load_users()
     # Always reload config to get latest roles
     config = load_config(force_reload=True)
     available_roles = [role.get("name") for role in config.get("roles", [])]
-
-    # Don't return password hashes
-    user_list = []
-    for user in users.get("users", []):
-        user_list.append(
-            {
-                "username": user.get("username"),
-                "is_admin": user.get("is_admin", False),
-                "created_at": user.get("created_at"),
-                "allowed_roles": user.get("allowed_roles", []),
-            }
-        )
+    # Returns user list including id field (used by admin token creation)
+    user_list = get_users_for_admin()
     return {"users": user_list, "available_roles": available_roles}
 
 

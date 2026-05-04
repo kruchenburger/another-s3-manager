@@ -17,6 +17,7 @@ import { RoleNewPage } from "@/pages/admin/RoleNewPage";
 import { RolesPage } from "@/pages/admin/RolesPage";
 import { SettingsPage } from "@/pages/admin/SettingsPage";
 import { UsersPage } from "@/pages/admin/UsersPage";
+import { AdminApiTokensPage } from "@/pages/admin/AdminApiTokensPage";
 
 export const router = createBrowserRouter(
   [
@@ -52,6 +53,7 @@ export const router = createBrowserRouter(
                 { path: "/admin/roles/new", element: <RoleNewPage /> },
                 { path: "/admin/roles/:roleName", element: <RoleEditPage /> },
                 { path: "/admin/settings", element: <SettingsPage /> },
+                { path: "/admin/api-tokens", element: <AdminApiTokensPage /> },
               ],
             },
           ],

@@ -137,6 +137,22 @@ def get_all_users() -> List[Dict[str, Any]]:
         return [_user_to_dict(u) for u in users]
 
 
+def get_users_for_admin() -> List[Dict[str, Any]]:
+    """Return users with id included for admin API responses. Does NOT seed."""
+    with session_scope() as session:
+        users = session.execute(select(User).options(selectinload(User.roles))).scalars().all()
+        return [
+            {
+                "id": u.id,
+                "username": u.username,
+                "is_admin": u.is_admin,
+                "created_at": u.created_at.isoformat() if u.created_at else None,
+                "allowed_roles": [r.role_name for r in u.roles],
+            }
+            for u in users
+        ]
+
+
 def create_user(
     username: str,
     password_hash: str,

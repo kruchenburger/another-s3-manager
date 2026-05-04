@@ -85,11 +85,13 @@ function renderPage() {
 const TWO_USERS = {
   users: [
     {
+      id: 1,
       username: "admin",
       is_admin: true,
       allowed_roles: [],
     },
     {
+      id: 2,
       username: "alice",
       is_admin: false,
       allowed_roles: ["dev", "ops"],
