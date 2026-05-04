@@ -4,6 +4,7 @@ Mounted as a FastAPI sub-app at /mcp via Streamable HTTP transport.
 All permission decisions delegate to s3_client.py — single source of truth.
 """
 
+import binascii
 import hashlib
 import logging
 import time
@@ -208,7 +209,8 @@ def get_mcp_app() -> Any:
             visible = [r for r in user["allowed_roles"] if r in all_role_names]
             logger.info("mcp.list_roles", extra={"user": user["username"], "count": len(visible)})
             return {"roles": visible}
-        except McpError:
+        except McpError as e:
+            error_code = e.code
             raise
         except Exception:
             error_code = "INTERNAL_ERROR"
@@ -295,7 +297,10 @@ def get_mcp_app() -> Any:
             token, user = await authenticate_mcp_request(_get_current_request())
             config = _config_module.load_config(force_reload=False)
             assert_write_allowed(token, "upload_file", config)
-            content = base64.b64decode(content_base64)
+            try:
+                content = base64.b64decode(content_base64, validate=True)
+            except (binascii.Error, ValueError) as e:
+                raise McpError("INVALID_INPUT", f"content_base64 is not valid base64: {e}", {"tool": "upload_file"})
             try:
                 _s3_client.put_object_for_role(role, bucket, path, content, user)
             except PermissionError as e:

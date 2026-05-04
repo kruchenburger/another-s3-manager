@@ -556,3 +556,58 @@ async def test_request_capture_middleware_non_http_passthrough():
 
     await middleware(scope, None, None)
     assert called["type"] == "lifespan"
+
+
+# ---------------------------------------------------------------------------
+# list_roles — error_code metric label on auth failure
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_roles_records_error_code_on_auth_failure(tool_registry):
+    """When list_roles auth fails, mcp_tool_calls_total must label error_code=INVALID_TOKEN."""
+    from another_s3_manager import metrics
+
+    def _count(tool: str, code: str) -> float:
+        for sample in metrics.mcp_tool_calls_total.collect()[0].samples:
+            if (
+                sample.name.endswith("_total")
+                and sample.labels.get("tool") == tool
+                and sample.labels.get("error_code") == code
+            ):
+                return sample.value
+        return 0.0
+
+    before_invalid = _count("list_roles", "INVALID_TOKEN")
+    before_none = _count("list_roles", "none")
+
+    with pytest.raises(McpError) as exc_info:
+        await _call(tool_registry, "list_roles", _no_auth_request())
+
+    assert exc_info.value.code == "INVALID_TOKEN"
+    # The counter for INVALID_TOKEN must have incremented, not 'none'.
+    assert _count("list_roles", "INVALID_TOKEN") >= before_invalid + 1
+    # 'none' counter must NOT have incremented (was the pre-fix bug).
+    assert _count("list_roles", "none") == before_none
+
+
+# ---------------------------------------------------------------------------
+# upload_file — INVALID_INPUT on malformed base64
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upload_file_returns_invalid_input_on_malformed_base64(alice_user, tool_registry):
+    """Malformed base64 content_base64 should raise McpError(INVALID_INPUT), not INTERNAL_ERROR."""
+    uid, plaintext = alice_user
+    with pytest.raises(McpError) as exc_info:
+        await _call(
+            tool_registry,
+            "upload_file",
+            _fake_request(plaintext),
+            role="Default",
+            bucket="b",
+            path="f.txt",
+            content_base64="not-base64!!!@@@",
+        )
+    assert exc_info.value.code == "INVALID_INPUT"
