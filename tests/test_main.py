@@ -553,7 +553,7 @@ def test_list_buckets_uses_s3(app_client, mocker):
     s3_mock = mocker.MagicMock()
     s3_mock.list_buckets.return_value = {"Buckets": [{"Name": "bucket"}]}
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(s3_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -580,7 +580,7 @@ def test_list_files(app_client, mocker):
     s3_mock = mocker.MagicMock()
     s3_mock.get_paginator.return_value = paginator_mock
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(s3_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -594,7 +594,7 @@ def test_upload_file(app_client, mocker):
     _, headers = login(app_client)
     s3_mock = mocker.MagicMock()
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(s3_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -636,7 +636,7 @@ def test_download_file(app_client, mocker):
         "ContentType": "text/plain",
     }
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(s3_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -654,7 +654,7 @@ def test_delete_file(app_client, mocker):
     s3_mock = mocker.MagicMock()
     s3_mock.get_paginator.return_value = paginator_mock
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(s3_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -884,7 +884,7 @@ def test_list_buckets_access_denied_returns_friendly_403(app_client, mocker):
     bucket-scoped policies), the API must return 403 with a generic explanation —
     not a raw 500 boto error. The frontend layers role-appropriate CTAs on top."""
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListBuckets")
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -900,7 +900,7 @@ def test_list_buckets_other_client_error_still_returns_500(app_client, mocker):
     """Non-403 boto errors should still surface as 500 — the friendly-error path
     is specifically for 'cannot list buckets' permission failures, not generic ones."""
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         raise ClientError({"Error": {"Code": "InternalError", "Message": "boom"}}, "ListBuckets")
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -912,7 +912,7 @@ def test_list_buckets_other_client_error_still_returns_500(app_client, mocker):
 def test_list_files_handles_error(app_client, mocker):
     _, headers = login(app_client)
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         raise ClientError({"Error": {"Code": "NoSuchBucket", "Message": "Missing"}}, "ListObjectsV2")
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -923,7 +923,7 @@ def test_list_files_handles_error(app_client, mocker):
 def test_upload_file_handles_exception(app_client, mocker):
     _, headers = login(app_client)
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         raise ValueError("boom")
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -945,7 +945,7 @@ def test_download_file_not_found(app_client, mocker):
         "GetObject",
     )
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(client_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -1381,7 +1381,7 @@ def test_download_file_with_colon_in_key(app_client, mocker):
         "ContentType": "text/plain",
     }
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(s3_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)

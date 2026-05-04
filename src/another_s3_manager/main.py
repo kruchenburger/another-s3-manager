@@ -42,6 +42,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
 import another_s3_manager.config as config_module
@@ -66,6 +67,11 @@ from another_s3_manager.constants import (
     COOKIE_SECURE,
     STATIC_DIR,
 )
+from another_s3_manager.metrics import (
+    REGISTRY,
+    http_request_duration_seconds,
+    http_requests_total,
+)
 from another_s3_manager.s3_client import clear_s3_clients_cache, execute_with_s3_retry
 from another_s3_manager.users import (
     load_bans,
@@ -79,13 +85,6 @@ from another_s3_manager.utils import (
     sanitize_bucket_name,
     sanitize_path,
     validate_password,
-)
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-
-from another_s3_manager.metrics import (
-    REGISTRY,
-    http_request_duration_seconds,
-    http_requests_total,
 )
 
 # Validate required environment variables at startup
@@ -1408,7 +1407,7 @@ async def list_buckets(
             response = s3_client.list_buckets()
             return [bucket["Name"] for bucket in response["Buckets"]]
 
-        return execute_with_s3_retry(validated_role, fetch_buckets)
+        return execute_with_s3_retry(validated_role, "list", fetch_buckets)
     except HTTPException:
         raise
     except ValueError as e:
@@ -1501,7 +1500,7 @@ async def list_files(
             files.sort(key=lambda x: (not x["is_directory"], x["name"].lower()))
             return {"files": files, "path": path, "total_count": len(files)}
 
-        return execute_with_s3_retry(validated_role, fetch_files)
+        return execute_with_s3_retry(validated_role, "list", fetch_files)
     except HTTPException:
         raise
     except ValueError as e:
@@ -1618,7 +1617,14 @@ async def upload_file(
             s3_client.put_object(**put_object_params)
             return {"message": "File uploaded successfully", "key": key}
 
-        return execute_with_s3_retry(validated_role, upload_object)
+        result = execute_with_s3_retry(validated_role, "put", upload_object)
+        # Record bytes uploaded after a successful put
+        from another_s3_manager.metrics import s3_bytes_uploaded_total, safe_role_label
+
+        s3_bytes_uploaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket_name).inc(
+            len(content)
+        )
+        return result
     except HTTPException:
         raise
     except ValueError as e:
@@ -1759,7 +1765,15 @@ async def download_file(
         def fetch_object(s3_client):
             return s3_client.get_object(Bucket=bucket_name, Key=path)
 
-        response = execute_with_s3_retry(validated_role, fetch_object)
+        response = execute_with_s3_retry(validated_role, "get", fetch_object)
+        # Record bytes downloaded; ContentLength is available in get_object metadata
+        content_length = response.get("ContentLength", 0)
+        if content_length:
+            from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+
+            s3_bytes_downloaded_total.labels(
+                role=safe_role_label(validated_role or "unknown"), bucket=bucket_name
+            ).inc(content_length)
         content_type = response.get("ContentType", "application/octet-stream")
         filename = path.split("/")[-1]  # Get filename from path
 
@@ -1877,7 +1891,7 @@ async def delete_file(
 
             return {"message": f"Successfully deleted {deleted_count} object(s)", "count": deleted_count}
 
-        return execute_with_s3_retry(validated_role, perform_delete)
+        return execute_with_s3_retry(validated_role, "delete", perform_delete)
     except HTTPException:
         raise
     except ValueError as e:

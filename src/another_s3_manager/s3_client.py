@@ -3,6 +3,7 @@ S3 client management module
 """
 
 import logging
+import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional, TypeVar
 from typing import Any as AnyType
@@ -531,19 +532,10 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
         raise
 
 
-def execute_with_s3_retry(role_name: Optional[str], callback: Callable[[AnyType], T]) -> T:
+def _execute_with_retry_inner(role_name: Optional[str], callback: Callable[[AnyType], T]) -> T:
     """
-    Run an S3 operation with automatic credential refresh on expiration.
-
-    Args:
-        role_name: Role name used to resolve the client.
-        callback: Callable receiving the S3 client and returning any value.
-
-    Returns:
-        Result of callback execution.
-
-    Raises:
-        Exception: Re-raises the original exception if retry is not possible.
+    Inner retry loop for S3 operations with automatic credential refresh.
+    Does not record metrics — called by execute_with_s3_retry which handles that.
     """
     # Import HTTPException here to avoid circular dependency
     from fastapi import HTTPException
@@ -630,6 +622,43 @@ def execute_with_s3_retry(role_name: Optional[str], callback: Callable[[AnyType]
         raise last_error
 
     raise RuntimeError("Unexpected S3 execution failure without exception")
+
+
+def execute_with_s3_retry(role_name: Optional[str], operation: str, callback: Callable[[AnyType], T]) -> T:
+    """
+    Run an S3 operation with automatic credential refresh on expiration.
+
+    Records s3_operations_total and s3_operation_duration_seconds metrics.
+    Counts only the final outcome — retries do not produce duplicate counter increments.
+
+    Args:
+        role_name: Role name used to resolve the client.
+        operation: Operation label for metrics ('list'|'get'|'put'|'delete'|'head').
+        callback: Callable receiving the S3 client and returning any value.
+
+    Returns:
+        Result of callback execution.
+
+    Raises:
+        Exception: Re-raises the original exception if retry is not possible.
+    """
+    from another_s3_manager.metrics import (
+        s3_operation_duration_seconds,
+        s3_operations_total,
+        safe_role_label,
+    )
+
+    role_lbl = safe_role_label(role_name or "unknown")
+    start = time.perf_counter()
+    try:
+        result = _execute_with_retry_inner(role_name, callback)
+        s3_operations_total.labels(role=role_lbl, operation=operation, result="ok").inc()
+        return result
+    except Exception:
+        s3_operations_total.labels(role=role_lbl, operation=operation, result="error").inc()
+        raise
+    finally:
+        s3_operation_duration_seconds.labels(operation=operation).observe(time.perf_counter() - start)
 
 
 def clear_s3_clients_cache() -> None:
