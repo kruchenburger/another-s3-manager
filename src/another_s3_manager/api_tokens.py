@@ -87,8 +87,15 @@ def list_all_tokens(include_revoked: bool = False) -> list[Tuple[ApiToken, User]
         result: list[Tuple[ApiToken, User]] = list(rows)
         for token, user in result:
             # Force-load the columns the caller will read after expunge.
-            _ = (token.id, token.name, token.is_read_only, token.max_read_bytes,
-                 token.created_at, token.last_used_at, token.revoked_at)
+            _ = (
+                token.id,
+                token.name,
+                token.is_read_only,
+                token.max_read_bytes,
+                token.created_at,
+                token.last_used_at,
+                token.revoked_at,
+            )
             _ = (user.id, user.username)
         session.expunge_all()
         return result

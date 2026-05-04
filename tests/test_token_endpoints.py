@@ -496,6 +496,7 @@ def test_serialized_token_timestamps_carry_utc_marker(client_with_admin):
 
     # last_used_at is set on the next MCP-style auth lookup; emulate via touch_last_used.
     from another_s3_manager import api_tokens as svc
+
     token_id = body["id"]
     svc.touch_last_used(token_id, throttle_seconds=0)
 

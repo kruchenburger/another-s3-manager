@@ -667,6 +667,7 @@ def _get_user_id_by_username(username: str) -> int:
 
 def _serialize_token(t, owner_username: Optional[str] = None) -> dict:
     """Serialize an ApiToken ORM row to a plain dict (no token_hash, no plaintext)."""
+
     # SQLite drops tzinfo on storage even though our DateTime columns declare
     # timezone=True; values come back naive. Since we always *write* UTC
     # (api_tokens._utcnow → datetime.now(UTC)), force a 'Z' suffix on the
