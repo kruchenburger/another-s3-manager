@@ -506,6 +506,20 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=1, description="The new password to set")
 
 
+class CreateTokenRequest(BaseModel):
+    """Body for POST /api/me/tokens — create an API token for the current user."""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    is_read_only: bool = True
+    max_read_bytes: int = Field(default=1_048_576, ge=1, le=10_485_760)
+
+
+class AdminCreateTokenRequest(CreateTokenRequest):
+    """Body for POST /api/admin/tokens — admin creates a token on behalf of a user."""
+
+    user_id: int = Field(..., gt=0)
+
+
 @app.put("/api/me/password")
 async def change_my_password(
     payload: ChangePasswordRequest,
@@ -546,6 +560,167 @@ async def change_my_password(
     from another_s3_manager.users import update_user as users_update_user
 
     users_update_user(username, password_hash=hash_password(payload.new_password))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Token CRUD helpers
+# ---------------------------------------------------------------------------
+
+from sqlalchemy import select  # noqa: E402 — deferred to avoid circular at module top
+from sqlalchemy.exc import IntegrityError  # noqa: E402
+
+from another_s3_manager import api_tokens as token_svc  # noqa: E402
+from another_s3_manager.models import User as UserModel  # noqa: E402
+
+
+def _get_user_id_by_username(username: str) -> int:
+    """Return the DB primary-key id for the given username.
+
+    Raises HTTPException 404 if the user is not found.
+    """
+    from another_s3_manager.database import session_scope
+
+    with session_scope() as session:
+        row = session.execute(select(UserModel).where(UserModel.username == username)).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        return row.id
+
+
+def _serialize_token(t, owner_username: Optional[str] = None) -> dict:
+    """Serialize an ApiToken ORM row to a plain dict (no token_hash, no plaintext)."""
+    out = {
+        "id": t.id,
+        "name": t.name,
+        "is_read_only": t.is_read_only,
+        "max_read_bytes": t.max_read_bytes,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
+        "revoked_at": t.revoked_at.isoformat() if t.revoked_at else None,
+    }
+    if owner_username is not None:
+        out["owner_username"] = owner_username
+    return out
+
+
+# ---------------------------------------------------------------------------
+# /api/me/tokens  (self-service)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/me/tokens")
+async def get_my_tokens(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """List active API tokens for the authenticated user.
+
+    Returns tokens, used count, and per-user limit. Never returns token_plaintext.
+    """
+    user_id = _get_user_id_by_username(current_user["username"])
+    tokens = token_svc.list_tokens_for_user(user_id, include_revoked=False)
+    used = token_svc.count_active_tokens_for_user(user_id)
+    return {
+        "tokens": [_serialize_token(t) for t in tokens],
+        "used": used,
+        "limit": token_svc.PER_USER_TOKEN_LIMIT,
+    }
+
+
+@app.post("/api/me/tokens")
+async def create_my_token(
+    payload: CreateTokenRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Create a new API token for the authenticated user.
+
+    Returns token metadata + token_plaintext exactly once. Store it immediately —
+    it cannot be retrieved again.
+    """
+    user_id = _get_user_id_by_username(current_user["username"])
+    try:
+        token, plaintext = token_svc.create_token(user_id, payload.name, payload.is_read_only, payload.max_read_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail=f"Token name '{payload.name}' already exists")
+    return {**_serialize_token(token), "token_plaintext": plaintext}
+
+
+@app.delete("/api/me/tokens/{token_id}")
+async def delete_my_token(
+    token_id: int,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Revoke one of the authenticated user's own tokens.
+
+    Returns 403 if the token belongs to another user, 404 if not found.
+    """
+    user_id = _get_user_id_by_username(current_user["username"])
+    try:
+        token_svc.revoke_token(token_id, by_user_id=user_id, by_is_admin=False)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="You can only revoke your own tokens")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Token not found")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# /api/admin/tokens  (admin-only)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/admin/tokens")
+async def admin_list_tokens(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """List all active API tokens across all users (admin only).
+
+    Each entry includes owner_username for display in the admin panel.
+    """
+    if not current_user.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    rows = token_svc.list_all_tokens(include_revoked=False)
+    return {"tokens": [_serialize_token(t, owner_username=u.username) for t, u in rows]}
+
+
+@app.post("/api/admin/tokens")
+async def admin_create_token(
+    payload: AdminCreateTokenRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Create an API token on behalf of any user (admin only).
+
+    Requires user_id (not username) in the request body; the caller (SPA)
+    must resolve username→id from the users list before calling this endpoint.
+    """
+    if not current_user.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    try:
+        token, plaintext = token_svc.create_token(
+            payload.user_id, payload.name, payload.is_read_only, payload.max_read_bytes
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail=f"Token name '{payload.name}' already exists for this user")
+    return {**_serialize_token(token), "token_plaintext": plaintext}
+
+
+@app.delete("/api/admin/tokens/{token_id}")
+async def admin_delete_token(
+    token_id: int,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Revoke any token regardless of owner (admin only)."""
+    if not current_user.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    try:
+        # by_is_admin=True bypasses owner check; by_user_id is irrelevant when admin.
+        token_svc.revoke_token(token_id, by_user_id=0, by_is_admin=True)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Token not found")
     return {"ok": True}
 
 
