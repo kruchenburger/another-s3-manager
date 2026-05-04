@@ -3,6 +3,10 @@ Another S3 Manager - Lightweight S3 file management interface
 Provides file browsing, upload, and deletion capabilities for S3 buckets
 """
 
+from another_s3_manager.logging_setup import configure_logging
+
+configure_logging()
+
 import json
 import logging
 import os
