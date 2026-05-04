@@ -183,6 +183,21 @@ async def _http_metrics(request: Request, call_next):
     return response
 
 
+# MCP kill-switch middleware — must be registered BEFORE the MCP sub-app is
+# mounted so Starlette evaluates it on every /mcp/* request.
+@app.middleware("http")
+async def _mcp_kill_switch(request: Request, call_next):
+    """Return 503 for all /mcp/* paths when mcp_enabled=False in config."""
+    if request.url.path.startswith("/mcp/"):
+        cfg = config_module.load_config(force_reload=False)
+        if not cfg.get("mcp_enabled", True):
+            return JSONResponse(
+                {"error": "MCP_DISABLED", "message": "MCP API is disabled"},
+                status_code=503,
+            )
+    return await call_next(request)
+
+
 def _check_metrics_auth(request: Request) -> None:
     """Enforce optional basic auth on /metrics. Open when METRICS_PASSWORD is unset."""
     expected = os.getenv("METRICS_PASSWORD")
@@ -1905,6 +1920,14 @@ async def delete_file(
     except Exception as e:
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to delete: {error_message}")
+
+
+# Mount MCP sub-app at /mcp — must come AFTER all @app.get/@app.post route
+# registrations and AFTER middleware is wired up, so Starlette's middleware
+# stack is already complete when the mount is added.
+from another_s3_manager.mcp_server import get_mcp_app  # noqa: E402
+
+app.mount("/mcp", get_mcp_app())
 
 
 if __name__ == "__main__":  # pragma: no cover

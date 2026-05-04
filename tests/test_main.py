@@ -1632,3 +1632,33 @@ def test_post_config_preserves_mcp_fields_when_omitted(app_client):
     assert resp.status_code == 200
     after = app_client.get("/api/config", headers=headers).json()
     assert after["mcp_enabled"] is False  # preserved from previous POST
+
+
+# ---------------------------------------------------------------------------
+# MCP kill-switch middleware
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_kill_switch_blocks_when_disabled(app_client, monkeypatch):
+    """When mcp_enabled=False in config, /mcp/* returns 503."""
+    import another_s3_manager.config as config_module
+
+    original_load = config_module.load_config
+
+    def _disabled_config(force_reload=False):
+        cfg = original_load(force_reload=force_reload)
+        cfg["mcp_enabled"] = False
+        return cfg
+
+    monkeypatch.setattr(config_module, "load_config", _disabled_config)
+    resp = app_client.get("/mcp/anything")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["error"] == "MCP_DISABLED"
+
+
+def test_mcp_kill_switch_allows_when_enabled(app_client):
+    """Default is mcp_enabled=True. /mcp/* should NOT return 503 from kill-switch."""
+    resp = app_client.get("/mcp/anything")
+    # MCP routing may return 404/405/etc. — any status except 503 is acceptable.
+    assert resp.status_code != 503
