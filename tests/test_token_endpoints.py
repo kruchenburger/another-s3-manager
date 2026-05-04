@@ -420,6 +420,24 @@ def test_admin_delete_token_404_on_unknown(client_with_admin):
     assert resp.status_code == 404
 
 
+def test_admin_create_token_for_nonexistent_user_returns_404(client_with_admin):
+    """Spec §11.4: admin POST with bogus user_id should be 404, not 409."""
+    client, csrf = client_with_admin
+    resp = client.post(
+        "/api/admin/tokens",
+        json={
+            "user_id": 999_999,
+            "name": "ghost",
+            "is_read_only": True,
+            "max_read_bytes": 1024,
+        },
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 404
+    body = resp.json()
+    assert "999999" in str(body) or "not found" in str(body).lower()
+
+
 def test_admin_delete_token_non_admin_403(app_client):
     """Non-admin must receive 403 on DELETE /api/admin/tokens/{id}."""
     import another_s3_manager.auth as auth_module

@@ -696,6 +696,17 @@ async def admin_create_token(
     """
     if not current_user.get("is_admin", False):
         raise HTTPException(status_code=403, detail="Admin access required")
+    # Validate that the target user exists before attempting to create the token.
+    # Without this check, a bogus user_id triggers an FK IntegrityError which
+    # the except-block below would incorrectly map to 409 "Token name already exists".
+    from another_s3_manager.database import session_scope
+
+    with session_scope() as _session:
+        user_exists = _session.execute(
+            select(UserModel.id).where(UserModel.id == payload.user_id)
+        ).scalar_one_or_none()
+    if user_exists is None:
+        raise HTTPException(status_code=404, detail=f"User with id {payload.user_id} not found")
     try:
         token, plaintext = token_svc.create_token(
             payload.user_id, payload.name, payload.is_read_only, payload.max_read_bytes
