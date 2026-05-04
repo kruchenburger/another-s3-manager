@@ -76,6 +76,30 @@ def isolated_environment(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def alice_with_token():
+    """Insert a user 'alice_proto' with the 'Default' role and return (user_id, plaintext_token).
+
+    Shared across test_mcp_tools.py and test_mcp_protocol.py.  Requires the
+    isolated_environment fixture to have already set up the SQLite database.
+    """
+    from another_s3_manager import api_tokens as svc
+    from another_s3_manager.database import session_scope
+    from another_s3_manager.models import User, UserRole
+
+    with session_scope() as session:
+        user = User(username="alice_proto", password_hash="x", is_admin=False)
+        session.add(user)
+        session.flush()
+        role = UserRole(user_id=user.id, role_name="Default")
+        session.add(role)
+        session.flush()
+        uid = user.id
+
+    _, plaintext = svc.create_token(uid, "proto-test", is_read_only=False, max_read_bytes=10_485_760)
+    return uid, plaintext
+
+
+@pytest.fixture
 def app_client(monkeypatch):
     """
     Provide a FastAPI TestClient with a fresh instance of the app.
