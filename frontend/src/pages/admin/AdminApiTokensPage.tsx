@@ -6,9 +6,11 @@ import { Plus } from "lucide-react";
 import { useAdminTokens } from "@/features/tokens/hooks/useAdminTokens";
 import { useCreateAdminToken } from "@/features/tokens/hooks/useCreateToken";
 import { useDeleteAdminToken } from "@/features/tokens/hooks/useDeleteToken";
+import { useUpdateAdminToken } from "@/features/tokens/hooks/useUpdateToken";
 import { useAdminUsers } from "@/features/admin/hooks/useAdminUsers";
 import { TokensTable } from "@/components/Tokens/TokensTable";
 import { CreateTokenModal } from "@/components/Tokens/CreateTokenModal";
+import { EditTokenModal } from "@/components/Tokens/EditTokenModal";
 import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { runWithToasts } from "@/utils/mutationToast";
@@ -20,10 +22,12 @@ export function AdminApiTokensPage() {
   const { data: usersData } = useAdminUsers();
   const createMutation = useCreateAdminToken();
   const deleteMutation = useDeleteAdminToken();
+  const updateMutation = useUpdateAdminToken();
 
   const [createOpen, create] = useDisclosure(false);
   const [plaintextResult, setPlaintextResult] = useState<(ApiTokenWithPlaintext & { owner_username: string }) | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<ApiToken | null>(null);
+  const [editTarget, setEditTarget] = useState<ApiTokenWithOwner | null>(null);
   const [userFilter, setUserFilter] = useState<string | null>(null);
 
   const allTokens: ApiTokenWithOwner[] = tokensData?.tokens ?? [];
@@ -97,6 +101,7 @@ export function AdminApiTokensPage() {
             tokens={filtered}
             showOwner
             onRevoke={(t) => setRevokeTarget(t)}
+            onEdit={(t) => setEditTarget(t as ApiTokenWithOwner)}
           />
         )}
       </Stack>
@@ -128,6 +133,23 @@ export function AdminApiTokensPage() {
         items={revokeTarget ? [`token "${revokeTarget.name}"`] : []}
         loading={deleteMutation.isPending}
       />
+
+      {editTarget && (
+        <EditTokenModal
+          opened
+          onClose={() => setEditTarget(null)}
+          loading={updateMutation.isPending}
+          token={editTarget}
+          onSubmit={(payload) =>
+            runWithToasts(
+              updateMutation,
+              { id: editTarget.id, payload },
+              `Token "${editTarget.name}" updated`,
+              () => setEditTarget(null),
+            )
+          }
+        />
+      )}
     </Container>
   );
 }
