@@ -1,5 +1,5 @@
-import { Badge, Button, Group, Stack, Table, Text, Title } from "@mantine/core";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Badge, Button, Group, Stack, Table, Text, Title, Tooltip } from "@mantine/core";
+import { AlertTriangle, Plus, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAdminConfig, useSaveConfig } from "@/features/admin/hooks/useAdminConfig";
@@ -81,7 +81,7 @@ export function RolesPage() {
           <Table.Tr>
             <Table.Th>Name</Table.Th>
             <Table.Th w={140}>Type</Table.Th>
-            <Table.Th w={120}>Buckets</Table.Th>
+            <Table.Th w={140}>Buckets</Table.Th>
             <Table.Th>Description</Table.Th>
             <Table.Th w={140}>Actions</Table.Th>
           </Table.Tr>
@@ -94,9 +94,21 @@ export function RolesPage() {
                 <Badge color={typeColor(r.type)} variant="light">{r.type}</Badge>
               </Table.Td>
               <Table.Td>
-                <Text size="sm" c="dimmed">
-                  {(r.allowed_buckets?.length ?? 0)} buckets
-                </Text>
+                {(r.allowed_buckets?.length ?? 0) === 0 ? (
+                  <Tooltip label="This role has no buckets configured — users with only this role will see an empty bucket list.">
+                    <Badge
+                      color="orange"
+                      variant="filled"
+                      leftSection={<AlertTriangle size={12} />}
+                    >
+                      No buckets
+                    </Badge>
+                  </Tooltip>
+                ) : (
+                  <Text size="sm" c="dimmed">
+                    {r.allowed_buckets!.length} buckets
+                  </Text>
+                )}
               </Table.Td>
               <Table.Td>
                 <Text size="sm" lineClamp={1}>{r.description ?? ""}</Text>

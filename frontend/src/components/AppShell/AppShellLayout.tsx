@@ -14,24 +14,39 @@ interface AppShellLayoutProps {
   children?: React.ReactNode;
   /** Navbar slot. Defaults to the file-browser <Sidebar />; admin shell overrides this. */
   navbar?: React.ReactNode;
+  /**
+   * When true, the navbar is locked to the expanded width (260px) regardless of
+   * the persisted collapse preference. Used by the admin shell where there is
+   * no role/bucket tree to collapse and the AdminSidebar always renders labels.
+   */
+  forceExpanded?: boolean;
 }
 
-export function AppShellLayout({ children, navbar }: AppShellLayoutProps = {}) {
+export function AppShellLayout({ children, navbar, forceExpanded = false }: AppShellLayoutProps = {}) {
   const [navOpened, { toggle: toggleNav, close: closeNav }] = useDisclosure(false);
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
+  const [collapsedPref, setCollapsedPref] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     return localStorage.getItem(COLLAPSED_KEY) === "true";
   });
+  const collapsed = forceExpanded ? false : collapsedPref;
 
   const toggleCollapsed = () => {
-    setCollapsed((c) => {
+    // Honour the JSDoc contract on `forceExpanded`: when the navbar is locked
+    // expanded, neither the runtime state nor the persisted preference may
+    // change. Today the toggle is unreachable from the admin shell (AdminSidebar
+    // doesn't receive it), but guarding here prevents future refactors from
+    // silently corrupting the file-browser sidebar's persisted state.
+    if (forceExpanded) return;
+    setCollapsedPref((c) => {
       const next = !c;
       localStorage.setItem(COLLAPSED_KEY, String(next));
       return next;
     });
   };
 
-  // Tour state hoisted here so HelpButton (header) and Sidebar's `?` both open it
+  // Tour state hoisted here so HelpButton (header) and WelcomeToast both open it.
+  // Sidebar no longer hosts a tour entry — the only persistent UI control is
+  // the HelpButton in the header.
   const [tourOpen, setTourOpen] = useState(false);
   const openTour = () => setTourOpen(true);
 
@@ -57,11 +72,7 @@ export function AppShellLayout({ children, navbar }: AppShellLayoutProps = {}) {
         </AppShell.Header>
         <AppShell.Navbar p={0}>
           {navbar ?? (
-            <Sidebar
-              collapsed={collapsed}
-              onToggleCollapsed={toggleCollapsed}
-              onOpenTour={openTour}
-            />
+            <Sidebar collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
           )}
         </AppShell.Navbar>
         <AppShell.Main onClick={closeNav}>

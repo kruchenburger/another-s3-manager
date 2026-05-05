@@ -1,11 +1,12 @@
 import { useState, type MouseEvent } from "react";
-import { ActionIcon, NavLink, Stack, Tooltip } from "@mantine/core";
+import { ActionIcon, NavLink, Stack, Tooltip, UnstyledButton } from "@mantine/core";
 import { AlertCircle, ChevronRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useBuckets } from "@/features/files/hooks/useBuckets";
 import { ApiError } from "@/utils/apiError";
 import { RoleAvatar } from "./RoleAvatar";
 import { SidebarBucketItem } from "./SidebarBucketItem";
+import classes from "./SidebarRoleItem.module.css";
 
 interface SidebarRoleItemProps {
   role: string;
@@ -32,13 +33,19 @@ export function SidebarRoleItem({ role, collapsed }: SidebarRoleItemProps) {
   };
 
   if (collapsed) {
+    // Hover hit area must match the round avatar shape; the default NavLink
+    // renders a full-width rectangle around the icon which looks broken at
+    // collapsed widths (~60px navbar around a ~26px circle).
     return (
-      <NavLink
-        label={null}
-        leftSection={<RoleAvatar role={role} />}
-        onClick={navigateToRole}
-        title={role}
-      />
+      <Tooltip label={role} position="right" withArrow>
+        <UnstyledButton
+          onClick={navigateToRole}
+          aria-label={role}
+          className={classes.collapsedItem}
+        >
+          <RoleAvatar role={role} />
+        </UnstyledButton>
+      </Tooltip>
     );
   }
 

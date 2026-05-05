@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { Database, Settings } from "lucide-react";
@@ -12,6 +13,23 @@ export function RolePage() {
   const navigate = useNavigate();
   const { data: buckets, isLoading, error } = useBuckets(roleId);
   const { data: me } = useMe();
+
+  // Auto-open the bucket when the role has exactly one allowed bucket — saves
+  // a click on the otherwise-degenerate "pick a bucket" list. `replace: true`
+  // keeps Back returning to home instead of bouncing through this page.
+  // Hook is declared before any early return to keep React's hook order stable.
+  // The `!error` guard avoids redirecting into an unreachable bucket when the
+  // hook returns stale cached buckets (length 1) while a fresh fetch is failing
+  // with 403 — the user should see the 403 EmptyState instead of being silently
+  // bounced past it.
+  useEffect(() => {
+    if (!error && buckets && buckets.length === 1) {
+      navigate(
+        `/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(buckets[0]!)}`,
+        { replace: true },
+      );
+    }
+  }, [buckets, roleId, navigate, error]);
 
   if (isLoading) return null;
 
@@ -54,6 +72,13 @@ export function RolePage() {
       />
     );
   }
+
+  // Single-bucket roles auto-redirect via the effect above; render nothing in
+  // the same tick so the table doesn't flash before navigation. The `!error`
+  // mirror of the effect guard prevents a blank screen when stale single-bucket
+  // data coexists with a fresh non-403 error — without it the effect would
+  // skip the redirect but this branch would still hide the EmptyState.
+  if (!error && buckets.length === 1) return null;
 
   return (
     <Stack gap="md">
