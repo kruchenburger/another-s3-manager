@@ -37,6 +37,11 @@ export function SettingsPage() {
       password_min_lowercase: 1,
       password_min_digits: 1,
       password_min_special: 0,
+      // MCP server fields (MB-converted value stored separately)
+      mcp_enabled: true,
+      mcp_disable_writes: false,
+      mcp_text_extensions: [] as string[],
+      mcp_global_max_read_bytes_mb: 10,
     },
   });
 
@@ -54,6 +59,11 @@ export function SettingsPage() {
       password_min_lowercase: config.password_min_lowercase,
       password_min_digits: config.password_min_digits,
       password_min_special: config.password_min_special,
+      mcp_enabled: config.mcp_enabled,
+      mcp_disable_writes: config.mcp_disable_writes,
+      mcp_text_extensions: config.mcp_text_extensions ?? [],
+      // Convert bytes → MB for the NumberInput display
+      mcp_global_max_read_bytes_mb: config.mcp_global_max_read_bytes / MB,
     };
     // setInitialValues so form.isDirty() correctly reports which fields the
     // user has actually modified (vs. fields populated from server data).
@@ -97,6 +107,13 @@ export function SettingsPage() {
       password_min_lowercase: values.password_min_lowercase,
       password_min_digits: values.password_min_digits,
       password_min_special: values.password_min_special,
+      mcp_enabled: values.mcp_enabled,
+      mcp_disable_writes: values.mcp_disable_writes,
+      mcp_text_extensions: values.mcp_text_extensions,
+      // Preserve original byte precision when user didn't touch the MB field
+      mcp_global_max_read_bytes: form.isDirty("mcp_global_max_read_bytes_mb")
+        ? Math.round(values.mcp_global_max_read_bytes_mb * MB)
+        : config.mcp_global_max_read_bytes,
     };
     runWithToasts(save, next, "Settings saved");
   });
@@ -207,6 +224,43 @@ export function SettingsPage() {
             step={1}
             disabled={readOnly}
             {...form.getInputProps("password_min_special")}
+          />
+          <Title order={3} mt="md">
+            MCP Server
+          </Title>
+          <Text size="sm" c="dimmed">
+            Model Context Protocol server for AI agents. Changes take effect
+            immediately after save. Token-level caps still apply on top of these
+            global limits.
+          </Text>
+          <Switch
+            label="Enable MCP server"
+            description="When off, /mcp/* endpoints return 503."
+            disabled={readOnly}
+            {...form.getInputProps("mcp_enabled", { type: "checkbox" })}
+          />
+          <Switch
+            label="Disable writes via MCP"
+            description="Forces all MCP tokens to read-only regardless of their per-token flag."
+            disabled={readOnly}
+            {...form.getInputProps("mcp_disable_writes", { type: "checkbox" })}
+          />
+          <NumberInput
+            label="Global max read bytes (MB)"
+            description="Server-wide cap on read_file response size. Applied as min(token cap, this). Hard ceiling: 10 MB."
+            min={0.001}
+            max={10}
+            step={0.5}
+            decimalScale={3}
+            disabled={readOnly}
+            {...form.getInputProps("mcp_global_max_read_bytes_mb")}
+          />
+          <TagsInput
+            label="Additional text extensions for read_file"
+            description="Per-deployment whitelist extensions beyond built-in defaults (e.g. mdx, rst, adoc)."
+            placeholder="Add extension and press Enter"
+            disabled={readOnly}
+            {...form.getInputProps("mcp_text_extensions")}
           />
           {!readOnly && (
             <Button type="submit" loading={save.isPending}>

@@ -90,6 +90,19 @@ def _migrate_config() -> bool:
     if "password_min_special" not in _config_cache:
         _config_cache["password_min_special"] = 0
         config_modified = True
+    # MCP server defaults — added Phase 5
+    if "mcp_enabled" not in _config_cache:
+        _config_cache["mcp_enabled"] = True
+        config_modified = True
+    if "mcp_disable_writes" not in _config_cache:
+        _config_cache["mcp_disable_writes"] = False
+        config_modified = True
+    if "mcp_text_extensions" not in _config_cache:
+        _config_cache["mcp_text_extensions"] = []
+        config_modified = True
+    if "mcp_global_max_read_bytes" not in _config_cache:
+        _config_cache["mcp_global_max_read_bytes"] = 10_485_760
+        config_modified = True
     # Note: data_dir is not migrated automatically - it should be set explicitly if needed
     # Note: default_role is optional and not migrated automatically - it should be set explicitly if needed
 
@@ -112,6 +125,10 @@ def _get_default_config() -> Dict[str, Any]:
         "password_min_lowercase": 1,
         "password_min_digits": 1,
         "password_min_special": 0,
+        "mcp_enabled": True,
+        "mcp_disable_writes": False,
+        "mcp_text_extensions": [],
+        "mcp_global_max_read_bytes": 10_485_760,
     }
 
 

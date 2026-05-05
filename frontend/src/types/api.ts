@@ -49,6 +49,7 @@ export interface Ban {
 }
 
 export interface AdminUser {
+  id: number;
   username: string;
   is_admin: boolean;
   allowed_roles: string[];
@@ -114,9 +115,52 @@ export interface AppConfig {
   password_min_lowercase: number;
   password_min_digits: number;
   password_min_special: number;
+  // MCP server settings
+  mcp_enabled: boolean;
+  mcp_disable_writes: boolean;
+  mcp_text_extensions: string[];
+  mcp_global_max_read_bytes: number;
 }
 
 export interface ChangeMyPasswordPayload {
   current_password: string;
   new_password: string;
+}
+
+export interface ApiToken {
+  id: number;
+  name: string;
+  is_read_only: boolean;
+  max_read_bytes: number;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface ApiTokenWithOwner extends ApiToken {
+  owner_username: string;
+}
+
+export interface ApiTokenWithPlaintext extends ApiToken {
+  token_plaintext: string;
+}
+
+export interface CreateTokenPayload {
+  name: string;
+  is_read_only: boolean;
+  max_read_bytes: number;
+}
+
+export interface AdminCreateTokenPayload extends CreateTokenPayload {
+  user_id: number;
+}
+
+export interface MyTokensResponse {
+  tokens: ApiToken[];
+  used: number;
+  limit: number;
+}
+
+export interface AdminTokensResponse {
+  tokens: ApiTokenWithOwner[];
 }

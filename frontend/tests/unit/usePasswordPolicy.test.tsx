@@ -29,6 +29,10 @@ describe("usePasswordPolicy", () => {
       password_min_lowercase: 1,
       password_min_digits: 1,
       password_min_special: 0,
+      mcp_enabled: true,
+      mcp_disable_writes: false,
+      mcp_text_extensions: [],
+      mcp_global_max_read_bytes: 10 * 1024 * 1024,
     });
     const { result } = renderHook(() => usePasswordPolicy(), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));

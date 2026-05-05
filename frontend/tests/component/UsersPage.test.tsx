@@ -35,6 +35,10 @@ vi.mock("@/features/admin/api/adminApi", () => ({
     password_min_lowercase: 1,
     password_min_digits: 1,
     password_min_special: 0,
+    mcp_enabled: true,
+    mcp_disable_writes: false,
+    mcp_text_extensions: [],
+    mcp_global_max_read_bytes: 10 * 1024 * 1024,
   })),
 }));
 import {
@@ -85,11 +89,13 @@ function renderPage() {
 const TWO_USERS = {
   users: [
     {
+      id: 1,
       username: "admin",
       is_admin: true,
       allowed_roles: [],
     },
     {
+      id: 2,
       username: "alice",
       is_admin: false,
       allowed_roles: ["dev", "ops"],

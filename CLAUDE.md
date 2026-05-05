@@ -43,7 +43,7 @@ another-s3-manager/
 
 - SQLAlchemy 2.0 (sync) + Alembic for migrations
 - SQLite at `<DATA_DIR>/another_s3_manager.db`
-- Tables: `users` (incl. `tour_seen_v1` flag for one-time onboarding), `user_roles` (junction), `bans` (FK → users with CASCADE)
+- Tables: `users` (incl. `tour_seen_v1` flag for one-time onboarding), `user_roles` (junction), `bans` (FK → users with CASCADE), `api_tokens` (FK CASCADE → users; stores SHA-256 hash of plaintext token, `is_read_only`, `max_read_bytes`, `revoked_at`)
 - Module: `database.py` (engine + `session_scope()`), `models.py` (ORM)
 - Auto-migration from `users.json` / `bans.json` on first startup (legacy files renamed to `*.migrated.bak`)
 
@@ -169,22 +169,24 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 
 ## Environment Variables
 
-| Variable                          | Required | Default         | Description                         |
-| --------------------------------- | -------- | --------------- | ----------------------------------- |
-| `JWT_SECRET_KEY`                  | Yes      | —               | JWT signing secret                  |
-| `PORT`                            | No       | `8080`          | Server port                         |
-| `UVICORN_HOST`                    | No       | `0.0.0.0`       | Server bind address                 |
-| `LOG_LEVEL`                       | No       | `info`          | Logging level                       |
-| `ADMIN_PASSWORD`                  | No       | `change_me_pls` | Admin user password                 |
-| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | No       | `180`           | JWT expiration (minutes)            |
-| `ITEMS_PER_PAGE`                  | No       | `200`           | Items per page in file listing      |
-| `DISABLE_DELETION`                | No       | `false`         | Disable file deletion               |
-| `MAX_FILE_SIZE`                   | No       | `104857600`     | Max upload file size (bytes, 100MB) |
-| `ENABLE_LAZY_LOADING`             | No       | `true`          | Enable lazy loading for file lists  |
-| `AWS_REGION`                      | No       | from env        | Default AWS region                  |
-| `S3_FILE_MANAGER_CONFIG`          | No       | `./data/config.json` | Path to config file (under DATA_DIR by convention) |
-| `DATA_DIR`                        | No       | `./data` (native), `/app/data` (Docker) | Data dir (SQLite DB + runtime data) |
-| `COOKIE_SECURE`                   | No       | `true`          | `Secure` flag on auth cookie. MUST be `false` on local HTTP, else browser drops the cookie |
+| Variable                          | Required | Default                                 | Description                                                                                  |
+| --------------------------------- | -------- | --------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `JWT_SECRET_KEY`                  | Yes      | —                                       | JWT signing secret                                                                           |
+| `PORT`                            | No       | `8080`                                  | Server port                                                                                  |
+| `UVICORN_HOST`                    | No       | `0.0.0.0`                               | Server bind address                                                                          |
+| `LOG_LEVEL`                       | No       | `info`                                  | Logging level                                                                                |
+| `ADMIN_PASSWORD`                  | No       | `change_me_pls`                         | Admin user password                                                                          |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | No       | `180`                                   | JWT expiration (minutes)                                                                     |
+| `ITEMS_PER_PAGE`                  | No       | `200`                                   | Items per page in file listing                                                               |
+| `DISABLE_DELETION`                | No       | `false`                                 | Disable file deletion                                                                        |
+| `MAX_FILE_SIZE`                   | No       | `104857600`                             | Max upload file size (bytes, 100MB)                                                          |
+| `ENABLE_LAZY_LOADING`             | No       | `true`                                  | Enable lazy loading for file lists                                                           |
+| `AWS_REGION`                      | No       | from env                                | Default AWS region                                                                           |
+| `S3_FILE_MANAGER_CONFIG`          | No       | `./data/config.json`                    | Path to config file (under DATA_DIR by convention)                                           |
+| `DATA_DIR`                        | No       | `./data` (native), `/app/data` (Docker) | Data dir (SQLite DB + runtime data)                                                          |
+| `COOKIE_SECURE`                   | No       | `true`                                  | `Secure` flag on auth cookie. MUST be `false` on local HTTP, else browser drops the cookie   |
+| `LOG_FORMAT`                      | No       | `text`                                  | Log output format: `text` or `json` (structured, for log aggregators)                        |
+| `METRICS_PASSWORD`                | No       | —                                       | Optional basic-auth password for `/metrics` (username `metrics`). If unset, endpoint is open |
 
 ## Features
 
@@ -198,6 +200,8 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 - React SPA on `/v2/*`: collapsible sidebar with role/bucket tree, file browser (table+grid toggle, hover actions, bulk delete, drag-drop upload, preview modal), one-time onboarding tour persisted via `tour_seen_v1` user flag.
 - React admin pages on `/v2/admin/*`: separate AdminLayout with grouped sidebar (ACCOUNTS: Users / Bans, INFRASTRUCTURE: Roles / Settings) reachable from "Admin Console" in UserMenu. Users page (CRUD + reset password + self-protect for delete/demote/reset). Bans page (view + unban). Roles page (table + create wizard with type-conditional credential fields + edit form, secret_access_key preserve-on-blank). Settings page (typed global settings with read-only k8s ConfigMap mode, MB↔bytes conversion preserves byte-precision when MB field unchanged). Backend endpoints unchanged from Phase 1; React pages reuse them via TanStack Query plus a small `update_user` self-demote guard.
 - Self-service password change at `/v2/change-password`: any authenticated user changes their own password via UserMenu → "Change password". Requires the current password (defence against stolen-cookie attacks) and rejects identical new password. Client-side validation: 8+ chars, confirm matches, current required.
+- **MCP server at `/mcp`** for AI agents (Claude Desktop, Cursor, Codex). Bearer auth via per-user API tokens; same role/permission model as web UI. Self-serve token management at `/v2/api-tokens`. See `docs/mcp-setup.md`.
+- **Prometheus metrics** at `/metrics` (optional basic auth via `METRICS_PASSWORD`). Covers HTTP, auth, S3 ops, MCP tool calls, DB query duration.
 
 ### React API surface
 
@@ -220,6 +224,14 @@ The React SPA consumes existing backend endpoints plus a small set added for SPA
 - `DELETE /api/admin/bans/{u}` — unban user
 - `GET /api/config` — read whole config including derived `data_dir` / `current_role` / `is_read_only` (response-only)
 - `POST /api/config` — write config; React strips derived fields via `toWritableConfig()` to avoid persisting runtime values
+- `GET /api/me/tokens` — list authenticated user's active API tokens
+- `POST /api/me/tokens` — create API token (returns plaintext token once; stored as SHA-256 hash)
+- `DELETE /api/me/tokens/{id}` — revoke own token
+- `GET /api/admin/tokens` — admin list of all tokens with owner info
+- `POST /api/admin/tokens` — admin create token on behalf of any user
+- `DELETE /api/admin/tokens/{id}` — admin revoke any token
+- `/mcp/*` — MCP server (Bearer token auth via `Authorization: Bearer as3m_...`; same role/permission model as web UI; see `docs/mcp-setup.md`)
+- `/metrics` — Prometheus exposition format (optional basic auth via `METRICS_PASSWORD`)
 
 ## Deployment
 
@@ -239,6 +251,7 @@ visible in your IDE. An `init-data` sidecar fixes ownership for the non-root app
 container before startup — no manual `chown` needed.
 
 For native dev (no Docker, fastest iteration):
+
 ```bash
 JWT_SECRET_KEY=dev-secret uv run python -m another_s3_manager.main
 ```

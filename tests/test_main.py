@@ -12,7 +12,7 @@ import pytest
 from botocore.exceptions import ClientError
 from fastapi import HTTPException, status
 
-from another_s3_manager.constants import APP_VERSION
+import another_s3_manager.constants as _constants_module
 
 
 def reload_main():
@@ -338,7 +338,7 @@ def test_get_current_user_info(app_client):
     data = response.json()
     assert data["username"] == "admin"
     assert data["is_admin"] is True
-    assert data["app_version"] == APP_VERSION
+    assert data["app_version"] == _constants_module.APP_VERSION
 
 
 def test_get_current_user_info_requires_auth(app_client):
@@ -352,7 +352,7 @@ def test_get_app_info(app_client):
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert "app_name" in data
-    assert data["app_version"] == APP_VERSION
+    assert data["app_version"] == _constants_module.APP_VERSION
 
 
 def test_admin_page(app_client):
@@ -553,7 +553,7 @@ def test_list_buckets_uses_s3(app_client, mocker):
     s3_mock = mocker.MagicMock()
     s3_mock.list_buckets.return_value = {"Buckets": [{"Name": "bucket"}]}
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(s3_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -580,7 +580,7 @@ def test_list_files(app_client, mocker):
     s3_mock = mocker.MagicMock()
     s3_mock.get_paginator.return_value = paginator_mock
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(s3_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -594,7 +594,7 @@ def test_upload_file(app_client, mocker):
     _, headers = login(app_client)
     s3_mock = mocker.MagicMock()
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(s3_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -636,7 +636,7 @@ def test_download_file(app_client, mocker):
         "ContentType": "text/plain",
     }
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(s3_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -654,7 +654,7 @@ def test_delete_file(app_client, mocker):
     s3_mock = mocker.MagicMock()
     s3_mock.get_paginator.return_value = paginator_mock
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(s3_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -884,7 +884,7 @@ def test_list_buckets_access_denied_returns_friendly_403(app_client, mocker):
     bucket-scoped policies), the API must return 403 with a generic explanation —
     not a raw 500 boto error. The frontend layers role-appropriate CTAs on top."""
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListBuckets")
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -900,7 +900,7 @@ def test_list_buckets_other_client_error_still_returns_500(app_client, mocker):
     """Non-403 boto errors should still surface as 500 — the friendly-error path
     is specifically for 'cannot list buckets' permission failures, not generic ones."""
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         raise ClientError({"Error": {"Code": "InternalError", "Message": "boom"}}, "ListBuckets")
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -912,7 +912,7 @@ def test_list_buckets_other_client_error_still_returns_500(app_client, mocker):
 def test_list_files_handles_error(app_client, mocker):
     _, headers = login(app_client)
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         raise ClientError({"Error": {"Code": "NoSuchBucket", "Message": "Missing"}}, "ListObjectsV2")
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -923,7 +923,7 @@ def test_list_files_handles_error(app_client, mocker):
 def test_upload_file_handles_exception(app_client, mocker):
     _, headers = login(app_client)
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         raise ValueError("boom")
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -945,7 +945,7 @@ def test_download_file_not_found(app_client, mocker):
         "GetObject",
     )
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(client_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -1349,11 +1349,18 @@ def test_startup_runs_migrations_and_json_import(monkeypatch, tmp_path):
         )
     )
 
-    import asyncio
+    # Phase 5 lifespan refactor: startup is now part of the FastAPI lifespan
+    # context manager rather than a standalone async function. Drive the same
+    # behavior by entering the lifespan via TestClient — TestClient runs the
+    # lifespan handler on enter (and exits it on close).
+    from fastapi.testclient import TestClient
 
-    from another_s3_manager.main import startup
+    from another_s3_manager.main import app
 
-    asyncio.run(startup())
+    with TestClient(app) as _client:
+        # Lifespan startup runs synchronously before this block executes;
+        # by the time we're here, alembic + JSON migration have completed.
+        pass
 
     # DB exists, has the imported user, JSON renamed
     assert (tmp_path / "another_s3_manager.db").exists()
@@ -1381,7 +1388,7 @@ def test_download_file_with_colon_in_key(app_client, mocker):
         "ContentType": "text/plain",
     }
 
-    def mock_execute_with_s3_retry(role_name, callback):
+    def mock_execute_with_s3_retry(role_name, operation, callback):
         return callback(s3_mock)
 
     mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
@@ -1575,3 +1582,90 @@ def test_admin_empty_is_admin_field_does_not_demote_target(app_client):
     users = app_client.get("/api/admin/users", headers=headers).json()["users"]
     other = next(u for u in users if u["username"] == "other_admin")
     assert other["is_admin"] is True, "target admin must NOT be demoted on empty is_admin="
+
+
+# ---------------------------------------------------------------------------
+# MCP config fields (Phase 5, Task 6)
+# ---------------------------------------------------------------------------
+
+
+def test_get_config_includes_mcp_fields(app_client):
+    """GET /api/config must expose all 4 MCP fields to the admin."""
+    _, headers = login(app_client)
+    resp = app_client.get("/api/config", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "mcp_enabled" in body
+    assert "mcp_disable_writes" in body
+    assert "mcp_text_extensions" in body
+    assert "mcp_global_max_read_bytes" in body
+
+
+def test_post_config_persists_mcp_fields(app_client):
+    """POST /api/config must accept and persist all 4 MCP fields."""
+    _, headers = login(app_client)
+    initial = app_client.get("/api/config", headers=headers).json()
+    initial["mcp_enabled"] = False
+    initial["mcp_disable_writes"] = True
+    initial["mcp_text_extensions"] = ["custom"]
+    initial["mcp_global_max_read_bytes"] = 2_097_152
+    resp = app_client.post("/api/config", json=initial, headers=headers)
+    assert resp.status_code == 200
+    after = app_client.get("/api/config", headers=headers).json()
+    assert after["mcp_enabled"] is False
+    assert after["mcp_disable_writes"] is True
+    assert after["mcp_text_extensions"] == ["custom"]
+    assert after["mcp_global_max_read_bytes"] == 2_097_152
+
+
+def test_post_config_validates_mcp_global_max_read_bytes_range(app_client):
+    """POST /api/config must reject mcp_global_max_read_bytes > 10MB."""
+    _, headers = login(app_client)
+    cfg = app_client.get("/api/config", headers=headers).json()
+    cfg["mcp_global_max_read_bytes"] = 999_999_999
+    resp = app_client.post("/api/config", json=cfg, headers=headers)
+    assert resp.status_code == 422
+
+
+def test_post_config_preserves_mcp_fields_when_omitted(app_client):
+    """POST /api/config without MCP fields must preserve previously saved values."""
+    _, headers = login(app_client)
+    cfg = app_client.get("/api/config", headers=headers).json()
+    cfg["mcp_enabled"] = False
+    app_client.post("/api/config", json=cfg, headers=headers)
+    # Submit same payload but without mcp_enabled key
+    minimal = {k: v for k, v in cfg.items() if k != "mcp_enabled"}
+    resp = app_client.post("/api/config", json=minimal, headers=headers)
+    assert resp.status_code == 200
+    after = app_client.get("/api/config", headers=headers).json()
+    assert after["mcp_enabled"] is False  # preserved from previous POST
+
+
+# ---------------------------------------------------------------------------
+# MCP kill-switch middleware
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_kill_switch_blocks_when_disabled(app_client, monkeypatch):
+    """When mcp_enabled=False in config, /mcp/* returns 503."""
+    import another_s3_manager.config as config_module
+
+    original_load = config_module.load_config
+
+    def _disabled_config(force_reload=False):
+        cfg = original_load(force_reload=force_reload)
+        cfg["mcp_enabled"] = False
+        return cfg
+
+    monkeypatch.setattr(config_module, "load_config", _disabled_config)
+    resp = app_client.get("/mcp/anything")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["error"] == "MCP_DISABLED"
+
+
+def test_mcp_kill_switch_allows_when_enabled(app_client):
+    """Default is mcp_enabled=True. /mcp/* should NOT return 503 from kill-switch."""
+    resp = app_client.get("/mcp/anything")
+    # MCP routing may return 404/405/etc. — any status except 503 is acceptable.
+    assert resp.status_code != 503

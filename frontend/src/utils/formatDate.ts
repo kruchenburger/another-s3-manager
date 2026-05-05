@@ -29,3 +29,21 @@ export function formatDate(iso: string): string {
   }
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
+
+// Wrapper that accepts nullable ISO strings (used by tooltips that show
+// absolute timestamps next to relative ones — e.g. TokensTable's "Created"
+// column). Returns "never" for null/undefined.
+export function formatRelative(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  return formatDate(iso);
+}
+
+// Absolute timestamp for tooltips: locale-aware "YYYY-MM-DD HH:mm" style.
+// Used as the secondary display alongside formatRelative() — the relative
+// label is the primary, the absolute is the tooltip detail.
+export function formatAbsolute(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}

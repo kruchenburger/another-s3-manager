@@ -3,10 +3,17 @@ Another S3 Manager - Lightweight S3 file management interface
 Provides file browsing, upload, and deletion capabilities for S3 buckets
 """
 
+from another_s3_manager.logging_setup import configure_logging
+
+configure_logging()
+
+import base64
 import json
 import logging
 import os
+import secrets as _secrets
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -35,6 +42,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
 import another_s3_manager.config as config_module
@@ -59,8 +67,14 @@ from another_s3_manager.constants import (
     COOKIE_SECURE,
     STATIC_DIR,
 )
+from another_s3_manager.metrics import (
+    REGISTRY,
+    http_request_duration_seconds,
+    http_requests_total,
+)
 from another_s3_manager.s3_client import clear_s3_clients_cache, execute_with_s3_retry
 from another_s3_manager.users import (
+    get_users_for_admin,
     load_bans,
     load_users,
     save_bans,
@@ -82,14 +96,6 @@ except ValueError as e:
     print("Please set the JWT_SECRET_KEY environment variable.")
     print("Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(32))'")
     sys.exit(1)
-
-app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION)
-
-# No application-level rate limiting. Brute-force defense lives in the
-# username-based ban (auth.record_login_attempt: 3 fails → 1h ban, admins exempt).
-# For production deployments expecting public exposure, put the app behind
-# Cloudflare Access / WAF (or any reverse proxy with auth) — that is the right
-# layer for IP-level rate limiting and DoS protection.
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -114,15 +120,31 @@ def _run_alembic_upgrade() -> None:
     command.upgrade(cfg, "head")
 
 
-@app.on_event("startup")
-async def startup() -> None:
-    """Run DB migrations + import legacy JSON files if needed."""
+from contextlib import asynccontextmanager
+
+from another_s3_manager.mcp_server import mcp as _mcp_instance
+
+
+@asynccontextmanager
+async def lifespan(app_: FastAPI):
+    """App startup + MCP session manager lifecycle.
+
+    Phase 5 added MCP via FastMCP (SDK 1.12.x). FastMCP's session_manager
+    needs an async task group that's only created inside its run() context
+    manager — without entering it during startup, every request to /mcp/*
+    fails with 'Task group is not initialized.' (We learned the hard way.)
+
+    Migration from on_event('startup') to lifespan also resolves the
+    deprecation warning that's been firing since the FastAPI 0.136 bump.
+    """
+    # 1. DB migrations — must complete before any request hits a model
     try:
         _run_alembic_upgrade()
     except Exception:
         logger.critical("alembic upgrade failed", exc_info=True)
         raise
 
+    # 2. Legacy JSON → SQLite migration (idempotent)
     try:
         from another_s3_manager.migration import migrate_json_if_needed
 
@@ -135,22 +157,98 @@ async def startup() -> None:
         sys.exit(1)
     except Exception:
         logger.warning("JSON migration failed; DB is still usable", exc_info=True)
-        # Don't exit — DB is still usable, admin can investigate
 
-    # Warn loudly if the default admin password is in use. Combined with
-    # admin-exempt-from-ban (auth.record_login_attempt) and no IP rate limiting,
-    # leaving this default open exposes the admin account to unimpeded brute-force.
+    # 3. Default-password security warning
     if os.getenv("ADMIN_PASSWORD", "change_me_pls") == "change_me_pls":
         logger.warning(
             "ADMIN_PASSWORD is the default 'change_me_pls'. CHANGE IT before exposing this app — "
             "admin is exempt from auto-ban and there is no application-level rate limit on /api/login."
         )
 
+    # 4. Enter FastMCP session manager — REQUIRED for /mcp/* to work.
+    async with _mcp_instance.session_manager.run():
+        yield
+
+
+app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION, lifespan=lifespan)
+
+# No application-level rate limiting. Brute-force defense lives in the
+# username-based ban (auth.record_login_attempt: 3 fails → 1h ban, admins exempt).
+# For production deployments expecting public exposure, put the app behind
+# Cloudflare Access / WAF (or any reverse proxy with auth) — that is the right
+# layer for IP-level rate limiting and DoS protection.
+
 
 # Exception handler to ensure all errors return JSON
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+# HTTP metrics middleware — registered late so it sees the final response status
+# (after exception handlers have run and converted exceptions to proper HTTP responses).
+@app.middleware("http")
+async def _http_metrics(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration = time.perf_counter() - start
+    # path_template — bounded cardinality. Falls back to actual path on no-route 404.
+    route = request.scope.get("route")
+    path_template = route.path if route is not None else request.url.path
+    method = request.method
+    status_code = str(response.status_code)
+    http_requests_total.labels(method=method, path_template=path_template, status_code=status_code).inc()
+    http_request_duration_seconds.labels(method=method, path_template=path_template).observe(duration)
+    return response
+
+
+# MCP kill-switch middleware — must be registered BEFORE the MCP sub-app is
+# mounted so Starlette evaluates it on every /mcp/* request.
+@app.middleware("http")
+async def _mcp_kill_switch(request: Request, call_next):
+    """Return 503 for all /mcp paths when mcp_enabled=False in config.
+
+    Match both /mcp (without trailing slash — Starlette would 307-redirect
+    this to /mcp/ unless we intercept first) and /mcp/* so the kill-switch
+    can't be bypassed via the no-slash form.
+    """
+    path = request.url.path
+    if path == "/mcp" or path.startswith("/mcp/"):
+        cfg = config_module.load_config(force_reload=False)
+        if not cfg.get("mcp_enabled", True):
+            return JSONResponse(
+                {"error": "MCP_DISABLED", "message": "MCP API is disabled"},
+                status_code=503,
+            )
+    return await call_next(request)
+
+
+def _check_metrics_auth(request: Request) -> None:
+    """Enforce optional basic auth on /metrics. Open when METRICS_PASSWORD is unset."""
+    expected = os.getenv("METRICS_PASSWORD")
+    if not expected:
+        return  # endpoint is open
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("basic "):
+        raise HTTPException(
+            status_code=401,
+            detail="Basic auth required",
+            headers={"WWW-Authenticate": 'Basic realm="metrics"'},
+        )
+    try:
+        decoded = base64.b64decode(auth[6:]).decode()
+        username, password = decoded.split(":", 1)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Malformed basic auth")
+    if username != "metrics" or not _secrets.compare_digest(password, expected):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+@app.get("/metrics")
+async def metrics_endpoint(request: Request):
+    """Prometheus metrics exposition endpoint. Optional METRICS_PASSWORD basic auth."""
+    _check_metrics_auth(request)
+    return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
 # Health endpoint (no auth required)
@@ -399,22 +497,11 @@ async def admin_page():
 @app.get("/api/admin/users")
 async def list_users(current_user: Dict[str, Any] = Depends(get_current_admin_user)):
     """List all users (admin only)"""
-    users = load_users()
     # Always reload config to get latest roles
     config = load_config(force_reload=True)
     available_roles = [role.get("name") for role in config.get("roles", [])]
-
-    # Don't return password hashes
-    user_list = []
-    for user in users.get("users", []):
-        user_list.append(
-            {
-                "username": user.get("username"),
-                "is_admin": user.get("is_admin", False),
-                "created_at": user.get("created_at"),
-                "allowed_roles": user.get("allowed_roles", []),
-            }
-        )
+    # Returns user list including id field (used by admin token creation)
+    user_list = get_users_for_admin()
     return {"users": user_list, "available_roles": available_roles}
 
 
@@ -502,6 +589,20 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=1, description="The new password to set")
 
 
+class CreateTokenRequest(BaseModel):
+    """Body for POST /api/me/tokens — create an API token for the current user."""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    is_read_only: bool = True
+    max_read_bytes: int = Field(default=1_048_576, ge=1, le=10_485_760)
+
+
+class AdminCreateTokenRequest(CreateTokenRequest):
+    """Body for POST /api/admin/tokens — admin creates a token on behalf of a user."""
+
+    user_id: int = Field(..., gt=0)
+
+
 @app.put("/api/me/password")
 async def change_my_password(
     payload: ChangePasswordRequest,
@@ -542,6 +643,190 @@ async def change_my_password(
     from another_s3_manager.users import update_user as users_update_user
 
     users_update_user(username, password_hash=hash_password(payload.new_password))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Token CRUD helpers
+# ---------------------------------------------------------------------------
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+
+from another_s3_manager import api_tokens as token_svc
+from another_s3_manager.models import User as UserModel
+
+
+def _get_user_id_by_username(username: str) -> int:
+    """Return the DB primary-key id for the given username.
+
+    Raises HTTPException 404 if the user is not found.
+    """
+    from another_s3_manager.database import session_scope
+
+    with session_scope() as session:
+        row = session.execute(select(UserModel).where(UserModel.username == username)).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        return row.id
+
+
+def _serialize_token(t, owner_username: Optional[str] = None) -> dict:
+    """Serialize an ApiToken ORM row to a plain dict (no token_hash, no plaintext)."""
+
+    # SQLite drops tzinfo on storage even though our DateTime columns declare
+    # timezone=True; values come back naive. Since we always *write* UTC
+    # (api_tokens._utcnow → datetime.now(UTC)), force a 'Z' suffix on the
+    # serialized ISO so the browser parses it as UTC instead of local time.
+    # Without this, the React UI showed "Last used 2 hours ago" right after
+    # using a token from a UTC+2 browser.
+    def _iso_utc(d):
+        if d is None:
+            return None
+        if d.tzinfo is not None:
+            return d.isoformat()
+        return d.isoformat() + "Z"
+
+    out = {
+        "id": t.id,
+        "name": t.name,
+        "is_read_only": t.is_read_only,
+        "max_read_bytes": t.max_read_bytes,
+        "created_at": _iso_utc(t.created_at),
+        "last_used_at": _iso_utc(t.last_used_at),
+        "revoked_at": _iso_utc(t.revoked_at),
+    }
+    if owner_username is not None:
+        out["owner_username"] = owner_username
+    return out
+
+
+# ---------------------------------------------------------------------------
+# /api/me/tokens  (self-service)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/me/tokens")
+async def get_my_tokens(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """List active API tokens for the authenticated user.
+
+    Returns tokens, used count, and per-user limit. Never returns token_plaintext.
+    """
+    user_id = _get_user_id_by_username(current_user["username"])
+    tokens = token_svc.list_tokens_for_user(user_id, include_revoked=False)
+    used = token_svc.count_active_tokens_for_user(user_id)
+    return {
+        "tokens": [_serialize_token(t) for t in tokens],
+        "used": used,
+        "limit": token_svc.PER_USER_TOKEN_LIMIT,
+    }
+
+
+@app.post("/api/me/tokens")
+async def create_my_token(
+    payload: CreateTokenRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Create a new API token for the authenticated user.
+
+    Returns token metadata + token_plaintext exactly once. Store it immediately —
+    it cannot be retrieved again.
+    """
+    user_id = _get_user_id_by_username(current_user["username"])
+    try:
+        token, plaintext = token_svc.create_token(user_id, payload.name, payload.is_read_only, payload.max_read_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail=f"Token name '{payload.name}' already exists")
+    return {**_serialize_token(token), "token_plaintext": plaintext}
+
+
+@app.delete("/api/me/tokens/{token_id}")
+async def delete_my_token(
+    token_id: int,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Revoke one of the authenticated user's own tokens.
+
+    Returns 403 if the token belongs to another user, 404 if not found.
+    """
+    user_id = _get_user_id_by_username(current_user["username"])
+    try:
+        token_svc.revoke_token(token_id, by_user_id=user_id, by_is_admin=False)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="You can only revoke your own tokens")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Token not found")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# /api/admin/tokens  (admin-only)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/admin/tokens")
+async def admin_list_tokens(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """List all active API tokens across all users (admin only).
+
+    Each entry includes owner_username for display in the admin panel.
+    """
+    if not current_user.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    rows = token_svc.list_all_tokens(include_revoked=False)
+    return {"tokens": [_serialize_token(t, owner_username=u.username) for t, u in rows]}
+
+
+@app.post("/api/admin/tokens")
+async def admin_create_token(
+    payload: AdminCreateTokenRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Create an API token on behalf of any user (admin only).
+
+    Requires user_id (not username) in the request body; the caller (SPA)
+    must resolve username→id from the users list before calling this endpoint.
+    """
+    if not current_user.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    # Validate that the target user exists before attempting to create the token.
+    # Without this check, a bogus user_id triggers an FK IntegrityError which
+    # the except-block below would incorrectly map to 409 "Token name already exists".
+    from another_s3_manager.database import session_scope
+
+    with session_scope() as _session:
+        user_exists = _session.execute(select(UserModel.id).where(UserModel.id == payload.user_id)).scalar_one_or_none()
+    if user_exists is None:
+        raise HTTPException(status_code=404, detail=f"User with id {payload.user_id} not found")
+    try:
+        token, plaintext = token_svc.create_token(
+            payload.user_id, payload.name, payload.is_read_only, payload.max_read_bytes
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail=f"Token name '{payload.name}' already exists for this user")
+    return {**_serialize_token(token), "token_plaintext": plaintext}
+
+
+@app.delete("/api/admin/tokens/{token_id}")
+async def admin_delete_token(
+    token_id: int,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Revoke any token regardless of owner (admin only)."""
+    if not current_user.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    try:
+        # by_is_admin=True bypasses owner check; by_user_id is irrelevant when admin.
+        token_svc.revoke_token(token_id, by_user_id=0, by_is_admin=True)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Token not found")
     return {"ok": True}
 
 
@@ -780,6 +1065,11 @@ async def get_config(
             "password_min_lowercase": config.get("password_min_lowercase", 0),
             "password_min_digits": config.get("password_min_digits", 0),
             "password_min_special": config.get("password_min_special", 0),
+            # MCP server fields (Phase 5)
+            "mcp_enabled": config.get("mcp_enabled", True),
+            "mcp_disable_writes": config.get("mcp_disable_writes", False),
+            "mcp_text_extensions": config.get("mcp_text_extensions", []),
+            "mcp_global_max_read_bytes": config.get("mcp_global_max_read_bytes", 10_485_760),
         }
         return safe_config
 
@@ -963,6 +1253,26 @@ async def update_config(
                 if preserved is not None:
                     config[field] = preserved
 
+        # MCP server fields (Phase 5): validate types/ranges when provided, preserve when omitted.
+        if "mcp_enabled" in config and not isinstance(config["mcp_enabled"], bool):
+            raise HTTPException(status_code=422, detail="mcp_enabled must be boolean")
+        if "mcp_disable_writes" in config and not isinstance(config["mcp_disable_writes"], bool):
+            raise HTTPException(status_code=422, detail="mcp_disable_writes must be boolean")
+        if "mcp_text_extensions" in config:
+            ext = config["mcp_text_extensions"]
+            if not isinstance(ext, list) or not all(isinstance(e, str) for e in ext):
+                raise HTTPException(status_code=422, detail="mcp_text_extensions must be list of strings")
+        if "mcp_global_max_read_bytes" in config:
+            v = config["mcp_global_max_read_bytes"]
+            # Explicitly reject booleans (bool is a subclass of int in Python)
+            if isinstance(v, bool) or not isinstance(v, int) or v < 1 or v > 10_485_760:
+                raise HTTPException(status_code=422, detail="mcp_global_max_read_bytes must be 1..10485760")
+        # Preserve MCP fields from current config when omitted in request
+        _current_cfg = load_config(force_reload=False)
+        for k in ("mcp_enabled", "mcp_disable_writes", "mcp_text_extensions", "mcp_global_max_read_bytes"):
+            if k not in config:
+                config[k] = _current_cfg.get(k)
+
         # Validate roles and preserve existing secret_access_key if not provided
         current_config = load_config(force_reload=False)
         current_roles = {r.get("name"): r for r in current_config.get("roles", [])}
@@ -1138,7 +1448,7 @@ async def list_buckets(
             response = s3_client.list_buckets()
             return [bucket["Name"] for bucket in response["Buckets"]]
 
-        return execute_with_s3_retry(validated_role, fetch_buckets)
+        return execute_with_s3_retry(validated_role, "list", fetch_buckets)
     except HTTPException:
         raise
     except ValueError as e:
@@ -1231,7 +1541,7 @@ async def list_files(
             files.sort(key=lambda x: (not x["is_directory"], x["name"].lower()))
             return {"files": files, "path": path, "total_count": len(files)}
 
-        return execute_with_s3_retry(validated_role, fetch_files)
+        return execute_with_s3_retry(validated_role, "list", fetch_files)
     except HTTPException:
         raise
     except ValueError as e:
@@ -1348,7 +1658,14 @@ async def upload_file(
             s3_client.put_object(**put_object_params)
             return {"message": "File uploaded successfully", "key": key}
 
-        return execute_with_s3_retry(validated_role, upload_object)
+        result = execute_with_s3_retry(validated_role, "put", upload_object)
+        # Record bytes uploaded after a successful put
+        from another_s3_manager.metrics import s3_bytes_uploaded_total, safe_role_label
+
+        s3_bytes_uploaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket_name).inc(
+            len(content)
+        )
+        return result
     except HTTPException:
         raise
     except ValueError as e:
@@ -1489,7 +1806,15 @@ async def download_file(
         def fetch_object(s3_client):
             return s3_client.get_object(Bucket=bucket_name, Key=path)
 
-        response = execute_with_s3_retry(validated_role, fetch_object)
+        response = execute_with_s3_retry(validated_role, "get", fetch_object)
+        # Record bytes downloaded; ContentLength is available in get_object metadata
+        content_length = response.get("ContentLength", 0)
+        if content_length:
+            from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+
+            s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket_name).inc(
+                content_length
+            )
         content_type = response.get("ContentType", "application/octet-stream")
         filename = path.split("/")[-1]  # Get filename from path
 
@@ -1607,7 +1932,7 @@ async def delete_file(
 
             return {"message": f"Successfully deleted {deleted_count} object(s)", "count": deleted_count}
 
-        return execute_with_s3_retry(validated_role, perform_delete)
+        return execute_with_s3_retry(validated_role, "delete", perform_delete)
     except HTTPException:
         raise
     except ValueError as e:
@@ -1623,6 +1948,14 @@ async def delete_file(
     except Exception as e:
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to delete: {error_message}")
+
+
+# Mount MCP sub-app at /mcp — must come AFTER all @app.get/@app.post route
+# registrations and AFTER middleware is wired up, so Starlette's middleware
+# stack is already complete when the mount is added.
+from another_s3_manager.mcp_server import get_mcp_app
+
+app.mount("/mcp", get_mcp_app())
 
 
 if __name__ == "__main__":  # pragma: no cover

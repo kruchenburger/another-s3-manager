@@ -1,13 +1,14 @@
 """Tests for ORM models — schema, defaults, cascades, constraints."""
 
+import hashlib
 import time
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
-from another_s3_manager.models import Ban, Base, User, UserRole
+from another_s3_manager.models import ApiToken, Ban, Base, User, UserRole
 
 
 @pytest.fixture
@@ -117,3 +118,149 @@ def test_updated_at_changes_on_update(session):
     session.commit()
     session.refresh(user)
     assert user.updated_at > original_updated
+
+
+def test_api_token_model_basic_columns():
+    """Verify ApiToken model has the columns the spec defines."""
+    from another_s3_manager.models import ApiToken
+
+    cols = {c.name for c in ApiToken.__table__.columns}
+    assert cols == {
+        "id",
+        "user_id",
+        "token_hash",
+        "name",
+        "created_at",
+        "last_used_at",
+        "revoked_at",
+        "is_read_only",
+        "max_read_bytes",
+    }
+
+
+def test_api_token_unique_user_name_constraint():
+    from another_s3_manager.models import ApiToken
+
+    constraint_names = {c.name for c in ApiToken.__table__.constraints}
+    assert "uq_api_token_user_name" in constraint_names
+
+
+def test_api_token_check_max_read_bytes_constraint():
+    from another_s3_manager.models import ApiToken
+
+    constraint_names = {c.name for c in ApiToken.__table__.constraints}
+    assert "ck_api_token_max_read_bytes_range" in constraint_names
+
+
+def test_api_token_user_relationship_cascade():
+    from another_s3_manager.models import User
+
+    rel = User.__mapper__.relationships["api_tokens"]
+    # delete-orphan semantics: deleting a User must delete their tokens
+    assert "delete-orphan" in rel.cascade
+
+
+def test_api_token_token_hash_indexed_unique():
+    """token_hash is the hot-path lookup column — must be indexed AND unique."""
+    from another_s3_manager.models import ApiToken
+
+    col = ApiToken.__table__.columns["token_hash"]
+    assert col.unique is True
+    assert col.index is True
+
+
+def test_api_token_user_id_indexed():
+    """user_id is the lookup column for list_tokens_for_user — must be indexed."""
+    from another_s3_manager.models import ApiToken
+
+    col = ApiToken.__table__.columns["user_id"]
+    assert col.index is True
+
+
+def test_api_token_cascades_when_user_deleted(session):
+    """Deleting a user must cascade-delete their api_tokens at the DB level (FK ON DELETE CASCADE).
+
+    This test uses the session fixture which enables PRAGMA foreign_keys=ON,
+    proving the cascade works at the DB layer — not just via ORM cascade logic.
+    """
+    user = User(username="cascade_user", password_hash="x", is_admin=False)
+    session.add(user)
+    session.flush()
+
+    token = ApiToken(
+        user_id=user.id,
+        token_hash=hashlib.sha256(b"test-cascade").hexdigest(),
+        name="cascade-token",
+        is_read_only=True,
+        max_read_bytes=1024,
+    )
+    session.add(token)
+    session.flush()
+    token_id = token.id
+
+    # Delete user — FK ON DELETE CASCADE must remove the token at DB level
+    session.delete(user)
+    session.commit()
+
+    remaining = session.execute(select(func.count(ApiToken.id)).where(ApiToken.id == token_id)).scalar_one()
+    assert remaining == 0
+
+
+def test_api_token_max_read_bytes_check_rejects_zero_and_above_ceiling(session):
+    """CHECK constraint must reject max_read_bytes <= 0 and > 10MB, accept exactly 10MB."""
+    user = User(username="check_user", password_hash="x", is_admin=False)
+    session.add(user)
+    session.flush()
+    user_id = user.id
+
+    # Below range: 0 must be rejected
+    with pytest.raises(IntegrityError):
+        session.add(
+            ApiToken(
+                user_id=user_id,
+                token_hash=hashlib.sha256(b"check-below").hexdigest(),
+                name="below",
+                is_read_only=True,
+                max_read_bytes=0,
+            )
+        )
+        session.flush()
+    session.rollback()
+
+    # Rebuild user after rollback wiped it
+    user = User(username="check_user2", password_hash="x", is_admin=False)
+    session.add(user)
+    session.flush()
+    user_id = user.id
+
+    # Above ceiling: 10_485_761 must be rejected
+    with pytest.raises(IntegrityError):
+        session.add(
+            ApiToken(
+                user_id=user_id,
+                token_hash=hashlib.sha256(b"check-above").hexdigest(),
+                name="above",
+                is_read_only=True,
+                max_read_bytes=10_485_761,
+            )
+        )
+        session.flush()
+    session.rollback()
+
+    # Rebuild user again after second rollback
+    user = User(username="check_user3", password_hash="x", is_admin=False)
+    session.add(user)
+    session.flush()
+    user_id = user.id
+
+    # Exactly at ceiling: 10_485_760 must succeed
+    session.add(
+        ApiToken(
+            user_id=user_id,
+            token_hash=hashlib.sha256(b"check-ceiling").hexdigest(),
+            name="at-ceiling",
+            is_read_only=True,
+            max_read_bytes=10_485_760,
+        )
+    )
+    session.flush()  # must not raise
