@@ -458,12 +458,18 @@ async def logout(response: Response):
 async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Get current user information"""
     is_admin = current_user.get("is_admin", False)
+    config = load_config()
     # Admins can access every role in the config — surface the full list so the
     # React sidebar matches admin permissions without an extra /api/config call.
     if is_admin:
-        allowed_roles = [r["name"] for r in load_config().get("roles", []) if r.get("name")]
+        allowed_roles = [r["name"] for r in config.get("roles", []) if r.get("name")]
     else:
         allowed_roles = current_user.get("allowed_roles", [])
+    # disable_deletion: env var OR config (env wins). Mirrors the same combined
+    # check used in /api/config so the two endpoints don't disagree.
+    disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
+    disable_deletion_config = config.get("disable_deletion", False)
+    disable_deletion = disable_deletion_env or disable_deletion_config
     return {
         "username": current_user.get("username"),
         "is_admin": is_admin,
@@ -471,6 +477,7 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
         "tour_seen_v1": current_user.get("tour_seen_v1", False),  # Return onboarding tour seen flag
         "allowed_roles": allowed_roles,
+        "disable_deletion": disable_deletion,
         "app_name": APP_NAME,  # Return app name for client
         "app_version": APP_VERSION,
     }

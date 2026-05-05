@@ -850,6 +850,42 @@ def test_me_admin_with_empty_config_returns_empty_roles(app_client, mocker):
     assert body["allowed_roles"] == []
 
 
+def test_me_includes_disable_deletion_from_config(app_client, mocker):
+    """/api/me must surface disable_deletion so the React UI can disable Delete controls."""
+    mocker.patch(
+        "another_s3_manager.main.load_config",
+        return_value={"roles": [], "disable_deletion": True},
+    )
+    _, _ = login(app_client)
+
+    me_response = app_client.get("/api/me")
+    assert me_response.status_code == status.HTTP_200_OK
+    assert me_response.json()["disable_deletion"] is True
+
+
+def test_me_includes_disable_deletion_from_env(app_client, mocker, monkeypatch):
+    """DISABLE_DELETION env var should win over config (matches /api/config behaviour)."""
+    mocker.patch(
+        "another_s3_manager.main.load_config",
+        return_value={"roles": [], "disable_deletion": False},
+    )
+    monkeypatch.setenv("DISABLE_DELETION", "true")
+    _, _ = login(app_client)
+
+    me_response = app_client.get("/api/me")
+    assert me_response.status_code == status.HTTP_200_OK
+    assert me_response.json()["disable_deletion"] is True
+
+
+def test_me_disable_deletion_defaults_false(app_client, mocker, monkeypatch):
+    """Neither env nor config set → disable_deletion is False."""
+    mocker.patch("another_s3_manager.main.load_config", return_value={"roles": []})
+    monkeypatch.delenv("DISABLE_DELETION", raising=False)
+    _, _ = login(app_client)
+
+    assert app_client.get("/api/me").json()["disable_deletion"] is False
+
+
 def test_delete_user_cannot_delete_self(app_client):
     _, headers = login(app_client)
     response = app_client.delete("/api/admin/users/admin", headers=headers)
