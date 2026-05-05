@@ -144,7 +144,7 @@ describe("RolesPage", () => {
     // 0-bucket row: text lives inside a Mantine Badge (root element has class
     // matching /mantine-Badge-root/). The dimmed Text variant uses a <p> with
     // a different className family, so this distinguishes the two paths.
-    const zeroBadge = screen.getByText("0 buckets");
+    const zeroBadge = screen.getByText("No buckets");
     expect(zeroBadge.closest("[class*='mantine-Badge-root']")).not.toBeNull();
 
     // 2-bucket row: text is a plain dimmed Text — should NOT be inside a Badge.
