@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { Database, Settings } from "lucide-react";
@@ -12,6 +13,19 @@ export function RolePage() {
   const navigate = useNavigate();
   const { data: buckets, isLoading, error } = useBuckets(roleId);
   const { data: me } = useMe();
+
+  // Auto-open the bucket when the role has exactly one allowed bucket — saves
+  // a click on the otherwise-degenerate "pick a bucket" list. `replace: true`
+  // keeps Back returning to home instead of bouncing through this page.
+  // Hook is declared before any early return to keep React's hook order stable.
+  useEffect(() => {
+    if (buckets && buckets.length === 1) {
+      navigate(
+        `/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(buckets[0]!)}`,
+        { replace: true },
+      );
+    }
+  }, [buckets, roleId, navigate]);
 
   if (isLoading) return null;
 
@@ -54,6 +68,10 @@ export function RolePage() {
       />
     );
   }
+
+  // Single-bucket roles auto-redirect via the effect above; render nothing in
+  // the same tick so the table doesn't flash before navigation.
+  if (buckets.length === 1) return null;
 
   return (
     <Stack gap="md">
