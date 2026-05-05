@@ -505,3 +505,257 @@ def test_serialized_token_timestamps_carry_utc_marker(client_with_admin):
     assert matched is not None
     assert matched["last_used_at"] is not None
     assert matched["last_used_at"].endswith("Z") or matched["last_used_at"].endswith("+00:00")
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/me/tokens/{id} — Phase 6a-1 (token edit metadata)
+# ---------------------------------------------------------------------------
+
+
+def _create_token_via_api(client, csrf, name="t", is_read_only=True, max_read_bytes=1024):
+    """Helper: create a token via POST /api/me/tokens, return the response body dict."""
+    resp = client.post(
+        "/api/me/tokens",
+        json={"name": name, "is_read_only": is_read_only, "max_read_bytes": max_read_bytes},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_put_me_tokens_rename(client_with_admin):
+    client, csrf = client_with_admin
+    tok = _create_token_via_api(client, csrf, name="old")
+    resp = client.put(
+        f"/api/me/tokens/{tok['id']}",
+        json={"name": "new"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "new"
+
+
+def test_put_me_tokens_toggle_read_only(client_with_admin):
+    client, csrf = client_with_admin
+    tok = _create_token_via_api(client, csrf, is_read_only=True)
+    resp = client.put(
+        f"/api/me/tokens/{tok['id']}",
+        json={"is_read_only": False},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["is_read_only"] is False
+
+
+def test_put_me_tokens_combined(client_with_admin):
+    client, csrf = client_with_admin
+    tok = _create_token_via_api(client, csrf, name="t", is_read_only=True, max_read_bytes=1024)
+    resp = client.put(
+        f"/api/me/tokens/{tok['id']}",
+        json={"name": "renamed", "is_read_only": False, "max_read_bytes": 4096},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "renamed"
+    assert body["is_read_only"] is False
+    assert body["max_read_bytes"] == 4096
+
+
+def test_put_me_tokens_max_read_out_of_range_returns_400(client_with_admin):
+    client, csrf = client_with_admin
+    tok = _create_token_via_api(client, csrf)
+    resp = client.put(
+        f"/api/me/tokens/{tok['id']}",
+        json={"max_read_bytes": 0},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 400
+
+
+def test_put_me_tokens_empty_body_returns_400(client_with_admin):
+    client, csrf = client_with_admin
+    tok = _create_token_via_api(client, csrf)
+    resp = client.put(
+        f"/api/me/tokens/{tok['id']}",
+        json={},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 400
+    assert "no fields to update" in resp.json()["detail"]
+
+
+def test_put_me_tokens_name_collision_returns_409(client_with_admin):
+    client, csrf = client_with_admin
+    _create_token_via_api(client, csrf, name="taken")
+    other = _create_token_via_api(client, csrf, name="other")
+
+    resp = client.put(
+        f"/api/me/tokens/{other['id']}",
+        json={"name": "taken"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 409
+
+
+def test_put_me_tokens_revoked_returns_404(client_with_admin):
+    client, csrf = client_with_admin
+    tok = _create_token_via_api(client, csrf)
+    # Revoke first
+    del_resp = client.delete(f"/api/me/tokens/{tok['id']}", headers={"X-CSRF-Token": csrf})
+    assert del_resp.status_code == 200
+
+    resp = client.put(
+        f"/api/me/tokens/{tok['id']}",
+        json={"name": "x"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 404
+
+
+def test_put_me_tokens_missing_returns_404(client_with_admin):
+    client, csrf = client_with_admin
+    resp = client.put(
+        "/api/me/tokens/999999",
+        json={"name": "x"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 404
+
+
+def test_put_me_tokens_other_user_returns_403(app_client):
+    """Alice cannot PUT admin's token."""
+    import another_s3_manager.auth as auth_module
+    import another_s3_manager.users as users_module
+
+    importlib.reload(auth_module)
+    importlib.reload(users_module)
+    auth_module._login_attempts = {}
+    users_module.save_bans({})
+    _ensure_admin(users_module, auth_module)
+
+    # Insert alice into JSON store
+    alice_data = users_module.load_users()
+    alice_data["users"].append(
+        {
+            "username": "alice",
+            "password_hash": auth_module.hash_password("alicepass"),
+            "is_admin": False,
+            "allowed_roles": [],
+            "theme": "auto",
+        }
+    )
+    users_module.save_users(alice_data)
+
+    # Admin creates a token
+    admin_csrf = _login(app_client, "admin", "admin123")
+    create_resp = app_client.post(
+        "/api/me/tokens",
+        json={"name": "admin-tok", "is_read_only": True, "max_read_bytes": 1024},
+        headers={"X-CSRF-Token": admin_csrf},
+    )
+    assert create_resp.status_code == 200
+    token_id = create_resp.json()["id"]
+
+    # Alice on a fresh client
+    from fastapi.testclient import TestClient
+
+    import another_s3_manager.main as main_module
+
+    alice_client = TestClient(main_module.app)
+    alice_csrf = _login(alice_client, "alice", "alicepass")
+
+    resp = alice_client.put(
+        f"/api/me/tokens/{token_id}",
+        json={"name": "x"},
+        headers={"X-CSRF-Token": alice_csrf},
+    )
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/admin/tokens/{id} — Phase 6a-1 (admin edit any user's token)
+# ---------------------------------------------------------------------------
+
+
+def test_put_admin_tokens_admin_edits_any_token(client_with_admin):
+    """Admin uses PUT /api/admin/tokens/{id} to rename a token they own (or anyone's)."""
+    client, csrf = client_with_admin
+    tok = _create_token_via_api(client, csrf, name="admin-tok")
+    resp = client.put(
+        f"/api/admin/tokens/{tok['id']}",
+        json={"name": "renamed-by-admin"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "renamed-by-admin"
+    # Admin endpoint mirrors the list response shape — owner_username is included.
+    assert body["owner_username"] == "admin"
+
+
+def test_put_admin_tokens_non_admin_returns_403(app_client):
+    """Non-admin users cannot use the admin endpoint even on their own token."""
+    import another_s3_manager.auth as auth_module
+    import another_s3_manager.users as users_module
+
+    importlib.reload(auth_module)
+    importlib.reload(users_module)
+    auth_module._login_attempts = {}
+    users_module.save_bans({})
+    _ensure_admin(users_module, auth_module)
+
+    # Insert non-admin bob
+    data = users_module.load_users()
+    data["users"].append(
+        {
+            "username": "bob",
+            "password_hash": auth_module.hash_password("bobpass"),
+            "is_admin": False,
+            "allowed_roles": [],
+            "theme": "auto",
+        }
+    )
+    users_module.save_users(data)
+
+    bob_csrf = _login(app_client, "bob", "bobpass")
+    # Bob creates a token via self-serve endpoint
+    create_resp = app_client.post(
+        "/api/me/tokens",
+        json={"name": "bob-tok", "is_read_only": True, "max_read_bytes": 1024},
+        headers={"X-CSRF-Token": bob_csrf},
+    )
+    assert create_resp.status_code == 200
+    token_id = create_resp.json()["id"]
+
+    # Bob tries to PUT against admin endpoint -> 403
+    resp = app_client.put(
+        f"/api/admin/tokens/{token_id}",
+        json={"name": "x"},
+        headers={"X-CSRF-Token": bob_csrf},
+    )
+    assert resp.status_code == 403
+
+
+def test_put_admin_tokens_revoked_returns_404(client_with_admin):
+    client, csrf = client_with_admin
+    tok = _create_token_via_api(client, csrf)
+    del_resp = client.delete(f"/api/me/tokens/{tok['id']}", headers={"X-CSRF-Token": csrf})
+    assert del_resp.status_code == 200
+
+    resp = client.put(
+        f"/api/admin/tokens/{tok['id']}",
+        json={"name": "x"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 404
+
+
+def test_put_admin_tokens_missing_returns_404(client_with_admin):
+    client, csrf = client_with_admin
+    resp = client.put(
+        "/api/admin/tokens/999999",
+        json={"name": "x"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 404

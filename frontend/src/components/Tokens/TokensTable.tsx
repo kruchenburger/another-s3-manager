@@ -1,5 +1,5 @@
-import { ActionIcon, Badge, Table, Text, Tooltip } from "@mantine/core";
-import { Check, Trash2 } from "lucide-react";
+import { ActionIcon, Badge, Group, Table, Text, Tooltip } from "@mantine/core";
+import { Check, Pencil, Trash2 } from "lucide-react";
 import { formatBytes } from "@/utils/formatBytes";
 import { formatAbsolute, formatRelative } from "@/utils/formatDate";
 import type { ApiToken, ApiTokenWithOwner } from "@/types/api";
@@ -8,9 +8,16 @@ interface TokensTableProps {
   tokens: (ApiToken | ApiTokenWithOwner)[];
   showOwner?: boolean;
   onRevoke: (token: ApiToken) => void;
+  /** Optional. When provided, renders a Pencil ActionIcon next to Revoke. */
+  onEdit?: (token: ApiToken) => void;
 }
 
-export function TokensTable({ tokens, showOwner = false, onRevoke }: TokensTableProps) {
+export function TokensTable({
+  tokens,
+  showOwner = false,
+  onRevoke,
+  onEdit,
+}: TokensTableProps) {
   if (tokens.length === 0) {
     return <Text c="dimmed">No tokens.</Text>;
   }
@@ -61,14 +68,25 @@ export function TokensTable({ tokens, showOwner = false, onRevoke }: TokensTable
               </Table.Td>
               <Table.Td>
                 {!isRevoked && (
-                  <ActionIcon
-                    variant="subtle"
-                    color="red"
-                    aria-label={`Revoke ${t.name}`}
-                    onClick={() => onRevoke(t)}
-                  >
-                    <Trash2 size={16} />
-                  </ActionIcon>
+                  <Group gap="xs" wrap="nowrap">
+                    {onEdit && (
+                      <ActionIcon
+                        variant="subtle"
+                        aria-label={`Edit ${t.name}`}
+                        onClick={() => onEdit(t)}
+                      >
+                        <Pencil size={16} />
+                      </ActionIcon>
+                    )}
+                    <ActionIcon
+                      variant="subtle"
+                      color="red"
+                      aria-label={`Revoke ${t.name}`}
+                      onClick={() => onRevoke(t)}
+                    >
+                      <Trash2 size={16} />
+                    </ActionIcon>
+                  </Group>
                 )}
               </Table.Td>
             </Table.Tr>

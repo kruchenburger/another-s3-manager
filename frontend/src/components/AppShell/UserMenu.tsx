@@ -45,7 +45,7 @@ export function UserMenu() {
           leftSection={<Key size={14} />}
           onClick={() => navigate("/api-tokens")}
         >
-          API tokens
+          MCP tokens
         </Menu.Item>
         {me.is_admin && (
           <Menu.Item

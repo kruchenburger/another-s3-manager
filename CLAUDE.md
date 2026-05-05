@@ -200,7 +200,7 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 - React SPA on `/v2/*`: collapsible sidebar with role/bucket tree, file browser (table+grid toggle, hover actions, bulk delete, drag-drop upload, preview modal), one-time onboarding tour persisted via `tour_seen_v1` user flag.
 - React admin pages on `/v2/admin/*`: separate AdminLayout with grouped sidebar (ACCOUNTS: Users / Bans, INFRASTRUCTURE: Roles / Settings) reachable from "Admin Console" in UserMenu. Users page (CRUD + reset password + self-protect for delete/demote/reset). Bans page (view + unban). Roles page (table + create wizard with type-conditional credential fields + edit form, secret_access_key preserve-on-blank). Settings page (typed global settings with read-only k8s ConfigMap mode, MB↔bytes conversion preserves byte-precision when MB field unchanged). Backend endpoints unchanged from Phase 1; React pages reuse them via TanStack Query plus a small `update_user` self-demote guard.
 - Self-service password change at `/v2/change-password`: any authenticated user changes their own password via UserMenu → "Change password". Requires the current password (defence against stolen-cookie attacks) and rejects identical new password. Client-side validation: 8+ chars, confirm matches, current required.
-- **MCP server at `/mcp`** for AI agents (Claude Desktop, Cursor, Codex). Bearer auth via per-user API tokens; same role/permission model as web UI. Self-serve token management at `/v2/api-tokens`. See `docs/mcp-setup.md`.
+- **MCP server at `/mcp`** for AI agents (Claude Desktop, Cursor, Codex). Bearer auth via per-user MCP tokens; same role/permission model as web UI. Self-serve token management at `/v2/api-tokens` (UI labels them "MCP tokens"; URL kept for backwards compatibility). User can edit token metadata (name, read-only flag, max read bytes) without revoke + recreate. Admin can issue tokens on behalf of users. See `docs/mcp-setup.md`.
 - **Prometheus metrics** at `/metrics` (optional basic auth via `METRICS_PASSWORD`). Covers HTTP, auth, S3 ops, MCP tool calls, DB query duration.
 
 ### React API surface
@@ -224,11 +224,13 @@ The React SPA consumes existing backend endpoints plus a small set added for SPA
 - `DELETE /api/admin/bans/{u}` — unban user
 - `GET /api/config` — read whole config including derived `data_dir` / `current_role` / `is_read_only` (response-only)
 - `POST /api/config` — write config; React strips derived fields via `toWritableConfig()` to avoid persisting runtime values
-- `GET /api/me/tokens` — list authenticated user's active API tokens
-- `POST /api/me/tokens` — create API token (returns plaintext token once; stored as SHA-256 hash)
+- `GET /api/me/tokens` — list authenticated user's active MCP tokens (table `api_tokens` kept for backwards compatibility)
+- `POST /api/me/tokens` — create MCP token (returns plaintext token once; stored as SHA-256 hash)
+- `PUT /api/me/tokens/{id}` — update editable metadata (`name`, `is_read_only`, `max_read_bytes`); 400 on empty body / out-of-range, 404 on missing/revoked, 409 on name collision
 - `DELETE /api/me/tokens/{id}` — revoke own token
 - `GET /api/admin/tokens` — admin list of all tokens with owner info
 - `POST /api/admin/tokens` — admin create token on behalf of any user
+- `PUT /api/admin/tokens/{id}` — admin edit any user's token metadata (returns `owner_username` alongside the standard token shape)
 - `DELETE /api/admin/tokens/{id}` — admin revoke any token
 - `/mcp/*` — MCP server (Bearer token auth via `Authorization: Bearer as3m_...`; same role/permission model as web UI; see `docs/mcp-setup.md`)
 - `/metrics` — Prometheus exposition format (optional basic auth via `METRICS_PASSWORD`)

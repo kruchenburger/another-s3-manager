@@ -162,3 +162,121 @@ def test_list_all_tokens_returns_detached_objects_safe_to_read(alice_user):
         assert token.name
         assert user.username
         assert token.is_read_only is True or token.is_read_only is False
+
+
+# ---------------------------------------------------------------------------
+# update_token — Phase 6a-1 (token edit metadata without revoke+recreate)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def bob_user():
+    """A second user for cross-user authorization tests."""
+    with session_scope() as session:
+        user = User(username="bob", password_hash="x", is_admin=False)
+        session.add(user)
+        session.flush()
+        return user.id
+
+
+def test_update_token_rename_only(alice_user):
+    token, _ = svc.create_token(alice_user, "old-name", is_read_only=True, max_read_bytes=1024)
+    updated = svc.update_token(token_id=token.id, by_user_id=alice_user, by_is_admin=False, name="new-name")
+    assert updated.name == "new-name"
+    assert updated.is_read_only is True
+    assert updated.max_read_bytes == 1024
+
+
+def test_update_token_toggle_read_only(alice_user):
+    token, _ = svc.create_token(alice_user, "t", is_read_only=True, max_read_bytes=1024)
+    updated = svc.update_token(token_id=token.id, by_user_id=alice_user, by_is_admin=False, is_read_only=False)
+    assert updated.is_read_only is False
+
+
+def test_update_token_change_max_read_bytes(alice_user):
+    token, _ = svc.create_token(alice_user, "t", is_read_only=True, max_read_bytes=1024)
+    updated = svc.update_token(token_id=token.id, by_user_id=alice_user, by_is_admin=False, max_read_bytes=2048)
+    assert updated.max_read_bytes == 2048
+
+
+def test_update_token_combined_fields(alice_user):
+    token, _ = svc.create_token(alice_user, "t", is_read_only=True, max_read_bytes=1024)
+    updated = svc.update_token(
+        token_id=token.id,
+        by_user_id=alice_user,
+        by_is_admin=False,
+        name="renamed",
+        is_read_only=False,
+        max_read_bytes=4096,
+    )
+    assert updated.name == "renamed"
+    assert updated.is_read_only is False
+    assert updated.max_read_bytes == 4096
+
+
+def test_update_token_no_fields_raises(alice_user):
+    token, _ = svc.create_token(alice_user, "t", is_read_only=True, max_read_bytes=1024)
+    with pytest.raises(ValueError, match="no fields to update"):
+        svc.update_token(token_id=token.id, by_user_id=alice_user, by_is_admin=False)
+
+
+def test_update_token_max_read_bytes_too_small_raises(alice_user):
+    token, _ = svc.create_token(alice_user, "t", is_read_only=True, max_read_bytes=1024)
+    with pytest.raises(ValueError, match="max_read_bytes out of range"):
+        svc.update_token(token_id=token.id, by_user_id=alice_user, by_is_admin=False, max_read_bytes=0)
+
+
+def test_update_token_max_read_bytes_too_large_raises(alice_user):
+    token, _ = svc.create_token(alice_user, "t", is_read_only=True, max_read_bytes=1024)
+    with pytest.raises(ValueError, match="max_read_bytes out of range"):
+        svc.update_token(
+            token_id=token.id,
+            by_user_id=alice_user,
+            by_is_admin=False,
+            max_read_bytes=10 * 1024 * 1024 + 1,
+        )
+
+
+def test_update_token_revoked_raises(alice_user):
+    token, _ = svc.create_token(alice_user, "t", is_read_only=True, max_read_bytes=1024)
+    svc.revoke_token(token_id=token.id, by_user_id=alice_user, by_is_admin=False)
+    with pytest.raises(ValueError, match="is revoked"):
+        svc.update_token(token_id=token.id, by_user_id=alice_user, by_is_admin=False, name="x")
+
+
+def test_update_token_missing_raises(alice_user):
+    with pytest.raises(ValueError, match="not found"):
+        svc.update_token(token_id=999_999, by_user_id=alice_user, by_is_admin=False, name="x")
+
+
+def test_update_token_third_party_forbidden(alice_user, bob_user):
+    token, _ = svc.create_token(alice_user, "t", is_read_only=True, max_read_bytes=1024)
+    with pytest.raises(PermissionError):
+        svc.update_token(token_id=token.id, by_user_id=bob_user, by_is_admin=False, name="x")
+
+
+def test_update_token_admin_can_edit_other_user(alice_user):
+    # An admin user (separate from alice). Admin's user_id doesn't need to match owner's.
+    with session_scope() as session:
+        admin = User(username="admin_for_update", password_hash="x", is_admin=True)
+        session.add(admin)
+        session.flush()
+        admin_id = admin.id
+    token, _ = svc.create_token(alice_user, "t", is_read_only=True, max_read_bytes=1024)
+    updated = svc.update_token(
+        token_id=token.id,
+        by_user_id=admin_id,
+        by_is_admin=True,
+        name="renamed-by-admin",
+    )
+    assert updated.name == "renamed-by-admin"
+
+
+def test_update_token_name_collision_raises_integrity_error(alice_user):
+    from sqlalchemy.exc import IntegrityError
+
+    svc.create_token(alice_user, "taken", is_read_only=True, max_read_bytes=1024)
+    other_token, _ = svc.create_token(alice_user, "other", is_read_only=True, max_read_bytes=1024)
+
+    with pytest.raises(IntegrityError):
+        svc.update_token(token_id=other_token.id, by_user_id=alice_user, by_is_admin=False, name="taken")

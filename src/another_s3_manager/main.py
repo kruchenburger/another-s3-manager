@@ -603,6 +603,21 @@ class AdminCreateTokenRequest(CreateTokenRequest):
     user_id: int = Field(..., gt=0)
 
 
+class UpdateTokenRequest(BaseModel):
+    """Body for PUT /api/me/tokens/{id} and PUT /api/admin/tokens/{id}.
+
+    All fields optional — the service rejects empty bodies with 400
+    'no fields to update' and out-of-range max_read_bytes with 400
+    'max_read_bytes out of range'. Range bounds intentionally NOT enforced at
+    the Pydantic layer so the contract is a single 400 error from the service,
+    not a 422 from validation.
+    """
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    is_read_only: Optional[bool] = None
+    max_read_bytes: Optional[int] = None
+
+
 @app.put("/api/me/password")
 async def change_my_password(
     payload: ChangePasswordRequest,
@@ -763,6 +778,41 @@ async def delete_my_token(
     return {"ok": True}
 
 
+@app.put("/api/me/tokens/{token_id}")
+async def update_my_token(
+    token_id: int,
+    payload: UpdateTokenRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Update editable metadata (name, is_read_only, max_read_bytes) on the user's own token.
+
+    Returns 400 on empty body or out-of-range max_read_bytes, 403 for non-owner,
+    404 for missing or revoked tokens, 409 on name collision.
+    """
+    user_id = _get_user_id_by_username(current_user["username"])
+    try:
+        updated = token_svc.update_token(
+            token_id=token_id,
+            by_user_id=user_id,
+            by_is_admin=False,
+            name=payload.name,
+            is_read_only=payload.is_read_only,
+            max_read_bytes=payload.max_read_bytes,
+        )
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="You can only update your own tokens")
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail=f"Token name '{payload.name}' already exists")
+    except ValueError as exc:
+        msg = str(exc)
+        if "no fields to update" in msg or "out of range" in msg:
+            raise HTTPException(status_code=400, detail=msg)
+        # "not found" or "is revoked" -> 404 (revoked tokens are treated as gone)
+        raise HTTPException(status_code=404, detail=msg)
+    return _serialize_token(updated)
+
+
 # ---------------------------------------------------------------------------
 # /api/admin/tokens  (admin-only)
 # ---------------------------------------------------------------------------
@@ -828,6 +878,60 @@ async def admin_delete_token(
     except ValueError:
         raise HTTPException(status_code=404, detail="Token not found")
     return {"ok": True}
+
+
+@app.put("/api/admin/tokens/{token_id}")
+async def admin_update_token(
+    token_id: int,
+    payload: UpdateTokenRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Admin endpoint: update any token's editable metadata regardless of owner.
+
+    Returns the same shape as the admin list (`owner_username` included) so the
+    SPA can patch its cache in place. 400 on bad input, 404 on missing/revoked,
+    409 on name collision.
+    """
+    if not current_user.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    actor_user_id = _get_user_id_by_username(current_user["username"])
+    try:
+        updated = token_svc.update_token(
+            token_id=token_id,
+            by_user_id=actor_user_id,
+            by_is_admin=True,
+            name=payload.name,
+            is_read_only=payload.is_read_only,
+            max_read_bytes=payload.max_read_bytes,
+        )
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail=f"Token name '{payload.name}' already exists for this user")
+    except ValueError as exc:
+        msg = str(exc)
+        if "no fields to update" in msg or "out of range" in msg:
+            raise HTTPException(status_code=400, detail=msg)
+        # "not found" or "is revoked" -> 404 (revoked tokens are treated as gone)
+        raise HTTPException(status_code=404, detail=msg)
+
+    # Mirror admin_list_tokens shape: include owner_username for the admin SPA.
+    # owner_username is part of the admin response contract — we 404 explicitly
+    # if the user vanished between update and lookup (extremely rare given FK
+    # CASCADE + single-worker SQLite, but the alternative — silently omitting
+    # the key from the JSON — would mislead the SPA cache patch logic).
+    from another_s3_manager.database import session_scope
+
+    with session_scope() as session:
+        owner_username = session.execute(
+            select(UserModel.username).where(UserModel.id == updated.user_id)
+        ).scalar_one_or_none()
+    if owner_username is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Owner of token {token_id} no longer exists",
+        )
+    return _serialize_token(updated, owner_username=owner_username)
 
 
 @app.put("/api/admin/users/{username}")

@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 PER_USER_TOKEN_LIMIT = 10
 TOKEN_PREFIX = "as3m_"
+# Mirrors the CHECK constraint on api_tokens.max_read_bytes (1..10MB).
+_MAX_READ_BYTES_CEILING = 10 * 1024 * 1024
 
 
 def _utcnow() -> datetime:
@@ -126,6 +128,63 @@ def revoke_token(token_id: int, by_user_id: int, by_is_admin: bool) -> None:
             raise PermissionError("Only the token owner or an admin can revoke")
         if token.revoked_at is None:
             token.revoked_at = _utcnow()
+
+
+def update_token(
+    token_id: int,
+    by_user_id: int,
+    by_is_admin: bool,
+    name: Optional[str] = None,
+    is_read_only: Optional[bool] = None,
+    max_read_bytes: Optional[int] = None,
+) -> ApiToken:
+    """Update editable metadata on an active token. Owner or admin only.
+
+    Returns the updated detached ApiToken instance.
+    Raises:
+        ValueError("no fields to update") when all editable fields are None.
+        ValueError("max_read_bytes out of range") when not in 1..10MB.
+        ValueError("Token {id} not found") when missing.
+        ValueError("Token {id} is revoked") when token is already revoked.
+        PermissionError when actor is neither owner nor admin.
+        IntegrityError when name collides with another token of the same user.
+    """
+    if name is None and is_read_only is None and max_read_bytes is None:
+        raise ValueError("no fields to update")
+
+    if max_read_bytes is not None and not (1 <= max_read_bytes <= _MAX_READ_BYTES_CEILING):
+        raise ValueError("max_read_bytes out of range")
+
+    with session_scope() as session:
+        token = session.get(ApiToken, token_id)
+        if token is None:
+            raise ValueError(f"Token {token_id} not found")
+
+        if not by_is_admin and token.user_id != by_user_id:
+            raise PermissionError("Only the token owner or an admin can update")
+
+        if token.revoked_at is not None:
+            raise ValueError(f"Token {token_id} is revoked")
+
+        if name is not None:
+            token.name = name
+        if is_read_only is not None:
+            token.is_read_only = is_read_only
+        if max_read_bytes is not None:
+            token.max_read_bytes = max_read_bytes
+
+        session.flush()
+        # `session.refresh(token)` is REQUIRED before `expunge` — it materializes
+        # every column attribute (including `user_id`, which the admin endpoint
+        # reads after the session closes to look up `owner_username`). Removing
+        # the refresh would re-introduce the `DetachedInstanceError` bug class
+        # fixed in commit d844e2a (`list_all_tokens` shared-identity expunge).
+        # Likewise: do NOT access `token.user` (the relationship) outside the
+        # session — only column attributes survive expunge. Use `token.user_id`
+        # and look up the User in a fresh session, like `admin_update_token` does.
+        session.refresh(token)
+        session.expunge(token)
+        return token
 
 
 def find_active_token_by_hash(token_hash: str) -> Optional[ApiToken]:

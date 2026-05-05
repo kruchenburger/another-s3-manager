@@ -61,4 +61,109 @@ test.describe("API tokens self-serve flow", () => {
     // Row disappears after successful deletion
     await expect(row).not.toBeVisible({ timeout: 5_000 });
   });
+
+  test("edits an existing token without re-issuing plaintext", async ({ page }) => {
+    await loginAsAdmin(page);
+
+    await page.getByLabel("User menu").click();
+    await page.getByRole("menuitem", { name: /api tokens|mcp tokens/i }).click();
+    await expect(page).toHaveURL(/\/v2\/api-tokens$/);
+
+    // Create a token to edit
+    const initialName = `e2e-edit-${Date.now()}`;
+    await page.getByRole("button", { name: /create token/i }).click();
+    await page.getByLabel("Name").fill(initialName);
+    await page.getByRole("dialog").getByRole("button", { name: /^create$/i }).click();
+
+    // Dismiss the plaintext modal
+    await expect(
+      page.getByText(/will not be shown again/i),
+    ).toBeVisible({ timeout: 5_000 });
+    await page.getByRole("button", { name: /i copied the token/i }).click();
+
+    // Open edit modal via the per-row Pencil icon
+    const row = page.locator("tr").filter({ hasText: initialName });
+    await expect(row).toBeVisible({ timeout: 5_000 });
+    await row.getByRole("button", { name: `Edit ${initialName}` }).click();
+
+    // Rename and save
+    const renamed = `${initialName}-renamed`;
+    const editDialog = page.getByRole("dialog");
+    await editDialog.getByLabel("Name").fill(renamed);
+    await editDialog.getByRole("button", { name: /^save$/i }).click();
+
+    // Listing reflects the new name; plaintext modal must NOT re-appear
+    await expect(page.locator("tr").filter({ hasText: renamed })).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.getByText(/will not be shown again/i)).not.toBeVisible();
+
+    // Cleanup: revoke the renamed token
+    const renamedRow = page.locator("tr").filter({ hasText: renamed });
+    await renamedRow.getByRole("button", { name: `Revoke ${renamed}` }).click();
+    await page.getByRole("dialog").getByRole("button", { name: /^delete$/i }).click();
+  });
+
+  test("admin issuing token via UserDrawer shows plaintext exactly once", async ({
+    page,
+  }) => {
+    // Regression guard: PR #20 review caught that UserTokensList silently
+    // discarded the plaintext from the create response. This walks the full
+    // flow from /v2/admin/users → drawer → "Issue token on behalf" → assert
+    // the plaintext modal appears.
+    await loginAsAdmin(page);
+    await page.goto("/v2/admin/users");
+
+    // Open the first user's edit drawer (the admin user always exists).
+    await page.locator("tbody tr").first().getByLabel(/edit/i).click();
+    await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
+
+    // Scroll to and click "Issue token on behalf" inside the drawer's
+    // UserTokensList section.
+    const drawer = page.getByRole("dialog");
+    await drawer
+      .getByRole("button", { name: /issue token on behalf/i })
+      .click();
+
+    // CreateTokenModal opens (separate dialog). Fill name + pick the user
+    // (Mantine Select doesn't auto-select even when availableUsers has 1
+    // entry — the form validator requires user_id to be non-null) + submit.
+    const onBehalfName = `e2e-on-behalf-${Date.now()}`;
+    const createDialog = page
+      .getByRole("dialog")
+      .filter({ hasText: /create mcp token/i });
+    await createDialog.getByLabel("User").click();
+    await page.getByRole("option", { name: ADMIN_USER }).click();
+    await createDialog.getByLabel("Name").fill(onBehalfName);
+    await createDialog.getByRole("button", { name: /^create$/i }).click();
+
+    // The plaintext modal must appear with the secret. Without the fix,
+    // the create modal closed silently and no secret was ever shown.
+    await expect(
+      page.getByText(/this token will not be shown again/i),
+    ).toBeVisible({ timeout: 5_000 });
+    const plaintextLocator = page.locator("code").first();
+    const plaintextText = await plaintextLocator.textContent();
+    expect(plaintextText).toMatch(/^as3m_/);
+
+    // Dismiss
+    await page
+      .getByRole("button", { name: /i copied the token/i })
+      .click();
+
+    // Cleanup: revoke the on-behalf token via the admin tokens page. The token
+    // MUST be there since we just created it — assert visibility (auto-waits)
+    // rather than a non-awaiting `isVisible()` conditional that could silently
+    // skip cleanup and leak the token.
+    await page.goto("/v2/admin/api-tokens");
+    const newRow = page.locator("tr").filter({ hasText: onBehalfName });
+    await expect(newRow).toBeVisible({ timeout: 5_000 });
+    await newRow
+      .getByRole("button", { name: `Revoke ${onBehalfName}` })
+      .click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /^delete$/i })
+      .click();
+  });
 });

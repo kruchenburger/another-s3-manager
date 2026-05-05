@@ -8,9 +8,11 @@ the MCP (Model Context Protocol) server.
 
 ### Tokens
 
-API tokens authenticate AI agents the same way session cookies authenticate
+MCP tokens authenticate AI agents the same way session cookies authenticate
 the web UI — they grant the same permissions (roles, allowed buckets,
-admin flags) as the user who created them. Each token:
+admin flags) as the user who created them. They are MCP-only and cannot be
+used as Bearer tokens against the regular `/api/*` web endpoints, which
+require the cookie + CSRF flow. Each token:
 
 - Has a per-token cap on `read_file` size (`max_read_bytes`, default 1 MB,
   hard ceiling 10 MB)

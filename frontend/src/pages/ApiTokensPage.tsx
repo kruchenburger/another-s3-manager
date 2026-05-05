@@ -5,8 +5,10 @@ import { Plus } from "lucide-react";
 import { useMyTokens } from "@/features/tokens/hooks/useMyTokens";
 import { useCreateMyToken } from "@/features/tokens/hooks/useCreateToken";
 import { useDeleteMyToken } from "@/features/tokens/hooks/useDeleteToken";
+import { useUpdateMyToken } from "@/features/tokens/hooks/useUpdateToken";
 import { TokensTable } from "@/components/Tokens/TokensTable";
 import { CreateTokenModal } from "@/components/Tokens/CreateTokenModal";
+import { EditTokenModal } from "@/components/Tokens/EditTokenModal";
 import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { notifications } from "@mantine/notifications";
@@ -18,10 +20,12 @@ export function ApiTokensPage() {
   const { data, isLoading } = useMyTokens();
   const createMutation = useCreateMyToken();
   const deleteMutation = useDeleteMyToken();
+  const updateMutation = useUpdateMyToken();
 
   const [createOpen, create] = useDisclosure(false);
   const [plaintextResult, setPlaintextResult] = useState<ApiTokenWithPlaintext | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<ApiToken | null>(null);
+  const [editTarget, setEditTarget] = useState<ApiToken | null>(null);
 
   const tokens = data?.tokens ?? [];
 
@@ -60,18 +64,27 @@ export function ApiTokensPage() {
     <Container size="lg" py="lg">
       <Stack gap="md">
         <Group justify="space-between">
-          <Title order={2}>API tokens</Title>
+          <Title order={2}>MCP tokens</Title>
           <Button leftSection={<Plus size={16} />} onClick={create.open}>
             Create token
           </Button>
         </Group>
+        <Text size="sm" c="dimmed">
+          Use these tokens to authorize AI agents (Claude Desktop, Cursor, etc.) at the{" "}
+          <Text span ff="monospace">/mcp</Text> endpoint. They do <strong>not</strong>{" "}
+          grant access to the web API — that uses your login cookie.
+        </Text>
         {data && (
           <Text size="sm" c="dimmed">
             Used {data.used} of {data.limit} token slots
           </Text>
         )}
         {!isLoading && (
-          <TokensTable tokens={tokens} onRevoke={(t) => setRevokeTarget(t)} />
+          <TokensTable
+            tokens={tokens}
+            onRevoke={(t) => setRevokeTarget(t)}
+            onEdit={(t) => setEditTarget(t)}
+          />
         )}
       </Stack>
 
@@ -99,6 +112,23 @@ export function ApiTokensPage() {
         items={revokeTarget ? [`token "${revokeTarget.name}"`] : []}
         loading={deleteMutation.isPending}
       />
+
+      {editTarget && (
+        <EditTokenModal
+          opened
+          onClose={() => setEditTarget(null)}
+          loading={updateMutation.isPending}
+          token={editTarget}
+          onSubmit={(payload) =>
+            runWithToasts(
+              updateMutation,
+              { id: editTarget.id, payload },
+              "Token updated",
+              () => setEditTarget(null),
+            )
+          }
+        />
+      )}
     </Container>
   );
 }
