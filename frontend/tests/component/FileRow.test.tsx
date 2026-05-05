@@ -1,9 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MantineProvider, Table } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 import { FileRow } from "@/components/FileBrowser/FileRow";
 import type { FileEntry } from "@/types/api";
+
+vi.mock("@/features/auth/hooks/useMe", () => ({
+  useMe: vi.fn(),
+}));
+
+import { useMe } from "@/features/auth/hooks/useMe";
+
+beforeEach(() => {
+  // Default: deletion enabled. Individual tests can override before render.
+  vi.mocked(useMe).mockReturnValue({
+    data: { disable_deletion: false },
+  } as never);
+});
 
 type RowCallbacks = Partial<{
   onToggleSelect: (name: string) => void;
@@ -118,5 +131,13 @@ describe("FileRow", () => {
       </MantineProvider>,
     );
     expect(screen.getByLabelText("Preview")).toBeInTheDocument();
+  });
+
+  it("renders Delete disabled when me.disable_deletion is true", () => {
+    vi.mocked(useMe).mockReturnValue({
+      data: { disable_deletion: true },
+    } as never);
+    renderRow({ name: "x.txt", is_directory: false, size: 100 });
+    expect(screen.getByLabelText("Delete")).toBeDisabled();
   });
 });

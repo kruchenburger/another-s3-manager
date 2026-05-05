@@ -1,6 +1,7 @@
 import { Card, Checkbox, Group, Text } from "@mantine/core";
 import { File as FileIcon, Folder } from "lucide-react";
 import { formatBytes } from "@/utils/formatBytes";
+import { useMe } from "@/features/auth/hooks/useMe";
 import { FileActions } from "./FileActions";
 import classes from "./FileBrowser.module.css";
 import type { FileEntry } from "@/types/api";
@@ -30,6 +31,8 @@ export function FileCard({
   onPreview,
   onDelete,
 }: FileCardProps) {
+  const me = useMe();
+  const disableDeletion = me.data?.disable_deletion ?? false;
   const canPreview = !file.is_directory && PREVIEWABLE_RE.test(file.name);
 
   return (
@@ -53,6 +56,7 @@ export function FileCard({
             onCopyUrl={() => onCopyUrl(file.name)}
             onPreview={() => onPreview(file.name)}
             onDelete={() => onDelete(file.name)}
+            disabled={disableDeletion}
           />
         </div>
       </Group>

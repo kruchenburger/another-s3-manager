@@ -1,4 +1,4 @@
-import { Button, Group, SegmentedControl, TextInput } from "@mantine/core";
+import { Button, Group, SegmentedControl, TextInput, Tooltip } from "@mantine/core";
 import { LayoutGrid, Link as LinkIcon, List as ListIcon, Search, Trash2, Upload } from "lucide-react";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import type { DisplayMode } from "@/hooks/useDisplayMode";
@@ -15,6 +15,8 @@ interface FileBrowserHeaderProps {
   onBulkDelete: () => void;
   onBulkCopyUrl: () => void;
   onUploadClick: () => void;
+  /** When true, bulk Delete is rendered disabled with a config-aware tooltip. */
+  disableDeletion?: boolean;
 }
 
 export function FileBrowserHeader({
@@ -29,6 +31,7 @@ export function FileBrowserHeader({
   onBulkDelete,
   onBulkCopyUrl,
   onUploadClick,
+  disableDeletion = false,
 }: FileBrowserHeaderProps) {
   return (
     <Group justify="space-between" mb="md" wrap="wrap" gap="sm">
@@ -61,15 +64,22 @@ export function FileBrowserHeader({
             >
               Copy URLs ({selectedCount})
             </Button>
-            <Button
-              color="red"
-              variant="light"
-              leftSection={<Trash2 size={14} />}
-              onClick={onBulkDelete}
-              size="sm"
+            <Tooltip
+              label="Deletion is disabled in the server config."
+              withArrow
+              disabled={!disableDeletion}
             >
-              Delete ({selectedCount})
-            </Button>
+              <Button
+                color="red"
+                variant="light"
+                leftSection={<Trash2 size={14} />}
+                onClick={onBulkDelete}
+                size="sm"
+                disabled={disableDeletion}
+              >
+                Delete ({selectedCount})
+              </Button>
+            </Tooltip>
           </>
         )}
         <Button leftSection={<Upload size={14} />} onClick={onUploadClick} size="sm" data-tour="upload-btn">

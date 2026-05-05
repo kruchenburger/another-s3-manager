@@ -6,6 +6,7 @@ import { useFiles } from "@/features/files/hooks/useFiles";
 import { useDelete } from "@/features/files/hooks/useDelete";
 import { useUpload } from "@/features/files/hooks/useUpload";
 import { buildDownloadUrl } from "@/features/files/api/filesApi";
+import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { joinPath, decodePath } from "@/utils/pathUtils";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
@@ -28,6 +29,8 @@ export function FileBrowser() {
   const deleteMutation = useDelete();
   const uploadMutation = useUpload();
   const { mode, setMode } = useDisplayMode(roleId, bucket);
+  const me = useMe();
+  const disableDeletion = me.data?.disable_deletion ?? false;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
@@ -240,6 +243,7 @@ export function FileBrowser() {
         onBulkDelete={() => requestDelete(Array.from(selected))}
         onBulkCopyUrl={handleBulkCopyUrl}
         onUploadClick={handleUploadClick}
+        disableDeletion={disableDeletion}
       />
       <input
         type="file"
