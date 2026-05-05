@@ -5,7 +5,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useFiles } from "@/features/files/hooks/useFiles";
 import { useDelete } from "@/features/files/hooks/useDelete";
 import { useUpload } from "@/features/files/hooks/useUpload";
-import { buildDownloadUrl } from "@/features/files/api/filesApi";
+import { buildDownloadUrl, getPresignedDownloadUrl } from "@/features/files/api/filesApi";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { joinPath, decodePath } from "@/utils/pathUtils";
@@ -60,24 +60,40 @@ export function FileBrowser() {
 
   const handleCopyUrl = async (name: string) => {
     const fullPath = joinPath(pathFromUrl, name);
-    const url = window.location.origin + buildDownloadUrl(bucket, roleId, fullPath);
     try {
+      const { url } = await getPresignedDownloadUrl(bucket, roleId, fullPath);
       await navigator.clipboard.writeText(url);
-      notifications.show({ color: "green", message: `Copied URL for ${name}` });
-    } catch {
-      notifications.show({ color: "red", message: "Failed to copy URL" });
+      notifications.show({
+        color: "green",
+        message: `Copied URL for ${name} (expires in 1h)`,
+      });
+    } catch (e) {
+      notifications.show({
+        color: "red",
+        message: `Failed to copy URL: ${e instanceof Error ? e.message : "unknown error"}`,
+      });
     }
   };
 
   const handleBulkCopyUrl = async () => {
-    const urls = Array.from(selected)
-      .map((name) => window.location.origin + buildDownloadUrl(bucket, roleId, joinPath(pathFromUrl, name)))
-      .join("\n");
+    const names = Array.from(selected);
     try {
+      const responses = await Promise.all(
+        names.map((name) =>
+          getPresignedDownloadUrl(bucket, roleId, joinPath(pathFromUrl, name)),
+        ),
+      );
+      const urls = responses.map((r) => r.url).join("\n");
       await navigator.clipboard.writeText(urls);
-      notifications.show({ color: "green", message: `Copied ${selected.size} URLs` });
-    } catch {
-      notifications.show({ color: "red", message: "Failed to copy URLs" });
+      notifications.show({
+        color: "green",
+        message: `Copied ${responses.length} URLs (expire in 1h)`,
+      });
+    } catch (e) {
+      notifications.show({
+        color: "red",
+        message: `Failed to copy URLs: ${e instanceof Error ? e.message : "unknown error"}`,
+      });
     }
   };
 
