@@ -671,3 +671,91 @@ def test_put_me_tokens_other_user_returns_403(app_client):
         headers={"X-CSRF-Token": alice_csrf},
     )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/admin/tokens/{id} — Phase 6a-1 (admin edit any user's token)
+# ---------------------------------------------------------------------------
+
+
+def test_put_admin_tokens_admin_edits_any_token(client_with_admin):
+    """Admin uses PUT /api/admin/tokens/{id} to rename a token they own (or anyone's)."""
+    client, csrf = client_with_admin
+    tok = _create_token_via_api(client, csrf, name="admin-tok")
+    resp = client.put(
+        f"/api/admin/tokens/{tok['id']}",
+        json={"name": "renamed-by-admin"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "renamed-by-admin"
+    # Admin endpoint mirrors the list response shape — owner_username is included.
+    assert body["owner_username"] == "admin"
+
+
+def test_put_admin_tokens_non_admin_returns_403(app_client):
+    """Non-admin users cannot use the admin endpoint even on their own token."""
+    import another_s3_manager.auth as auth_module
+    import another_s3_manager.users as users_module
+
+    importlib.reload(auth_module)
+    importlib.reload(users_module)
+    auth_module._login_attempts = {}
+    users_module.save_bans({})
+    _ensure_admin(users_module, auth_module)
+
+    # Insert non-admin bob
+    data = users_module.load_users()
+    data["users"].append(
+        {
+            "username": "bob",
+            "password_hash": auth_module.hash_password("bobpass"),
+            "is_admin": False,
+            "allowed_roles": [],
+            "theme": "auto",
+        }
+    )
+    users_module.save_users(data)
+
+    bob_csrf = _login(app_client, "bob", "bobpass")
+    # Bob creates a token via self-serve endpoint
+    create_resp = app_client.post(
+        "/api/me/tokens",
+        json={"name": "bob-tok", "is_read_only": True, "max_read_bytes": 1024},
+        headers={"X-CSRF-Token": bob_csrf},
+    )
+    assert create_resp.status_code == 200
+    token_id = create_resp.json()["id"]
+
+    # Bob tries to PUT against admin endpoint -> 403
+    resp = app_client.put(
+        f"/api/admin/tokens/{token_id}",
+        json={"name": "x"},
+        headers={"X-CSRF-Token": bob_csrf},
+    )
+    assert resp.status_code == 403
+
+
+def test_put_admin_tokens_revoked_returns_404(client_with_admin):
+    client, csrf = client_with_admin
+    tok = _create_token_via_api(client, csrf)
+    del_resp = client.delete(f"/api/me/tokens/{tok['id']}", headers={"X-CSRF-Token": csrf})
+    assert del_resp.status_code == 200
+
+    resp = client.put(
+        f"/api/admin/tokens/{tok['id']}",
+        json={"name": "x"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 404
+
+
+def test_put_admin_tokens_missing_returns_404(client_with_admin):
+    client, csrf = client_with_admin
+    resp = client.put(
+        "/api/admin/tokens/999999",
+        json={"name": "x"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 404

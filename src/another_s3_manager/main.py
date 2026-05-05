@@ -882,6 +882,53 @@ async def admin_delete_token(
     return {"ok": True}
 
 
+@app.put("/api/admin/tokens/{token_id}")
+async def admin_update_token(
+    token_id: int,
+    payload: UpdateTokenRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Admin endpoint: update any token's editable metadata regardless of owner.
+
+    Returns the same shape as the admin list (`owner_username` included) so the
+    SPA can patch its cache in place. 400 on bad input, 404 on missing/revoked,
+    409 on name collision.
+    """
+    if not current_user.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    actor_user_id = _get_user_id_by_username(current_user["username"])
+    try:
+        updated = token_svc.update_token(
+            token_id=token_id,
+            by_user_id=actor_user_id,
+            by_is_admin=True,
+            name=payload.name,
+            is_read_only=payload.is_read_only,
+            max_read_bytes=payload.max_read_bytes,
+        )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=409, detail=f"Token name '{payload.name}' already exists for this user"
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if "no fields to update" in msg or "out of range" in msg:
+            raise HTTPException(status_code=400, detail=msg)
+        # "not found" or "is revoked" -> 404 (revoked tokens are treated as gone)
+        raise HTTPException(status_code=404, detail=msg)
+
+    # Mirror admin_list_tokens shape: include owner_username for the admin SPA.
+    from another_s3_manager.database import session_scope
+
+    with session_scope() as session:
+        owner_username = session.execute(
+            select(UserModel.username).where(UserModel.id == updated.user_id)
+        ).scalar_one_or_none()
+    return _serialize_token(updated, owner_username=owner_username)
+
+
 @app.put("/api/admin/users/{username}")
 async def update_user(
     request: Request,
