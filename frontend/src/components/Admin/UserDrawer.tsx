@@ -1,5 +1,6 @@
 import {
   Button,
+  Divider,
   Drawer,
   PasswordInput,
   Stack,
@@ -16,6 +17,7 @@ import {
   PasswordRequirementsList,
   meetsPolicy,
 } from "@/components/Auth/PasswordRequirementsList";
+import { UserTokensList } from "@/components/Admin/UserTokensList";
 
 export type UserDrawerMode = "create" | "edit";
 
@@ -197,6 +199,15 @@ export function UserDrawer({
             }}
             {...form.getInputProps("allowed_roles")}
           />
+          {mode === "edit" && initialUser && (
+            <>
+              <Divider my="xs" />
+              <UserTokensList
+                username={initialUser.username}
+                userId={initialUser.id}
+              />
+            </>
+          )}
         </Stack>
         <div
           style={{
