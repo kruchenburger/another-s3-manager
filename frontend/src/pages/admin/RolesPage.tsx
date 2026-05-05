@@ -81,7 +81,7 @@ export function RolesPage() {
           <Table.Tr>
             <Table.Th>Name</Table.Th>
             <Table.Th w={140}>Type</Table.Th>
-            <Table.Th w={120}>Buckets</Table.Th>
+            <Table.Th w={140}>Buckets</Table.Th>
             <Table.Th>Description</Table.Th>
             <Table.Th w={140}>Actions</Table.Th>
           </Table.Tr>
