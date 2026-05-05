@@ -58,19 +58,32 @@ export function FileBrowser() {
     window.location.href = buildDownloadUrl(bucket, roleId, fullPath);
   };
 
+  const formatExpiry = (iso: string): string => {
+    // Local time, hours+minutes only — `02:14 PM` is more useful than the full ISO.
+    const d = new Date(iso);
+    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  };
+
   const handleCopyUrl = async (name: string) => {
     const fullPath = joinPath(pathFromUrl, name);
     try {
-      const { url } = await getPresignedDownloadUrl(bucket, roleId, fullPath);
+      const { url, expires_at } = await getPresignedDownloadUrl(
+        bucket,
+        roleId,
+        fullPath,
+      );
       await navigator.clipboard.writeText(url);
       notifications.show({
         color: "green",
-        message: `Copied URL for ${name} (expires in 1h)`,
+        title: "Presigned URL copied",
+        message: `${name} — anyone with this link can download it until ${formatExpiry(expires_at)} (expires in 1 hour). No login needed.`,
+        autoClose: 6000,
       });
     } catch (e) {
       notifications.show({
         color: "red",
-        message: `Failed to copy URL: ${e instanceof Error ? e.message : "unknown error"}`,
+        title: "Copy failed",
+        message: e instanceof Error ? e.message : "unknown error",
       });
     }
   };
@@ -85,14 +98,21 @@ export function FileBrowser() {
       );
       const urls = responses.map((r) => r.url).join("\n");
       await navigator.clipboard.writeText(urls);
+      // All URLs in a bulk copy share the same backend timestamp (same request batch).
+      const expiry = responses[0]?.expires_at;
       notifications.show({
         color: "green",
-        message: `Copied ${responses.length} URLs (expire in 1h)`,
+        title: `${responses.length} presigned URLs copied`,
+        message: expiry
+          ? `Anyone with these links can download until ${formatExpiry(expiry)} (expires in 1 hour). No login needed.`
+          : "Anyone with these links can download for 1 hour. No login needed.",
+        autoClose: 6000,
       });
     } catch (e) {
       notifications.show({
         color: "red",
-        message: `Failed to copy URLs: ${e instanceof Error ? e.message : "unknown error"}`,
+        title: "Copy failed",
+        message: e instanceof Error ? e.message : "unknown error",
       });
     }
   };

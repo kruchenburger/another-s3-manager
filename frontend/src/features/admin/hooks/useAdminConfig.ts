@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getConfig, saveConfig } from "@/features/admin/api/adminApi";
+import { meQueryKey } from "@/features/auth/hooks/useMe";
 import type { AppConfig } from "@/types/api";
 
 export const adminConfigQueryKey = ["admin", "config"] as const;
@@ -22,6 +23,14 @@ export function useSaveConfig() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (config: AppConfig) => saveConfig(config),
-    onSuccess: () => qc.invalidateQueries({ queryKey: adminConfigQueryKey }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: adminConfigQueryKey });
+      // /api/me surfaces config-derived flags (currently disable_deletion;
+      // future flags too). Invalidate so the FileBrowser disable-Delete UX
+      // and any other useMe consumers reflect the new config without a
+      // page reload. Without this, the browser keeps stale me data for up
+      // to 60s (useMe.staleTime).
+      qc.invalidateQueries({ queryKey: meQueryKey });
+    },
   });
 }
