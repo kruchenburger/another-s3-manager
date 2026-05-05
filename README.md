@@ -190,7 +190,7 @@ another-s3-manager exposes an MCP (Model Context Protocol) server at `/mcp`,
 allowing AI agents (Claude Desktop, Cursor, Codex) to interact with your S3
 storage using the same roles and permissions as the web UI.
 
-Quick start: log in → User menu → API tokens → create. Copy the plaintext
+Quick start: log in → User menu → MCP tokens → create. Copy the plaintext
 token once, paste into your AI agent's MCP config.
 
 See [docs/mcp-setup.md](docs/mcp-setup.md) for client-specific configurations
