@@ -1054,14 +1054,10 @@ def test_generate_presigned_url_for_role_returns_url(mocker):
         return_value={"roles": [{"name": "RoleA", "type": "default"}]},
     )
     fake_client = mocker.MagicMock()
-    fake_client.generate_presigned_url.return_value = (
-        "https://bucket.s3.amazonaws.com/file.txt?X-Amz-Signature=abc"
-    )
+    fake_client.generate_presigned_url.return_value = "https://bucket.s3.amazonaws.com/file.txt?X-Amz-Signature=abc"
     mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
 
-    url = mod.generate_presigned_url_for_role(
-        "RoleA", "bucket", "file.txt", _make_user(allowed_roles=["RoleA"])
-    )
+    url = mod.generate_presigned_url_for_role("RoleA", "bucket", "file.txt", _make_user(allowed_roles=["RoleA"]))
     assert url.startswith("https://")
     assert "X-Amz-Signature" in url
     fake_client.generate_presigned_url.assert_called_once_with(
@@ -1093,9 +1089,7 @@ def test_generate_presigned_url_for_role_permission_denied_role():
     import another_s3_manager.s3_client as mod
 
     with pytest.raises(PermissionError):
-        mod.generate_presigned_url_for_role(
-            "RoleX", "bucket", "f", _make_user(allowed_roles=["RoleA"])
-        )
+        mod.generate_presigned_url_for_role("RoleX", "bucket", "f", _make_user(allowed_roles=["RoleA"]))
 
 
 def test_generate_presigned_url_for_role_permission_denied_bucket(mocker):
@@ -1103,12 +1097,8 @@ def test_generate_presigned_url_for_role_permission_denied_bucket(mocker):
 
     mocker.patch(
         "another_s3_manager.config.load_config",
-        return_value={
-            "roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["allowed"]}]
-        },
+        return_value={"roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["allowed"]}]},
     )
 
     with pytest.raises(PermissionError):
-        mod.generate_presigned_url_for_role(
-            "RoleA", "denied", "f", _make_user(allowed_roles=["RoleA"])
-        )
+        mod.generate_presigned_url_for_role("RoleA", "denied", "f", _make_user(allowed_roles=["RoleA"]))
