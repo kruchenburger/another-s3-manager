@@ -85,7 +85,7 @@ export function RoleEditPage() {
       <Title order={2}>Edit role: {decoded}</Title>
       <form onSubmit={onSubmit}>
         <Stack gap="md" maw={620}>
-          <RoleFormFields form={form} disabled={readOnly} mode="edit" />
+          <RoleFormFields form={form} disabled={readOnly} mode="edit" step="all" />
           <Group>
             <Button type="submit" disabled={readOnly} loading={save.isPending}>
               Save changes
