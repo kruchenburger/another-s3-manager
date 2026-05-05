@@ -610,30 +610,24 @@ async def test_upload_file_returns_invalid_input_on_malformed_base64(alice_user,
 
 
 @pytest.mark.asyncio
-async def test_list_roles_records_response_bytes_per_token(alice_user, tool_registry):
-    """mcp_tool_response_bytes{tool, token_id} must observe the JSON size after a successful tool call."""
+async def test_list_roles_records_response_bytes(alice_user, tool_registry):
+    """mcp_tool_response_bytes{tool} must observe the JSON size after a successful tool call.
+
+    NOTE: previously labeled by (tool, token_id) but token_id violated the
+    "Never label by user_id" cardinality rule (revoked tokens never leave
+    the Prometheus label set). Label set is now {tool} only.
+    """
     from another_s3_manager import metrics
 
-    uid, plaintext = alice_user
-    # Find the token row to know its id (label value).
-    import hashlib
+    _, plaintext = alice_user
 
-    digest = hashlib.sha256(plaintext.encode()).hexdigest()
-    token_row = svc.find_active_token_by_hash(digest)
-    assert token_row is not None
-    token_id_label = str(token_row.id)
-
-    def count(tool: str, tid: str) -> float:
+    def count(tool: str) -> float:
         for sample in metrics.mcp_tool_response_bytes.collect()[0].samples:
-            if (
-                sample.name.endswith("_count")
-                and sample.labels.get("tool") == tool
-                and sample.labels.get("token_id") == tid
-            ):
+            if sample.name.endswith("_count") and sample.labels.get("tool") == tool:
                 return sample.value
         return 0.0
 
-    before = count("list_roles", token_id_label)
+    before = count("list_roles")
     await _call(tool_registry, "list_roles", _fake_request(plaintext))
-    after = count("list_roles", token_id_label)
+    after = count("list_roles")
     assert after >= before + 1

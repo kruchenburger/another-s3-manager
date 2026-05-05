@@ -38,6 +38,17 @@ def create_token(
     Plaintext is returned ONLY here. Caller must persist it (response to client) immediately.
     Raises ValueError if the per-user active limit is reached.
     Raises sqlalchemy.exc.IntegrityError on duplicate name (caught at endpoint layer -> 409).
+
+    Concurrency note: the COUNT-then-INSERT pair is not strictly serializable —
+    two concurrent transactions can both see N<LIMIT and both INSERT, ending
+    up at LIMIT+1 active tokens. Safe in our deployment because:
+      - SQLite enforces a database-level write lock (only one writer at a time)
+      - Default uvicorn config is single-worker, so within-process async tasks
+        are scheduled cooperatively rather than truly concurrent
+      - Per-user limit (10) is a soft cap, not a security boundary; over by 1-2
+        is harmless
+    If we ever move to multi-worker uvicorn or Postgres, revisit with a
+    SELECT...FOR UPDATE or a unique partial index.
     """
     with session_scope() as session:
         active = session.execute(

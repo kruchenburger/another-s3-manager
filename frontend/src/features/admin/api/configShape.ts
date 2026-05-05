@@ -26,7 +26,12 @@ export function toWritableConfig(config: AppConfig): AppConfig {
     password_min_lowercase: config.password_min_lowercase,
     password_min_digits: config.password_min_digits,
     password_min_special: config.password_min_special,
-    // MCP server settings
+    // MCP server settings.
+    // NOTE: mcp_global_max_read_bytes is in BYTES, not MB. SettingsPage edits
+    // an MB-converted shadow field (mcp_global_max_read_bytes_mb) and converts
+    // back to bytes before save. Any other caller of toWritableConfig that
+    // wants to override this field MUST do the same conversion — passing the
+    // raw MB value would silently shrink the cap by 1024×.
     mcp_enabled: config.mcp_enabled,
     mcp_disable_writes: config.mcp_disable_writes,
     mcp_text_extensions: config.mcp_text_extensions,

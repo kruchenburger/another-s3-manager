@@ -402,16 +402,19 @@ def _observe_response_size(tool: str, token: Any, payload: dict) -> dict:
 
     The bytes count is a proxy for the LLM-input-token cost the agent will pay
     when it reinjects this result into its next prompt (≈4 bytes / token for
-    English text). token_id label lets ops see which Bearer is the heaviest.
+    English text). Labeled by tool only — see metrics.mcp_tool_response_bytes
+    for the cardinality reasoning. The `token` argument is kept in the
+    signature for future log-emit use (token id is already logged via
+    logger.info("mcp.<tool>", extra={"user": ...}) in each tool body).
     """
+    del token  # unused — see docstring
     try:
         size = len(json.dumps(payload, default=str).encode("utf-8"))
     except (TypeError, ValueError):
         return payload
     from another_s3_manager.metrics import mcp_tool_response_bytes
 
-    token_id = str(getattr(token, "id", "unknown"))
-    mcp_tool_response_bytes.labels(tool=tool, token_id=token_id).observe(size)
+    mcp_tool_response_bytes.labels(tool=tool).observe(size)
     return payload
 
 

@@ -120,9 +120,9 @@ def _run_alembic_upgrade() -> None:
     command.upgrade(cfg, "head")
 
 
-from contextlib import asynccontextmanager  # noqa: E402
+from contextlib import asynccontextmanager
 
-from another_s3_manager.mcp_server import mcp as _mcp_instance  # noqa: E402
+from another_s3_manager.mcp_server import mcp as _mcp_instance
 
 
 @asynccontextmanager
@@ -206,8 +206,14 @@ async def _http_metrics(request: Request, call_next):
 # mounted so Starlette evaluates it on every /mcp/* request.
 @app.middleware("http")
 async def _mcp_kill_switch(request: Request, call_next):
-    """Return 503 for all /mcp/* paths when mcp_enabled=False in config."""
-    if request.url.path.startswith("/mcp/"):
+    """Return 503 for all /mcp paths when mcp_enabled=False in config.
+
+    Match both /mcp (without trailing slash — Starlette would 307-redirect
+    this to /mcp/ unless we intercept first) and /mcp/* so the kill-switch
+    can't be bypassed via the no-slash form.
+    """
+    path = request.url.path
+    if path == "/mcp" or path.startswith("/mcp/"):
         cfg = config_module.load_config(force_reload=False)
         if not cfg.get("mcp_enabled", True):
             return JSONResponse(
@@ -644,11 +650,11 @@ async def change_my_password(
 # Token CRUD helpers
 # ---------------------------------------------------------------------------
 
-from sqlalchemy import select  # noqa: E402 — deferred to avoid circular at module top
-from sqlalchemy.exc import IntegrityError  # noqa: E402
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
-from another_s3_manager import api_tokens as token_svc  # noqa: E402
-from another_s3_manager.models import User as UserModel  # noqa: E402
+from another_s3_manager import api_tokens as token_svc
+from another_s3_manager.models import User as UserModel
 
 
 def _get_user_id_by_username(username: str) -> int:
@@ -1947,7 +1953,7 @@ async def delete_file(
 # Mount MCP sub-app at /mcp — must come AFTER all @app.get/@app.post route
 # registrations and AFTER middleware is wired up, so Starlette's middleware
 # stack is already complete when the mount is added.
-from another_s3_manager.mcp_server import get_mcp_app  # noqa: E402
+from another_s3_manager.mcp_server import get_mcp_app
 
 app.mount("/mcp", get_mcp_app())
 

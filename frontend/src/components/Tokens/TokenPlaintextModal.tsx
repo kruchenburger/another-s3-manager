@@ -76,13 +76,15 @@ export function TokenPlaintextModal({ opened, onClose, plaintext, noteForAdmin }
             </Text>
           )}
         </Alert>
-        <Box style={{ position: "relative" }}>
-          <Code block style={{ paddingRight: 40, wordBreak: "break-all" }}>
+        <Box pos="relative">
+          <Code block pr={40} style={{ wordBreak: "break-all" }}>
             {plaintext}
           </Code>
           <ActionIcon
             variant="subtle"
-            style={{ position: "absolute", top: 8, right: 8 }}
+            pos="absolute"
+            top={8}
+            right={8}
             onClick={() => copy(plaintext)}
             aria-label="Copy token"
           >
@@ -99,11 +101,13 @@ export function TokenPlaintextModal({ opened, onClose, plaintext, noteForAdmin }
           Show MCP config snippet
         </Button>
         <Collapse in={snippetOpen}>
-          <Box style={{ position: "relative" }}>
+          <Box pos="relative">
             <Code block>{mcpSnippet}</Code>
             <ActionIcon
               variant="subtle"
-              style={{ position: "absolute", top: 8, right: 8 }}
+              pos="absolute"
+              top={8}
+              right={8}
               onClick={() => copy(mcpSnippet)}
               aria-label="Copy snippet"
             >

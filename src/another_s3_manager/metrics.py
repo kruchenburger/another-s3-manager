@@ -91,13 +91,16 @@ mcp_bytes_read_total = Counter(
 # Proxy for LLM input-token cost: how many bytes of JSON each MCP tool call
 # returned to the agent. Agents reinject this into their next prompt, so the
 # byte count is a reasonable proxy for "how much context this tool consumed"
-# (≈4 bytes/token for English text / JSON). token_id label lets ops see which
-# Bearer token is hottest. Cardinality cap: 6 tools × ~100 active tokens = ~600
-# series max in realistic deployments.
+# (≈4 bytes/token for English text / JSON). Labeled by tool only — token_id
+# label was tempting (per-token attribution) but violates this module's own
+# "Never label by user_id, username, file path" rule because revoked tokens
+# never leave the Prometheus label set, growing unbounded over time.
+# Per-token call accounting is still available via mcp_tool_calls_total which
+# is keyed by tool+error_code (low cardinality regardless of churn).
 mcp_tool_response_bytes = Histogram(
     "mcp_tool_response_bytes",
     "Size in bytes of the JSON response returned by an MCP tool call",
-    ["tool", "token_id"],
+    ["tool"],
     # Buckets sized for typical LLM-context consumption: <100 bytes (empty
     # listings, OK responses), few KB (small reads, list_files), 10-100 KB
     # (medium files, deep listings), 1-10 MB (large reads at the cap).

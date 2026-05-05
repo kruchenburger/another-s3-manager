@@ -1,13 +1,12 @@
 import { ActionIcon, Badge, Table, Text, Tooltip } from "@mantine/core";
 import { Check, Trash2 } from "lucide-react";
 import { formatBytes } from "@/utils/formatBytes";
-import { formatAbsolute, formatRelativeTime } from "@/utils/formatRelativeTime";
+import { formatAbsolute, formatRelative } from "@/utils/formatDate";
 import type { ApiToken, ApiTokenWithOwner } from "@/types/api";
 
 interface TokensTableProps {
   tokens: (ApiToken | ApiTokenWithOwner)[];
   showOwner?: boolean;
-  showRevoked?: boolean;
   onRevoke: (token: ApiToken) => void;
 }
 
@@ -41,17 +40,17 @@ export function TokensTable({ tokens, showOwner = false, onRevoke }: TokensTable
               {showOwner && <Table.Td>{(t as ApiTokenWithOwner).owner_username}</Table.Td>}
               <Table.Td>
                 <Tooltip label={formatAbsolute(t.created_at)}>
-                  <span>{formatRelativeTime(t.created_at)}</span>
+                  <span>{formatRelative(t.created_at)}</span>
                 </Tooltip>
               </Table.Td>
               <Table.Td>
                 {isRevoked ? (
                   <Text size="sm" c="dimmed">
-                    Revoked {formatRelativeTime(t.revoked_at)}
+                    Revoked {formatRelative(t.revoked_at)}
                   </Text>
                 ) : (
                   <Tooltip label={formatAbsolute(t.last_used_at)} disabled={!t.last_used_at}>
-                    <span>{formatRelativeTime(t.last_used_at)}</span>
+                    <span>{formatRelative(t.last_used_at)}</span>
                   </Tooltip>
                 )}
               </Table.Td>
