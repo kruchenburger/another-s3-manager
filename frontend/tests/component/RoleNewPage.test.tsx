@@ -61,15 +61,13 @@ describe("RoleNewPage", () => {
 
     await waitFor(() => expect(screen.getByText(/new role/i)).toBeInTheDocument());
 
-    // All 5 types visible as radios. Mantine accessible name = full label
-    // (the radio's bold name + the description text). Use ^anchor regex so
-    // a description that *mentions* another type name (e.g. credentials's
-    // description references "Default or Assume Role") doesn't double-match.
-    expect(screen.getByRole("radio", { name: /^default/i })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /^profile/i })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /^assume_role/i })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /^credentials/i })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /^s3_compatible/i })).toBeInTheDocument();
+    // All 5 types visible as radios. After RoleTypePicker refactor the
+    // accessible name starts with the friendly label (not the type code).
+    expect(screen.getByRole("radio", { name: /AWS instance role/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Named AWS profile/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /STS assume role/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Static access key/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Other S3-compatible/i })).toBeInTheDocument();
   });
 
   it("includes the AWS docs link on the Default type description", async () => {
@@ -97,7 +95,7 @@ describe("RoleNewPage", () => {
 
     // Stays on Step 1 — Name field still visible (Step 2 would hide name+type).
     // Mantine appends " *" to required label text, so match flexibly.
-    expect(screen.getByLabelText(/^name/i)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /^name/i })).toBeInTheDocument();
     // Validation error appears
     await waitFor(() => expect(screen.getByText("Required")).toBeInTheDocument());
   });
@@ -111,7 +109,7 @@ describe("RoleNewPage", () => {
     );
 
     // Step 1: type defaults to "default", name = "Existing" (collides)
-    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "Existing" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "Existing" } });
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
 
     // For "default" type Step 2 is skipped → we land on Step 3 (Review). Save button visible.
@@ -139,7 +137,7 @@ describe("RoleNewPage", () => {
       expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
     );
 
-    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "NewRole" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "NewRole" } });
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
     // For default type, lands on Review (Step 3)
     await waitFor(() =>
@@ -167,13 +165,15 @@ describe("RoleNewPage", () => {
     );
 
     // Try to jump directly to Review (Step 3) by clicking the step header.
-    // Mantine 8 Stepper headers may be `tab` role or plain text — try both.
-    const reviewByRole = screen.queryByRole("tab", { name: /review/i });
-    const reviewStepHeader = reviewByRole ?? screen.getByText(/^review$/i);
+    // Mantine 8 Stepper renders headers as <button> with the visible label as
+    // accessible name. New label is "Review & save".
+    const reviewStepHeader =
+      screen.queryByRole("tab", { name: /review/i }) ??
+      screen.getByRole("button", { name: /review & save/i });
     fireEvent.click(reviewStepHeader);
 
     // Should NOT have advanced — Step 1 (Name field) is still visible
-    expect(screen.getByLabelText(/^name/i)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /^name/i })).toBeInTheDocument();
     // Save button should NOT have appeared (would only show on Step 3)
     expect(screen.queryByRole("button", { name: /save role/i })).not.toBeInTheDocument();
   });
@@ -185,8 +185,8 @@ describe("RoleNewPage", () => {
       expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
     );
     // Pick credentials type, fill name, advance to Step 2
-    fireEvent.click(screen.getByRole("radio", { name: /^credentials/i }));
-    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "TestCred" } });
+    fireEvent.click(screen.getByRole("radio", { name: /Static access key/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "TestCred" } });
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
     // Step 2 fields visible but empty
     await waitFor(() =>
@@ -207,8 +207,8 @@ describe("RoleNewPage", () => {
       expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
     );
     // Pick credentials, fill name + secrets
-    fireEvent.click(screen.getByRole("radio", { name: /^credentials/i }));
-    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "TestStale" } });
+    fireEvent.click(screen.getByRole("radio", { name: /Static access key/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "TestStale" } });
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
     await waitFor(() =>
       expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument(),
@@ -218,9 +218,9 @@ describe("RoleNewPage", () => {
     // Go back, switch to default
     fireEvent.click(screen.getByRole("button", { name: /previous/i }));
     await waitFor(() =>
-      expect(screen.getByRole("radio", { name: /^default/i })).toBeInTheDocument(),
+      expect(screen.getByRole("radio", { name: /AWS instance role/i })).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("radio", { name: /^default/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /AWS instance role/i }));
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /save role/i })).toBeInTheDocument(),
@@ -243,8 +243,8 @@ describe("RoleNewPage", () => {
     );
 
     // Step 1: type=credentials, name=TestCred
-    fireEvent.click(screen.getByRole("radio", { name: /^credentials/i }));
-    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "TestCred" } });
+    fireEvent.click(screen.getByRole("radio", { name: /Static access key/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "TestCred" } });
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
 
     // Step 2: fill credentials including a secret
@@ -262,5 +262,28 @@ describe("RoleNewPage", () => {
     const preview = screen.getByLabelText(/role json/i) as HTMLTextAreaElement;
     expect(preview.value).toContain("***REDACTED***");
     expect(preview.value).not.toContain("SUPER_SECRET");
+  });
+
+  it("renders the new Stepper labels (Choose type / Configure credentials / Review & save)", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderWizard();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/choose type/i)).toBeInTheDocument();
+    expect(screen.getByText(/configure credentials/i)).toBeInTheDocument();
+    expect(screen.getByText(/review & save/i)).toBeInTheDocument();
+  });
+
+  it('Step 1 (step="type") does NOT render credential fields', async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderWizard();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
+    );
+    // Pick credentials type — credential fields should still NOT appear on Step 1
+    fireEvent.click(screen.getByRole("radio", { name: /Static access key/i }));
+    expect(screen.queryByLabelText(/^access key id/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^secret access key/i)).not.toBeInTheDocument();
   });
 });

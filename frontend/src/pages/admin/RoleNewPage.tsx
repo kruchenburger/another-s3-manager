@@ -125,17 +125,17 @@ export function RoleNewPage() {
         onStepClick={(s) => { if (s < active) setActive(s); }}
         maw={720}
       >
-        <Stepper.Step label="Type" description="Pick role kind">
+        <Stepper.Step label="Choose type" description="Pick role kind">
           <Stack gap="md" mt="md">
-            <RoleFormFields form={form} mode="create" />
+            <RoleFormFields form={form} mode="create" step="type" />
           </Stack>
         </Stepper.Step>
-        <Stepper.Step label="Credentials" description="Type-specific fields">
+        <Stepper.Step label="Configure credentials" description="Type-specific fields">
           <Stack gap="md" mt="md">
-            <RoleFormFields form={form} mode="create" hideNameAndType />
+            <RoleFormFields form={form} mode="create" step="credentials" />
           </Stack>
         </Stepper.Step>
-        <Stepper.Step label="Review" description="Confirm and save">
+        <Stepper.Step label="Review & save" description="Confirm and save">
           <Stack gap="md" mt="md">
             <Title order={4}>Review</Title>
             <JsonInput
