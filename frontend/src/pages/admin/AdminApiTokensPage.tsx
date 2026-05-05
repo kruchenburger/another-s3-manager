@@ -78,7 +78,7 @@ export function AdminApiTokensPage() {
     <Container size="lg" py="lg">
       <Stack gap="md">
         <Group justify="space-between">
-          <Title order={2}>API tokens</Title>
+          <Title order={2}>MCP tokens</Title>
           <Button leftSection={<Plus size={16} />} onClick={create.open}>
             Issue token on behalf of user
           </Button>

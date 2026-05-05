@@ -11,7 +11,7 @@ interface NavItem {
 const accountsItems: NavItem[] = [
   { label: "Users", to: "/admin/users", icon: <Users size={16} /> },
   { label: "Bans", to: "/admin/bans", icon: <Ban size={16} /> },
-  { label: "API Tokens", to: "/admin/api-tokens", icon: <Key size={16} /> },
+  { label: "MCP Tokens", to: "/admin/api-tokens", icon: <Key size={16} /> },
 ];
 
 const infrastructureItems: NavItem[] = [

@@ -50,7 +50,7 @@ export function CreateTokenModal({
   const slotFull = used >= limit;
 
   return (
-    <Modal opened={opened} onClose={onClose} title="Create API token" centered size="md" radius="lg">
+    <Modal opened={opened} onClose={onClose} title="Create MCP token" centered size="md" radius="lg">
       <form
         onSubmit={form.onSubmit((vals) => {
           const max_read_bytes = Math.min(HARD_CEILING, Math.round(vals.max_read_mb * 1024 * 1024));
@@ -61,6 +61,9 @@ export function CreateTokenModal({
         })}
       >
         <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            MCP-only — for AI agents. Web API uses cookie auth.
+          </Text>
           {adminMode && (
             <Select
               label="User"

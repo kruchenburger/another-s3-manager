@@ -64,11 +64,16 @@ export function ApiTokensPage() {
     <Container size="lg" py="lg">
       <Stack gap="md">
         <Group justify="space-between">
-          <Title order={2}>API tokens</Title>
+          <Title order={2}>MCP tokens</Title>
           <Button leftSection={<Plus size={16} />} onClick={create.open}>
             Create token
           </Button>
         </Group>
+        <Text size="sm" c="dimmed">
+          Use these tokens to authorize AI agents (Claude Desktop, Cursor, etc.) at the{" "}
+          <Text span ff="monospace">/mcp</Text> endpoint. They do <strong>not</strong>{" "}
+          grant access to the web API — that uses your login cookie.
+        </Text>
         {data && (
           <Text size="sm" c="dimmed">
             Used {data.used} of {data.limit} token slots
