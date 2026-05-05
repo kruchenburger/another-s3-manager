@@ -916,12 +916,21 @@ async def admin_update_token(
         raise HTTPException(status_code=404, detail=msg)
 
     # Mirror admin_list_tokens shape: include owner_username for the admin SPA.
+    # owner_username is part of the admin response contract — we 404 explicitly
+    # if the user vanished between update and lookup (extremely rare given FK
+    # CASCADE + single-worker SQLite, but the alternative — silently omitting
+    # the key from the JSON — would mislead the SPA cache patch logic).
     from another_s3_manager.database import session_scope
 
     with session_scope() as session:
         owner_username = session.execute(
             select(UserModel.username).where(UserModel.id == updated.user_id)
         ).scalar_one_or_none()
+    if owner_username is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Owner of token {token_id} no longer exists",
+        )
     return _serialize_token(updated, owner_username=owner_username)
 
 

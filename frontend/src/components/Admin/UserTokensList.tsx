@@ -8,7 +8,9 @@ import {
   Table,
   Text,
   Title,
+  Tooltip,
 } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 
 import { useAdminTokens } from "@/features/tokens/hooks/useAdminTokens";
@@ -17,17 +19,18 @@ import { useDeleteAdminToken } from "@/features/tokens/hooks/useDeleteToken";
 import { useCreateAdminToken } from "@/features/tokens/hooks/useCreateToken";
 import { CreateTokenModal } from "@/components/Tokens/CreateTokenModal";
 import { EditTokenModal } from "@/components/Tokens/EditTokenModal";
+import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
 import { runWithToasts } from "@/utils/mutationToast";
-import type { ApiTokenWithOwner } from "@/types/api";
+import { getErrorMessage } from "@/utils/apiError";
+import { formatAbsolute, formatRelative } from "@/utils/formatDate";
+import type {
+  ApiTokenWithOwner,
+  ApiTokenWithPlaintext,
+} from "@/types/api";
 
 interface UserTokensListProps {
   username: string;
   userId: number;
-}
-
-function formatLastUsed(value: string | null): string {
-  if (!value) return "Never";
-  return new Date(value).toLocaleString();
 }
 
 export function UserTokensList({ username, userId }: UserTokensListProps) {
@@ -38,6 +41,11 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
 
   const [createOpened, setCreateOpened] = useState(false);
   const [editTarget, setEditTarget] = useState<ApiTokenWithOwner | null>(null);
+  // Plaintext is returned by the create endpoint exactly once. We capture it
+  // into state and render TokenPlaintextModal so the admin can hand it to the
+  // user out-of-band — without this, the secret is silently lost.
+  const [plaintextResult, setPlaintextResult] =
+    useState<ApiTokenWithPlaintext | null>(null);
 
   const createMutation = useCreateAdminToken();
   const updateMutation = useUpdateAdminToken();
@@ -86,7 +94,14 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
                     <Badge color="orange">No</Badge>
                   )}
                 </Table.Td>
-                <Table.Td>{formatLastUsed(t.last_used_at)}</Table.Td>
+                <Table.Td>
+                  <Tooltip
+                    label={formatAbsolute(t.last_used_at)}
+                    disabled={!t.last_used_at}
+                  >
+                    <span>{formatRelative(t.last_used_at)}</span>
+                  </Tooltip>
+                </Table.Td>
                 <Table.Td>
                   <Group gap="xs" wrap="nowrap">
                     <ActionIcon
@@ -129,9 +144,10 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
           adminMode
           availableUsers={[{ id: userId, username }]}
           loading={createMutation.isPending}
-          // The CreateTokenModal in admin mode passes the picked user_id back to onSubmit;
-          // since we hard-pin the picker to a single user, userId arg always equals our userId prop.
-          // Slot indicator is hidden for admin mode (Phase 5 fix); per-user limit is enforced server-side.
+          // CreateTokenModal in admin mode passes the picked user_id back to onSubmit;
+          // since the picker is hard-pinned to a single user, pickedUserId always
+          // equals our userId prop. Slot indicator is hidden for admin mode (Phase 5);
+          // per-user limit is enforced server-side.
           used={0}
           limit={Infinity}
           onSubmit={(payload, pickedUserId) => {
@@ -139,10 +155,35 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
             createMutation.mutate(
               { ...payload, user_id: targetId },
               {
-                onSuccess: () => setCreateOpened(false),
+                onSuccess: (token) => {
+                  notifications.show({
+                    title: "Success",
+                    message: "Token created",
+                    color: "green",
+                  });
+                  setCreateOpened(false);
+                  setPlaintextResult(token);
+                },
+                onError: (e) => {
+                  notifications.show({
+                    title: "Error",
+                    message: getErrorMessage(e),
+                    color: "red",
+                    autoClose: false,
+                  });
+                },
               },
             );
           }}
+        />
+      )}
+
+      {plaintextResult && (
+        <TokenPlaintextModal
+          opened
+          onClose={() => setPlaintextResult(null)}
+          plaintext={plaintextResult.token_plaintext}
+          noteForAdmin={`Pass this token to ${username} via a secure channel (e.g. password manager share).`}
         />
       )}
 

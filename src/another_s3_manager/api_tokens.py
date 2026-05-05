@@ -174,8 +174,15 @@ def update_token(
             token.max_read_bytes = max_read_bytes
 
         session.flush()
+        # `session.refresh(token)` is REQUIRED before `expunge` — it materializes
+        # every column attribute (including `user_id`, which the admin endpoint
+        # reads after the session closes to look up `owner_username`). Removing
+        # the refresh would re-introduce the `DetachedInstanceError` bug class
+        # fixed in commit d844e2a (`list_all_tokens` shared-identity expunge).
+        # Likewise: do NOT access `token.user` (the relationship) outside the
+        # session — only column attributes survive expunge. Use `token.user_id`
+        # and look up the User in a fresh session, like `admin_update_token` does.
         session.refresh(token)
-        # Detach so caller can read attributes after the session closes.
         session.expunge(token)
         return token
 

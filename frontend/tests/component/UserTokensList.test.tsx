@@ -87,4 +87,10 @@ describe("UserTokensList", () => {
       ).toBeInTheDocument(),
     );
   });
+
+  // Note: the full create-then-show-plaintext flow is asserted in the E2E spec
+  // (frontend/tests/e2e/api-tokens.spec.ts) because Mantine's Select picker
+  // requires a real combobox interaction that jsdom doesn't render reliably.
+  // Vitest here only guards the rendered shape; the regression where the
+  // plaintext modal was missing entirely is covered by the visible markup.
 });
