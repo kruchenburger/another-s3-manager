@@ -12,7 +12,7 @@ import { AdminSidebar } from "./AdminSidebar";
  */
 export function AdminLayout() {
   return (
-    <AppShellLayout navbar={<AdminSidebar />}>
+    <AppShellLayout navbar={<AdminSidebar />} forceExpanded>
       <Outlet />
     </AppShellLayout>
   );

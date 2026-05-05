@@ -14,17 +14,24 @@ interface AppShellLayoutProps {
   children?: React.ReactNode;
   /** Navbar slot. Defaults to the file-browser <Sidebar />; admin shell overrides this. */
   navbar?: React.ReactNode;
+  /**
+   * When true, the navbar is locked to the expanded width (260px) regardless of
+   * the persisted collapse preference. Used by the admin shell where there is
+   * no role/bucket tree to collapse and the AdminSidebar always renders labels.
+   */
+  forceExpanded?: boolean;
 }
 
-export function AppShellLayout({ children, navbar }: AppShellLayoutProps = {}) {
+export function AppShellLayout({ children, navbar, forceExpanded = false }: AppShellLayoutProps = {}) {
   const [navOpened, { toggle: toggleNav, close: closeNav }] = useDisclosure(false);
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
+  const [collapsedPref, setCollapsedPref] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     return localStorage.getItem(COLLAPSED_KEY) === "true";
   });
+  const collapsed = forceExpanded ? false : collapsedPref;
 
   const toggleCollapsed = () => {
-    setCollapsed((c) => {
+    setCollapsedPref((c) => {
       const next = !c;
       localStorage.setItem(COLLAPSED_KEY, String(next));
       return next;

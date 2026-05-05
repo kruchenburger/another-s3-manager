@@ -1,4 +1,4 @@
-import { Button, Group, SegmentedControl, Text, TextInput, Tooltip } from "@mantine/core";
+import { Button, Center, Group, SegmentedControl, Text, TextInput, Tooltip } from "@mantine/core";
 import { LayoutGrid, List as ListIcon, Search, Share2, Trash2, Upload } from "lucide-react";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import type { DisplayMode } from "@/hooks/useDisplayMode";
@@ -64,8 +64,22 @@ export function FileBrowserHeader({
           value={mode}
           onChange={(v) => onModeChange(v as DisplayMode)}
           data={[
-            { value: "table", label: <ListIcon size={14} aria-label="Table view" /> },
-            { value: "grid", label: <LayoutGrid size={14} aria-label="Grid view" /> },
+            {
+              value: "table",
+              label: (
+                <Center>
+                  <ListIcon size={14} aria-label="Table view" />
+                </Center>
+              ),
+            },
+            {
+              value: "grid",
+              label: (
+                <Center>
+                  <LayoutGrid size={14} aria-label="Grid view" />
+                </Center>
+              ),
+            },
           ]}
           size="sm"
         />
