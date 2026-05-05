@@ -1705,3 +1705,88 @@ def test_mcp_kill_switch_allows_when_enabled(app_client):
     resp = app_client.get("/mcp/anything")
     # MCP routing may return 404/405/etc. — any status except 503 is acceptable.
     assert resp.status_code != 503
+
+
+# --- /api/buckets/{b}/presigned ---
+
+
+def test_presigned_endpoint_happy_path(app_client, mocker):
+    """Allowed role + bucket + existing path returns 200 with url + expires_at."""
+    _, _ = login(app_client)
+
+    mocker.patch(
+        "another_s3_manager.main.validate_role_access",
+        return_value="default-role",
+    )
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        return_value="https://bucket.s3.amazonaws.com/file.txt?X-Amz-Signature=abc",
+    )
+
+    response = app_client.get(
+        "/api/buckets/my-bucket/presigned",
+        params={"role": "default-role", "path": "file.txt"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["url"].startswith("https://")
+    assert "X-Amz-Signature" in body["url"]
+    assert "expires_at" in body
+    # Parses as ISO8601 with timezone info
+    from datetime import datetime
+
+    datetime.fromisoformat(body["expires_at"].replace("Z", "+00:00"))
+
+
+def test_presigned_endpoint_permission_denied(app_client, mocker):
+    """PermissionError from helper → 403."""
+    _, _ = login(app_client)
+
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="r")
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        side_effect=PermissionError("Bucket not allowed for role"),
+    )
+
+    response = app_client.get(
+        "/api/buckets/forbidden/presigned",
+        params={"role": "r", "path": "x.txt"},
+    )
+    assert response.status_code == 403
+
+
+def test_presigned_endpoint_not_found(app_client, mocker):
+    """FileNotFoundError → 404."""
+    _, _ = login(app_client)
+
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="r")
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        side_effect=FileNotFoundError("not there"),
+    )
+
+    response = app_client.get(
+        "/api/buckets/some-bucket/presigned",
+        params={"role": "r", "path": "missing.txt"},
+    )
+    assert response.status_code == 404
+
+
+def test_presigned_endpoint_invalid_op(app_client):
+    """Only op=get supported in v1."""
+    _, _ = login(app_client)
+    response = app_client.get(
+        "/api/buckets/some-bucket/presigned",
+        params={"role": "r", "path": "x.txt", "op": "put"},
+    )
+    assert response.status_code == 400
+
+
+def test_presigned_endpoint_requires_auth(app_client):
+    """Anonymous request → 401."""
+    app_client.cookies.clear()
+    response = app_client.get(
+        "/api/buckets/some-bucket/presigned",
+        params={"role": "r", "path": "x.txt"},
+    )
+    assert response.status_code == 401

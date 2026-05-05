@@ -73,6 +73,9 @@ from another_s3_manager.metrics import (
     http_requests_total,
 )
 from another_s3_manager.s3_client import clear_s3_clients_cache, execute_with_s3_retry
+from another_s3_manager.s3_client import (
+    generate_presigned_url_for_role as s3_generate_presigned_url_for_role,
+)
 from another_s3_manager.users import (
     get_users_for_admin,
     load_bans,
@@ -1972,6 +1975,54 @@ async def download_file(
     except Exception as e:
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to download file: {error_message}")
+
+
+@app.get("/api/buckets/{bucket_name}/presigned")
+async def get_presigned_url(
+    bucket_name: str,
+    path: str = Query(..., description="Object key to sign"),
+    role: Optional[str] = Query(None, description="Role name to use"),
+    op: str = Query("get", description="Presign operation; only 'get' is supported"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Return a short-lived presigned URL for sharing or browser-side display.
+
+    The signed URL embeds the role's credentials and is valid for 1 hour.
+    Use this for Copy URL flows and for <img>/<video> srcs that can't carry
+    the auth cookie reliably.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    if op != "get":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported op: {op!r} (only 'get' is supported)",
+        )
+
+    try:
+        bucket_name = sanitize_bucket_name(bucket_name)
+        path = sanitize_path(path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    validated_role = validate_role_access(role, current_user)
+
+    expires_in = 3600
+    try:
+        url = s3_generate_presigned_url_for_role(
+            validated_role or role or "",
+            bucket_name,
+            path,
+            current_user,
+            expires_in=expires_in,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+    return {"url": url, "expires_at": expires_at}
 
 
 @app.delete("/api/buckets/{bucket_name}/files")
