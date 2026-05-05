@@ -36,14 +36,16 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenTour }: SidebarPro
         </Stack>
       </div>
       <div className={classes.footer}>
-        <ActionIcon
-          variant="subtle"
-          onClick={onOpenTour}
-          aria-label="Open help tour"
-          title="Help"
-        >
-          <HelpCircle size={18} />
-        </ActionIcon>
+        {!collapsed && (
+          <ActionIcon
+            variant="subtle"
+            onClick={onOpenTour}
+            aria-label="Open help tour"
+            title="Help"
+          >
+            <HelpCircle size={18} />
+          </ActionIcon>
+        )}
         <ActionIcon
           variant="subtle"
           onClick={onToggleCollapsed}
