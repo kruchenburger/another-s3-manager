@@ -12,34 +12,35 @@ function renderSidebar(collapsed: boolean) {
   return render(
     <MantineProvider>
       <MemoryRouter initialEntries={["/v2/"]} basename="/v2">
-        <Sidebar
-          collapsed={collapsed}
-          onToggleCollapsed={vi.fn()}
-          onOpenTour={vi.fn()}
-        />
+        <Sidebar collapsed={collapsed} onToggleCollapsed={vi.fn()} />
       </MemoryRouter>
     </MantineProvider>,
   );
 }
 
 describe("Sidebar footer", () => {
-  it("hides the help button when collapsed", () => {
+  it("never renders a help / tour button (tour lives in the header only)", () => {
+    renderSidebar(false);
+    expect(
+      screen.queryByRole("button", { name: /open help tour/i }),
+    ).not.toBeInTheDocument();
     renderSidebar(true);
     expect(
       screen.queryByRole("button", { name: /open help tour/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders the collapse toggle when expanded", () => {
+    renderSidebar(false);
     expect(
-      screen.getByRole("button", { name: /expand sidebar/i }),
+      screen.getByRole("button", { name: /collapse sidebar/i }),
     ).toBeInTheDocument();
   });
 
-  it("shows the help button when expanded", () => {
-    renderSidebar(false);
+  it("renders the expand toggle when collapsed", () => {
+    renderSidebar(true);
     expect(
-      screen.getByRole("button", { name: /open help tour/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /collapse sidebar/i }),
+      screen.getByRole("button", { name: /expand sidebar/i }),
     ).toBeInTheDocument();
   });
 });

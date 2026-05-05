@@ -31,7 +31,9 @@ export function AppShellLayout({ children, navbar }: AppShellLayoutProps = {}) {
     });
   };
 
-  // Tour state hoisted here so HelpButton (header) and Sidebar's `?` both open it
+  // Tour state hoisted here so HelpButton (header) and WelcomeToast both open it.
+  // Sidebar no longer hosts a tour entry — the only persistent UI control is
+  // the HelpButton in the header.
   const [tourOpen, setTourOpen] = useState(false);
   const openTour = () => setTourOpen(true);
 
@@ -57,11 +59,7 @@ export function AppShellLayout({ children, navbar }: AppShellLayoutProps = {}) {
         </AppShell.Header>
         <AppShell.Navbar p={0}>
           {navbar ?? (
-            <Sidebar
-              collapsed={collapsed}
-              onToggleCollapsed={toggleCollapsed}
-              onOpenTour={openTour}
-            />
+            <Sidebar collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
           )}
         </AppShell.Navbar>
         <AppShell.Main onClick={closeNav}>

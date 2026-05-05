@@ -1,5 +1,6 @@
-import { Burger, Group, Title } from "@mantine/core";
-import { Link } from "react-router-dom";
+import { ActionIcon, Burger, Group, Title, Tooltip } from "@mantine/core";
+import { Link, useNavigate } from "react-router-dom";
+import { Shield } from "lucide-react";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { BurgerLogo } from "@/components/BurgerLogo/BurgerLogo";
 import { ThemeToggle } from "@/components/AppShell/ThemeToggle";
@@ -14,6 +15,7 @@ interface AppHeaderProps {
 
 export function AppHeader({ navOpened, onNavToggle, onOpenTour }: AppHeaderProps) {
   const { data: me } = useMe();
+  const navigate = useNavigate();
   const appName = me?.app_name ?? "Another S3 Manager";
 
   return (
@@ -37,6 +39,18 @@ export function AppHeader({ navOpened, onNavToggle, onOpenTour }: AppHeaderProps
         </Link>
       </Group>
       <Group gap="sm">
+        {me?.is_admin && (
+          <Tooltip label="Admin Console">
+            <ActionIcon
+              variant="default"
+              size="lg"
+              onClick={() => navigate("/admin/users")}
+              aria-label="Open admin console"
+            >
+              <Shield size={18} />
+            </ActionIcon>
+          </Tooltip>
+        )}
         <HelpButton onClick={onOpenTour} />
         <ThemeToggle />
         <UserMenu />

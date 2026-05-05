@@ -1,0 +1,28 @@
+/* Round hit area for the collapsed sidebar role item — matches the avatar
+   diameter so hover/focus feels intentional instead of a full-width rectangle
+   floating around a small circle. */
+.collapsedItem {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 2px auto;
+  padding: 3px;
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+  /* width = avatar (~26px) + padding (3px * 2) = ~32px, so the round hit area
+     hugs the avatar instead of stretching across the navbar. */
+  width: fit-content;
+}
+
+.collapsedItem:hover {
+  background-color: light-dark(
+    var(--mantine-color-slate-2),
+    var(--mantine-color-slate-7)
+  );
+}
+
+.collapsedItem:focus-visible {
+  outline: 2px solid var(--mantine-color-amber-5);
+  outline-offset: 2px;
+}

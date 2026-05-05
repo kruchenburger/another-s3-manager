@@ -1,5 +1,5 @@
 import { ActionIcon, Stack, Text } from "@mantine/core";
-import { ChevronLeft, ChevronRight, HelpCircle } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { SidebarRoleItem } from "./SidebarRoleItem";
 import classes from "./Sidebar.module.css";
@@ -7,10 +7,9 @@ import classes from "./Sidebar.module.css";
 interface SidebarProps {
   collapsed: boolean;
   onToggleCollapsed: () => void;
-  onOpenTour: () => void;
 }
 
-export function Sidebar({ collapsed, onToggleCollapsed, onOpenTour }: SidebarProps) {
+export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
   const { data: me } = useMe();
   // For non-admins, allowed_roles is on the user record. For admins in Phase 4
   // we'll merge with all roles from /api/config.
@@ -36,16 +35,6 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenTour }: SidebarPro
         </Stack>
       </div>
       <div className={classes.footer}>
-        {!collapsed && (
-          <ActionIcon
-            variant="subtle"
-            onClick={onOpenTour}
-            aria-label="Open help tour"
-            title="Help"
-          >
-            <HelpCircle size={18} />
-          </ActionIcon>
-        )}
         <ActionIcon
           variant="subtle"
           onClick={onToggleCollapsed}
