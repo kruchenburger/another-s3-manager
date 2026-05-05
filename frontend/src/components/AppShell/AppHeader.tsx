@@ -1,4 +1,5 @@
 import { Burger, Group, Title } from "@mantine/core";
+import { Link } from "react-router-dom";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { BurgerLogo } from "@/components/BurgerLogo/BurgerLogo";
 import { ThemeToggle } from "@/components/AppShell/ThemeToggle";
@@ -19,8 +20,21 @@ export function AppHeader({ navOpened, onNavToggle, onOpenTour }: AppHeaderProps
     <Group h="100%" px="md" justify="space-between">
       <Group gap="sm">
         <Burger opened={navOpened} onClick={onNavToggle} hiddenFrom="sm" size="sm" />
-        <BurgerLogo size={32} mode="static" />
-        <Title order={4}>{appName}</Title>
+        <Link
+          to="/"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            textDecoration: "none",
+            color: "inherit",
+            cursor: "pointer",
+          }}
+          aria-label="Go to home"
+        >
+          <BurgerLogo size={32} mode="static" />
+          <Title order={4}>{appName}</Title>
+        </Link>
       </Group>
       <Group gap="sm">
         <HelpButton onClick={onOpenTour} />
