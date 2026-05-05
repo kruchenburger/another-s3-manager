@@ -1,5 +1,5 @@
 import { ActionIcon, Group, Tooltip } from "@mantine/core";
-import { Download, Eye, Link as LinkIcon, Trash2 } from "lucide-react";
+import { Download, Eye, Share2, Trash2 } from "lucide-react";
 
 export interface FileActionsProps {
   isDirectory: boolean;
@@ -33,9 +33,14 @@ export function FileActions({
         </Tooltip>
       )}
       {!isDirectory && onCopyUrl && (
-        <Tooltip label="Copy URL" withArrow>
+        <Tooltip
+          label="Copy shareable link (expires in 1h, no login required)"
+          withArrow
+          multiline
+          w={240}
+        >
           <ActionIcon variant="subtle" onClick={onCopyUrl} aria-label="Copy URL">
-            <LinkIcon size={16} />
+            <Share2 size={16} />
           </ActionIcon>
         </Tooltip>
       )}

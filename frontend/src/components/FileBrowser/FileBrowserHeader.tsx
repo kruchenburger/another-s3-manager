@@ -1,5 +1,5 @@
 import { Button, Group, SegmentedControl, Text, TextInput, Tooltip } from "@mantine/core";
-import { LayoutGrid, Link as LinkIcon, List as ListIcon, Search, Trash2, Upload } from "lucide-react";
+import { LayoutGrid, List as ListIcon, Search, Share2, Trash2, Upload } from "lucide-react";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import type { DisplayMode } from "@/hooks/useDisplayMode";
 
@@ -71,14 +71,21 @@ export function FileBrowserHeader({
         />
         {selectedCount > 0 && (
           <>
-            <Button
-              variant="light"
-              leftSection={<LinkIcon size={14} />}
-              onClick={onBulkCopyUrl}
-              size="sm"
+            <Tooltip
+              label="Copy shareable links (expire in 1h, no login required)"
+              withArrow
+              multiline
+              w={240}
             >
-              Copy URLs ({selectedCount})
-            </Button>
+              <Button
+                variant="light"
+                leftSection={<Share2 size={14} />}
+                onClick={onBulkCopyUrl}
+                size="sm"
+              >
+                Copy URLs ({selectedCount})
+              </Button>
+            </Tooltip>
             <Tooltip
               label="Deletion is disabled in the server config."
               withArrow
