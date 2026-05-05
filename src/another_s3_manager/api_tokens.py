@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Optional, Tuple
 
 from sqlalchemy import and_, func, or_, select, update
-from sqlalchemy.exc import IntegrityError
 
 from another_s3_manager.database import session_scope
 from another_s3_manager.models import ApiToken, User

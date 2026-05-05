@@ -803,9 +803,7 @@ async def update_my_token(
     except PermissionError:
         raise HTTPException(status_code=403, detail="You can only update your own tokens")
     except IntegrityError:
-        raise HTTPException(
-            status_code=409, detail=f"Token name '{payload.name}' already exists"
-        )
+        raise HTTPException(status_code=409, detail=f"Token name '{payload.name}' already exists")
     except ValueError as exc:
         msg = str(exc)
         if "no fields to update" in msg or "out of range" in msg:
@@ -909,9 +907,7 @@ async def admin_update_token(
             max_read_bytes=payload.max_read_bytes,
         )
     except IntegrityError:
-        raise HTTPException(
-            status_code=409, detail=f"Token name '{payload.name}' already exists for this user"
-        )
+        raise HTTPException(status_code=409, detail=f"Token name '{payload.name}' already exists for this user")
     except ValueError as exc:
         msg = str(exc)
         if "no fields to update" in msg or "out of range" in msg:
