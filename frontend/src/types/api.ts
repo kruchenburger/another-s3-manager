@@ -14,6 +14,12 @@ export interface MeResponse {
   app_name: string;
   app_version: string;
   allowed_roles: string[];
+  /**
+   * True when admin set `disable_deletion: true` in config.json OR the
+   * `DISABLE_DELETION` env var is set. UI uses this to disable delete controls
+   * before the user clicks (avoids the "click → 403" UX dead-end).
+   */
+  disable_deletion: boolean;
 }
 
 export interface AppInfo {
