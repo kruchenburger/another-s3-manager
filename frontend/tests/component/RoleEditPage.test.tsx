@@ -120,7 +120,7 @@ describe("RoleEditPage", () => {
 
     // RoleTypePicker friendly labels render
     expect(screen.getByText(/Other S3-compatible service/i)).toBeInTheDocument();
-    expect(screen.getByText(/AWS instance role/i)).toBeInTheDocument();
+    expect(screen.getByText(/AWS credential chain/i)).toBeInTheDocument();
 
     // All 5 radios are present and ALL disabled (type cannot change in edit mode)
     const radios = screen.getAllByRole("radio");

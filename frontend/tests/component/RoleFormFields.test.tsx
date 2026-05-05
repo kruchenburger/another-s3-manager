@@ -50,7 +50,7 @@ describe("RoleFormFields", () => {
       // Exact match avoids colliding with "Named AWS profile" radio label
       expect(screen.getByLabelText(/^Name\s*\*?$/)).toBeInTheDocument();
       // RoleTypePicker friendly label
-      expect(screen.getByText(/AWS instance role/i)).toBeInTheDocument();
+      expect(screen.getByText(/AWS credential chain/i)).toBeInTheDocument();
       // Credential / scope fields NOT present
       expect(screen.queryByLabelText(/^access key id/i)).not.toBeInTheDocument();
       expect(screen.queryByLabelText(/^secret access key/i)).not.toBeInTheDocument();
@@ -73,7 +73,7 @@ describe("RoleFormFields", () => {
       expect(screen.getByLabelText(/^description$/i)).toBeInTheDocument();
       // Name field NOT rendered (no TextInput labelled "Name") and no friendly picker
       expect(screen.queryByLabelText(/^name$/i)).not.toBeInTheDocument();
-      expect(screen.queryByText(/AWS instance role/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/AWS credential chain/i)).not.toBeInTheDocument();
     });
   });
 
@@ -81,7 +81,7 @@ describe("RoleFormFields", () => {
     it("shows everything: Name + RoleTypePicker + endpoint + SSL toggles + addressing style + creds + scope", () => {
       renderFields({ step: "all", initial: { type: "s3_compatible" } });
       expect(screen.getByLabelText(/^Name\s*\*?$/)).toBeInTheDocument();
-      expect(screen.getByText(/AWS instance role/i)).toBeInTheDocument();
+      expect(screen.getByText(/AWS credential chain/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/^endpoint url/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/^use ssl/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/^verify ssl/i)).toBeInTheDocument();

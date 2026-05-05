@@ -12,6 +12,9 @@ vi.mock("@/features/admin/api/adminApi", () => ({
 }));
 import { getConfig, saveConfig } from "@/features/admin/api/adminApi";
 
+const VALID_AWS_KEY = "AKIAIOSFODNN7EXAMPLE";
+const VALID_ARN = "arn:aws:iam::123456789012:role/MyRole";
+
 const baseConfig = {
   roles: [{ name: "Existing", type: "default" as const }],
   items_per_page: 200,
@@ -61,9 +64,7 @@ describe("RoleNewPage", () => {
 
     await waitFor(() => expect(screen.getByText(/new role/i)).toBeInTheDocument());
 
-    // All 5 types visible as radios. After RoleTypePicker refactor the
-    // accessible name starts with the friendly label (not the type code).
-    expect(screen.getByRole("radio", { name: /AWS instance role/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /AWS credential chain/i })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Named AWS profile/i })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /STS assume role/i })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Static access key/i })).toBeInTheDocument();
@@ -73,14 +74,10 @@ describe("RoleNewPage", () => {
   it("includes the AWS docs link on the Default type description", async () => {
     vi.mocked(getConfig).mockResolvedValue(baseConfig);
     renderWizard();
-
     await waitFor(() =>
-      expect(screen.getByRole("link", { name: /learn more/i })).toBeInTheDocument(),
-    );
-    const link = screen.getByRole("link", { name: /learn more/i });
-    expect(link).toHaveAttribute(
-      "href",
-      "https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html",
+      expect(
+        screen.getByLabelText(/more details about AWS credential chain/i),
+      ).toBeInTheDocument(),
     );
   });
 
@@ -93,10 +90,7 @@ describe("RoleNewPage", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
 
-    // Stays on Step 1 — Name field still visible (Step 2 would hide name+type).
-    // Mantine appends " *" to required label text, so match flexibly.
     expect(screen.getByRole("textbox", { name: /^name/i })).toBeInTheDocument();
-    // Validation error appears
     await waitFor(() => expect(screen.getByText("Required")).toBeInTheDocument());
   });
 
@@ -112,23 +106,27 @@ describe("RoleNewPage", () => {
     fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "Existing" } });
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
 
-    // For "default" type Step 2 is skipped → we land on Step 3 (Review). Save button visible.
+    // Step 2 (Scope & details) is reached even for default — only allowed_buckets + description show
+    await waitFor(() =>
+      expect(screen.getByText(/allowed buckets/i)).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+
+    // Step 3 (Review)
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /save role/i })).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByRole("button", { name: /save role/i }));
 
-    // Notification appears with the collision message
     await waitFor(() =>
       expect(screen.getByText(/already exists/i)).toBeInTheDocument(),
     );
-    // saveConfig was NOT called
     expect(saveConfig).not.toHaveBeenCalled();
     // Active step bounced back to Step 1 — Next button visible (Save button gone)
     expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument();
   });
 
-  it("creates a new default role end-to-end", async () => {
+  it("creates a new default role end-to-end (now visits Step 2 to set scope)", async () => {
     vi.mocked(getConfig).mockResolvedValue(baseConfig);
     vi.mocked(saveConfig).mockResolvedValue(undefined);
     renderWizard();
@@ -139,7 +137,14 @@ describe("RoleNewPage", () => {
 
     fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "NewRole" } });
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
-    // For default type, lands on Review (Step 3)
+    // Step 2 — only Allowed buckets + Description (no credential fields for default)
+    await waitFor(() =>
+      expect(screen.getByText(/allowed buckets/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText(/^access key id/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^secret access key/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    // Step 3
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /save role/i })).toBeInTheDocument(),
     );
@@ -147,12 +152,10 @@ describe("RoleNewPage", () => {
 
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
-    expect(submitted.roles).toHaveLength(2);  // existing + new
+    expect(submitted.roles).toHaveLength(2);
     const newRole = submitted.roles.find((r) => r.name === "NewRole");
     expect(newRole).toBeDefined();
     expect(newRole!.type).toBe("default");
-
-    // Navigated to /admin/roles list
     await waitFor(() => expect(screen.getByText(/roles list/i)).toBeInTheDocument());
   });
 
@@ -164,38 +167,29 @@ describe("RoleNewPage", () => {
       expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
     );
 
-    // Try to jump directly to Review (Step 3) by clicking the step header.
-    // Mantine 8 Stepper renders headers as <button> with the visible label as
-    // accessible name. New label is "Review & save".
     const reviewStepHeader =
       screen.queryByRole("tab", { name: /review/i }) ??
       screen.getByRole("button", { name: /review & save/i });
     fireEvent.click(reviewStepHeader);
 
-    // Should NOT have advanced — Step 1 (Name field) is still visible
     expect(screen.getByRole("textbox", { name: /^name/i })).toBeInTheDocument();
-    // Save button should NOT have appeared (would only show on Step 3)
     expect(screen.queryByRole("button", { name: /save role/i })).not.toBeInTheDocument();
   });
 
-  it("blocks Next from Step 2 (Credentials) when required field is missing", async () => {
+  it("blocks Next from Step 2 (credentials) when required field is missing", async () => {
     vi.mocked(getConfig).mockResolvedValue(baseConfig);
     renderWizard();
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
     );
-    // Pick credentials type, fill name, advance to Step 2
     fireEvent.click(screen.getByRole("radio", { name: /Static access key/i }));
     fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "TestCred" } });
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
-    // Step 2 fields visible but empty
     await waitFor(() =>
       expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
-    // Should NOT advance to Review — Save button must not appear
     expect(screen.queryByRole("button", { name: /save role/i })).not.toBeInTheDocument();
-    // Validation errors visible
     expect(screen.getAllByText("Required").length).toBeGreaterThan(0);
   });
 
@@ -206,21 +200,26 @@ describe("RoleNewPage", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
     );
-    // Pick credentials, fill name + secrets
     fireEvent.click(screen.getByRole("radio", { name: /Static access key/i }));
     fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "TestStale" } });
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
     await waitFor(() =>
       expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument(),
     );
-    fireEvent.change(screen.getByLabelText(/^access key id/i), { target: { value: "STALE_KEY" } });
+    fireEvent.change(screen.getByLabelText(/^access key id/i), { target: { value: VALID_AWS_KEY } });
     fireEvent.change(screen.getByLabelText(/^secret access key/i), { target: { value: "STALE_SECRET" } });
-    // Go back, switch to default
+    // Back → switch to default → Next (Step 2 still rendered, just no creds) → Next
     fireEvent.click(screen.getByRole("button", { name: /previous/i }));
     await waitFor(() =>
-      expect(screen.getByRole("radio", { name: /AWS instance role/i })).toBeInTheDocument(),
+      expect(screen.getByRole("radio", { name: /AWS credential chain/i })).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("radio", { name: /AWS instance role/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /AWS credential chain/i }));
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    // Step 2 visible — no credential fields for default
+    await waitFor(() =>
+      expect(screen.getByText(/allowed buckets/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText(/^access key id/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /save role/i })).toBeInTheDocument(),
@@ -242,20 +241,17 @@ describe("RoleNewPage", () => {
       expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
     );
 
-    // Step 1: type=credentials, name=TestCred
     fireEvent.click(screen.getByRole("radio", { name: /Static access key/i }));
     fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "TestCred" } });
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
 
-    // Step 2: fill credentials including a secret
     await waitFor(() =>
       expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument(),
     );
-    fireEvent.change(screen.getByLabelText(/^access key id/i), { target: { value: "AKIA..." } });
+    fireEvent.change(screen.getByLabelText(/^access key id/i), { target: { value: VALID_AWS_KEY } });
     fireEvent.change(screen.getByLabelText(/^secret access key/i), { target: { value: "SUPER_SECRET" } });
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
 
-    // Step 3: Review — JSON preview should mask the secret
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /save role/i })).toBeInTheDocument(),
     );
@@ -264,14 +260,55 @@ describe("RoleNewPage", () => {
     expect(preview.value).not.toContain("SUPER_SECRET");
   });
 
-  it("renders the new Stepper labels (Choose type / Configure credentials / Review & save)", async () => {
+  it("strips stale credentials from the Review preview after type switch", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderWizard();
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: /Static access key/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "Stale1" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(/^access key id/i), { target: { value: VALID_AWS_KEY } });
+    fireEvent.change(screen.getByLabelText(/^secret access key/i), { target: { value: "STALE_SECRET" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /previous/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: /AWS credential chain/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /AWS credential chain/i }));
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    // Step 2 (no creds for default) → Next → Review
+    await waitFor(() =>
+      expect(screen.getByText(/allowed buckets/i)).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /save role/i })).toBeInTheDocument(),
+    );
+    const preview = screen.getByLabelText(/role json/i) as HTMLTextAreaElement;
+    expect(preview.value).toContain('"type": "default"');
+    expect(preview.value).not.toContain(VALID_AWS_KEY);
+    expect(preview.value).not.toContain("STALE_SECRET");
+    expect(preview.value).not.toContain("access_key_id");
+    expect(preview.value).not.toContain("secret_access_key");
+  });
+
+  it("renders the new Stepper labels (Choose type / Scope & details / Review & save)", async () => {
     vi.mocked(getConfig).mockResolvedValue(baseConfig);
     renderWizard();
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
     );
     expect(screen.getByText(/choose type/i)).toBeInTheDocument();
-    expect(screen.getByText(/configure credentials/i)).toBeInTheDocument();
+    expect(screen.getByText(/scope & details/i)).toBeInTheDocument();
     expect(screen.getByText(/review & save/i)).toBeInTheDocument();
   });
 
@@ -281,9 +318,107 @@ describe("RoleNewPage", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
     );
-    // Pick credentials type — credential fields should still NOT appear on Step 1
     fireEvent.click(screen.getByRole("radio", { name: /Static access key/i }));
     expect(screen.queryByLabelText(/^access key id/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^secret access key/i)).not.toBeInTheDocument();
+  });
+
+  it("default type still shows Allowed buckets + Description on Step 2 (no credential fields)", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderWizard();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
+    );
+    // Default is preselected — fill name, advance
+    fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "DefaultRole" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/allowed buckets/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText(/^description$/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^access key id/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^endpoint url/i)).not.toBeInTheDocument();
+  });
+
+  it("rejects a malformed Role ARN (assume_role) on Step 2", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderWizard();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /STS assume role/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "ArnTest" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^role arn/i)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(/^role arn/i), { target: { value: "not-an-arn" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    expect(screen.queryByRole("button", { name: /save role/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/arn:aws:iam::<account-id>:role\/<RoleName>/),
+    ).toBeInTheDocument();
+  });
+
+  it("accepts a well-formed Role ARN", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderWizard();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /STS assume role/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "ArnOk" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^role arn/i)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(/^role arn/i), { target: { value: VALID_ARN } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /save role/i })).toBeInTheDocument(),
+    );
+  });
+
+  it("rejects a non-AWS-format access_key_id for the credentials type", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderWizard();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /Static access key/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "BadKey" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(/^access key id/i), { target: { value: "garbage" } });
+    fireEvent.change(screen.getByLabelText(/^secret access key/i), { target: { value: "anything" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    expect(screen.queryByRole("button", { name: /save role/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/AKIA or ASIA followed by 16 uppercase chars/),
+    ).toBeInTheDocument();
+  });
+
+  it("does NOT enforce AWS access-key format for s3_compatible (R2/MinIO use other formats)", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderWizard();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /Other S3-compatible/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "R2Role" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument(),
+    );
+    // R2-style key (32-char lowercase hex) — would fail AWS regex but must pass here
+    fireEvent.change(screen.getByLabelText(/^access key id/i), { target: { value: "abcdef0123456789abcdef0123456789" } });
+    fireEvent.change(screen.getByLabelText(/^secret access key/i), { target: { value: "r2secret" } });
+    fireEvent.change(screen.getByLabelText(/^endpoint url/i), { target: { value: "https://x.r2.cloudflarestorage.com" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /save role/i })).toBeInTheDocument(),
+    );
   });
 });

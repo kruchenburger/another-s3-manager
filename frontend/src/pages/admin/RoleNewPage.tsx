@@ -34,15 +34,27 @@ export function RoleNewPage() {
         values.type === "profile" && (!v || v.trim().length === 0)
           ? "Required for profile type"
           : null,
-      role_arn: (v, values) =>
-        values.type === "assume_role" && (!v || v.trim().length === 0)
-          ? "Required for assume_role type"
-          : null,
-      access_key_id: (v, values) =>
-        (values.type === "credentials" || values.type === "s3_compatible") &&
-        (!v || v.trim().length === 0)
-          ? "Required"
-          : null,
+      role_arn: (v, values) => {
+        if (values.type !== "assume_role") return null;
+        if (!v || v.trim().length === 0) return "Required for assume_role type";
+        // IAM Role ARN: arn:aws:iam::<12-digit-account>:role/<RoleName>
+        // Allows aws-cn / aws-us-gov partitions and role-paths.
+        if (!/^arn:aws[a-z-]*:iam::\d{12}:role\/[\w+=,.@/-]+$/.test(v.trim())) {
+          return "Must look like arn:aws:iam::<account-id>:role/<RoleName>";
+        }
+        return null;
+      },
+      access_key_id: (v, values) => {
+        const required = values.type === "credentials" || values.type === "s3_compatible";
+        if (!required) return null;
+        if (!v || v.trim().length === 0) return "Required";
+        // Format check applies only to plain AWS credentials. S3-compatible
+        // services (R2, MinIO, Wasabi…) use arbitrary key formats.
+        if (values.type === "credentials" && !/^(AKIA|ASIA)[A-Z0-9]{16}$/.test(v.trim())) {
+          return "AWS access key IDs start with AKIA or ASIA followed by 16 uppercase chars";
+        }
+        return null;
+      },
       secret_access_key: (v, values) =>
         (values.type === "credentials" || values.type === "s3_compatible") &&
         (!v || v.trim().length === 0)
@@ -62,13 +74,13 @@ export function RoleNewPage() {
     if (active === 0) {
       const nameResult = form.validateField("name");
       if (nameResult.hasError) return;
-      // For "default" type, skip step 2 (no credentials needed)
-      setActive(form.values.type === "default" ? 2 : 1);
+      setActive(1);
       return;
     }
     if (active === 1) {
-      // Validate credential fields before reaching Review (server returns 400
-      // if anything required for the chosen type is missing — fail-fast in UI).
+      // Validate credential / scope fields before reaching Review (server
+      // returns 400 if anything required for the chosen type is missing —
+      // fail-fast in UI).
       const result = form.validate();
       if (result.hasErrors) return;
     }
@@ -76,11 +88,6 @@ export function RoleNewPage() {
   };
 
   const goPrev = (): void => {
-    // Mirror the skip in Step 0→2 for "default" type
-    if (active === 2 && form.values.type === "default") {
-      setActive(0);
-      return;
-    }
     setActive((a) => Math.max(a - 1, 0));
   };
 
@@ -109,8 +116,11 @@ export function RoleNewPage() {
     );
   };
 
-  // Build the preview JSON with secret masked
-  const previewRole = { ...form.values };
+  // Build the preview JSON with secret masked. Strip fields not applicable to
+  // the chosen type — otherwise switching from credentials → default would
+  // leave stale `access_key_id` / `secret_access_key` in the preview, which
+  // doesn't match what `onSave` actually persists (it strips them too).
+  const previewRole = stripIrrelevantFields({ ...form.values });
   if (previewRole.secret_access_key) {
     previewRole.secret_access_key = REDACTED;
   }
@@ -130,7 +140,7 @@ export function RoleNewPage() {
             <RoleFormFields form={form} mode="create" step="type" />
           </Stack>
         </Stepper.Step>
-        <Stepper.Step label="Configure credentials" description="Type-specific fields">
+        <Stepper.Step label="Scope & details" description="Buckets, credentials, description">
           <Stack gap="md" mt="md">
             <RoleFormFields form={form} mode="create" step="credentials" />
           </Stack>
