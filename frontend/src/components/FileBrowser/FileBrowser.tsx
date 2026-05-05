@@ -5,9 +5,11 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useFiles } from "@/features/files/hooks/useFiles";
 import { useDelete } from "@/features/files/hooks/useDelete";
 import { useUpload } from "@/features/files/hooks/useUpload";
-import { buildDownloadUrl } from "@/features/files/api/filesApi";
+import { buildDownloadUrl, getPresignedDownloadUrl } from "@/features/files/api/filesApi";
+import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { joinPath, decodePath } from "@/utils/pathUtils";
+import { formatTimeOfDay } from "@/utils/formatDate";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
@@ -28,6 +30,8 @@ export function FileBrowser() {
   const deleteMutation = useDelete();
   const uploadMutation = useUpload();
   const { mode, setMode } = useDisplayMode(roleId, bucket);
+  const me = useMe();
+  const disableDeletion = me.data?.disable_deletion ?? false;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
@@ -57,24 +61,54 @@ export function FileBrowser() {
 
   const handleCopyUrl = async (name: string) => {
     const fullPath = joinPath(pathFromUrl, name);
-    const url = window.location.origin + buildDownloadUrl(bucket, roleId, fullPath);
     try {
+      const { url, expires_at } = await getPresignedDownloadUrl(
+        bucket,
+        roleId,
+        fullPath,
+      );
       await navigator.clipboard.writeText(url);
-      notifications.show({ color: "green", message: `Copied URL for ${name}` });
-    } catch {
-      notifications.show({ color: "red", message: "Failed to copy URL" });
+      notifications.show({
+        color: "green",
+        title: "Presigned URL copied",
+        message: `${name} — anyone with this link can download it until ${formatTimeOfDay(expires_at)} (expires in 1 hour). No login needed.`,
+        autoClose: 6000,
+      });
+    } catch (e) {
+      notifications.show({
+        color: "red",
+        title: "Copy failed",
+        message: e instanceof Error ? e.message : "unknown error",
+      });
     }
   };
 
   const handleBulkCopyUrl = async () => {
-    const urls = Array.from(selected)
-      .map((name) => window.location.origin + buildDownloadUrl(bucket, roleId, joinPath(pathFromUrl, name)))
-      .join("\n");
+    const names = Array.from(selected);
     try {
+      const responses = await Promise.all(
+        names.map((name) =>
+          getPresignedDownloadUrl(bucket, roleId, joinPath(pathFromUrl, name)),
+        ),
+      );
+      const urls = responses.map((r) => r.url).join("\n");
       await navigator.clipboard.writeText(urls);
-      notifications.show({ color: "green", message: `Copied ${selected.size} URLs` });
-    } catch {
-      notifications.show({ color: "red", message: "Failed to copy URLs" });
+      // All URLs in a bulk copy share the same backend timestamp (same request batch).
+      const expiry = responses[0]?.expires_at;
+      notifications.show({
+        color: "green",
+        title: `${responses.length} presigned URLs copied`,
+        message: expiry
+          ? `Anyone with these links can download until ${formatTimeOfDay(expiry)} (expires in 1 hour). No login needed.`
+          : "Anyone with these links can download for 1 hour. No login needed.",
+        autoClose: 6000,
+      });
+    } catch (e) {
+      notifications.show({
+        color: "red",
+        title: "Copy failed",
+        message: e instanceof Error ? e.message : "unknown error",
+      });
     }
   };
 
@@ -240,6 +274,8 @@ export function FileBrowser() {
         onBulkDelete={() => requestDelete(Array.from(selected))}
         onBulkCopyUrl={handleBulkCopyUrl}
         onUploadClick={handleUploadClick}
+        disableDeletion={disableDeletion}
+        objectCount={data?.files?.length ?? 0}
       />
       <input
         type="file"
@@ -273,6 +309,9 @@ export function FileBrowser() {
             onCopyUrl={handleCopyUrl}
             onPreview={handlePreview}
             onDelete={(name) => requestDelete([name])}
+            bucket={bucket}
+            roleId={roleId}
+            path={pathFromUrl}
           />
         )}
       </Stack>

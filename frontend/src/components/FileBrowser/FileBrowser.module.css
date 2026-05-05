@@ -32,3 +32,12 @@
     opacity: 1;
   }
 }
+
+/* Grid-card thumbnail for <img>/<video>. Shared between image and video so the
+   poster frame renders at exactly the same size as a static thumbnail. */
+.thumbnail {
+  max-width: 48px;
+  max-height: 48px;
+  object-fit: cover;
+  border-radius: 4px;
+}

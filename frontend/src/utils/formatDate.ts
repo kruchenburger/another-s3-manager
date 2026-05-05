@@ -47,3 +47,13 @@ export function formatAbsolute(iso: string | null | undefined): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+// Time-of-day only ("02:14 PM" / "14:14"), locale-aware. Used for short-window
+// expiry hints — the date is implicit ("expires today within the hour"), so
+// HH:MM is the most useful detail. For full timestamps use formatAbsolute().
+export function formatTimeOfDay(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}

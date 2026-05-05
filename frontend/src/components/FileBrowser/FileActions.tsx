@@ -1,5 +1,5 @@
 import { ActionIcon, Group, Tooltip } from "@mantine/core";
-import { Download, Eye, Link as LinkIcon, Trash2 } from "lucide-react";
+import { Download, Eye, Share2, Trash2 } from "lucide-react";
 
 export interface FileActionsProps {
   isDirectory: boolean;
@@ -8,7 +8,11 @@ export interface FileActionsProps {
   onCopyUrl?: () => void;
   onPreview?: () => void;
   onDelete: () => void;
+  /** When true, Delete is rendered disabled with a config-aware tooltip. */
+  disabled?: boolean;
 }
+
+const DISABLED_DELETE_LABEL = "Deletion is disabled in the server config.";
 
 export function FileActions({
   isDirectory,
@@ -17,6 +21,7 @@ export function FileActions({
   onCopyUrl,
   onPreview,
   onDelete,
+  disabled = false,
 }: FileActionsProps) {
   return (
     <Group gap={4} wrap="nowrap">
@@ -28,9 +33,14 @@ export function FileActions({
         </Tooltip>
       )}
       {!isDirectory && onCopyUrl && (
-        <Tooltip label="Copy URL" withArrow>
+        <Tooltip
+          label="Copy shareable link (expires in 1h, no login required)"
+          withArrow
+          multiline
+          w={240}
+        >
           <ActionIcon variant="subtle" onClick={onCopyUrl} aria-label="Copy URL">
-            <LinkIcon size={16} />
+            <Share2 size={16} />
           </ActionIcon>
         </Tooltip>
       )}
@@ -41,8 +51,15 @@ export function FileActions({
           </ActionIcon>
         </Tooltip>
       )}
-      <Tooltip label="Delete" withArrow>
-        <ActionIcon variant="subtle" color="red" onClick={onDelete} aria-label="Delete">
+      <Tooltip label={disabled ? DISABLED_DELETE_LABEL : "Delete"} withArrow>
+        <ActionIcon
+          variant="subtle"
+          color="red"
+          onClick={onDelete}
+          aria-label="Delete"
+          disabled={disabled}
+          data-disabled-reason={disabled ? DISABLED_DELETE_LABEL : undefined}
+        >
           <Trash2 size={16} />
         </ActionIcon>
       </Tooltip>

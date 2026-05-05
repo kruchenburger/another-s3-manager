@@ -41,3 +41,28 @@ export function buildDownloadUrl(bucket: string, role: string, path: string): st
   const params = new URLSearchParams({ role, path });
   return `/api/buckets/${encodeURIComponent(bucket)}/download?${params}`;
 }
+
+export interface PresignedUrlResponse {
+  url: string;
+  /** ISO8601 UTC timestamp when the URL stops working. */
+  expires_at: string;
+}
+
+/**
+ * Fetch a short-lived (1h) presigned GET URL for a single object.
+ *
+ * Use this for shareable links and for <img>/<video> tags that can't carry
+ * the auth cookie reliably (third-party CDNs, copy-to-clipboard flows). For
+ * the regular Download button (browser-triggered <a href>), keep using
+ * {@link buildDownloadUrl}.
+ */
+export async function getPresignedDownloadUrl(
+  bucket: string,
+  role: string,
+  path: string,
+): Promise<PresignedUrlResponse> {
+  const params = new URLSearchParams({ role, path });
+  return apiRequest<PresignedUrlResponse>(
+    `/api/buckets/${encodeURIComponent(bucket)}/presigned?${params}`,
+  );
+}

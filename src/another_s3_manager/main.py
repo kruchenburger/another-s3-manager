@@ -73,6 +73,9 @@ from another_s3_manager.metrics import (
     http_requests_total,
 )
 from another_s3_manager.s3_client import clear_s3_clients_cache, execute_with_s3_retry
+from another_s3_manager.s3_client import (
+    generate_presigned_url_for_role as s3_generate_presigned_url_for_role,
+)
 from another_s3_manager.users import (
     get_users_for_admin,
     load_bans,
@@ -458,12 +461,18 @@ async def logout(response: Response):
 async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Get current user information"""
     is_admin = current_user.get("is_admin", False)
+    config = load_config()
     # Admins can access every role in the config — surface the full list so the
     # React sidebar matches admin permissions without an extra /api/config call.
     if is_admin:
-        allowed_roles = [r["name"] for r in load_config().get("roles", []) if r.get("name")]
+        allowed_roles = [r["name"] for r in config.get("roles", []) if r.get("name")]
     else:
         allowed_roles = current_user.get("allowed_roles", [])
+    # disable_deletion: env var OR config (env wins). Mirrors the same combined
+    # check used in /api/config so the two endpoints don't disagree.
+    disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
+    disable_deletion_config = config.get("disable_deletion", False)
+    disable_deletion = disable_deletion_env or disable_deletion_config
     return {
         "username": current_user.get("username"),
         "is_admin": is_admin,
@@ -471,6 +480,7 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
         "tour_seen_v1": current_user.get("tour_seen_v1", False),  # Return onboarding tour seen flag
         "allowed_roles": allowed_roles,
+        "disable_deletion": disable_deletion,
         "app_name": APP_NAME,  # Return app name for client
         "app_version": APP_VERSION,
     }
@@ -1965,6 +1975,68 @@ async def download_file(
     except Exception as e:
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to download file: {error_message}")
+
+
+@app.get("/api/buckets/{bucket_name}/presigned")
+async def get_presigned_url(
+    bucket_name: str,
+    path: str = Query(..., description="Object key to sign"),
+    role: str = Query(..., description="Role name to use (required)"),
+    op: str = Query("get", description="Presign operation; only 'get' is supported"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Return a short-lived presigned URL for sharing or browser-side display.
+
+    The signed URL embeds the role's credentials and is valid for 1 hour.
+    Use this for Copy URL flows and for `<img>/<video>` srcs that can't
+    carry the auth cookie reliably. The helper auto-applies a UTF-8 charset
+    override for known text extensions so Cyrillic / CJK / emoji content
+    renders correctly when the link is opened in a new tab.
+
+    `role` is required (the underlying `s3_client._for_role` helper signature
+    is `role: str`, not Optional). The frontend always passes it explicitly.
+    Direct API callers that omit it get 422 from FastAPI's query validation.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    if op != "get":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported op: {op!r} (only 'get' is supported)",
+        )
+
+    try:
+        bucket_name = sanitize_bucket_name(bucket_name)
+        path = sanitize_path(path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Validate the role belongs to the user; on success, validated_role is the
+    # canonical role string the helper expects.
+    validated_role = validate_role_access(role, current_user) or role
+
+    expires_in = 3600
+    try:
+        url = s3_generate_presigned_url_for_role(
+            validated_role,
+            bucket_name,
+            path,
+            current_user,
+            expires_in=expires_in,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (ClientError, BotoCoreError) as e:
+        # STS assume_role failure / credential refresh failure / invalid bucket
+        # config — produce a clean error rather than a bare 500 with botocore repr.
+        raise HTTPException(status_code=500, detail=format_boto_error(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=format_boto_error(e))
+
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+    return {"url": url, "expires_at": expires_at}
 
 
 @app.delete("/api/buckets/{bucket_name}/files")

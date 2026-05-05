@@ -978,6 +978,100 @@ def read_object_range_for_role(
     return execute_with_s3_retry(validated_role, "get", do_get_range)
 
 
+# Extensions for which we force `Content-Type: <type>; charset=utf-8` on the
+# presigned URL. S3 typically returns these as `text/plain` or
+# `application/octet-stream` without a charset — Chrome/Safari then guess
+# Latin-1 and Cyrillic / CJK / emoji renders as mojibake when opened in a
+# new tab. Overriding the response Content-Type via the presigned URL
+# (boto3 `ResponseContentType` param) fixes the rendering without re-uploading
+# the object.
+#
+# `.html`/`.htm` and `.svg` are INTENTIONALLY EXCLUDED — overriding their
+# Content-Type to a renderable `text/html` / `image/svg+xml` would let an
+# authenticated user upload a malicious HTML/SVG file and share its presigned
+# URL as a phishing page on a "trusted" S3 origin. They keep S3's stored
+# Content-Type (typically octet-stream after AppFlow → browser downloads).
+# Likewise, `.js`/`.css` are excluded — no reason to force them inline.
+_TEXT_EXTENSION_TO_MIME = {
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".csv": "text/csv",
+    ".tsv": "text/tab-separated-values",
+    ".log": "text/plain",
+    ".json": "application/json",
+    ".yaml": "text/yaml",
+    ".yml": "text/yaml",
+    ".xml": "application/xml",
+    ".py": "text/x-python",
+    ".sh": "application/x-sh",
+    ".sql": "application/sql",
+    ".toml": "application/toml",
+    ".ini": "text/plain",
+    ".conf": "text/plain",
+    ".srt": "text/plain",
+    ".vtt": "text/vtt",
+}
+
+
+def _utf8_text_content_type_for(path: str) -> Optional[str]:
+    """Return `<mime>; charset=utf-8` for known text extensions, else None.
+
+    Inline-displayed text files served from S3 without a charset render as
+    mojibake for non-ASCII content (Cyrillic, CJK, emoji) because the browser
+    falls back to Latin-1. We attach an explicit charset only for extensions
+    we're confident are UTF-8 text — everything else keeps S3's stored
+    Content-Type so binary downloads (zip, pdf, png, …) aren't broken.
+    """
+    lower = path.lower()
+    for ext, mime in _TEXT_EXTENSION_TO_MIME.items():
+        if lower.endswith(ext):
+            return f"{mime}; charset=utf-8"
+    return None
+
+
+def generate_presigned_url_for_role(
+    role: str,
+    bucket: str,
+    path: str,
+    user_dict: Dict[str, Any],
+    expires_in: int = 3600,
+) -> str:
+    """
+    Generate a boto3 presigned GET URL for an object in `bucket` at `path`.
+
+    The URL is signed with the role's credentials and is valid for `expires_in`
+    seconds (default 1 hour). Anyone holding the URL can fetch the object until
+    it expires — no session cookie required. Use for shareable links and for
+    browser-side <img>/<video> tags that can't carry the auth cookie reliably
+    (e.g. third-party CDNs, copy-to-clipboard flows).
+
+    For text extensions in `_TEXT_EXTENSION_TO_MIME`, the URL embeds a
+    `ResponseContentType: <mime>; charset=utf-8` override so the browser
+    renders Cyrillic / CJK / emoji correctly when the link is opened in a new
+    tab. Without this, S3 typically serves text files without a charset and
+    the browser guesses wrong.
+
+    Raises PermissionError on role/bucket access violation.
+    """
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    params: Dict[str, Any] = {"Bucket": bucket, "Key": path}
+    utf8_content_type = _utf8_text_content_type_for(path)
+    if utf8_content_type is not None:
+        params["ResponseContentType"] = utf8_content_type
+
+    def do_presign(s3_client):
+        return s3_client.generate_presigned_url(
+            "get_object",
+            Params=params,
+            ExpiresIn=expires_in,
+        )
+
+    return execute_with_s3_retry(validated_role, "get", do_presign)
+
+
 def put_object_for_role(
     role: str,
     bucket: str,

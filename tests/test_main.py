@@ -850,6 +850,42 @@ def test_me_admin_with_empty_config_returns_empty_roles(app_client, mocker):
     assert body["allowed_roles"] == []
 
 
+def test_me_includes_disable_deletion_from_config(app_client, mocker):
+    """/api/me must surface disable_deletion so the React UI can disable Delete controls."""
+    mocker.patch(
+        "another_s3_manager.main.load_config",
+        return_value={"roles": [], "disable_deletion": True},
+    )
+    _, _ = login(app_client)
+
+    me_response = app_client.get("/api/me")
+    assert me_response.status_code == status.HTTP_200_OK
+    assert me_response.json()["disable_deletion"] is True
+
+
+def test_me_includes_disable_deletion_from_env(app_client, mocker, monkeypatch):
+    """DISABLE_DELETION env var should win over config (matches /api/config behaviour)."""
+    mocker.patch(
+        "another_s3_manager.main.load_config",
+        return_value={"roles": [], "disable_deletion": False},
+    )
+    monkeypatch.setenv("DISABLE_DELETION", "true")
+    _, _ = login(app_client)
+
+    me_response = app_client.get("/api/me")
+    assert me_response.status_code == status.HTTP_200_OK
+    assert me_response.json()["disable_deletion"] is True
+
+
+def test_me_disable_deletion_defaults_false(app_client, mocker, monkeypatch):
+    """Neither env nor config set → disable_deletion is False."""
+    mocker.patch("another_s3_manager.main.load_config", return_value={"roles": []})
+    monkeypatch.delenv("DISABLE_DELETION", raising=False)
+    _, _ = login(app_client)
+
+    assert app_client.get("/api/me").json()["disable_deletion"] is False
+
+
 def test_delete_user_cannot_delete_self(app_client):
     _, headers = login(app_client)
     response = app_client.delete("/api/admin/users/admin", headers=headers)
@@ -1669,3 +1705,122 @@ def test_mcp_kill_switch_allows_when_enabled(app_client):
     resp = app_client.get("/mcp/anything")
     # MCP routing may return 404/405/etc. — any status except 503 is acceptable.
     assert resp.status_code != 503
+
+
+# --- /api/buckets/{b}/presigned ---
+
+
+def test_presigned_endpoint_happy_path(app_client, mocker):
+    """Allowed role + bucket + existing path returns 200 with url + expires_at."""
+    _, _ = login(app_client)
+
+    mocker.patch(
+        "another_s3_manager.main.validate_role_access",
+        return_value="default-role",
+    )
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        return_value="https://bucket.s3.amazonaws.com/file.txt?X-Amz-Signature=abc",
+    )
+
+    response = app_client.get(
+        "/api/buckets/my-bucket/presigned",
+        params={"role": "default-role", "path": "file.txt"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["url"].startswith("https://")
+    assert "X-Amz-Signature" in body["url"]
+    assert "expires_at" in body
+    # Parses as ISO8601 with timezone info
+    from datetime import datetime
+
+    datetime.fromisoformat(body["expires_at"].replace("Z", "+00:00"))
+
+
+def test_presigned_endpoint_permission_denied(app_client, mocker):
+    """PermissionError from helper → 403."""
+    _, _ = login(app_client)
+
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="r")
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        side_effect=PermissionError("Bucket not allowed for role"),
+    )
+
+    response = app_client.get(
+        "/api/buckets/forbidden/presigned",
+        params={"role": "r", "path": "x.txt"},
+    )
+    assert response.status_code == 403
+
+
+def test_presigned_endpoint_not_found(app_client, mocker):
+    """FileNotFoundError → 404."""
+    _, _ = login(app_client)
+
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="r")
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        side_effect=FileNotFoundError("not there"),
+    )
+
+    response = app_client.get(
+        "/api/buckets/some-bucket/presigned",
+        params={"role": "r", "path": "missing.txt"},
+    )
+    assert response.status_code == 404
+
+
+def test_presigned_endpoint_invalid_op(app_client):
+    """Only op=get supported in v1."""
+    _, _ = login(app_client)
+    response = app_client.get(
+        "/api/buckets/some-bucket/presigned",
+        params={"role": "r", "path": "x.txt", "op": "put"},
+    )
+    assert response.status_code == 400
+
+
+def test_presigned_endpoint_requires_auth(app_client):
+    """Anonymous request → 401."""
+    app_client.cookies.clear()
+    response = app_client.get(
+        "/api/buckets/some-bucket/presigned",
+        params={"role": "r", "path": "x.txt"},
+    )
+    assert response.status_code == 401
+
+
+def test_presigned_endpoint_requires_role_param(app_client):
+    """Omitting `role` query param → 422 (FastAPI validation)."""
+    _, _ = login(app_client)
+    response = app_client.get(
+        "/api/buckets/some-bucket/presigned",
+        params={"path": "x.txt"},
+    )
+    assert response.status_code == 422
+
+
+def test_presigned_endpoint_boto_error_returns_500(app_client, mocker):
+    """ClientError from helper (e.g. STS assume_role failure) → 500 with formatted message."""
+    _, _ = login(app_client)
+
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="r")
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        side_effect=ClientError(
+            {"Error": {"Code": "InvalidClientTokenId", "Message": "STS token expired"}},
+            "AssumeRole",
+        ),
+    )
+
+    response = app_client.get(
+        "/api/buckets/some-bucket/presigned",
+        params={"role": "r", "path": "x.txt"},
+    )
+    assert response.status_code == 500
+    # format_boto_error produces a user-friendly message rather than raw repr
+    body = response.json()
+    assert "detail" in body
+    assert isinstance(body["detail"], str)

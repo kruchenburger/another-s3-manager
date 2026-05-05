@@ -11,6 +11,10 @@ interface FileGridProps {
   onCopyUrl: (name: string) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
+  // Forwarded to FileCard so each card can fetch its own presigned thumbnail URL.
+  bucket: string;
+  roleId: string;
+  path: string;
 }
 
 export function FileGrid(props: FileGridProps) {
@@ -28,6 +32,9 @@ export function FileGrid(props: FileGridProps) {
           onCopyUrl={props.onCopyUrl}
           onPreview={props.onPreview}
           onDelete={props.onDelete}
+          bucket={props.bucket}
+          roleId={props.roleId}
+          path={props.path}
         />
       ))}
     </SimpleGrid>

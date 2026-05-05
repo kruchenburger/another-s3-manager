@@ -2,6 +2,7 @@ import { Checkbox, Table, Text } from "@mantine/core";
 import { File as FileIcon, Folder } from "lucide-react";
 import { formatBytes } from "@/utils/formatBytes";
 import { formatDate } from "@/utils/formatDate";
+import { useMe } from "@/features/auth/hooks/useMe";
 import { FileActions } from "./FileActions";
 import classes from "./FileBrowser.module.css";
 import type { FileEntry } from "@/types/api";
@@ -31,6 +32,8 @@ export function FileRow({
   onPreview,
   onDelete,
 }: FileRowProps) {
+  const me = useMe();
+  const disableDeletion = me.data?.disable_deletion ?? false;
   const canPreview = !file.is_directory && PREVIEWABLE_RE.test(file.name);
 
   return (
@@ -76,6 +79,7 @@ export function FileRow({
           onCopyUrl={() => onCopyUrl(file.name)}
           onPreview={() => onPreview(file.name)}
           onDelete={() => onDelete(file.name)}
+          disabled={disableDeletion}
         />
       </Table.Td>
     </Table.Tr>
