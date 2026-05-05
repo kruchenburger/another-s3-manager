@@ -164,3 +164,14 @@ export interface MyTokensResponse {
 export interface AdminTokensResponse {
   tokens: ApiTokenWithOwner[];
 }
+
+// Phase 6a-1: PUT /api/me/tokens/{id} and PUT /api/admin/tokens/{id} bodies.
+// All fields optional; backend rejects empty bodies with 400.
+export interface UpdateTokenPayload {
+  name?: string;
+  is_read_only?: boolean;
+  max_read_bytes?: number;
+}
+
+// Admin uses the same shape as self-serve. Aliased for call-site clarity.
+export type AdminUpdateTokenPayload = UpdateTokenPayload;
