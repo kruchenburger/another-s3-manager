@@ -125,11 +125,15 @@ test.describe("API tokens self-serve flow", () => {
       .getByRole("button", { name: /issue token on behalf/i })
       .click();
 
-    // CreateTokenModal opens (separate dialog). Fill name and submit.
+    // CreateTokenModal opens (separate dialog). Fill name + pick the user
+    // (Mantine Select doesn't auto-select even when availableUsers has 1
+    // entry — the form validator requires user_id to be non-null) + submit.
     const onBehalfName = `e2e-on-behalf-${Date.now()}`;
     const createDialog = page
       .getByRole("dialog")
       .filter({ hasText: /create mcp token/i });
+    await createDialog.getByLabel("User").click();
+    await page.getByRole("option", { name: ADMIN_USER }).click();
     await createDialog.getByLabel("Name").fill(onBehalfName);
     await createDialog.getByRole("button", { name: /^create$/i }).click();
 
@@ -147,20 +151,19 @@ test.describe("API tokens self-serve flow", () => {
       .getByRole("button", { name: /i copied the token/i })
       .click();
 
-    // Cleanup: the new token now lives under the admin user. Revoke it via
-    // the admin tokens page (the user drawer scopes to the original user we
-    // opened, but the on-behalf payload's user_id may differ depending on
-    // which row was first).
+    // Cleanup: revoke the on-behalf token via the admin tokens page. The token
+    // MUST be there since we just created it — assert visibility (auto-waits)
+    // rather than a non-awaiting `isVisible()` conditional that could silently
+    // skip cleanup and leak the token.
     await page.goto("/v2/admin/api-tokens");
     const newRow = page.locator("tr").filter({ hasText: onBehalfName });
-    if (await newRow.isVisible()) {
-      await newRow
-        .getByRole("button", { name: `Revoke ${onBehalfName}` })
-        .click();
-      await page
-        .getByRole("dialog")
-        .getByRole("button", { name: /^delete$/i })
-        .click();
-    }
+    await expect(newRow).toBeVisible({ timeout: 5_000 });
+    await newRow
+      .getByRole("button", { name: `Revoke ${onBehalfName}` })
+      .click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /^delete$/i })
+      .click();
   });
 });
