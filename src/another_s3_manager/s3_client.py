@@ -978,6 +978,37 @@ def read_object_range_for_role(
     return execute_with_s3_retry(validated_role, "get", do_get_range)
 
 
+def generate_presigned_url_for_role(
+    role: str,
+    bucket: str,
+    path: str,
+    user_dict: Dict[str, Any],
+    expires_in: int = 3600,
+) -> str:
+    """
+    Generate a boto3 presigned GET URL for an object in `bucket` at `path`.
+
+    The URL is signed with the role's credentials and is valid for `expires_in`
+    seconds (default 1 hour). Anyone holding the URL can fetch the object until
+    it expires — no session cookie required. Use for shareable links and for
+    browser-side <img>/<video> tags that can't carry the auth cookie reliably
+    (e.g. third-party CDNs, copy-to-clipboard flows).
+
+    Raises PermissionError on role/bucket access violation.
+    """
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_presign(s3_client):
+        return s3_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": path},
+            ExpiresIn=expires_in,
+        )
+
+    return execute_with_s3_retry(validated_role, "get", do_presign)
+
+
 def put_object_for_role(
     role: str,
     bucket: str,
