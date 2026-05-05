@@ -85,7 +85,7 @@ export function FileCard({
           />
         </div>
       </Group>
-      <Group justify="center" mb="sm" style={{ minHeight: 48 }}>
+      <Group justify="center" mb="sm" mih={48}>
         {file.is_directory ? (
           <Folder size={48} style={{ color: "var(--mantine-color-amber-6)" }} />
         ) : kind === "image" && presigned.data?.url && !mediaError ? (
@@ -95,7 +95,7 @@ export function FileCard({
             loading="lazy"
             decoding="async"
             onError={() => setMediaError(true)}
-            style={{ maxWidth: 48, maxHeight: 48, objectFit: "cover", borderRadius: 4 }}
+            className={classes.thumbnail}
           />
         ) : kind === "video" && presigned.data?.url && !mediaError ? (
           <video
@@ -104,7 +104,7 @@ export function FileCard({
             muted
             playsInline
             onError={() => setMediaError(true)}
-            style={{ maxWidth: 48, maxHeight: 48, objectFit: "cover", borderRadius: 4 }}
+            className={classes.thumbnail}
           />
         ) : (
           <FileIcon size={48} style={{ color: "var(--mantine-color-slate-5)" }} />

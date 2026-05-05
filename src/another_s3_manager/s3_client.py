@@ -985,6 +985,13 @@ def read_object_range_for_role(
 # new tab. Overriding the response Content-Type via the presigned URL
 # (boto3 `ResponseContentType` param) fixes the rendering without re-uploading
 # the object.
+#
+# `.html`/`.htm` and `.svg` are INTENTIONALLY EXCLUDED — overriding their
+# Content-Type to a renderable `text/html` / `image/svg+xml` would let an
+# authenticated user upload a malicious HTML/SVG file and share its presigned
+# URL as a phishing page on a "trusted" S3 origin. They keep S3's stored
+# Content-Type (typically octet-stream after AppFlow → browser downloads).
+# Likewise, `.js`/`.css` are excluded — no reason to force them inline.
 _TEXT_EXTENSION_TO_MIME = {
     ".txt": "text/plain",
     ".md": "text/markdown",
@@ -996,11 +1003,6 @@ _TEXT_EXTENSION_TO_MIME = {
     ".yaml": "text/yaml",
     ".yml": "text/yaml",
     ".xml": "application/xml",
-    ".html": "text/html",
-    ".htm": "text/html",
-    ".css": "text/css",
-    ".js": "application/javascript",
-    ".ts": "application/typescript",
     ".py": "text/x-python",
     ".sh": "application/x-sh",
     ".sql": "application/sql",

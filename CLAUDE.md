@@ -207,13 +207,14 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 
 The React SPA consumes existing backend endpoints plus a small set added for SPA UX:
 
-- `GET /api/me` — extended to include `tour_seen_v1: bool` and `allowed_roles: string[]`
+- `GET /api/me` — extended to include `tour_seen_v1: bool`, `allowed_roles: string[]`, and `disable_deletion: bool` (env `DISABLE_DELETION` OR `config.disable_deletion`, env wins; surfaces the flag so the React UI can disable Delete controls before the user clicks)
 - `PUT /api/user/tour-seen` — marks the onboarding tour as seen (idempotent, CSRF-protected)
 - `GET /api/buckets?role=...` — list buckets (already existed)
 - `GET /api/buckets/{b}/files?path=...&role=...` — list files (already existed)
 - `POST /api/buckets/{b}/upload` — single-file multipart upload (already existed)
 - `DELETE /api/buckets/{b}/files?path=...&role=...` — file or folder delete (already existed)
-- `GET /api/buckets/{b}/download?path=...&role=...` — streamed download (already existed)
+- `GET /api/buckets/{b}/download?path=...&role=...` — streamed download (already existed; cookie-auth proxy used by Download button)
+- `GET /api/buckets/{b}/presigned?path=...&role=...&op=get` — short-lived (1h) boto3 presigned URL for the object; returns `{url, expires_at}`. Used by Copy URL flow (shareable links) and grid-view image/video thumbnails (`<img>`/`<video>` srcs). Auto-applies a `; charset=utf-8` Content-Type override for known text extensions (`.md`/`.csv`/`.txt`/`.json`/`.yaml`/etc.) so Cyrillic / CJK / emoji content renders correctly when the link opens in a new tab
 - `GET /api/admin/users` — list users with available roles (returns `{users, available_roles}`)
 - `POST /api/admin/users` — create user (multipart Form)
 - `PUT /api/admin/users/{u}` — update user (multipart Form, blocks self-demote)

@@ -1790,3 +1790,37 @@ def test_presigned_endpoint_requires_auth(app_client):
         params={"role": "r", "path": "x.txt"},
     )
     assert response.status_code == 401
+
+
+def test_presigned_endpoint_requires_role_param(app_client):
+    """Omitting `role` query param → 422 (FastAPI validation)."""
+    _, _ = login(app_client)
+    response = app_client.get(
+        "/api/buckets/some-bucket/presigned",
+        params={"path": "x.txt"},
+    )
+    assert response.status_code == 422
+
+
+def test_presigned_endpoint_boto_error_returns_500(app_client, mocker):
+    """ClientError from helper (e.g. STS assume_role failure) → 500 with formatted message."""
+    _, _ = login(app_client)
+
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="r")
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        side_effect=ClientError(
+            {"Error": {"Code": "InvalidClientTokenId", "Message": "STS token expired"}},
+            "AssumeRole",
+        ),
+    )
+
+    response = app_client.get(
+        "/api/buckets/some-bucket/presigned",
+        params={"role": "r", "path": "x.txt"},
+    )
+    assert response.status_code == 500
+    # format_boto_error produces a user-friendly message rather than raw repr
+    body = response.json()
+    assert "detail" in body
+    assert isinstance(body["detail"], str)

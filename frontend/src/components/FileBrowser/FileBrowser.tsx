@@ -9,6 +9,7 @@ import { buildDownloadUrl, getPresignedDownloadUrl } from "@/features/files/api/
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { joinPath, decodePath } from "@/utils/pathUtils";
+import { formatTimeOfDay } from "@/utils/formatDate";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
@@ -58,12 +59,6 @@ export function FileBrowser() {
     window.location.href = buildDownloadUrl(bucket, roleId, fullPath);
   };
 
-  const formatExpiry = (iso: string): string => {
-    // Local time, hours+minutes only — `02:14 PM` is more useful than the full ISO.
-    const d = new Date(iso);
-    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  };
-
   const handleCopyUrl = async (name: string) => {
     const fullPath = joinPath(pathFromUrl, name);
     try {
@@ -76,7 +71,7 @@ export function FileBrowser() {
       notifications.show({
         color: "green",
         title: "Presigned URL copied",
-        message: `${name} — anyone with this link can download it until ${formatExpiry(expires_at)} (expires in 1 hour). No login needed.`,
+        message: `${name} — anyone with this link can download it until ${formatTimeOfDay(expires_at)} (expires in 1 hour). No login needed.`,
         autoClose: 6000,
       });
     } catch (e) {
@@ -104,7 +99,7 @@ export function FileBrowser() {
         color: "green",
         title: `${responses.length} presigned URLs copied`,
         message: expiry
-          ? `Anyone with these links can download until ${formatExpiry(expiry)} (expires in 1 hour). No login needed.`
+          ? `Anyone with these links can download until ${formatTimeOfDay(expiry)} (expires in 1 hour). No login needed.`
           : "Anyone with these links can download for 1 hour. No login needed.",
         autoClose: 6000,
       });

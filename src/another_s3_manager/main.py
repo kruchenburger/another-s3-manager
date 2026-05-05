@@ -1981,7 +1981,7 @@ async def download_file(
 async def get_presigned_url(
     bucket_name: str,
     path: str = Query(..., description="Object key to sign"),
-    role: Optional[str] = Query(None, description="Role name to use"),
+    role: str = Query(..., description="Role name to use (required)"),
     op: str = Query("get", description="Presign operation; only 'get' is supported"),
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
@@ -1992,6 +1992,10 @@ async def get_presigned_url(
     carry the auth cookie reliably. The helper auto-applies a UTF-8 charset
     override for known text extensions so Cyrillic / CJK / emoji content
     renders correctly when the link is opened in a new tab.
+
+    `role` is required (the underlying `s3_client._for_role` helper signature
+    is `role: str`, not Optional). The frontend always passes it explicitly.
+    Direct API callers that omit it get 422 from FastAPI's query validation.
     """
     from datetime import datetime, timedelta, timezone
 
@@ -2007,12 +2011,14 @@ async def get_presigned_url(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    validated_role = validate_role_access(role, current_user)
+    # Validate the role belongs to the user; on success, validated_role is the
+    # canonical role string the helper expects.
+    validated_role = validate_role_access(role, current_user) or role
 
     expires_in = 3600
     try:
         url = s3_generate_presigned_url_for_role(
-            validated_role or role or "",
+            validated_role,
             bucket_name,
             path,
             current_user,
@@ -2022,6 +2028,12 @@ async def get_presigned_url(
         raise HTTPException(status_code=403, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except (ClientError, BotoCoreError) as e:
+        # STS assume_role failure / credential refresh failure / invalid bucket
+        # config — produce a clean error rather than a bare 500 with botocore repr.
+        raise HTTPException(status_code=500, detail=format_boto_error(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=format_boto_error(e))
 
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
     return {"url": url, "expires_at": expires_at}

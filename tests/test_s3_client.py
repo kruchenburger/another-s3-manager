@@ -1178,3 +1178,29 @@ def test_generate_presigned_url_for_role_charset_extension_case_insensitive(mock
     mod.generate_presigned_url_for_role("RoleA", "bucket", "README.MD", _make_user(allowed_roles=["RoleA"]))
     _, kwargs = fake_client.generate_presigned_url.call_args
     assert kwargs["Params"]["ResponseContentType"] == "text/markdown; charset=utf-8"
+
+
+def test_generate_presigned_url_for_role_no_override_for_html_or_svg(mocker):
+    """SECURITY: .html / .htm / .svg / .js / .css must NOT get a renderable
+    Content-Type override. Otherwise an authenticated user could upload a
+    malicious HTML/SVG file and share its presigned URL as a phishing page
+    on the trusted *.s3.amazonaws.com origin.
+    """
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://x"
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    for risky_path in ("phish.html", "evil.htm", "icon.svg", "tracker.js", "style.css"):
+        fake_client.reset_mock()
+        mod.generate_presigned_url_for_role("RoleA", "bucket", risky_path, _make_user(allowed_roles=["RoleA"]))
+        _, kwargs = fake_client.generate_presigned_url.call_args
+        assert "ResponseContentType" not in kwargs["Params"], (
+            f"renderable file {risky_path!r} must NOT get a content-type override "
+            "— would enable phishing on the S3 origin"
+        )
