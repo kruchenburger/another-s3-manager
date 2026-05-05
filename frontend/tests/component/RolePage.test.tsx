@@ -95,4 +95,23 @@ describe("RolePage auto-open single bucket", () => {
     renderPage();
     expect(navigateMock).not.toHaveBeenCalled();
   });
+
+  it("does not redirect when stale cached buckets coexist with a fresh 403 error", () => {
+    // Race scenario: TanStack Query returns the previously-cached single bucket
+    // while a concurrent refresh fails with 403 (e.g. the role's credentials
+    // just lost permission). The user must land on the 403 EmptyState, not be
+    // silently redirected past it AND not on a blank screen.
+    useBucketsMock.mockReturnValue({
+      data: ["stale-bucket"],
+      isLoading: false,
+      error: new ApiError(403, "forbidden"),
+    });
+    renderPage();
+    expect(navigateMock).not.toHaveBeenCalled();
+    // 403 EmptyState should render, not a blank `return null` from the
+    // single-bucket guard. Match on the EmptyState title text.
+    expect(
+      screen.getByText(/cannot list buckets for this role/i),
+    ).toBeInTheDocument();
+  });
 });

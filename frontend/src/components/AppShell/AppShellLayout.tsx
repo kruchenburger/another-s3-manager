@@ -31,6 +31,12 @@ export function AppShellLayout({ children, navbar, forceExpanded = false }: AppS
   const collapsed = forceExpanded ? false : collapsedPref;
 
   const toggleCollapsed = () => {
+    // Honour the JSDoc contract on `forceExpanded`: when the navbar is locked
+    // expanded, neither the runtime state nor the persisted preference may
+    // change. Today the toggle is unreachable from the admin shell (AdminSidebar
+    // doesn't receive it), but guarding here prevents future refactors from
+    // silently corrupting the file-browser sidebar's persisted state.
+    if (forceExpanded) return;
     setCollapsedPref((c) => {
       const next = !c;
       localStorage.setItem(COLLAPSED_KEY, String(next));
