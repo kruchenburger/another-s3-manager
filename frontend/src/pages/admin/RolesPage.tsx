@@ -1,4 +1,4 @@
-import { Badge, Button, Group, Stack, Table, Text, Title } from "@mantine/core";
+import { Badge, Button, Group, Stack, Table, Text, Title, Tooltip } from "@mantine/core";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -94,9 +94,15 @@ export function RolesPage() {
                 <Badge color={typeColor(r.type)} variant="light">{r.type}</Badge>
               </Table.Td>
               <Table.Td>
-                <Text size="sm" c="dimmed">
-                  {(r.allowed_buckets?.length ?? 0)} buckets
-                </Text>
+                {(r.allowed_buckets?.length ?? 0) === 0 ? (
+                  <Tooltip label="This role has no buckets configured — users with only this role will see an empty bucket list.">
+                    <Badge color="orange" variant="light">0 buckets</Badge>
+                  </Tooltip>
+                ) : (
+                  <Text size="sm" c="dimmed">
+                    {r.allowed_buckets!.length} buckets
+                  </Text>
+                )}
               </Table.Td>
               <Table.Td>
                 <Text size="sm" lineClamp={1}>{r.description ?? ""}</Text>
