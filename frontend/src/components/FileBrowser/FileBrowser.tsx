@@ -260,6 +260,7 @@ export function FileBrowser() {
         onBulkCopyUrl={handleBulkCopyUrl}
         onUploadClick={handleUploadClick}
         disableDeletion={disableDeletion}
+        objectCount={data?.files?.length ?? 0}
       />
       <input
         type="file"

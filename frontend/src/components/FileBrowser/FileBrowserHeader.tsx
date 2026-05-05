@@ -1,4 +1,4 @@
-import { Button, Group, SegmentedControl, TextInput, Tooltip } from "@mantine/core";
+import { Button, Group, SegmentedControl, Text, TextInput, Tooltip } from "@mantine/core";
 import { LayoutGrid, Link as LinkIcon, List as ListIcon, Search, Trash2, Upload } from "lucide-react";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import type { DisplayMode } from "@/hooks/useDisplayMode";
@@ -17,6 +17,15 @@ interface FileBrowserHeaderProps {
   onUploadClick: () => void;
   /** When true, bulk Delete is rendered disabled with a config-aware tooltip. */
   disableDeletion?: boolean;
+  /**
+   * Optional total object count (files + folders) loaded for the current
+   * prefix. Renders a dimmed label next to the filter input. Omit to hide.
+   */
+  objectCount?: number;
+}
+
+function formatObjectCount(n: number): string {
+  return n === 1 ? "1 object" : `${n} objects`;
 }
 
 export function FileBrowserHeader({
@@ -32,6 +41,7 @@ export function FileBrowserHeader({
   onBulkCopyUrl,
   onUploadClick,
   disableDeletion = false,
+  objectCount,
 }: FileBrowserHeaderProps) {
   return (
     <Group justify="space-between" mb="md" wrap="wrap" gap="sm">
@@ -45,6 +55,11 @@ export function FileBrowserHeader({
           size="sm"
           style={{ minWidth: 200 }}
         />
+        {typeof objectCount === "number" && (
+          <Text size="sm" c="dimmed">
+            {formatObjectCount(objectCount)}
+          </Text>
+        )}
         <SegmentedControl
           value={mode}
           onChange={(v) => onModeChange(v as DisplayMode)}
