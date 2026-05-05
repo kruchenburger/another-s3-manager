@@ -294,6 +294,9 @@ export function FileBrowser() {
             onCopyUrl={handleCopyUrl}
             onPreview={handlePreview}
             onDelete={(name) => requestDelete([name])}
+            bucket={bucket}
+            roleId={roleId}
+            path={pathFromUrl}
           />
         )}
       </Stack>
