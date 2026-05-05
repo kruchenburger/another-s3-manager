@@ -1988,8 +1988,10 @@ async def get_presigned_url(
     """Return a short-lived presigned URL for sharing or browser-side display.
 
     The signed URL embeds the role's credentials and is valid for 1 hour.
-    Use this for Copy URL flows and for <img>/<video> srcs that can't carry
-    the auth cookie reliably.
+    Use this for Copy URL flows and for `<img>/<video>` srcs that can't
+    carry the auth cookie reliably. The helper auto-applies a UTF-8 charset
+    override for known text extensions so Cyrillic / CJK / emoji content
+    renders correctly when the link is opened in a new tab.
     """
     from datetime import datetime, timedelta, timezone
 

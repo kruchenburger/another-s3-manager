@@ -1057,12 +1057,16 @@ def test_generate_presigned_url_for_role_returns_url(mocker):
     fake_client.generate_presigned_url.return_value = "https://bucket.s3.amazonaws.com/file.txt?X-Amz-Signature=abc"
     mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
 
-    url = mod.generate_presigned_url_for_role("RoleA", "bucket", "file.txt", _make_user(allowed_roles=["RoleA"]))
+    # `.txt` is in the text-extension override list, so the call also gets a
+    # `ResponseContentType: text/plain; charset=utf-8` param. Use a path
+    # without a known text extension to verify the URL/params plumbing in
+    # isolation; the charset override has its own dedicated tests below.
+    url = mod.generate_presigned_url_for_role("RoleA", "bucket", "blob.bin", _make_user(allowed_roles=["RoleA"]))
     assert url.startswith("https://")
     assert "X-Amz-Signature" in url
     fake_client.generate_presigned_url.assert_called_once_with(
         "get_object",
-        Params={"Bucket": "bucket", "Key": "file.txt"},
+        Params={"Bucket": "bucket", "Key": "blob.bin"},
         ExpiresIn=3600,
     )
 
@@ -1102,3 +1106,75 @@ def test_generate_presigned_url_for_role_permission_denied_bucket(mocker):
 
     with pytest.raises(PermissionError):
         mod.generate_presigned_url_for_role("RoleA", "denied", "f", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_generate_presigned_url_for_role_overrides_content_type_for_markdown(mocker):
+    """Markdown files get a UTF-8 charset override so Cyrillic renders inline."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://x"
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    mod.generate_presigned_url_for_role("RoleA", "bucket", "notes/2026-03-22.md", _make_user(allowed_roles=["RoleA"]))
+    _, kwargs = fake_client.generate_presigned_url.call_args
+    assert kwargs["Params"]["ResponseContentType"] == "text/markdown; charset=utf-8"
+
+
+def test_generate_presigned_url_for_role_overrides_content_type_for_csv(mocker):
+    """CSV gets text/csv; charset=utf-8 — same Cyrillic mojibake fix."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://x"
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    mod.generate_presigned_url_for_role("RoleA", "bucket", "data.csv", _make_user(allowed_roles=["RoleA"]))
+    _, kwargs = fake_client.generate_presigned_url.call_args
+    assert kwargs["Params"]["ResponseContentType"] == "text/csv; charset=utf-8"
+
+
+def test_generate_presigned_url_for_role_no_override_for_binary(mocker):
+    """Binary files (.png, .pdf, .zip) keep S3's stored Content-Type — no charset added."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://x"
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    for binary_path in ("photo.png", "doc.pdf", "archive.zip", "video.mp4"):
+        fake_client.reset_mock()
+        mod.generate_presigned_url_for_role("RoleA", "bucket", binary_path, _make_user(allowed_roles=["RoleA"]))
+        _, kwargs = fake_client.generate_presigned_url.call_args
+        assert "ResponseContentType" not in kwargs["Params"], (
+            f"binary file {binary_path!r} should not get a content-type override"
+        )
+
+
+def test_generate_presigned_url_for_role_charset_extension_case_insensitive(mocker):
+    """`.MD` (uppercase) gets the same override as `.md` — extensions are case-insensitive."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://x"
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    mod.generate_presigned_url_for_role("RoleA", "bucket", "README.MD", _make_user(allowed_roles=["RoleA"]))
+    _, kwargs = fake_client.generate_presigned_url.call_args
+    assert kwargs["Params"]["ResponseContentType"] == "text/markdown; charset=utf-8"
