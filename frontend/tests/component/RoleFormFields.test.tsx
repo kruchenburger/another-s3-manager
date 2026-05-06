@@ -45,35 +45,37 @@ function renderFields(props: {
 
 describe("RoleFormFields", () => {
   describe('step="type"', () => {
-    it("shows Name and the friendly RoleTypePicker; hides credential fields", () => {
+    it("shows Name + Description + RoleTypePicker; hides credential fields", () => {
       renderFields({ step: "type" });
-      // Exact match avoids colliding with "Named AWS profile" radio label
       expect(screen.getByLabelText(/^Name\s*\*?$/)).toBeInTheDocument();
-      // RoleTypePicker friendly label
+      // Description is meta — moved here from Step 2 so it's filled once for any role type
+      expect(screen.getByLabelText(/^description$/i)).toBeInTheDocument();
       expect(screen.getByText(/AWS credential chain/i)).toBeInTheDocument();
-      // Credential / scope fields NOT present
       expect(screen.queryByLabelText(/^access key id/i)).not.toBeInTheDocument();
       expect(screen.queryByLabelText(/^secret access key/i)).not.toBeInTheDocument();
       expect(screen.queryByLabelText(/^region/i)).not.toBeInTheDocument();
       expect(screen.queryByLabelText(/^endpoint url/i)).not.toBeInTheDocument();
       expect(screen.queryByLabelText(/^profile name/i)).not.toBeInTheDocument();
       expect(screen.queryByLabelText(/^role arn/i)).not.toBeInTheDocument();
-      expect(screen.queryByLabelText(/^description$/i)).not.toBeInTheDocument();
     });
   });
 
   describe('step="credentials" with type=credentials', () => {
-    it("shows credential + scope fields; hides Name and RoleTypePicker", () => {
+    it("shows credential + scope fields + RoleTypeSummary; hides Name and Description (meta is on Step 1)", () => {
       renderFields({ step: "credentials", initial: { type: "credentials" } });
       expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/^secret access key/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/^region/i)).toBeInTheDocument();
-      // TagsInput renders a hidden label + visible input; query by label text only
+      // Autocomplete renders the input + dropdown options under the same label;
+      // narrow to the input only.
+      expect(screen.getByRole("textbox", { name: /^region/i })).toBeInTheDocument();
       expect(screen.getByText(/allowed buckets/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/^description$/i)).toBeInTheDocument();
-      // Name field NOT rendered (no TextInput labelled "Name") and no friendly picker
+      // RoleTypeSummary surfaces the picked type at the top of Step 2 so the
+      // user doesn't have to remember it.
+      expect(screen.getByText(/Static access key \+ secret/i)).toBeInTheDocument();
+      expect(screen.getByText(/^selected$/i)).toBeInTheDocument();
+      // Name + Description are meta — they live on Step 1, not Step 2
       expect(screen.queryByLabelText(/^name$/i)).not.toBeInTheDocument();
-      expect(screen.queryByText(/AWS credential chain/i)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/^description$/i)).not.toBeInTheDocument();
     });
   });
 
@@ -88,7 +90,7 @@ describe("RoleFormFields", () => {
       expect(screen.getAllByLabelText(/^addressing style/i).length).toBeGreaterThan(0);
       expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/^secret access key/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/^region/i)).toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: /^region/i })).toBeInTheDocument();
       expect(screen.getByText(/allowed buckets/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/^description$/i)).toBeInTheDocument();
     });

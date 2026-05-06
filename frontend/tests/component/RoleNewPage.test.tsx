@@ -323,7 +323,7 @@ describe("RoleNewPage", () => {
     expect(screen.queryByLabelText(/^secret access key/i)).not.toBeInTheDocument();
   });
 
-  it("default type still shows Allowed buckets + Description on Step 2 (no credential fields)", async () => {
+  it("default type Step 2 shows Allowed buckets + RoleTypeSummary; no credential fields and no Description (meta lives on Step 1)", async () => {
     vi.mocked(getConfig).mockResolvedValue(baseConfig);
     renderWizard();
     await waitFor(() =>
@@ -335,7 +335,11 @@ describe("RoleNewPage", () => {
     await waitFor(() =>
       expect(screen.getByText(/allowed buckets/i)).toBeInTheDocument(),
     );
-    expect(screen.getByLabelText(/^description$/i)).toBeInTheDocument();
+    // Type summary at top so user doesn't forget what they picked
+    expect(screen.getByText(/AWS credential chain/i)).toBeInTheDocument();
+    expect(screen.getByText(/^selected$/i)).toBeInTheDocument();
+    // Description moved to Step 1 (meta block); not duplicated on Step 2
+    expect(screen.queryByLabelText(/^description$/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^access key id/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^endpoint url/i)).not.toBeInTheDocument();
   });

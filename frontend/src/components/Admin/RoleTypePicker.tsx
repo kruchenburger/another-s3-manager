@@ -30,7 +30,7 @@ interface Option {
   details?: ReactNode;
 }
 
-const OPTIONS: Option[] = [
+export const OPTIONS: Option[] = [
   {
     value: "default",
     label: "AWS credential chain",
