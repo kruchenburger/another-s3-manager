@@ -16,6 +16,22 @@ import type { AppConfig, AppRole } from "@/types/api";
 
 const REDACTED = "***REDACTED***";
 
+// Empty defaults used both for initial mount and to reset the form when the
+// drawer reopens in create mode after an edit. We can't use form.reset() for
+// that case: setInitialValues during the previous edit-open replaced the
+// stored "initial" snapshot with the edited role's values, and reset() would
+// restore those — leaking the previous role's data into the create form.
+const EMPTY_ROLE = {
+  name: "",
+  type: "default",
+  use_ssl: true,
+  verify_ssl: true,
+  addressing_style: "auto",
+  allowed_buckets: [],
+  // avoid PasswordInput controlled→uncontrolled warning when user starts typing
+  secret_access_key: "",
+} as AppRole;
+
 interface RoleDrawerProps {
   opened: boolean;
   mode: "create" | "edit";
@@ -60,16 +76,7 @@ export function RoleDrawer({
   const [active, setActive] = useState(0);
 
   const form = useForm<AppRole>({
-    initialValues: {
-      name: "",
-      type: "default",
-      use_ssl: true,
-      verify_ssl: true,
-      addressing_style: "auto",
-      allowed_buckets: [],
-      // avoid PasswordInput controlled→uncontrolled warning when user starts typing
-      secret_access_key: "",
-    } as AppRole,
+    initialValues: { ...EMPTY_ROLE },
     validate: {
       name: (v) => (!v || v.trim().length === 0 ? "Required" : null),
       profile_name: (v, values) =>
@@ -121,9 +128,17 @@ export function RoleDrawer({
     },
   });
 
-  // Populate form when the drawer opens or its inputs change. Edit mode shows
-  // an empty secret_access_key (placeholder hints to leave blank to preserve);
-  // the parent re-attaches the original secret on submit.
+  // Populate form when the drawer opens or its inputs change.
+  //
+  // Edit mode: load the role's values into the form. secret_access_key is
+  // surfaced as empty (placeholder hints "leave blank to preserve"); the
+  // parent re-attaches the original secret on submit.
+  //
+  // Create mode: explicitly reseed initial values + current values from
+  // EMPTY_ROLE. We can't rely on form.reset() because a previous edit-open
+  // called setInitialValues(role) which moved the stored baseline to the
+  // edited role. reset() would restore that baseline — leaking the prior
+  // role's data into the create form when the user clicks Edit -> Add Role.
   useEffect(() => {
     if (!opened) return;
     if (mode === "edit" && initialRole) {
@@ -131,7 +146,10 @@ export function RoleDrawer({
       form.setInitialValues(populated);
       form.setValues(populated);
     } else if (mode === "create") {
-      form.reset();
+      const fresh = { ...EMPTY_ROLE };
+      form.setInitialValues(fresh);
+      form.setValues(fresh);
+      form.clearErrors();
       setActive(0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

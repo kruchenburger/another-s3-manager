@@ -481,4 +481,86 @@ describe("RoleDrawer", () => {
       expect(screen.getByRole("button", { name: /save role/i })).toBeInTheDocument(),
     );
   });
+
+  it("does not leak edit-mode values into a subsequent create-mode session", async () => {
+    // Regression: clicking Edit on a row, closing the drawer, then clicking
+    // "Add role" used to show the previously-edited role's data prefilled in
+    // the create form. The bug was that form.reset() restores the values
+    // baseline that the edit-open had moved via setInitialValues().
+    const onSubmit = vi.fn();
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <MantineProvider>
+        <Notifications />
+        <RoleDrawer
+          opened={true}
+          mode="edit"
+          initialRole={r2Role}
+          config={baseConfig}
+          readOnly={false}
+          onClose={onClose}
+          onSubmit={onSubmit}
+        />
+      </MantineProvider>,
+    );
+
+    // Edit-mode populated the form with R2's values
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("textbox", { name: /^name/i }) as HTMLInputElement)
+          .value,
+      ).toBe("R2"),
+    );
+    expect(
+      (screen.getByLabelText(/^endpoint url/i) as HTMLInputElement).value,
+    ).toBe("https://x.r2.cloudflarestorage.com");
+
+    // Close the drawer (parent flips opened=false)
+    rerender(
+      <MantineProvider>
+        <Notifications />
+        <RoleDrawer
+          opened={false}
+          mode="edit"
+          initialRole={r2Role}
+          config={baseConfig}
+          readOnly={false}
+          onClose={onClose}
+          onSubmit={onSubmit}
+        />
+      </MantineProvider>,
+    );
+
+    // Reopen in create mode (parent navigates to /admin/roles/new)
+    rerender(
+      <MantineProvider>
+        <Notifications />
+        <RoleDrawer
+          opened={true}
+          mode="create"
+          initialRole={undefined}
+          config={baseConfig}
+          readOnly={false}
+          onClose={onClose}
+          onSubmit={onSubmit}
+        />
+      </MantineProvider>,
+    );
+
+    // Form must show empty defaults, NOT R2's values.
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("textbox", { name: /^name/i }) as HTMLInputElement)
+          .value,
+      ).toBe(""),
+    );
+    // Step 1 has no endpoint URL field — credentials live on Step 2.
+    expect(screen.queryByLabelText(/^endpoint url/i)).not.toBeInTheDocument();
+    // The default radio is the active one (form.values.type === "default")
+    const defaultRadio = screen
+      .getAllByRole("radio")
+      .find((r) => (r as HTMLInputElement).value === "default");
+    expect(defaultRadio).toBeDefined();
+    expect((defaultRadio as HTMLInputElement).checked).toBe(true);
+  });
 });
