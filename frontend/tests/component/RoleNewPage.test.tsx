@@ -400,8 +400,35 @@ describe("RoleNewPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
     expect(screen.queryByRole("button", { name: /save role/i })).not.toBeInTheDocument();
     expect(
-      screen.getByText(/AKIA or ASIA followed by 16 uppercase chars/),
+      screen.getByText(/AKIA followed by 16 uppercase chars/),
     ).toBeInTheDocument();
+  });
+
+  it("rejects an ASIA-prefixed access_key_id for the credentials type (STS keys need session_token)", async () => {
+    // Regression: ASIA = STS temporary credentials. Without aws_session_token
+    // (which the credentials type doesn't carry) any S3 call would 403 with
+    // InvalidClientTokenId. The regex must steer users toward the assume_role
+    // type instead.
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderWizard();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /Static access key/i }));
+    fireEvent.change(screen.getByRole("textbox", { name: /^name/i }), { target: { value: "AsiaKey" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(/^access key id/i), { target: { value: "ASIAIOSFODNN7EXAMPLE" } });
+    fireEvent.change(screen.getByLabelText(/^secret access key/i), { target: { value: "anything" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    expect(screen.queryByRole("button", { name: /save role/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/AKIA followed by 16 uppercase chars/),
+    ).toBeInTheDocument();
+    // Error message must point users to the right type for STS
+    expect(screen.getByText(/STS assume role/i)).toBeInTheDocument();
   });
 
   it("does NOT enforce AWS access-key format for s3_compatible (R2/MinIO use other formats)", async () => {

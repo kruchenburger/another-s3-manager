@@ -61,9 +61,12 @@ interface Props {
   mode: "create" | "edit";
   /**
    * Controls which subset of fields renders.
-   * - "type"        → name + RoleTypePicker only (wizard step 1)
-   * - "credentials" → type-specific credential fields + allowed buckets + description (wizard step 2)
+   * - "type"        → meta (name + description) + RoleTypePicker (wizard step 1)
+   * - "credentials" → RoleTypeSummary card + type-specific credential fields + allowed buckets (wizard step 2)
    * - "all"         → everything (single-page edit form)
+   *
+   * Description is meta — it lives in the "type" block alongside name, not in
+   * the type-specific "credentials" block.
    */
   step: "type" | "credentials" | "all";
 }
@@ -119,11 +122,20 @@ export function RoleFormFields({ form, disabled, mode, step }: Props) {
           />
           <div>
             <Text size="sm" fw={500} mb={4}>
-              Type <span style={{ color: "var(--mantine-color-red-6)" }}>*</span>
+              Type{" "}
+              <Text span c="red.6">
+                *
+              </Text>
             </Text>
             <RoleTypePicker
               value={type}
-              onChange={(next) => form.setFieldValue("type", next)}
+              onChange={(next) => {
+                form.setFieldValue("type", next);
+                // Clear stale per-field errors from a previous type so the
+                // user doesn't see pre-highlighted errors when navigating
+                // back to a type after a failed validation attempt.
+                form.clearErrors();
+              }}
               disabled={typePickerDisabled}
             />
           </div>

@@ -50,8 +50,12 @@ export function RoleNewPage() {
         if (!v || v.trim().length === 0) return "Required";
         // Format check applies only to plain AWS credentials. S3-compatible
         // services (R2, MinIO, Wasabi…) use arbitrary key formats.
-        if (values.type === "credentials" && !/^(AKIA|ASIA)[A-Z0-9]{16}$/.test(v.trim())) {
-          return "AWS access key IDs start with AKIA or ASIA followed by 16 uppercase chars";
+        // Reject ASIA prefix here: ASIA = STS temporary credentials that need a
+        // session token, which the credentials type doesn't carry. Such a key
+        // would save successfully but every S3 call would 403 with
+        // InvalidClientTokenId. STS workflows belong on the assume_role type.
+        if (values.type === "credentials" && !/^AKIA[A-Z0-9]{16}$/.test(v.trim())) {
+          return "Static AWS access key IDs start with AKIA followed by 16 uppercase chars. For temporary STS credentials use the 'STS assume role' type.";
         }
         return null;
       },

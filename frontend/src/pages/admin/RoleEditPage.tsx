@@ -70,8 +70,10 @@ export function RoleEditPage() {
           ? values.secret_access_key
           : existing.secret_access_key,
     };
-    // Strip fields that don't apply to the role's current type (avoids
-    // persisting stale credentials e.g. when type was changed mid-edit).
+    // Defensive normalisation before save: drop any fields not applicable to
+    // the role's type. Type cannot change in edit mode (the picker is
+    // disabled), but a config edited out-of-band — or a future refactor that
+    // permits type edits — could otherwise carry stale credentials through.
     const cleaned = stripIrrelevantFields(merged);
     const next: AppConfig = {
       ...toWritableConfig(config),
