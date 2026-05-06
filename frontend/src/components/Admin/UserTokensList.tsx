@@ -18,7 +18,7 @@ import { useUpdateAdminToken } from "@/features/tokens/hooks/useUpdateToken";
 import { useDeleteAdminToken } from "@/features/tokens/hooks/useDeleteToken";
 import { useCreateAdminToken } from "@/features/tokens/hooks/useCreateToken";
 import { CreateTokenModal } from "@/components/Tokens/CreateTokenModal";
-import { EditTokenModal } from "@/components/Tokens/EditTokenModal";
+import { TokenEditDrawer } from "@/components/Tokens/TokenEditDrawer";
 import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
 import { runWithToasts } from "@/utils/mutationToast";
 import { getErrorMessage } from "@/utils/apiError";
@@ -188,7 +188,7 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
       )}
 
       {editTarget && (
-        <EditTokenModal
+        <TokenEditDrawer
           opened
           onClose={() => setEditTarget(null)}
           loading={updateMutation.isPending}

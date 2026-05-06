@@ -1,8 +1,8 @@
 import { useEffect } from "react";
 import {
   Button,
+  Drawer,
   Group,
-  Modal,
   NumberInput,
   Stack,
   Switch,
@@ -14,7 +14,7 @@ import type { ApiToken, UpdateTokenPayload } from "@/types/api";
 
 const HARD_CEILING_BYTES = 10 * 1024 * 1024;
 
-interface EditTokenModalProps {
+interface TokenEditDrawerProps {
   opened: boolean;
   onClose: () => void;
   onSubmit: (payload: UpdateTokenPayload) => void;
@@ -32,13 +32,13 @@ function bytesToMB(bytes: number): number {
   return Math.max(1, Math.round(bytes / (1024 * 1024)));
 }
 
-export function EditTokenModal({
+export function TokenEditDrawer({
   opened,
   onClose,
   onSubmit,
   loading,
   token,
-}: EditTokenModalProps) {
+}: TokenEditDrawerProps) {
   const form = useForm<FormValues>({
     initialValues: {
       name: token.name,
@@ -52,7 +52,7 @@ export function EditTokenModal({
   });
 
   // Re-prime form when the target token changes (e.g. user opens edit on a
-  // different row without unmounting the modal between renders).
+  // different row without unmounting the drawer between renders).
   useEffect(() => {
     const next = {
       name: token.name,
@@ -77,9 +77,30 @@ export function EditTokenModal({
   });
 
   return (
-    <Modal opened={opened} onClose={onClose} title="Edit MCP token" centered radius="lg">
-      <form onSubmit={handleSubmit}>
-        <Stack gap="md">
+    <Drawer
+      opened={opened}
+      onClose={onClose}
+      position="right"
+      size="md"
+      title="Edit MCP token"
+      // Make the drawer body a flex column so the form can stretch and the
+      // sticky footer (Cancel / Save) stays pinned to the bottom regardless
+      // of inner content height. `calc(100% - 60px)` accounts for the
+      // Mantine Drawer header height.
+      styles={{
+        body: {
+          display: "flex",
+          flexDirection: "column",
+          height: "calc(100% - 60px)",
+          overflow: "hidden",
+        },
+      }}
+    >
+      <form
+        onSubmit={handleSubmit}
+        style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
+      >
+        <Stack gap="md" style={{ flex: 1, overflowY: "auto", paddingRight: 4 }}>
           <TextInput label="Name" required {...form.getInputProps("name")} />
           <Switch
             label="Read-only"
@@ -94,7 +115,15 @@ export function EditTokenModal({
             step={1}
             {...form.getInputProps("max_read_mb")}
           />
-          <Group justify="flex-end" mt="sm">
+        </Stack>
+        <div
+          style={{
+            paddingTop: 12,
+            marginTop: 12,
+            borderTop: "1px solid var(--mantine-color-default-border)",
+          }}
+        >
+          <Group justify="space-between">
             <Button variant="subtle" onClick={onClose} disabled={loading}>
               Cancel
             </Button>
@@ -102,8 +131,8 @@ export function EditTokenModal({
               Save
             </Button>
           </Group>
-        </Stack>
+        </div>
       </form>
-    </Modal>
+    </Drawer>
   );
 }

@@ -10,7 +10,7 @@ import { useUpdateAdminToken } from "@/features/tokens/hooks/useUpdateToken";
 import { useAdminUsers } from "@/features/admin/hooks/useAdminUsers";
 import { TokensTable } from "@/components/Tokens/TokensTable";
 import { CreateTokenModal } from "@/components/Tokens/CreateTokenModal";
-import { EditTokenModal } from "@/components/Tokens/EditTokenModal";
+import { TokenEditDrawer } from "@/components/Tokens/TokenEditDrawer";
 import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { runWithToasts } from "@/utils/mutationToast";
@@ -135,7 +135,7 @@ export function AdminApiTokensPage() {
       />
 
       {editTarget && (
-        <EditTokenModal
+        <TokenEditDrawer
           opened
           onClose={() => setEditTarget(null)}
           loading={updateMutation.isPending}

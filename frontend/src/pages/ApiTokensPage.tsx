@@ -8,7 +8,7 @@ import { useDeleteMyToken } from "@/features/tokens/hooks/useDeleteToken";
 import { useUpdateMyToken } from "@/features/tokens/hooks/useUpdateToken";
 import { TokensTable } from "@/components/Tokens/TokensTable";
 import { CreateTokenModal } from "@/components/Tokens/CreateTokenModal";
-import { EditTokenModal } from "@/components/Tokens/EditTokenModal";
+import { TokenEditDrawer } from "@/components/Tokens/TokenEditDrawer";
 import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { notifications } from "@mantine/notifications";
@@ -114,7 +114,7 @@ export function ApiTokensPage() {
       />
 
       {editTarget && (
-        <EditTokenModal
+        <TokenEditDrawer
           opened
           onClose={() => setEditTarget(null)}
           loading={updateMutation.isPending}

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
-import { EditTokenModal } from "@/components/Tokens/EditTokenModal";
+import { TokenEditDrawer } from "@/components/Tokens/TokenEditDrawer";
 import type { ApiToken } from "@/types/api";
 
 const TOKEN: ApiToken = {
@@ -15,12 +15,12 @@ const TOKEN: ApiToken = {
   max_read_bytes: 2 * 1024 * 1024, // 2 MB
 };
 
-function renderModal(
-  props: Partial<Parameters<typeof EditTokenModal>[0]> = {},
+function renderDrawer(
+  props: Partial<Parameters<typeof TokenEditDrawer>[0]> = {},
 ) {
   return render(
     <MantineProvider>
-      <EditTokenModal
+      <TokenEditDrawer
         opened
         onClose={() => {}}
         onSubmit={() => {}}
@@ -32,9 +32,9 @@ function renderModal(
   );
 }
 
-describe("EditTokenModal", () => {
+describe("TokenEditDrawer", () => {
   it("pre-fills name, read-only flag and MB size from the token", () => {
-    renderModal();
+    renderDrawer();
     expect(screen.getByLabelText(/name/i)).toHaveValue("ci-token");
     expect(screen.getByLabelText(/read-only/i)).toBeChecked();
     // Mantine NumberInput renders the value as a string in the input field;
@@ -44,7 +44,7 @@ describe("EditTokenModal", () => {
 
   it("submits payload with bytes computed from MB", async () => {
     const onSubmit = vi.fn();
-    renderModal({ onSubmit });
+    renderDrawer({ onSubmit });
 
     fireEvent.change(screen.getByLabelText(/name/i), {
       target: { value: "renamed" },
@@ -65,7 +65,7 @@ describe("EditTokenModal", () => {
 
   it("clamps MB above the 10 MB ceiling", async () => {
     const onSubmit = vi.fn();
-    renderModal({ onSubmit });
+    renderDrawer({ onSubmit });
 
     fireEvent.change(screen.getByLabelText(/max read \(mb\)/i), {
       target: { value: "999" },
@@ -81,7 +81,7 @@ describe("EditTokenModal", () => {
 
   it("requires a non-empty name", async () => {
     const onSubmit = vi.fn();
-    renderModal({ onSubmit });
+    renderDrawer({ onSubmit });
 
     fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "" } });
     fireEvent.submit(document.querySelector("form")!);
