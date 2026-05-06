@@ -109,4 +109,43 @@ describe("RoleEditPage", () => {
     );
     expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
   });
+
+  it("renders the friendly RoleTypePicker with the role's type and every radio disabled", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderEdit("R2");
+
+    await waitFor(() =>
+      expect(screen.getByText(/edit role: r2/i)).toBeInTheDocument(),
+    );
+
+    // RoleTypePicker friendly labels render
+    expect(screen.getByText(/Other S3-compatible service/i)).toBeInTheDocument();
+    expect(screen.getByText(/AWS credential chain/i)).toBeInTheDocument();
+
+    // All 5 radios are present and ALL disabled (type cannot change in edit mode)
+    const radios = screen.getAllByRole("radio");
+    expect(radios.length).toBe(5);
+    radios.forEach((r) => expect(r).toBeDisabled());
+
+    // The role's actual type (s3_compatible) is the selected one
+    const r2Radio = radios.find((r) => (r as HTMLInputElement).value === "s3_compatible");
+    expect(r2Radio).toBeDefined();
+    expect((r2Radio as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("disables every input including the picker when read-only", async () => {
+    vi.mocked(getConfig).mockResolvedValue({ ...baseConfig, is_read_only: true });
+    renderEdit("R2");
+
+    await waitFor(() =>
+      expect(screen.getByText(/edit role: r2/i)).toBeInTheDocument(),
+    );
+
+    // Picker disabled
+    const radios = screen.getAllByRole("radio");
+    radios.forEach((r) => expect(r).toBeDisabled());
+
+    // A representative credential field disabled
+    expect(screen.getByRole("textbox", { name: /^access key id/i })).toBeDisabled();
+  });
 });
