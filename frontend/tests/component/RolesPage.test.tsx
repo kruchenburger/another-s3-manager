@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { MantineProvider } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { RolesPage } from "@/pages/admin/RolesPage";
 
 vi.mock("@/features/admin/api/adminApi", () => ({
@@ -54,6 +54,24 @@ function renderPage() {
         <Notifications />
         <MemoryRouter>
           <RolesPage />
+        </MemoryRouter>
+      </MantineProvider>
+    </QueryClientProvider>,
+  );
+}
+
+function renderAt(path: string) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MantineProvider>
+        <Notifications />
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/admin/roles" element={<RolesPage />} />
+            <Route path="/admin/roles/new" element={<RolesPage />} />
+            <Route path="/admin/roles/:roleName" element={<RolesPage />} />
+          </Routes>
         </MemoryRouter>
       </MantineProvider>
     </QueryClientProvider>,
@@ -150,5 +168,125 @@ describe("RolesPage", () => {
     // 2-bucket row: text is a plain dimmed Text — should NOT be inside a Badge.
     const twoText = screen.getByText("2 buckets");
     expect(twoText.closest("[class*='mantine-Badge-root']")).toBeNull();
+  });
+
+  it("opens the create-role drawer when navigated to /admin/roles/new", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderAt("/admin/roles/new");
+
+    // Wait for the list to render — the drawer is mounted alongside it.
+    await waitFor(() => expect(screen.getByText("Default")).toBeInTheDocument());
+
+    // Drawer header reads "Create role" in create mode.
+    expect(screen.getByText(/create role/i)).toBeInTheDocument();
+    // Step 1 picker shows the AWS credential chain radio.
+    expect(
+      screen.getByRole("radio", { name: /AWS credential chain/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("opens the edit-role drawer pre-filled when navigated to /admin/roles/:name", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderAt("/admin/roles/R2");
+
+    await waitFor(() =>
+      expect(screen.getByText(/edit role: R2/i)).toBeInTheDocument(),
+    );
+
+    const nameInput = screen.getByRole("textbox", { name: /^name/i });
+    expect(nameInput).toHaveValue("R2");
+    expect(nameInput).toBeDisabled();
+
+    // Type-picker locked in edit mode — every radio disabled.
+    const radios = screen.getAllByRole("radio");
+    expect(radios.length).toBe(5);
+    radios.forEach((r) => expect(r).toBeDisabled());
+  });
+
+  it("Cancel in the edit drawer navigates back to /admin/roles", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderAt("/admin/roles/R2");
+
+    await waitFor(() =>
+      expect(screen.getByText(/edit role: R2/i)).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    // Drawer closed via URL change → "Edit role: R2" title is gone.
+    await waitFor(() =>
+      expect(screen.queryByText(/edit role: R2/i)).not.toBeInTheDocument(),
+    );
+    // The list stays visible behind/after the closed drawer.
+    expect(screen.getByText("Default")).toBeInTheDocument();
+    expect(screen.getByText("R2")).toBeInTheDocument();
+  });
+
+  it("redirects to /admin/roles with a notification when the role does not exist", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderAt("/admin/roles/Nonexistent");
+
+    // Notification appears — Notifications harness renders messages into the DOM.
+    await waitFor(
+      () =>
+        expect(
+          screen.getByText(/role "Nonexistent" not found/i),
+        ).toBeInTheDocument(),
+      { timeout: 2000 },
+    );
+
+    // Drawer closed (no edit-title), list visible.
+    expect(screen.queryByText(/edit role: Nonexistent/i)).not.toBeInTheDocument();
+    expect(screen.getByText("R2")).toBeInTheDocument();
+  });
+
+  it("preserves the existing secret when Save is clicked without typing one", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+    renderAt("/admin/roles/R2");
+
+    await waitFor(() =>
+      expect(screen.getByText(/edit role: R2/i)).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
+    const r2 = submitted.roles.find((r) => r.name === "R2");
+    // Parent merge attaches the original secret because the drawer emitted "".
+    expect(r2?.secret_access_key).toBe("S");
+  });
+
+  it("uses the new secret when one is typed in the edit drawer", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+    renderAt("/admin/roles/R2");
+
+    await waitFor(() =>
+      expect(screen.getByText(/edit role: R2/i)).toBeInTheDocument(),
+    );
+
+    fireEvent.change(screen.getByLabelText(/^secret access key/i), {
+      target: { value: "NEWSECRET" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
+    const r2 = submitted.roles.find((r) => r.name === "R2");
+    expect(r2?.secret_access_key).toBe("NEWSECRET");
+  });
+
+  it("clicking the row Edit button navigates to /admin/roles/:name and opens the drawer", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderAt("/admin/roles");
+
+    await waitFor(() => expect(screen.getByText("R2")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /edit R2/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/edit role: R2/i)).toBeInTheDocument(),
+    );
   });
 });

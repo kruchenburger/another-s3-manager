@@ -12,8 +12,6 @@ import { BucketPage } from "@/pages/BucketPage";
 import { ApiTokensPage } from "@/pages/ApiTokensPage";
 import { ChangePasswordPage } from "@/pages/ChangePasswordPage";
 import { BansPage } from "@/pages/admin/BansPage";
-import { RoleEditPage } from "@/pages/admin/RoleEditPage";
-import { RoleNewPage } from "@/pages/admin/RoleNewPage";
 import { RolesPage } from "@/pages/admin/RolesPage";
 import { SettingsPage } from "@/pages/admin/SettingsPage";
 import { UsersPage } from "@/pages/admin/UsersPage";
@@ -50,8 +48,8 @@ export const router = createBrowserRouter(
                 { path: "/admin/users", element: <UsersPage /> },
                 { path: "/admin/bans", element: <BansPage /> },
                 { path: "/admin/roles", element: <RolesPage /> },
-                { path: "/admin/roles/new", element: <RoleNewPage /> },
-                { path: "/admin/roles/:roleName", element: <RoleEditPage /> },
+                { path: "/admin/roles/new", element: <RolesPage /> },
+                { path: "/admin/roles/:roleName", element: <RolesPage /> },
                 { path: "/admin/settings", element: <SettingsPage /> },
                 { path: "/admin/api-tokens", element: <AdminApiTokensPage /> },
               ],
