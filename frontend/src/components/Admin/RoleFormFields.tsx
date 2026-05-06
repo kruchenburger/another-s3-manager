@@ -11,7 +11,9 @@ import {
   TagsInput,
   Text,
   TextInput,
+  Tooltip,
 } from "@mantine/core";
+import { Info } from "lucide-react";
 import type { UseFormReturnType } from "@mantine/form";
 import type { AppRole } from "@/types/api";
 import { RoleTypePicker, OPTIONS as ROLE_TYPE_OPTIONS } from "./RoleTypePicker";
@@ -203,8 +205,39 @@ export function RoleFormFields({ form, disabled, mode, step }: Props) {
                 {...form.getInputProps("verify_ssl", { type: "checkbox" })}
               />
               <Select
-                label="Addressing style"
-                description="How the bucket name is placed in the request URL — `virtual` puts it in the host (bucket.host), `path` puts it in the path (host/bucket). Most managed S3 services use virtual; self-hosted / on-prem services (MinIO, Ceph, SeaweedFS) usually need path. `auto` lets boto3 decide per-host."
+                label={
+                  <Group gap={6} wrap="nowrap" component="span">
+                    <span>Addressing style</span>
+                    <Tooltip
+                      label={
+                        <>
+                          How the bucket name is placed in the request URL —{" "}
+                          <Code c="white" bg="dark.5">virtual</Code> puts it in
+                          the host (<Code c="white" bg="dark.5">bucket.host</Code>),{" "}
+                          <Code c="white" bg="dark.5">path</Code> puts it in
+                          the path (<Code c="white" bg="dark.5">host/bucket</Code>).
+                          Most managed S3 services use virtual; self-hosted /
+                          on-prem services (MinIO, Ceph, SeaweedFS) usually need
+                          path. <Code c="white" bg="dark.5">auto</Code> lets boto3
+                          decide per-host.
+                        </>
+                      }
+                      multiline
+                      w={320}
+                      withArrow
+                      position="right"
+                      color="dark"
+                      c="white"
+                      events={{ hover: true, focus: true, touch: true }}
+                    >
+                      <Info
+                        size={14}
+                        aria-label="More about addressing style"
+                        style={{ cursor: "help", opacity: 0.6 }}
+                      />
+                    </Tooltip>
+                  </Group>
+                }
                 data={[
                   { value: "auto", label: "auto (let boto3 decide)" },
                   { value: "virtual", label: "virtual (bucket.host) — most managed S3" },

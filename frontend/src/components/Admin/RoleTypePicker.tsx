@@ -38,14 +38,13 @@ export const OPTIONS: Option[] = [
     description: <>Resolve credentials via the standard AWS chain. No keys stored in this app.</>,
     details: (
       <>
-        Sources tried in order: env vars (<code>AWS_ACCESS_KEY_ID</code> etc.),{" "}
-        <code>~/.aws/config</code> profile, EC2/ECS/EKS instance metadata, or{" "}
-        <code>credential_process</code> hooks like{" "}
+        Sources tried in order: env vars (AWS_ACCESS_KEY_ID etc.), ~/.aws/config
+        profile, EC2/ECS/EKS instance metadata, or credential_process hooks like{" "}
         <Anchor
           href="https://docs.aws.amazon.com/rolesanywhere/latest/userguide/introduction.html"
           target="_blank"
           rel="noopener noreferrer"
-          c="white"
+          inherit
           underline="always"
         >
           IAM Roles Anywhere
@@ -55,7 +54,7 @@ export const OPTIONS: Option[] = [
           href="https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html"
           target="_blank"
           rel="noopener noreferrer"
-          c="white"
+          inherit
           underline="always"
         >
           Full chain reference
@@ -121,6 +120,8 @@ export function RoleTypePicker({ value, onChange, disabled }: Props) {
                       w={340}
                       withArrow
                       position="right"
+                      color="dark"
+                      c="white"
                       events={{ hover: true, focus: true, touch: true }}
                     >
                       <Info
