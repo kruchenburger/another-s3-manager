@@ -486,7 +486,14 @@ describe("RoleDrawer", () => {
     // Regression: clicking Edit on a row, closing the drawer, then clicking
     // "Add role" used to show the previously-edited role's data prefilled in
     // the create form. The bug was that form.reset() restores the values
-    // baseline that the edit-open had moved via setInitialValues().
+    // baseline that the edit-open had moved via setInitialValues(); the
+    // follow-up bug was that setValues({...EMPTY_ROLE}) only overwrote keys
+    // that EMPTY_ROLE explicitly listed, so fields like `description` kept
+    // their previous string value.
+    const r2RoleWithDescription: AppRole = {
+      ...r2Role,
+      description: "Cloudflare R2 prod",
+    };
     const onSubmit = vi.fn();
     const onClose = vi.fn();
     const { rerender } = render(
@@ -495,7 +502,7 @@ describe("RoleDrawer", () => {
         <RoleDrawer
           opened={true}
           mode="edit"
-          initialRole={r2Role}
+          initialRole={r2RoleWithDescription}
           config={baseConfig}
           readOnly={false}
           onClose={onClose}
@@ -512,8 +519,8 @@ describe("RoleDrawer", () => {
       ).toBe("R2"),
     );
     expect(
-      (screen.getByLabelText(/^endpoint url/i) as HTMLInputElement).value,
-    ).toBe("https://x.r2.cloudflarestorage.com");
+      (screen.getByLabelText(/^description$/i) as HTMLInputElement).value,
+    ).toBe("Cloudflare R2 prod");
 
     // Close the drawer (parent flips opened=false)
     rerender(
@@ -522,7 +529,7 @@ describe("RoleDrawer", () => {
         <RoleDrawer
           opened={false}
           mode="edit"
-          initialRole={r2Role}
+          initialRole={r2RoleWithDescription}
           config={baseConfig}
           readOnly={false}
           onClose={onClose}
@@ -547,13 +554,16 @@ describe("RoleDrawer", () => {
       </MantineProvider>,
     );
 
-    // Form must show empty defaults, NOT R2's values.
+    // Step 1 fields must all be empty
     await waitFor(() =>
       expect(
         (screen.getByRole("textbox", { name: /^name/i }) as HTMLInputElement)
           .value,
       ).toBe(""),
     );
+    expect(
+      (screen.getByLabelText(/^description$/i) as HTMLInputElement).value,
+    ).toBe("");
     // Step 1 has no endpoint URL field — credentials live on Step 2.
     expect(screen.queryByLabelText(/^endpoint url/i)).not.toBeInTheDocument();
     // The default radio is the active one (form.values.type === "default")

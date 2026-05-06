@@ -24,12 +24,22 @@ const REDACTED = "***REDACTED***";
 const EMPTY_ROLE = {
   name: "",
   type: "default",
+  description: "",
   use_ssl: true,
   verify_ssl: true,
   addressing_style: "auto",
   allowed_buckets: [],
-  // avoid PasswordInput controlled→uncontrolled warning when user starts typing
+  // Every field must have an explicit empty value here, otherwise setValues()
+  // leaves whatever the form held from a previous edit-mode session in place
+  // (Mantine setValues merges keys; missing keys become undefined, and a
+  // controlled TextInput keeps showing its prior string). This bit us with
+  // `description` after Edit → close → Add Role.
   secret_access_key: "",
+  access_key_id: "",
+  profile_name: "",
+  role_arn: "",
+  endpoint_url: "",
+  region: "",
 } as AppRole;
 
 interface RoleDrawerProps {
