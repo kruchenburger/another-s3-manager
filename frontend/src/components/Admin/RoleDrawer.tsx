@@ -152,14 +152,21 @@ export function RoleDrawer({
   useEffect(() => {
     if (!opened) return;
     if (mode === "edit" && initialRole) {
-      // Build the populated payload from EMPTY_ROLE up. Strip any keys that
-      // are explicitly `undefined` on initialRole (e.g. an absent
-      // `description` from the API) — Mantine's setInitialValues / setValues
-      // silently drops keys with undefined value when merging, leaving the
-      // previously-edited role's value in form state. Hit when switching
-      // Edit A → Edit B in a row.
+      // Build the populated payload from EMPTY_ROLE up. Strip any keys whose
+      // value is null or undefined on initialRole (e.g. an absent
+      // `description` from the API, a legacy `allowed_buckets: null`) —
+      // Mantine's setInitialValues / setValues silently drop undefined keys
+      // when merging (leaving the previously-edited role's value in form
+      // state), and `null` would propagate into form state as-is, breaking
+      // controls like TagsInput that expect an array. Stripping both forces
+      // EMPTY_ROLE's empty defaults to win for any field the API omits or
+      // explicitly nulls. Regression test:
+      // "clears stale description even when the next role has
+      // description=undefined".
       const cleanedInitial: Partial<AppRole> = Object.fromEntries(
-        Object.entries(initialRole).filter(([, v]) => v !== undefined),
+        Object.entries(initialRole).filter(
+          ([, v]) => v !== undefined && v !== null,
+        ),
       ) as Partial<AppRole>;
       const populated: AppRole = {
         ...EMPTY_ROLE,
