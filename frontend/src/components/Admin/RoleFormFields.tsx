@@ -151,7 +151,7 @@ export function RoleFormFields({ form, disabled, mode, step }: Props) {
               label="Profile name"
               required
               disabled={disabled}
-              description="Name of a profile in ~/.aws/credentials or ~/.aws/config (incl. AWS SSO). The container needs that file mounted."
+              description="Name of a profile in ~/.aws/credentials or ~/.aws/config. SSO profiles work too — boto3 resolves them through ~/.aws/config + cached SSO sessions. The container needs that file mounted."
               placeholder="my-prod-profile"
               {...form.getInputProps("profile_name")}
             />

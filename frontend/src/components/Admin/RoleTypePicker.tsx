@@ -68,7 +68,8 @@ export const OPTIONS: Option[] = [
     icon: <User size={18} />,
     description: (
       <>
-        Reference a profile from <Code>~/.aws/credentials</Code> or AWS SSO config.
+        Reference a profile from <Code>~/.aws/credentials</Code> or{" "}
+        <Code>~/.aws/config</Code>. The container needs that file mounted.
       </>
     ),
   },
