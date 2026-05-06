@@ -152,13 +152,18 @@ export function RoleDrawer({
   useEffect(() => {
     if (!opened) return;
     if (mode === "edit" && initialRole) {
-      // Merge over EMPTY_ROLE so every key has a defined value. Without this
-      // base, a role missing a field (e.g. no `description`) wouldn't override
-      // that key during setValues — leaving the previously-edited role's
-      // value in form state. Hit when switching Edit A → Edit B in a row.
+      // Build the populated payload from EMPTY_ROLE up. Strip any keys that
+      // are explicitly `undefined` on initialRole (e.g. an absent
+      // `description` from the API) — Mantine's setInitialValues / setValues
+      // silently drops keys with undefined value when merging, leaving the
+      // previously-edited role's value in form state. Hit when switching
+      // Edit A → Edit B in a row.
+      const cleanedInitial: Partial<AppRole> = Object.fromEntries(
+        Object.entries(initialRole).filter(([, v]) => v !== undefined),
+      ) as Partial<AppRole>;
       const populated: AppRole = {
         ...EMPTY_ROLE,
-        ...initialRole,
+        ...cleanedInitial,
         secret_access_key: "",
       };
       form.setInitialValues(populated);

@@ -482,6 +482,76 @@ describe("RoleDrawer", () => {
     );
   });
 
+  it("clears stale description even when the next role has description=undefined (API omits the key)", async () => {
+    // Reproduces the real-browser bug: backend omits `description` from the
+    // payload when a role has no description set. Spread `{...EMPTY_ROLE,
+    // ...initialRole}` would produce description=""; but if `initialRole`
+    // explicitly carries `description: undefined`, it overwrites the
+    // EMPTY_ROLE default with undefined, and Mantine's setValues silently
+    // drops undefined keys during merge — leaving the prior role's value.
+    const roleA: AppRole = {
+      name: "A",
+      type: "default",
+      description: "First role description",
+      allowed_buckets: [],
+    };
+    // roleB explicitly has description=undefined (TypeScript trick to
+    // force the key to exist with undefined — same shape as JSON.parse'd
+    // payload from a backend that omits empty strings).
+    const roleB: AppRole = {
+      name: "B",
+      type: "default",
+      description: undefined,
+      allowed_buckets: [],
+    } as AppRole;
+
+    const { rerender } = render(
+      <MantineProvider>
+        <Notifications />
+        <RoleDrawer
+          opened={true}
+          mode="edit"
+          initialRole={roleA}
+          config={baseConfig}
+          readOnly={false}
+          onClose={vi.fn()}
+          onSubmit={vi.fn()}
+        />
+      </MantineProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText(/^description$/i) as HTMLInputElement).value,
+      ).toBe("First role description"),
+    );
+
+    rerender(
+      <MantineProvider>
+        <Notifications />
+        <RoleDrawer
+          opened={true}
+          mode="edit"
+          initialRole={roleB}
+          config={baseConfig}
+          readOnly={false}
+          onClose={vi.fn()}
+          onSubmit={vi.fn()}
+        />
+      </MantineProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("textbox", { name: /^name/i }) as HTMLInputElement)
+          .value,
+      ).toBe("B"),
+    );
+    expect(
+      (screen.getByLabelText(/^description$/i) as HTMLInputElement).value,
+    ).toBe("");
+  });
+
   it("does not leak description from one edited role into the next when switching Edit A → Edit B", async () => {
     // Regression: opening Edit on a role with a description, then opening
     // Edit on a different role without description, used to keep the first
