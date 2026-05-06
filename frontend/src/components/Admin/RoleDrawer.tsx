@@ -152,7 +152,15 @@ export function RoleDrawer({
   useEffect(() => {
     if (!opened) return;
     if (mode === "edit" && initialRole) {
-      const populated: AppRole = { ...initialRole, secret_access_key: "" };
+      // Merge over EMPTY_ROLE so every key has a defined value. Without this
+      // base, a role missing a field (e.g. no `description`) wouldn't override
+      // that key during setValues — leaving the previously-edited role's
+      // value in form state. Hit when switching Edit A → Edit B in a row.
+      const populated: AppRole = {
+        ...EMPTY_ROLE,
+        ...initialRole,
+        secret_access_key: "",
+      };
       form.setInitialValues(populated);
       form.setValues(populated);
     } else if (mode === "create") {

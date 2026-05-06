@@ -482,6 +482,77 @@ describe("RoleDrawer", () => {
     );
   });
 
+  it("does not leak description from one edited role into the next when switching Edit A → Edit B", async () => {
+    // Regression: opening Edit on a role with a description, then opening
+    // Edit on a different role without description, used to keep the first
+    // role's description visible in the form. Cause: initialRole spread on
+    // top of form.setValues only writes keys present on the new role —
+    // missing keys (description = undefined) leave the prior value in place.
+    const roleA: AppRole = {
+      name: "RoleA",
+      type: "default",
+      description: "First role description",
+      allowed_buckets: [],
+    };
+    const roleB: AppRole = {
+      name: "RoleB",
+      type: "default",
+      // intentionally NO description property
+      allowed_buckets: [],
+    };
+
+    const onSubmit = vi.fn();
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <MantineProvider>
+        <Notifications />
+        <RoleDrawer
+          opened={true}
+          mode="edit"
+          initialRole={roleA}
+          config={baseConfig}
+          readOnly={false}
+          onClose={onClose}
+          onSubmit={onSubmit}
+        />
+      </MantineProvider>,
+    );
+
+    // Edit A: description shows
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText(/^description$/i) as HTMLInputElement).value,
+      ).toBe("First role description"),
+    );
+
+    // Switch to Edit B (drawer stays open, only initialRole changes)
+    rerender(
+      <MantineProvider>
+        <Notifications />
+        <RoleDrawer
+          opened={true}
+          mode="edit"
+          initialRole={roleB}
+          config={baseConfig}
+          readOnly={false}
+          onClose={onClose}
+          onSubmit={onSubmit}
+        />
+      </MantineProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("textbox", { name: /^name/i }) as HTMLInputElement)
+          .value,
+      ).toBe("RoleB"),
+    );
+    // Description must be EMPTY for roleB, not "First role description"
+    expect(
+      (screen.getByLabelText(/^description$/i) as HTMLInputElement).value,
+    ).toBe("");
+  });
+
   it("does not leak edit-mode values into a subsequent create-mode session", async () => {
     // Regression: clicking Edit on a row, closing the drawer, then clicking
     // "Add role" used to show the previously-edited role's data prefilled in
