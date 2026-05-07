@@ -27,7 +27,6 @@ def _user_to_dict(user: User) -> Dict[str, Any]:
         "is_admin": user.is_admin,
         "allowed_roles": [r.role_name for r in user.roles],
         "theme": user.theme,
-        "tour_seen_v1": user.tour_seen_v1,
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
 
@@ -99,7 +98,6 @@ def save_users(users_data: Dict[str, Any]) -> None:
                 existing.password_hash = user_dict["password_hash"]
                 existing.is_admin = user_dict.get("is_admin", False)
                 existing.theme = user_dict.get("theme", "auto")
-                existing.tour_seen_v1 = user_dict.get("tour_seen_v1", False)
                 # Replace roles atomically.
                 # Flush after clear() so the orphan DELETEs hit the DB before
                 # the new INSERTs — otherwise a no-op edit (set Default → clear,
@@ -116,7 +114,6 @@ def save_users(users_data: Dict[str, Any]) -> None:
                     password_hash=user_dict["password_hash"],
                     is_admin=user_dict.get("is_admin", False),
                     theme=user_dict.get("theme", "auto"),
-                    tour_seen_v1=user_dict.get("tour_seen_v1", False),
                 )
                 for role_name in user_dict.get("allowed_roles", []):
                     user.roles.append(UserRole(role_name=role_name))
@@ -191,8 +188,6 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
             user.is_admin = kwargs["is_admin"]
         if "theme" in kwargs:
             user.theme = kwargs["theme"]
-        if "tour_seen_v1" in kwargs:
-            user.tour_seen_v1 = kwargs["tour_seen_v1"]
         if "allowed_roles" in kwargs:
             # Replace all roles
             user.roles.clear()

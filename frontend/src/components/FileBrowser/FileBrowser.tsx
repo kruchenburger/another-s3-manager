@@ -284,7 +284,7 @@ export function FileBrowser() {
         multiple
         style={{ display: "none" }}
       />
-      <Stack gap="md" data-tour="file-list">
+      <Stack gap="md">
         {filteredFiles.length === 0 ? (
           <FileBrowserEmptyState />
         ) : mode === "table" ? (

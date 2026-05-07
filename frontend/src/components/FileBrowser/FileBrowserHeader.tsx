@@ -118,7 +118,7 @@ export function FileBrowserHeader({
             </Tooltip>
           </>
         )}
-        <Button leftSection={<Upload size={14} />} onClick={onUploadClick} size="sm" data-tour="upload-btn">
+        <Button leftSection={<Upload size={14} />} onClick={onUploadClick} size="sm">
           Upload
         </Button>
       </Group>

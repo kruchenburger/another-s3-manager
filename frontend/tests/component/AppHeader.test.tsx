@@ -15,9 +15,6 @@ vi.mock("@/components/AppShell/ThemeToggle", () => ({
 vi.mock("@/components/AppShell/UserMenu", () => ({
   UserMenu: () => null,
 }));
-vi.mock("@/components/AppShell/HelpButton", () => ({
-  HelpButton: () => null,
-}));
 vi.mock("@/components/BurgerLogo/BurgerLogo", () => ({
   BurgerLogo: () => <span data-testid="burger-logo" />,
 }));
@@ -26,7 +23,7 @@ function renderHeader() {
   return render(
     <MantineProvider>
       <MemoryRouter basename="/v2" initialEntries={["/v2/r/some-role"]}>
-        <AppHeader navOpened={false} onNavToggle={vi.fn()} onOpenTour={vi.fn()} />
+        <AppHeader navOpened={false} onNavToggle={vi.fn()} />
       </MemoryRouter>
     </MantineProvider>,
   );

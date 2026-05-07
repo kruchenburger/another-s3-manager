@@ -17,10 +17,6 @@ export async function fetchMe(): Promise<MeResponse> {
   return apiRequest<MeResponse>("/api/me");
 }
 
-export async function markTourSeen(): Promise<void> {
-  await apiRequest<void>("/api/user/tour-seen", { method: "PUT" });
-}
-
 export async function changeMyPassword(payload: ChangeMyPasswordPayload): Promise<void> {
   await apiRequest<void>("/api/me/password", {
     method: "PUT",

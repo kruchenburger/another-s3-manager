@@ -747,44 +747,6 @@ def test_update_user_theme_user_missing(app_client, mocker):
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
-def test_mark_tour_seen(app_client, monkeypatch):
-    """PUT /api/user/tour-seen flips tour_seen_v1 to True for the current user."""
-    monkeypatch.setenv("ADMIN_PASSWORD", "test-pw")
-    from another_s3_manager.auth import hash_password
-    from another_s3_manager.users import save_users
-
-    save_users(
-        {
-            "users": [
-                {
-                    "username": "admin",
-                    "password_hash": hash_password("test-pw"),
-                    "is_admin": True,
-                    "allowed_roles": [],
-                    "theme": "auto",
-                    "tour_seen_v1": False,
-                }
-            ]
-        }
-    )
-
-    # Login to get cookie + CSRF
-    login_response = app_client.post("/api/login", data={"username": "admin", "password": "test-pw"})
-    assert login_response.status_code == 200, login_response.text
-    me_response = app_client.get("/api/me")
-    csrf = me_response.json()["csrf_token"]
-    assert me_response.json()["tour_seen_v1"] is False
-
-    # Mark tour as seen
-    response = app_client.put("/api/user/tour-seen", headers={"X-CSRF-Token": csrf})
-    assert response.status_code == 200
-    assert response.json() == {"tour_seen_v1": True}
-
-    # /api/me now reports True
-    me_response2 = app_client.get("/api/me")
-    assert me_response2.json()["tour_seen_v1"] is True
-
-
 def test_me_returns_allowed_roles(app_client, monkeypatch):
     """/api/me must include allowed_roles for the React sidebar."""
     monkeypatch.setenv("ADMIN_PASSWORD", "test-pw")
@@ -800,7 +762,6 @@ def test_me_returns_allowed_roles(app_client, monkeypatch):
                     "is_admin": False,
                     "allowed_roles": ["aws-prod", "r2-cdn"],
                     "theme": "auto",
-                    "tour_seen_v1": False,
                 }
             ]
         }

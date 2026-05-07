@@ -61,7 +61,6 @@ function mockMe(username: string) {
       is_admin: true,
       csrf_token: "x",
       theme: "auto",
-      tour_seen_v1: true,
       allowed_roles: [],
       app_name: "x",
       app_version: "x",
