@@ -18,7 +18,7 @@ import { useUpdateAdminToken } from "@/features/tokens/hooks/useUpdateToken";
 import { useDeleteAdminToken } from "@/features/tokens/hooks/useDeleteToken";
 import { useCreateAdminToken } from "@/features/tokens/hooks/useCreateToken";
 import { CreateTokenModal } from "@/components/Tokens/CreateTokenModal";
-import { EditTokenModal } from "@/components/Tokens/EditTokenModal";
+import { TokenEditModal } from "@/components/Tokens/TokenEditModal";
 import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
 import { runWithToasts } from "@/utils/mutationToast";
 import { getErrorMessage } from "@/utils/apiError";
@@ -187,22 +187,26 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
         />
       )}
 
-      {editTarget && (
-        <EditTokenModal
-          opened
-          onClose={() => setEditTarget(null)}
-          loading={updateMutation.isPending}
-          token={editTarget}
-          onSubmit={(payload) =>
-            runWithToasts(
-              updateMutation,
-              { id: editTarget.id, payload },
-              `Token "${editTarget.name}" updated`,
-              () => setEditTarget(null),
-            )
-          }
-        />
-      )}
+      {/* Modal (not Drawer) here on purpose: this list is rendered inside the
+          admin UserDrawer, and stacking a right-Drawer over it would: (a) fully
+          obscure the parent so the user loses context of which user they're
+          editing, (b) fight the Mantine focus-trap stack on close (the inner
+          drawer's onClose can spuriously cascade to the parent). */}
+      <TokenEditModal
+        opened={editTarget !== null}
+        onClose={() => setEditTarget(null)}
+        loading={updateMutation.isPending}
+        token={editTarget}
+        onSubmit={(payload) => {
+          if (!editTarget) return;
+          runWithToasts(
+            updateMutation,
+            { id: editTarget.id, payload },
+            `Token "${editTarget.name}" updated`,
+            () => setEditTarget(null),
+          );
+        }}
+      />
     </Stack>
   );
 }

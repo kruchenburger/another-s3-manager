@@ -8,7 +8,7 @@ import { useDeleteMyToken } from "@/features/tokens/hooks/useDeleteToken";
 import { useUpdateMyToken } from "@/features/tokens/hooks/useUpdateToken";
 import { TokensTable } from "@/components/Tokens/TokensTable";
 import { CreateTokenModal } from "@/components/Tokens/CreateTokenModal";
-import { EditTokenModal } from "@/components/Tokens/EditTokenModal";
+import { TokenEditDrawer } from "@/components/Tokens/TokenEditDrawer";
 import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { notifications } from "@mantine/notifications";
@@ -113,22 +113,21 @@ export function ApiTokensPage() {
         loading={deleteMutation.isPending}
       />
 
-      {editTarget && (
-        <EditTokenModal
-          opened
-          onClose={() => setEditTarget(null)}
-          loading={updateMutation.isPending}
-          token={editTarget}
-          onSubmit={(payload) =>
-            runWithToasts(
-              updateMutation,
-              { id: editTarget.id, payload },
-              "Token updated",
-              () => setEditTarget(null),
-            )
-          }
-        />
-      )}
+      <TokenEditDrawer
+        opened={editTarget !== null}
+        onClose={() => setEditTarget(null)}
+        loading={updateMutation.isPending}
+        token={editTarget}
+        onSubmit={(payload) => {
+          if (!editTarget) return;
+          runWithToasts(
+            updateMutation,
+            { id: editTarget.id, payload },
+            "Token updated",
+            () => setEditTarget(null),
+          );
+        }}
+      />
     </Container>
   );
 }
