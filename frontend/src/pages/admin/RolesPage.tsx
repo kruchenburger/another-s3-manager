@@ -1,7 +1,7 @@
 import { Badge, Button, Group, Stack, Table, Text, Title, Tooltip } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { AlertTriangle, Plus, Pencil, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMatch, useNavigate } from "react-router-dom";
 import { useAdminConfig, useSaveConfig } from "@/features/admin/hooks/useAdminConfig";
 import { toWritableConfig } from "@/features/admin/api/configShape";
@@ -47,10 +47,18 @@ export function RolesPage() {
   }, [drawerMode]);
   const renderMode = drawerMode ?? lastDrawerMode.current ?? "create";
 
-  const editRole =
-    editRoleName && config
-      ? config.roles.find((r) => r.name === editRoleName)
-      : undefined;
+  // Memoize so the reference is stable across parent renders triggered by
+  // unrelated state (mutation pending toggle, filter changes, etc.). Without
+  // this, RoleDrawer's populate-effect (deps include initialRole) re-runs on
+  // every parent render, overwriting the user's in-flight edits with the
+  // pristine role from the config snapshot.
+  const editRole = useMemo<AppRole | undefined>(
+    () =>
+      editRoleName && config
+        ? config.roles.find((r) => r.name === editRoleName)
+        : undefined,
+    [editRoleName, config],
+  );
 
   // Not-found redirect: if the URL points at a role that doesn't exist in the
   // loaded config, bounce back to the list and notify. We can only do this

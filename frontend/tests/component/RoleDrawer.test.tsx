@@ -714,4 +714,13 @@ describe("RoleDrawer", () => {
     expect(defaultRadio).toBeDefined();
     expect((defaultRadio as HTMLInputElement).checked).toBe(true);
   });
+
+  it('mode="create": renders the Stepper labels (Choose type / Scope & details / Review & save)', () => {
+    // Locks the user-facing step labels to their current copy. Replaces
+    // the equivalent assertion that lived in the deleted RoleNewPage.test.tsx.
+    renderDrawer({ opened: true, mode: "create" });
+    expect(screen.getByText(/choose type/i)).toBeInTheDocument();
+    expect(screen.getByText(/scope & details/i)).toBeInTheDocument();
+    expect(screen.getByText(/review & save/i)).toBeInTheDocument();
+  });
 });

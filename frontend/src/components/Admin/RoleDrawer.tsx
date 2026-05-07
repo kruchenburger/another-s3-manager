@@ -66,7 +66,9 @@ interface RoleDrawerProps {
  * (AKIA-only access_key_id, ARN regex) run only when mode === "create" — a
  * legacy role saved before those checks landed (e.g. an ASIA-prefixed key)
  * must not be blocked from re-saving in edit mode. Presence checks ("Required")
- * still run in both modes.
+ * still run in both modes EXCEPT for secret_access_key, whose presence check
+ * is create-only because the drawer surfaces the field empty on edit (see the
+ * `secret merge` note below) and the parent re-attaches the original.
  *
  * The drawer owns no URL routing — opening, closing, and routing are the
  * parent's job. It also does NOT merge secrets: in edit mode the drawer emits
@@ -326,7 +328,11 @@ export function RoleDrawer({
                 )}
                 {active < 2 && <Button onClick={goNext}>Next</Button>}
                 {active === 2 && (
-                  <Button onClick={onCreate} loading={loading}>
+                  <Button
+                    onClick={onCreate}
+                    loading={loading}
+                    disabled={loading}
+                  >
                     Save role
                   </Button>
                 )}
@@ -366,7 +372,11 @@ export function RoleDrawer({
               <Button variant="subtle" onClick={onClose}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={readOnly} loading={loading}>
+              <Button
+                type="submit"
+                disabled={readOnly || loading}
+                loading={loading}
+              >
                 Save changes
               </Button>
             </Group>

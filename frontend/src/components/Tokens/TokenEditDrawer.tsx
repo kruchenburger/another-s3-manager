@@ -127,7 +127,7 @@ export function TokenEditDrawer({
             <Button variant="subtle" onClick={onClose} disabled={loading}>
               Cancel
             </Button>
-            <Button type="submit" loading={loading}>
+            <Button type="submit" loading={loading} disabled={loading}>
               Save
             </Button>
           </Group>
