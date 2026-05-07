@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   Button,
   Drawer,
@@ -19,7 +19,13 @@ interface TokenEditDrawerProps {
   onClose: () => void;
   onSubmit: (payload: UpdateTokenPayload) => void;
   loading: boolean;
-  token: ApiToken;
+  /**
+   * Target token. May be null while the drawer is closing — keep the drawer
+   * mounted and switch `opened` instead of unmounting on close, so Mantine
+   * runs the slide-out animation. The component holds the last non-null
+   * token internally so the form keeps its layout during the close.
+   */
+  token: ApiToken | null;
 }
 
 interface FormValues {
@@ -39,12 +45,21 @@ export function TokenEditDrawer({
   loading,
   token,
 }: TokenEditDrawerProps) {
+  // Hold on to the last non-null token so the form keeps rendering with valid
+  // data while the drawer slides out (parent typically clears editTarget on
+  // close, but Mantine's animation runs ~250ms after `opened` flips to false).
+  const lastTokenRef = useRef<ApiToken | null>(token);
+  if (token) lastTokenRef.current = token;
+  const activeToken = token ?? lastTokenRef.current;
+
   const form = useForm<FormValues>({
-    initialValues: {
-      name: token.name,
-      is_read_only: token.is_read_only,
-      max_read_mb: bytesToMB(token.max_read_bytes),
-    },
+    initialValues: activeToken
+      ? {
+          name: activeToken.name,
+          is_read_only: activeToken.is_read_only,
+          max_read_mb: bytesToMB(activeToken.max_read_bytes),
+        }
+      : { name: "", is_read_only: false, max_read_mb: 1 },
     validate: {
       name: (v) => (v.trim().length === 0 ? "Name is required" : null),
       max_read_mb: (v) => (v < 1 ? "Must be at least 1 MB" : null),
@@ -52,8 +67,11 @@ export function TokenEditDrawer({
   });
 
   // Re-prime form when the target token changes (e.g. user opens edit on a
-  // different row without unmounting the drawer between renders).
+  // different row without unmounting the drawer between renders). Skip when
+  // token is null (close-animation in flight) so we don't blank the inputs
+  // mid-slide.
   useEffect(() => {
+    if (!token) return;
     const next = {
       name: token.name,
       is_read_only: token.is_read_only,
@@ -62,7 +80,7 @@ export function TokenEditDrawer({
     form.setInitialValues(next);
     form.setValues(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token.id, token.name, token.is_read_only, token.max_read_bytes]);
+  }, [token?.id, token?.name, token?.is_read_only, token?.max_read_bytes]);
 
   const handleSubmit = form.onSubmit((values) => {
     const bytes = Math.min(

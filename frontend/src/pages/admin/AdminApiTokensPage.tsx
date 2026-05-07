@@ -134,22 +134,21 @@ export function AdminApiTokensPage() {
         loading={deleteMutation.isPending}
       />
 
-      {editTarget && (
-        <TokenEditDrawer
-          opened
-          onClose={() => setEditTarget(null)}
-          loading={updateMutation.isPending}
-          token={editTarget}
-          onSubmit={(payload) =>
-            runWithToasts(
-              updateMutation,
-              { id: editTarget.id, payload },
-              `Token "${editTarget.name}" updated`,
-              () => setEditTarget(null),
-            )
-          }
-        />
-      )}
+      <TokenEditDrawer
+        opened={editTarget !== null}
+        onClose={() => setEditTarget(null)}
+        loading={updateMutation.isPending}
+        token={editTarget}
+        onSubmit={(payload) => {
+          if (!editTarget) return;
+          runWithToasts(
+            updateMutation,
+            { id: editTarget.id, payload },
+            `Token "${editTarget.name}" updated`,
+            () => setEditTarget(null),
+          );
+        }}
+      />
     </Container>
   );
 }
