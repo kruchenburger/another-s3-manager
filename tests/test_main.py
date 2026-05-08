@@ -1804,3 +1804,55 @@ def test_to_http_exception_uses_typed_status_and_dict_detail():
     http2 = _s3_error_to_http(nf)
     assert http2.status_code == 404
     assert http2.detail == {"code": "NoSuchBucket", "message": "missing"}
+
+
+def test_list_buckets_typed_access_denied_returns_403_with_dict_detail(app_client, mocker):
+    """When the s3_client probe / op raises S3AccessDeniedError, /api/buckets
+    returns 403 with detail={'code': 'AccessDenied', 'message': '...'}."""
+    from another_s3_manager.errors import S3AccessDeniedError
+
+    def _boom(role_name, operation, callback):
+        raise S3AccessDeniedError("AccessDenied", "scoped token cannot list")
+
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=_boom)
+    _, headers = login(app_client)
+    resp = app_client.get("/api/buckets", headers=headers)
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["detail"]["code"] == "AccessDenied"
+    assert "scoped token cannot list" in body["detail"]["message"]
+
+
+def test_list_files_typed_no_such_bucket_returns_404_with_dict_detail(app_client, mocker):
+    """list_files maps S3NotFoundError to 404 with structured detail."""
+    from another_s3_manager.errors import S3NotFoundError
+
+    def _boom(role_name, operation, callback):
+        raise S3NotFoundError("NoSuchBucket", "bucket missing")
+
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=_boom)
+    _, headers = login(app_client)
+    resp = app_client.get("/api/buckets/missing-bucket/files", headers=headers)
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["detail"]["code"] == "NoSuchBucket"
+    assert body["detail"]["message"] == "bucket missing"
+
+
+def test_list_files_generic_exception_logs_and_returns_500(app_client, mocker, caplog):
+    """Generic uncaught Exception in list_files: response is 500 with INTERNAL,
+    AND the server logs include the stack trace (was missing before)."""
+    import logging
+
+    def _boom(role_name, operation, callback):
+        raise RuntimeError("totally unexpected")
+
+    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=_boom)
+    _, headers = login(app_client)
+
+    with caplog.at_level(logging.ERROR, logger="another_s3_manager.main"):
+        resp = app_client.get("/api/buckets/some/files", headers=headers)
+
+    assert resp.status_code == 500
+    # Must contain the stack trace (logger.exception writes ERROR level + exc_info).
+    assert any("totally unexpected" in record.message or record.exc_info is not None for record in caplog.records)

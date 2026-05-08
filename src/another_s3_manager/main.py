@@ -1473,7 +1473,11 @@ async def update_config(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update config: {str(e)}")
+        logger.exception("Unexpected error in update_config")
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "INTERNAL", "message": "Failed to update config — see server logs"},
+        ) from e
 
 
 def _s3_error_to_http(error: S3OperationError) -> HTTPException:
@@ -1585,10 +1589,14 @@ async def list_buckets(
 
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to list buckets: {error_message}")
+    except S3OperationError as e:
+        raise _s3_error_to_http(e) from e
     except Exception as e:
-        # Catch other AWS-related exceptions (like UnauthorizedSSOTokenError)
-        error_message = format_boto_error(e)
-        raise HTTPException(status_code=500, detail=f"Failed to list buckets: {error_message}")
+        logger.exception("Unexpected error in list_buckets")
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "INTERNAL", "message": "Server error — see server logs"},
+        ) from e
 
 
 @app.get("/api/buckets/{bucket_name}/files")
@@ -1660,9 +1668,14 @@ async def list_files(
             raise HTTPException(status_code=404, detail=f"Bucket '{bucket_name}' not found")
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to list files: {error_message}")
+    except S3OperationError as e:
+        raise _s3_error_to_http(e) from e
     except Exception as e:
-        error_message = format_boto_error(e)
-        raise HTTPException(status_code=500, detail=f"Failed to list files: {error_message}")
+        logger.exception("Unexpected error in list_files")
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "INTERNAL", "message": "Server error — see server logs"},
+        ) from e
 
 
 @app.post("/api/buckets/{bucket_name}/upload")
@@ -1821,10 +1834,11 @@ async def upload_file(
         # Return 403 status for access denied errors
         status_code = 403 if is_access_denied else 500
         raise HTTPException(status_code=status_code, detail=f"Failed to upload file: {error_message}")
+    except S3OperationError as e:
+        raise _s3_error_to_http(e) from e
     except Exception as e:
-        error_message = format_boto_error(e)
         # Log error details for debugging (without credentials)
-        logger.error(
+        logger.exception(
             "File upload failed (unexpected error)",
             extra={
                 "bucket": bucket_name,
@@ -1833,9 +1847,11 @@ async def upload_file(
                 "error_type": type(e).__name__,
                 "file_size": total_read if "total_read" in locals() else None,
             },
-            exc_info=True,
         )
-        raise HTTPException(status_code=500, detail=f"Failed to upload file: {error_message}")
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "INTERNAL", "message": "Upload failed — see server logs"},
+        ) from e
 
 
 def get_user_for_download(token: Optional[str] = Query(None), request: Request = None) -> Dict[str, Any]:
@@ -1963,9 +1979,14 @@ async def download_file(
             raise HTTPException(status_code=404, detail=f"File '{path}' not found")
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to download file: {error_message}")
+    except S3OperationError as e:
+        raise _s3_error_to_http(e) from e
     except Exception as e:
-        error_message = format_boto_error(e)
-        raise HTTPException(status_code=500, detail=f"Failed to download file: {error_message}")
+        logger.exception("Unexpected error in download_file")
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "INTERNAL", "message": "Download failed — see server logs"},
+        ) from e
 
 
 @app.get("/api/buckets/{bucket_name}/presigned")
@@ -2023,8 +2044,14 @@ async def get_presigned_url(
         # STS assume_role failure / credential refresh failure / invalid bucket
         # config — produce a clean error rather than a bare 500 with botocore repr.
         raise HTTPException(status_code=500, detail=format_boto_error(e))
+    except S3OperationError as e:
+        raise _s3_error_to_http(e) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=format_boto_error(e))
+        logger.exception("Unexpected error in get_presigned_url")
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "INTERNAL", "message": "Presigned URL generation failed — see server logs"},
+        ) from e
 
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
     return {"url": url, "expires_at": expires_at}
@@ -2112,9 +2139,14 @@ async def delete_file(
     except (ClientError, BotoCoreError) as e:
         error_message = format_boto_error(e)
         raise HTTPException(status_code=500, detail=f"Failed to delete: {error_message}")
+    except S3OperationError as e:
+        raise _s3_error_to_http(e) from e
     except Exception as e:
-        error_message = format_boto_error(e)
-        raise HTTPException(status_code=500, detail=f"Failed to delete: {error_message}")
+        logger.exception("Unexpected error in delete_file")
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "INTERNAL", "message": "Delete failed — see server logs"},
+        ) from e
 
 
 # Mount MCP sub-app at /mcp — must come AFTER all @app.get/@app.post route

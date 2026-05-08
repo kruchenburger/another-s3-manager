@@ -478,7 +478,10 @@ async def test_update_config_unexpected_error(monkeypatch, reload_main):
     with pytest.raises(HTTPException) as exc:
         await main.update_config(None, new_config, {"is_admin": True}, True)
     assert exc.value.status_code == 500
-    assert "Failed to update config" in exc.value.detail
+    # Detail is now structured: {"code": "INTERNAL", "message": "Failed to update config — see server logs"}
+    assert isinstance(exc.value.detail, dict)
+    assert exc.value.detail["code"] == "INTERNAL"
+    assert "Failed to update config" in exc.value.detail["message"]
 
 
 @pytest.mark.asyncio
@@ -1302,7 +1305,10 @@ async def test_delete_file_generic_exception(monkeypatch, reload_main):
     with pytest.raises(HTTPException) as exc:
         await main.delete_file(request, "bucket", path="file.txt", role=None, current_user={"is_admin": True})
     assert exc.value.status_code == 500
-    assert "Failed to delete" in exc.value.detail
+    # Detail is now structured: {"code": "INTERNAL", "message": "Delete failed — see server logs"}
+    assert isinstance(exc.value.detail, dict)
+    assert exc.value.detail["code"] == "INTERNAL"
+    assert "Delete failed" in exc.value.detail["message"]
 
 
 @pytest.mark.asyncio
