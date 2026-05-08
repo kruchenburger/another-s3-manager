@@ -25,10 +25,11 @@ test.describe("Upload + delete via MinIO", () => {
     // Using a timestamp keeps the spec re-runnable without manual cleanup if delete fails.
     const uploadName = `upload-${Date.now()}.txt`;
 
-    // Click Upload (data-tour selector is most stable). The hidden <input type="file">
-    // lives in FileBrowser.tsx and is triggered via ref by the Upload button onClick.
+    // The hidden <input type="file"> lives in FileBrowser.tsx and is triggered
+    // via ref by the Upload button's onClick. There is exactly one role=button
+    // with name "Upload" on the page, so getByRole is the stable hook.
     const fileChooserPromise = page.waitForEvent("filechooser");
-    await page.locator('[data-tour="upload-btn"]').click();
+    await page.getByRole("button", { name: "Upload" }).click();
     const fileChooser = await fileChooserPromise;
     // Playwright lets us set virtual file content — avoids needing a fixture with this exact name.
     await fileChooser.setFiles({

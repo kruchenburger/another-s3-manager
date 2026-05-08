@@ -5,15 +5,13 @@ import { useMe } from "@/features/auth/hooks/useMe";
 import { BurgerLogo } from "@/components/BurgerLogo/BurgerLogo";
 import { ThemeToggle } from "@/components/AppShell/ThemeToggle";
 import { UserMenu } from "@/components/AppShell/UserMenu";
-import { HelpButton } from "@/components/AppShell/HelpButton";
 
 interface AppHeaderProps {
   navOpened: boolean;
   onNavToggle: () => void;
-  onOpenTour: () => void;
 }
 
-export function AppHeader({ navOpened, onNavToggle, onOpenTour }: AppHeaderProps) {
+export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
   const { data: me } = useMe();
   const navigate = useNavigate();
   const appName = me?.app_name ?? "Another S3 Manager";
@@ -51,7 +49,6 @@ export function AppHeader({ navOpened, onNavToggle, onOpenTour }: AppHeaderProps
             </ActionIcon>
           </Tooltip>
         )}
-        <HelpButton onClick={onOpenTour} />
         <ThemeToggle />
         <UserMenu />
       </Group>

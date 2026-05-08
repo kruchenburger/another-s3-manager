@@ -10,7 +10,6 @@ export interface MeResponse {
   is_admin: boolean;
   csrf_token: string;
   theme: Theme;
-  tour_seen_v1: boolean;
   app_name: string;
   app_version: string;
   allowed_roles: string[];

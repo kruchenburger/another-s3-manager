@@ -85,7 +85,6 @@ export function UploadDropZone({ currentPath, onDrop, active = true }: UploadDro
         border: "4px dashed var(--mantine-color-amber-6)",
         pointerEvents: "none",
       }}
-      data-tour="drop-overlay"
     >
       <Stack align="center" gap="xs">
         <Upload size={64} color="var(--mantine-color-amber-6)" />

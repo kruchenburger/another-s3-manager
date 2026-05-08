@@ -16,7 +16,7 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
   const roles = me?.allowed_roles ?? [];
 
   return (
-    <div className={classes.shell} data-tour="sidebar">
+    <div className={classes.shell}>
       <div className={classes.scrollArea}>
         {!collapsed && (
           <Text size="xs" c="dimmed" px="sm" pb="xs" tt="uppercase">
@@ -39,7 +39,6 @@ export function Sidebar({ collapsed, onToggleCollapsed }: SidebarProps) {
           variant="subtle"
           onClick={onToggleCollapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          data-tour="collapse-btn"
         >
           {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
         </ActionIcon>
