@@ -243,3 +243,77 @@ def test_probe_access_denied_without_allowed_buckets_raises_actionable_error(mon
     msg = str(exc_info.value)
     assert "allowed_buckets" in msg or "ListAllMyBuckets" in msg, "Error message must point the admin at the fix"
     assert "ScopedNoBuckets" not in s3_client_module._s3_clients_cache
+
+
+def test_assume_role_invalid_arn_raises_s3configerror(monkeypatch):
+    """Bad assume_role config (InvalidArgument from STS) raises S3ConfigError
+    instead of bare ValueError so the HTTP boundary returns 400 + boto code."""
+    from botocore.exceptions import ClientError as BotoClientError
+
+    from another_s3_manager import s3_client as s3_client_module
+    from another_s3_manager.errors import S3ConfigError
+
+    role = {
+        "name": "Bad",
+        "type": "assume_role",
+        "role_arn": "arn:aws:iam::000000000000:role/does-not-exist",
+    }
+
+    class _FakeSTS:
+        def assume_role(self, **kwargs):
+            raise BotoClientError(
+                error_response={
+                    "Error": {"Code": "InvalidArgument", "Message": "bad arn"},
+                    "ResponseMetadata": {"HTTPStatusCode": 400},
+                },
+                operation_name="AssumeRole",
+            )
+
+    def _fake_boto_client(service, **kwargs):
+        if service == "sts":
+            return _FakeSTS()
+        raise NotImplementedError(f"Unexpected boto3.client('{service}')")
+
+    monkeypatch.setattr(s3_client_module.boto3, "client", _fake_boto_client)
+
+    with pytest.raises(S3ConfigError) as exc_info:
+        s3_client_module._create_s3_client_from_role(role)
+
+    # The classifier maps InvalidArgument → S3ConfigError. The role ARN is
+    # preserved in the message so admins can identify which role is broken.
+    assert "does-not-exist" in str(exc_info.value) or exc_info.value.code == "InvalidArgument"
+
+
+def test_assume_role_expired_token_raises_credentials_expired(monkeypatch):
+    """ExpiredToken from STS raises CredentialsExpiredError (HTTP 401)
+    instead of bare ValueError (was HTTP 400)."""
+    from botocore.exceptions import ClientError as BotoClientError
+
+    from another_s3_manager import s3_client as s3_client_module
+    from another_s3_manager.errors import CredentialsExpiredError
+
+    role = {
+        "name": "Bad",
+        "type": "assume_role",
+        "role_arn": "arn:aws:iam::000000000000:role/r",
+    }
+
+    class _FakeSTS:
+        def assume_role(self, **kwargs):
+            raise BotoClientError(
+                error_response={
+                    "Error": {"Code": "ExpiredToken", "Message": "token expired"},
+                    "ResponseMetadata": {"HTTPStatusCode": 403},
+                },
+                operation_name="AssumeRole",
+            )
+
+    def _fake_boto_client(service, **kwargs):
+        if service == "sts":
+            return _FakeSTS()
+        raise NotImplementedError(f"Unexpected boto3.client('{service}')")
+
+    monkeypatch.setattr(s3_client_module.boto3, "client", _fake_boto_client)
+
+    with pytest.raises(CredentialsExpiredError):
+        s3_client_module._create_s3_client_from_role(role)

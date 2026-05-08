@@ -300,7 +300,11 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                     sts_attempts += 1
                     continue  # Retry once
                 else:
-                    # Second attempt failed or not an expired token error
+                    # Second attempt failed or not an expired token error.
+                    # Convert to typed CredentialsExpiredError so the HTTP boundary
+                    # can return 401 (re-auth required) instead of bare 400.
+                    from another_s3_manager.errors import CredentialsExpiredError
+
                     logger.error(
                         f"Failed to retrieve credentials for STS client (needed to assume role {role_arn})",
                         extra={
@@ -310,13 +314,18 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                         },
                         exc_info=True,
                     )
-                    raise ValueError(
-                        f"Unable to retrieve AWS credentials needed to assume role {role_arn}. "
-                        f"In Kubernetes, ensure IRSA (IAM Roles for Service Accounts) or eks-pod-identity is configured, "
-                        f"or that the pod has access to instance profile credentials. "
-                        f"Error: {str(e)}"
+                    raise CredentialsExpiredError(
+                        code="CredentialRetrievalError",
+                        message=(
+                            f"Unable to retrieve AWS credentials needed to assume role {role_arn}. "
+                            f"In Kubernetes, ensure IRSA (IAM Roles for Service Accounts) or eks-pod-identity is configured, "
+                            f"or that the pod has access to instance profile credentials. "
+                            f"Error: {str(e)}"
+                        ),
                     ) from e
             except ClientError as e:
+                from another_s3_manager.errors import classify_boto_error
+
                 error_code = (
                     e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") and e.response else ""
                 )
@@ -332,19 +341,20 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                     },
                     exc_info=True,
                 )
-                # Re-raise with more context
-                if error_code == "AccessDenied":
-                    raise ValueError(
-                        f"Access denied when trying to assume role {role_arn}. "
-                        f"Check that the pod/service account has permission to assume this role. "
-                        f"Error: {error_msg}"
-                    ) from e
-                raise ValueError(f"Failed to assume role {role_arn}: {error_msg or str(e)}") from e
+                # Convert to typed exception via classifier (preserves boto code +
+                # http_status). Preserve the role ARN context in the message —
+                # admins need to know which role's config is broken.
+                typed = classify_boto_error(e)
+                original = typed.args[0] if typed.args else str(e)
+                typed.args = (f"assume_role for {role_arn}: {original}",)
+                raise typed from e
             except Exception as e:
                 error_type = type(e).__name__
                 error_msg = str(e)
-                # Check for NoCredentialsError
+                # Check for NoCredentialsError — re-auth required, not bad config.
                 if "NoCredentialsError" in error_type or "Unable to locate credentials" in error_msg:
+                    from another_s3_manager.errors import CredentialsExpiredError
+
                     logger.error(
                         f"No AWS credentials found (needed to assume role {role_arn})",
                         extra={
@@ -353,19 +363,28 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                         },
                         exc_info=True,
                     )
-                    raise ValueError(
-                        f"Unable to locate AWS credentials needed to assume role {role_arn}. "
-                        f"In Kubernetes, ensure IRSA (IAM Roles for Service Accounts) or eks-pod-identity is configured, "
-                        f"or that the pod has access to instance profile credentials. "
-                        f"Error: {error_msg}"
+                    raise CredentialsExpiredError(
+                        code="NoCredentialsError",
+                        message=(
+                            f"Unable to locate AWS credentials needed to assume role {role_arn}. "
+                            f"In Kubernetes, ensure IRSA (IAM Roles for Service Accounts) or eks-pod-identity is configured, "
+                            f"or that the pod has access to instance profile credentials. "
+                            f"Error: {error_msg}"
+                        ),
                     ) from e
+
+                from another_s3_manager.errors import S3OperationError
 
                 logger.error(
                     f"Unexpected error while assuming role {role_arn}",
                     extra={"role_arn": role_arn, "error_type": error_type},
                     exc_info=True,
                 )
-                raise ValueError(f"Unexpected error while assuming role {role_arn}: {error_msg}") from e
+                raise S3OperationError(
+                    code="Unknown",
+                    message=f"Unexpected error while assuming role {role_arn}: {error_msg}",
+                    http_status=500,
+                ) from e
 
         # Verify that we successfully obtained credentials
         if initial_credentials is None:
