@@ -1785,3 +1785,22 @@ def test_presigned_endpoint_boto_error_returns_500(app_client, mocker):
     body = response.json()
     assert "detail" in body
     assert isinstance(body["detail"], str)
+
+
+def test_to_http_exception_uses_typed_status_and_dict_detail():
+    """_s3_error_to_http maps each typed S3 error to its http_status + structured detail."""
+    from fastapi import HTTPException
+
+    from another_s3_manager.errors import S3AccessDeniedError, S3NotFoundError
+    from another_s3_manager.main import _s3_error_to_http
+
+    err = S3AccessDeniedError("AccessDenied", "no perms")
+    http = _s3_error_to_http(err)
+    assert isinstance(http, HTTPException)
+    assert http.status_code == 403
+    assert http.detail == {"code": "AccessDenied", "message": "no perms"}
+
+    nf = S3NotFoundError("NoSuchBucket", "missing")
+    http2 = _s3_error_to_http(nf)
+    assert http2.status_code == 404
+    assert http2.detail == {"code": "NoSuchBucket", "message": "missing"}

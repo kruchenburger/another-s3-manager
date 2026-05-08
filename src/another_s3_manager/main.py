@@ -67,6 +67,7 @@ from another_s3_manager.constants import (
     COOKIE_SECURE,
     STATIC_DIR,
 )
+from another_s3_manager.errors import S3OperationError
 from another_s3_manager.metrics import (
     REGISTRY,
     http_request_duration_seconds,
@@ -1473,6 +1474,19 @@ async def update_config(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to update config: {str(e)}")
+
+
+def _s3_error_to_http(error: S3OperationError) -> HTTPException:
+    """Map a typed S3 error to an HTTPException with structured detail.
+
+    Detail shape: ``{"code": <boto code>, "message": <human-readable>}``.
+    Frontend reads ``message`` for display and ``code`` for per-code UI hints
+    (e.g. "Open admin to fix" when code == "InvalidRegion").
+    """
+    return HTTPException(
+        status_code=error.http_status,
+        detail={"code": error.code, "message": str(error)},
+    )
 
 
 def validate_role_access(role_name: Optional[str], current_user: Dict[str, Any]) -> Optional[str]:
