@@ -479,6 +479,13 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     """
     Get S3 client for the specified role (cached).
 
+    On cache miss, after creation we probe the client with a lightweight
+    call (list_buckets, falling back to head_bucket on the role's first
+    allowed_bucket if list_buckets is denied). If the probe raises, the
+    client is NOT cached and the failure is propagated as a typed
+    S3OperationError so callers see the real error code immediately
+    instead of caching a broken client.
+
     Args:
         role_name: Name of the role to use, or None for default
 
@@ -487,6 +494,10 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     """
     # Import here to avoid circular dependency
     from another_s3_manager.config import load_config
+    from another_s3_manager.errors import (
+        S3AccessDeniedError,
+        classify_boto_error,
+    )
 
     # Use cache key based on role name
     cache_key = role_name or "default"
@@ -511,14 +522,11 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
             # Fallback to default AWS credentials
             role = {"name": "Default", "type": "default", "description": "Use default AWS credentials"}
 
-    # Create and cache client
+    # Create client
     try:
         role_type = role.get("type", "unknown")
         logger.debug(f"Creating S3 client for role '{role_name or 'default'}' (type: {role_type})")
         client = _create_s3_client_from_role(role)
-        _s3_clients_cache[cache_key] = client
-        logger.debug(f"Successfully created and cached S3 client for role '{role_name or 'default'}'")
-        return client
     except Exception:
         logger.error(
             f"Failed to create S3 client for role '{role_name or 'default'}'",
@@ -530,6 +538,55 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
             exc_info=True,
         )
         raise
+
+    # Probe the client to surface bad config (invalid region, unreachable
+    # endpoint, expired credentials) BEFORE caching. Roles with
+    # allowed_buckets configured are expected to lack ListAllMyBuckets
+    # permission — fall back to head_bucket on the first allowed bucket.
+    try:
+        client.list_buckets()
+    except Exception as probe_error:
+        typed = classify_boto_error(probe_error)
+        if isinstance(typed, S3AccessDeniedError):
+            allowed_buckets = role.get("allowed_buckets") or []
+            if isinstance(allowed_buckets, list) and allowed_buckets:
+                first = str(allowed_buckets[0])
+                try:
+                    client.head_bucket(Bucket=first)
+                except Exception as head_error:
+                    head_typed = classify_boto_error(head_error)
+                    logger.error(
+                        f"S3 client probe (head_bucket) failed for role '{role_name or 'default'}': "
+                        f"code={head_typed.code} status={head_typed.http_status}"
+                    )
+                    raise head_typed from head_error
+                # head_bucket succeeded — scoped token is valid for that bucket.
+            else:
+                # No allowed_buckets configured AND the role's creds can't
+                # list all buckets. Wrap with an actionable message so the
+                # admin knows the fix (configure allowed_buckets, or grant
+                # ListAllMyBuckets) — the bare boto message just says
+                # "AccessDenied" which doesn't point at the resolution.
+                logger.error(
+                    f"S3 client probe denied for role '{role_name or 'default'}' and no allowed_buckets configured"
+                )
+                raise S3AccessDeniedError(
+                    code=typed.code,
+                    message=(
+                        f"{typed}. This role's credentials cannot list all buckets — "
+                        "configure 'allowed_buckets' on the role or grant ListAllMyBuckets."
+                    ),
+                ) from probe_error
+        else:
+            logger.error(
+                f"S3 client probe failed for role '{role_name or 'default'}': "
+                f"code={typed.code} status={typed.http_status}"
+            )
+            raise typed from probe_error
+
+    _s3_clients_cache[cache_key] = client
+    logger.debug(f"Successfully created, probed and cached S3 client for role '{role_name or 'default'}'")
+    return client
 
 
 def _execute_with_retry_inner(role_name: Optional[str], callback: Callable[[AnyType], T]) -> T:
