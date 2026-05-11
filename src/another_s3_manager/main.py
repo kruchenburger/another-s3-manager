@@ -1873,7 +1873,8 @@ def get_user_for_download(token: Optional[str] = Query(None), request: Request =
                 if user:
                     user["csrf_token"] = payload.get("csrf_token")
                     return user
-        except (JWTError, Exception):
+        except (JWTError, ValueError):
+            # Bad JWT or malformed user input — try the next candidate (or fall through to 401).
             pass
 
     # Fall back to Bearer header (legacy vanilla UI) or access_token cookie (cookie-auth UI)
@@ -1896,7 +1897,8 @@ def get_user_for_download(token: Optional[str] = Query(None), request: Request =
                     if user:
                         user["csrf_token"] = payload.get("csrf_token")
                         return user
-            except (JWTError, Exception):
+            except (JWTError, ValueError):
+                # Bad JWT or malformed user input — try the next candidate (or fall through to 401).
                 pass
 
     raise HTTPException(

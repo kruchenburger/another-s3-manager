@@ -1856,3 +1856,38 @@ def test_list_files_generic_exception_logs_and_returns_500(app_client, mocker, c
     assert resp.status_code == 500
     # Must contain the stack trace (logger.exception writes ERROR level + exc_info).
     assert any("totally unexpected" in record.message or record.exc_info is not None for record in caplog.records)
+
+
+def test_get_user_for_download_does_not_swallow_db_errors(monkeypatch):
+    """A non-JWT exception (e.g. SQLite OperationalError) during user lookup
+    must NOT be silently swallowed and turned into 401 — it should propagate."""
+    # Create a valid JWT for "alice".
+    from datetime import datetime, timedelta, timezone
+
+    from jose import jwt
+    from sqlalchemy.exc import OperationalError
+
+    from another_s3_manager.auth import get_jwt_secret_key
+    from another_s3_manager.constants import JWT_ALGORITHM
+    from another_s3_manager.main import get_user_for_download
+
+    payload = {
+        "sub": "alice",
+        "csrf_token": "csrf-x",
+        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+    }
+    token = jwt.encode(payload, get_jwt_secret_key(), algorithm=JWT_ALGORITHM)
+
+    # Patch load_users to raise OperationalError (transient DB error). The
+    # function imports load_users INSIDE its body, so patch the source module.
+    import another_s3_manager.users as users_module
+
+    def _boom():
+        raise OperationalError("statement", "params", Exception("db down"))
+
+    monkeypatch.setattr(users_module, "load_users", _boom)
+
+    # Old behaviour: silent catch → returns 401.
+    # New behaviour: re-raise OperationalError (transient infra → caller sees real error).
+    with pytest.raises(OperationalError):
+        get_user_for_download(token=token, request=None)
