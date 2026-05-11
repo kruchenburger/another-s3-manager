@@ -631,3 +631,57 @@ async def test_list_roles_records_response_bytes(alice_user, tool_registry):
     await _call(tool_registry, "list_roles", _fake_request(plaintext))
     after = count("list_roles")
     assert after >= before + 1
+
+
+# ---------------------------------------------------------------------------
+# Typed S3 exception forwarding (Task 7 — PR1 error-handling overhaul)
+#
+# Each MCP handler must surface S3OperationError subclasses as their own
+# error code (e.g. S3_ACCESS_DENIED) instead of falling through to the
+# generic INTERNAL_ERROR catch-all. The boto error code must be exposed
+# in details.boto_code so AI agents can render specific guidance.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_buckets_typed_access_denied_forwards_s3_access_denied_code(alice_user, tool_registry):
+    """When list_buckets_for_role raises S3AccessDeniedError,
+    the MCP tool surfaces 'S3_ACCESS_DENIED' with details.boto_code."""
+    from another_s3_manager.errors import S3AccessDeniedError
+
+    _, plaintext = alice_user
+
+    with patch(
+        "another_s3_manager.s3_client.list_buckets_for_role",
+        side_effect=S3AccessDeniedError("AccessDenied", "scoped token cannot list"),
+    ):
+        with pytest.raises(McpError) as exc_info:
+            await _call(tool_registry, "list_buckets", _fake_request(plaintext), role="Default")
+
+    assert exc_info.value.code == "S3_ACCESS_DENIED"
+    assert exc_info.value.details.get("boto_code") == "AccessDenied"
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_files_typed_config_error_forwards_s3_config_error(alice_user, tool_registry):
+    """S3ConfigError surfaces as S3_CONFIG_ERROR with boto_code in details."""
+    from another_s3_manager.errors import S3ConfigError
+
+    _, plaintext = alice_user
+
+    with patch(
+        "another_s3_manager.s3_client.list_objects_for_role",
+        side_effect=S3ConfigError("InvalidRegion", "eu-central-1 not valid for R2"),
+    ):
+        with pytest.raises(McpError) as exc_info:
+            await _call(
+                tool_registry,
+                "list_files",
+                _fake_request(plaintext),
+                role="Default",
+                bucket="my-bucket",
+                path="",
+            )
+
+    assert exc_info.value.code == "S3_CONFIG_ERROR"
+    assert exc_info.value.details.get("boto_code") == "InvalidRegion"
