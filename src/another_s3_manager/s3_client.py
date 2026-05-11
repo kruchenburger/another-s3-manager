@@ -43,21 +43,23 @@ def _clear_boto3_cached_credentials() -> None:
             try:
                 if hasattr(default_session, "_credentials"):
                     default_session._credentials = None
-            except Exception:  # noqa: BLE001 - best effort cleanup
-                pass
+            except Exception as exc:  # noqa: BLE001 - best effort cleanup
+                logger.debug("_clear_boto3_cached_credentials: default_session._credentials clear failed: %s", exc)
             try:
                 inner_session = getattr(default_session, "_session", None)
                 if inner_session is not None and hasattr(inner_session, "_credentials"):
                     inner_session._credentials = None
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - best effort cleanup
+                logger.debug(
+                    "_clear_boto3_cached_credentials: default_session._session._credentials clear failed: %s", exc
+                )
 
         module_session = getattr(boto3, "_session", None)
         if module_session is not None and hasattr(module_session, "_credentials"):
             try:
                 module_session._credentials = None
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - best effort cleanup
+                logger.debug("_clear_boto3_cached_credentials: module_session._credentials clear failed: %s", exc)
 
         # Clear credential resolver caches on a fresh botocore session
         import botocore.session
