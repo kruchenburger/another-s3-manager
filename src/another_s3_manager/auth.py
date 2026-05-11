@@ -49,12 +49,20 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         if len(password_bytes) > 72:
             plain_password = password_bytes[:72].decode("utf-8", errors="ignore")
         return pwd_context.verify(plain_password, hashed_password)
-    except Exception:
-        # If verification fails, try with pbkdf2_sha256 context
+    except Exception as primary_exc:
+        # Try pbkdf2_sha256 fallback before giving up — historical migration path.
         try:
             pwd_context_fallback = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
             return pwd_context_fallback.verify(plain_password, hashed_password)
-        except Exception:
+        except Exception as fallback_exc:
+            # Both schemes failed — the hash is likely corrupted. Return False so
+            # the user gets a normal "wrong password" response, but warn so
+            # operators can spot data corruption in the logs.
+            logger.warning(
+                "verify_password: both bcrypt and pbkdf2_sha256 raised; treating as failure (primary=%s, fallback=%s)",
+                primary_exc,
+                fallback_exc,
+            )
             return False
 
 
