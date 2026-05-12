@@ -199,6 +199,109 @@ def test_probe_network_error_raises_s3networkerror(monkeypatch, tmp_path):
     assert "BadEndpoint" not in s3_client_module._s3_clients_cache
 
 
+def test_probe_iterates_allowed_buckets_until_one_succeeds(monkeypatch, tmp_path):
+    """Probe must NOT brick the role when allowed_buckets[0] is gone — it must
+    iterate ALL allowed_buckets and cache as long as ONE responds. Otherwise
+    a single deleted/renamed bucket out-of-band makes the role unusable."""
+    from another_s3_manager import s3_client as s3_client_module
+
+    cfg = {
+        "roles": [
+            {
+                "name": "MultiBucket",
+                "type": "s3_compatible",
+                "access_key_id": "x",
+                "secret_access_key": "y",
+                "endpoint_url": "https://acct.r2.cloudflarestorage.com",
+                "region": "auto",
+                # First bucket is gone (deleted out-of-band); second still works.
+                "allowed_buckets": ["legacy-archive", "active-data"],
+            }
+        ]
+    }
+    cfg_path = tmp_path / "cfg.json"
+    cfg_path.write_text(json.dumps(cfg))
+    monkeypatch.setenv("S3_FILE_MANAGER_CONFIG", str(cfg_path))
+
+    from another_s3_manager import config as config_module
+
+    monkeypatch.setattr(config_module, "CONFIG_FILE", cfg_path)
+    config_module._config_cache = {}
+    config_module._config_mtime = 0
+
+    head_calls: list[str] = []
+
+    class _FakeClient:
+        def list_buckets(self):
+            raise _client_error("AccessDenied", "scoped token", http_status=403)
+
+        def head_bucket(self, Bucket):
+            head_calls.append(Bucket)
+            if Bucket == "legacy-archive":
+                # Simulate out-of-band deletion.
+                raise _client_error("NoSuchBucket", "gone", http_status=404)
+            return {}
+
+    fake_client = _FakeClient()
+    monkeypatch.setattr(s3_client_module, "_create_s3_client_from_role", lambda role: fake_client)
+    s3_client_module._s3_clients_cache.clear()
+
+    client = s3_client_module.get_s3_client("MultiBucket")
+    assert client is fake_client
+    # Both buckets tried in order; second succeeded → loop broke → cached.
+    assert head_calls == ["legacy-archive", "active-data"]
+    assert "MultiBucket" in s3_client_module._s3_clients_cache
+
+
+def test_probe_raises_when_all_allowed_buckets_fail(monkeypatch, tmp_path):
+    """If list_buckets is denied AND every allowed_bucket fails head_bucket,
+    the probe must raise — caching a totally unusable client is worse than
+    failing loud."""
+    from another_s3_manager import s3_client as s3_client_module
+    from another_s3_manager.errors import S3OperationError
+
+    cfg = {
+        "roles": [
+            {
+                "name": "AllGone",
+                "type": "s3_compatible",
+                "access_key_id": "x",
+                "secret_access_key": "y",
+                "endpoint_url": "https://acct.r2.cloudflarestorage.com",
+                "region": "auto",
+                "allowed_buckets": ["a", "b"],
+            }
+        ]
+    }
+    cfg_path = tmp_path / "cfg.json"
+    cfg_path.write_text(json.dumps(cfg))
+    monkeypatch.setenv("S3_FILE_MANAGER_CONFIG", str(cfg_path))
+
+    from another_s3_manager import config as config_module
+
+    monkeypatch.setattr(config_module, "CONFIG_FILE", cfg_path)
+    config_module._config_cache = {}
+    config_module._config_mtime = 0
+
+    class _FakeClient:
+        def list_buckets(self):
+            raise _client_error("AccessDenied", "scoped token", http_status=403)
+
+        def head_bucket(self, Bucket):
+            raise _client_error("NoSuchBucket", "gone", http_status=404)
+
+    monkeypatch.setattr(s3_client_module, "_create_s3_client_from_role", lambda role: _FakeClient())
+    s3_client_module._s3_clients_cache.clear()
+
+    with pytest.raises(S3OperationError) as exc_info:
+        s3_client_module.get_s3_client("AllGone")
+
+    # Message should list which buckets were tried so admins can debug.
+    msg = str(exc_info.value)
+    assert "a" in msg and "b" in msg
+    assert "AllGone" not in s3_client_module._s3_clients_cache
+
+
 def test_probe_access_denied_without_allowed_buckets_raises_actionable_error(monkeypatch, tmp_path):
     """If list_buckets returns 403 AND allowed_buckets is not configured,
     the probe surfaces an S3AccessDeniedError with an actionable message
@@ -241,8 +344,62 @@ def test_probe_access_denied_without_allowed_buckets_raises_actionable_error(mon
         s3_client_module.get_s3_client("ScopedNoBuckets")
 
     msg = str(exc_info.value)
-    assert "allowed_buckets" in msg or "ListAllMyBuckets" in msg, "Error message must point the admin at the fix"
+    assert "allowed_buckets" in msg.lower() or "listallmybuckets" in msg.lower(), (
+        "Error message must point the admin at the fix"
+    )
+    # Preserve the friendly copy from PR #14 so frontend keeps showing the
+    # "scoped tokens (R2, MinIO, ...)" guidance — probe must NOT regress to
+    # bare "Access Denied".
+    assert "scoped token" in msg.lower(), "Friendly PR #14 copy must be preserved by probe"
     assert "ScopedNoBuckets" not in s3_client_module._s3_clients_cache
+
+
+def test_assume_role_access_denied_includes_iam_trust_policy_hint(monkeypatch):
+    """STS AccessDenied on assume_role must include the IRSA / pod-identity
+    debugging hint. Boto's raw message names the principal but doesn't tell
+    admins to check the trust policy — that hint is the actionable fix."""
+    from botocore.exceptions import ClientError as BotoClientError
+
+    from another_s3_manager import s3_client as s3_client_module
+    from another_s3_manager.errors import S3AccessDeniedError
+
+    role = {
+        "name": "Bad",
+        "type": "assume_role",
+        "role_arn": "arn:aws:iam::000000000000:role/target",
+    }
+
+    class _FakeSTS:
+        def assume_role(self, **kwargs):
+            raise BotoClientError(
+                error_response={
+                    "Error": {
+                        "Code": "AccessDenied",
+                        "Message": "User: arn:aws:iam::000:user/x is not authorized to perform: sts:AssumeRole",
+                    },
+                    "ResponseMetadata": {"HTTPStatusCode": 403},
+                },
+                operation_name="AssumeRole",
+            )
+
+    def _fake_boto_client(service, **kwargs):
+        if service == "sts":
+            return _FakeSTS()
+        raise NotImplementedError(f"Unexpected boto3.client('{service}')")
+
+    monkeypatch.setattr(s3_client_module.boto3, "client", _fake_boto_client)
+
+    with pytest.raises(S3AccessDeniedError) as exc_info:
+        s3_client_module._create_s3_client_from_role(role)
+
+    msg = str(exc_info.value)
+    # The original boto principal/action context is preserved.
+    assert "sts:AssumeRole" in msg
+    # The actionable IAM trust-policy hint is added back (was lost in the
+    # initial typed-exception conversion in this PR).
+    assert "trust policy" in msg.lower() or "permission to assume" in msg.lower(), (
+        "AssumeRole AccessDenied must include the IAM trust-policy / pod-identity hint"
+    )
 
 
 def test_assume_role_invalid_arn_raises_s3configerror(monkeypatch):

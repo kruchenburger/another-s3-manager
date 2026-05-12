@@ -326,7 +326,7 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                         ),
                     ) from e
             except ClientError as e:
-                from another_s3_manager.errors import classify_boto_error
+                from another_s3_manager.errors import S3AccessDeniedError, classify_boto_error
 
                 error_code = (
                     e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") and e.response else ""
@@ -348,7 +348,18 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                 # admins need to know which role's config is broken.
                 typed = classify_boto_error(e)
                 original = typed.args[0] if typed.args else str(e)
-                typed.args = (f"assume_role for {role_arn}: {original}",)
+                # Preserve role-arn context. For AccessDenied specifically,
+                # add the IRSA / pod-identity hint that helps admins debug
+                # trust-policy bugs (the boto message names the principal but
+                # not the resolution path).
+                if isinstance(typed, S3AccessDeniedError):
+                    typed.args = (
+                        f"assume_role for {role_arn}: {original}. "
+                        f"Check that the pod/service account has permission to assume this role "
+                        f"(IAM trust policy must allow the calling principal).",
+                    )
+                else:
+                    typed.args = (f"assume_role for {role_arn}: {original}",)
                 raise typed from e
             except Exception as e:
                 error_type = type(e).__name__
@@ -517,6 +528,7 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     from another_s3_manager.config import load_config
     from another_s3_manager.errors import (
         S3AccessDeniedError,
+        S3OperationError,
         classify_boto_error,
     )
 
@@ -563,7 +575,9 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     # Probe the client to surface bad config (invalid region, unreachable
     # endpoint, expired credentials) BEFORE caching. Roles with
     # allowed_buckets configured are expected to lack ListAllMyBuckets
-    # permission — fall back to head_bucket on the first allowed bucket.
+    # permission — fall back to head_bucket. We iterate ALL allowed_buckets
+    # (not just the first) so a single deleted/renamed bucket out-of-band
+    # doesn't brick the entire role for users who only access the others.
     try:
         client.list_buckets()
     except Exception as probe_error:
@@ -571,31 +585,50 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
         if isinstance(typed, S3AccessDeniedError):
             allowed_buckets = role.get("allowed_buckets") or []
             if isinstance(allowed_buckets, list) and allowed_buckets:
-                first = str(allowed_buckets[0])
-                try:
-                    client.head_bucket(Bucket=first)
-                except Exception as head_error:
-                    head_typed = classify_boto_error(head_error)
+                # Try each allowed bucket until one succeeds. As long as at
+                # least ONE responds, the credentials are valid — cache the
+                # client. Per-bucket NoSuchBucket / AccessDenied for the rest
+                # will surface on the actual operation, not at probe time.
+                head_failures: list[tuple[str, S3OperationError]] = []
+                for bucket_name in allowed_buckets:
+                    try:
+                        client.head_bucket(Bucket=str(bucket_name))
+                        break  # success — fall through to cache
+                    except Exception as head_error:
+                        head_failures.append((str(bucket_name), classify_boto_error(head_error)))
+                else:
+                    # Loop exhausted without break — every allowed bucket failed.
+                    # Surface the most-recent typed error with context about which
+                    # buckets were tried, so admins can spot config-vs-runtime issues.
+                    last_typed = head_failures[-1][1]
+                    bucket_summary = ", ".join(f"{name} ({err.code})" for name, err in head_failures)
                     logger.error(
-                        f"S3 client probe (head_bucket) failed for role '{role_name or 'default'}': "
-                        f"code={head_typed.code} status={head_typed.http_status}"
+                        f"S3 client probe (head_bucket) failed for ALL allowed_buckets on role "
+                        f"'{role_name or 'default'}': {bucket_summary}"
                     )
-                    raise head_typed from head_error
-                # head_bucket succeeded — scoped token is valid for that bucket.
+                    raise type(last_typed)(
+                        code=last_typed.code,
+                        message=(
+                            f"All allowed_buckets failed for this role: {bucket_summary}. "
+                            "Check the bucket names + credentials in the role config."
+                        ),
+                    ) from probe_error
             else:
                 # No allowed_buckets configured AND the role's creds can't
-                # list all buckets. Wrap with an actionable message so the
-                # admin knows the fix (configure allowed_buckets, or grant
-                # ListAllMyBuckets) — the bare boto message just says
-                # "AccessDenied" which doesn't point at the resolution.
+                # list all buckets. Wrap with the same friendly message that
+                # the legacy /api/buckets handler used (PR #14 contract) so
+                # frontend keeps showing actionable guidance, and add the
+                # fix path for admins.
                 logger.error(
                     f"S3 client probe denied for role '{role_name or 'default'}' and no allowed_buckets configured"
                 )
                 raise S3AccessDeniedError(
                     code=typed.code,
                     message=(
-                        f"{typed}. This role's credentials cannot list all buckets — "
-                        "configure 'allowed_buckets' on the role or grant ListAllMyBuckets."
+                        "Your credentials don't have permission to list all buckets. "
+                        "This is normal for scoped tokens (R2, MinIO, AWS IAM with bucket-scoped policies). "
+                        "Edit this role and fill in 'Allowed Buckets' with the bucket names you want to access, "
+                        "or grant ListAllMyBuckets."
                     ),
                 ) from probe_error
         else:
