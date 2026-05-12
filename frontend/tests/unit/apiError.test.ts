@@ -40,9 +40,11 @@ describe("getErrorMessage", () => {
     expect(getErrorMessage(err)).toBe("502 Bad Gateway");
   });
 
-  it("treats TypeError (fetch network failure) as a network error", () => {
+  it("treats TypeError (fetch network failure) as a friendly app-unreachable message", () => {
     const err = new TypeError("Failed to fetch");
-    expect(getErrorMessage(err)).toBe("Network error — check your connection.");
+    expect(getErrorMessage(err)).toBe(
+      "The app isn't responding right now. Try refreshing the page, or contact your admin if this keeps happening.",
+    );
   });
 
   it("returns the message for generic Error", () => {

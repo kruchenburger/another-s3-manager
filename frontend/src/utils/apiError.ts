@@ -55,8 +55,10 @@ export function getErrorMessage(err: unknown): string {
     return `HTTP ${err.status}`;
   }
   if (err instanceof TypeError) {
-    // `fetch` rejects with TypeError on network failure (offline, DNS, CORS).
-    return "Network error — check your connection.";
+    // `fetch` rejects with TypeError on network failure (offline, DNS, CORS,
+    // backend unreachable). Talk in user terms ("the app"), not infra terms,
+    // and give the two actions that actually fix it.
+    return "The app isn't responding right now. Try refreshing the page, or contact your admin if this keeps happening.";
   }
   if (err instanceof Error) return err.message;
   return "Unknown error";
