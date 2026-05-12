@@ -473,3 +473,21 @@ def test_get_current_user_401_when_cookie_invalid():
     with pytest.raises(HTTPException) as exc:
         auth.get_current_user(request)
     assert exc.value.status_code == 401
+
+
+def test_verify_password_warn_logs_when_hash_is_corrupt(caplog):
+    """If both bcrypt AND pbkdf2_sha256 raise on a corrupted hash, we still
+    return False (correct UX — user gets 'wrong password'), but we WARN-log
+    so operators can detect the broken hash."""
+    import logging
+
+    from another_s3_manager.auth import verify_password
+
+    with caplog.at_level(logging.WARNING, logger="another_s3_manager.auth"):
+        # Garbage input that no scheme can parse.
+        result = verify_password("anything", "$not-a-real-hash$xyz")
+
+    assert result is False
+    assert any(record.levelno == logging.WARNING and "verify" in record.message.lower() for record in caplog.records), (
+        "Expected a WARNING log when both hash schemes fail"
+    )

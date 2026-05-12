@@ -255,7 +255,10 @@ def test_get_s3_client_missing_role_raises(mocker):
 
 def test_clear_s3_clients_cache(mocker):
     module = reload_s3_client()
-    mocker.patch("boto3.client", return_value="client")
+    # Mock client must answer list_buckets() — get_s3_client probes it on cache miss.
+    fake = mocker.MagicMock()
+    fake.list_buckets.return_value = {"Buckets": []}
+    mocker.patch("boto3.client", return_value=fake)
     module.get_s3_client()
     assert module._s3_clients_cache
     module.clear_s3_clients_cache()
@@ -300,7 +303,10 @@ def test_create_s3_client_unknown_type():
 
 def test_get_s3_client_without_roles_uses_default(mocker):
     module = reload_s3_client()
-    mocker.patch("boto3.client", return_value="client")
+    # Mock client must answer list_buckets() — get_s3_client probes it on cache miss.
+    fake = mocker.MagicMock()
+    fake.list_buckets.return_value = {"Buckets": []}
+    mocker.patch("boto3.client", return_value=fake)
     import another_s3_manager.config as config_module
 
     config_module.save_config(
@@ -313,7 +319,7 @@ def test_get_s3_client_without_roles_uses_default(mocker):
     )
 
     client = module.get_s3_client()
-    assert client == "client"
+    assert client is fake
 
 
 def test_get_s3_client_missing_named_role_raises(mocker):

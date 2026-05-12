@@ -43,21 +43,23 @@ def _clear_boto3_cached_credentials() -> None:
             try:
                 if hasattr(default_session, "_credentials"):
                     default_session._credentials = None
-            except Exception:  # noqa: BLE001 - best effort cleanup
-                pass
+            except Exception as exc:  # noqa: BLE001 - best effort cleanup
+                logger.debug("_clear_boto3_cached_credentials: default_session._credentials clear failed: %s", exc)
             try:
                 inner_session = getattr(default_session, "_session", None)
                 if inner_session is not None and hasattr(inner_session, "_credentials"):
                     inner_session._credentials = None
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - best effort cleanup
+                logger.debug(
+                    "_clear_boto3_cached_credentials: default_session._session._credentials clear failed: %s", exc
+                )
 
         module_session = getattr(boto3, "_session", None)
         if module_session is not None and hasattr(module_session, "_credentials"):
             try:
                 module_session._credentials = None
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - best effort cleanup
+                logger.debug("_clear_boto3_cached_credentials: module_session._credentials clear failed: %s", exc)
 
         # Clear credential resolver caches on a fresh botocore session
         import botocore.session
@@ -300,7 +302,11 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                     sts_attempts += 1
                     continue  # Retry once
                 else:
-                    # Second attempt failed or not an expired token error
+                    # Second attempt failed or not an expired token error.
+                    # Convert to typed CredentialsExpiredError so the HTTP boundary
+                    # can return 401 (re-auth required) instead of bare 400.
+                    from another_s3_manager.errors import CredentialsExpiredError
+
                     logger.error(
                         f"Failed to retrieve credentials for STS client (needed to assume role {role_arn})",
                         extra={
@@ -310,13 +316,18 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                         },
                         exc_info=True,
                     )
-                    raise ValueError(
-                        f"Unable to retrieve AWS credentials needed to assume role {role_arn}. "
-                        f"In Kubernetes, ensure IRSA (IAM Roles for Service Accounts) or eks-pod-identity is configured, "
-                        f"or that the pod has access to instance profile credentials. "
-                        f"Error: {str(e)}"
+                    raise CredentialsExpiredError(
+                        code="CredentialRetrievalError",
+                        message=(
+                            f"Unable to retrieve AWS credentials needed to assume role {role_arn}. "
+                            f"In Kubernetes, ensure IRSA (IAM Roles for Service Accounts) or eks-pod-identity is configured, "
+                            f"or that the pod has access to instance profile credentials. "
+                            f"Error: {str(e)}"
+                        ),
                     ) from e
             except ClientError as e:
+                from another_s3_manager.errors import S3AccessDeniedError, classify_boto_error
+
                 error_code = (
                     e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") and e.response else ""
                 )
@@ -332,19 +343,31 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                     },
                     exc_info=True,
                 )
-                # Re-raise with more context
-                if error_code == "AccessDenied":
-                    raise ValueError(
-                        f"Access denied when trying to assume role {role_arn}. "
-                        f"Check that the pod/service account has permission to assume this role. "
-                        f"Error: {error_msg}"
-                    ) from e
-                raise ValueError(f"Failed to assume role {role_arn}: {error_msg or str(e)}") from e
+                # Convert to typed exception via classifier (preserves boto code +
+                # http_status). Preserve the role ARN context in the message —
+                # admins need to know which role's config is broken.
+                typed = classify_boto_error(e)
+                original = typed.args[0] if typed.args else str(e)
+                # Preserve role-arn context. For AccessDenied specifically,
+                # add the IRSA / pod-identity hint that helps admins debug
+                # trust-policy bugs (the boto message names the principal but
+                # not the resolution path).
+                if isinstance(typed, S3AccessDeniedError):
+                    typed.args = (
+                        f"assume_role for {role_arn}: {original}. "
+                        f"Check that the pod/service account has permission to assume this role "
+                        f"(IAM trust policy must allow the calling principal).",
+                    )
+                else:
+                    typed.args = (f"assume_role for {role_arn}: {original}",)
+                raise typed from e
             except Exception as e:
                 error_type = type(e).__name__
                 error_msg = str(e)
-                # Check for NoCredentialsError
+                # Check for NoCredentialsError — re-auth required, not bad config.
                 if "NoCredentialsError" in error_type or "Unable to locate credentials" in error_msg:
+                    from another_s3_manager.errors import CredentialsExpiredError
+
                     logger.error(
                         f"No AWS credentials found (needed to assume role {role_arn})",
                         extra={
@@ -353,19 +376,28 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                         },
                         exc_info=True,
                     )
-                    raise ValueError(
-                        f"Unable to locate AWS credentials needed to assume role {role_arn}. "
-                        f"In Kubernetes, ensure IRSA (IAM Roles for Service Accounts) or eks-pod-identity is configured, "
-                        f"or that the pod has access to instance profile credentials. "
-                        f"Error: {error_msg}"
+                    raise CredentialsExpiredError(
+                        code="NoCredentialsError",
+                        message=(
+                            f"Unable to locate AWS credentials needed to assume role {role_arn}. "
+                            f"In Kubernetes, ensure IRSA (IAM Roles for Service Accounts) or eks-pod-identity is configured, "
+                            f"or that the pod has access to instance profile credentials. "
+                            f"Error: {error_msg}"
+                        ),
                     ) from e
+
+                from another_s3_manager.errors import S3OperationError
 
                 logger.error(
                     f"Unexpected error while assuming role {role_arn}",
                     extra={"role_arn": role_arn, "error_type": error_type},
                     exc_info=True,
                 )
-                raise ValueError(f"Unexpected error while assuming role {role_arn}: {error_msg}") from e
+                raise S3OperationError(
+                    code="Unknown",
+                    message=f"Unexpected error while assuming role {role_arn}: {error_msg}",
+                    http_status=500,
+                ) from e
 
         # Verify that we successfully obtained credentials
         if initial_credentials is None:
@@ -479,6 +511,13 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     """
     Get S3 client for the specified role (cached).
 
+    On cache miss, after creation we probe the client with a lightweight
+    call (list_buckets, falling back to head_bucket on the role's first
+    allowed_bucket if list_buckets is denied). If the probe raises, the
+    client is NOT cached and the failure is propagated as a typed
+    S3OperationError so callers see the real error code immediately
+    instead of caching a broken client.
+
     Args:
         role_name: Name of the role to use, or None for default
 
@@ -487,6 +526,11 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     """
     # Import here to avoid circular dependency
     from another_s3_manager.config import load_config
+    from another_s3_manager.errors import (
+        S3AccessDeniedError,
+        S3OperationError,
+        classify_boto_error,
+    )
 
     # Use cache key based on role name
     cache_key = role_name or "default"
@@ -511,14 +555,11 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
             # Fallback to default AWS credentials
             role = {"name": "Default", "type": "default", "description": "Use default AWS credentials"}
 
-    # Create and cache client
+    # Create client
     try:
         role_type = role.get("type", "unknown")
         logger.debug(f"Creating S3 client for role '{role_name or 'default'}' (type: {role_type})")
         client = _create_s3_client_from_role(role)
-        _s3_clients_cache[cache_key] = client
-        logger.debug(f"Successfully created and cached S3 client for role '{role_name or 'default'}'")
-        return client
     except Exception:
         logger.error(
             f"Failed to create S3 client for role '{role_name or 'default'}'",
@@ -530,6 +571,76 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
             exc_info=True,
         )
         raise
+
+    # Probe the client to surface bad config (invalid region, unreachable
+    # endpoint, expired credentials) BEFORE caching. Roles with
+    # allowed_buckets configured are expected to lack ListAllMyBuckets
+    # permission — fall back to head_bucket. We iterate ALL allowed_buckets
+    # (not just the first) so a single deleted/renamed bucket out-of-band
+    # doesn't brick the entire role for users who only access the others.
+    try:
+        client.list_buckets()
+    except Exception as probe_error:
+        typed = classify_boto_error(probe_error)
+        if isinstance(typed, S3AccessDeniedError):
+            allowed_buckets = role.get("allowed_buckets") or []
+            if isinstance(allowed_buckets, list) and allowed_buckets:
+                # Try each allowed bucket until one succeeds. As long as at
+                # least ONE responds, the credentials are valid — cache the
+                # client. Per-bucket NoSuchBucket / AccessDenied for the rest
+                # will surface on the actual operation, not at probe time.
+                head_failures: list[tuple[str, S3OperationError]] = []
+                for bucket_name in allowed_buckets:
+                    try:
+                        client.head_bucket(Bucket=str(bucket_name))
+                        break  # success — fall through to cache
+                    except Exception as head_error:
+                        head_failures.append((str(bucket_name), classify_boto_error(head_error)))
+                else:
+                    # Loop exhausted without break — every allowed bucket failed.
+                    # Surface the most-recent typed error with context about which
+                    # buckets were tried, so admins can spot config-vs-runtime issues.
+                    last_typed = head_failures[-1][1]
+                    bucket_summary = ", ".join(f"{name} ({err.code})" for name, err in head_failures)
+                    logger.error(
+                        f"S3 client probe (head_bucket) failed for ALL allowed_buckets on role "
+                        f"'{role_name or 'default'}': {bucket_summary}"
+                    )
+                    raise type(last_typed)(
+                        code=last_typed.code,
+                        message=(
+                            f"All allowed_buckets failed for this role: {bucket_summary}. "
+                            "Check the bucket names + credentials in the role config."
+                        ),
+                    ) from probe_error
+            else:
+                # No allowed_buckets configured AND the role's creds can't
+                # list all buckets. Wrap with the same friendly message that
+                # the legacy /api/buckets handler used (PR #14 contract) so
+                # frontend keeps showing actionable guidance, and add the
+                # fix path for admins.
+                logger.error(
+                    f"S3 client probe denied for role '{role_name or 'default'}' and no allowed_buckets configured"
+                )
+                raise S3AccessDeniedError(
+                    code=typed.code,
+                    message=(
+                        "Your credentials don't have permission to list all buckets. "
+                        "This is normal for scoped tokens (R2, MinIO, AWS IAM with bucket-scoped policies). "
+                        "Edit this role and fill in 'Allowed Buckets' with the bucket names you want to access, "
+                        "or grant ListAllMyBuckets."
+                    ),
+                ) from probe_error
+        else:
+            logger.error(
+                f"S3 client probe failed for role '{role_name or 'default'}': "
+                f"code={typed.code} status={typed.http_status}"
+            )
+            raise typed from probe_error
+
+    _s3_clients_cache[cache_key] = client
+    logger.debug(f"Successfully created, probed and cached S3 client for role '{role_name or 'default'}'")
+    return client
 
 
 def _execute_with_retry_inner(role_name: Optional[str], callback: Callable[[AnyType], T]) -> T:

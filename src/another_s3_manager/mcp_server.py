@@ -20,6 +20,14 @@ from starlette.requests import Request
 import another_s3_manager.config as _config_module
 from another_s3_manager import api_tokens as token_svc
 from another_s3_manager import s3_client as _s3_client
+from another_s3_manager.errors import (
+    CredentialsExpiredError,
+    S3AccessDeniedError,
+    S3ConfigError,
+    S3NetworkError,
+    S3NotFoundError,
+    S3OperationError,
+)
 from another_s3_manager.metrics import (
     mcp_auth_failures_total,
     mcp_bytes_read_total,
@@ -437,6 +445,31 @@ async def list_roles() -> dict:
     except McpError as e:
         error_code = e.code
         raise
+    except S3AccessDeniedError as e:
+        error_code = "S3_ACCESS_DENIED"
+        logger.warning("mcp.list_roles.access_denied", extra={"boto_code": e.code})
+        raise McpError("S3_ACCESS_DENIED", str(e), {"boto_code": e.code})
+    except S3NotFoundError as e:
+        error_code = "S3_NOT_FOUND"
+        logger.warning("mcp.list_roles.not_found", extra={"boto_code": e.code})
+        raise McpError("S3_NOT_FOUND", str(e), {"boto_code": e.code})
+    except S3ConfigError as e:
+        error_code = "S3_CONFIG_ERROR"
+        logger.warning("mcp.list_roles.config_error", extra={"boto_code": e.code})
+        raise McpError("S3_CONFIG_ERROR", str(e), {"boto_code": e.code})
+    except S3NetworkError as e:
+        error_code = "S3_NETWORK_ERROR"
+        logger.warning("mcp.list_roles.network_error", extra={"boto_code": e.code})
+        raise McpError("S3_NETWORK_ERROR", str(e), {"boto_code": e.code})
+    except CredentialsExpiredError as e:
+        error_code = "CREDENTIALS_EXPIRED"
+        logger.warning("mcp.list_roles.credentials_expired", extra={"boto_code": e.code})
+        raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
+    except S3OperationError as e:
+        # Unknown S3 subclass — still better than INTERNAL_ERROR.
+        error_code = "S3_OPERATION_ERROR"
+        logger.warning("mcp.list_roles.s3_operation_error", extra={"boto_code": e.code})
+        raise McpError("S3_OPERATION_ERROR", str(e), {"boto_code": e.code})
     except Exception:
         error_code = "INTERNAL_ERROR"
         logger.exception("mcp.list_roles.error")
@@ -469,6 +502,31 @@ async def list_buckets(role: str) -> dict:
     except McpError as e:
         error_code = e.code
         raise
+    except S3AccessDeniedError as e:
+        error_code = "S3_ACCESS_DENIED"
+        logger.warning("mcp.list_buckets.access_denied", extra={"boto_code": e.code})
+        raise McpError("S3_ACCESS_DENIED", str(e), {"boto_code": e.code})
+    except S3NotFoundError as e:
+        error_code = "S3_NOT_FOUND"
+        logger.warning("mcp.list_buckets.not_found", extra={"boto_code": e.code})
+        raise McpError("S3_NOT_FOUND", str(e), {"boto_code": e.code})
+    except S3ConfigError as e:
+        error_code = "S3_CONFIG_ERROR"
+        logger.warning("mcp.list_buckets.config_error", extra={"boto_code": e.code})
+        raise McpError("S3_CONFIG_ERROR", str(e), {"boto_code": e.code})
+    except S3NetworkError as e:
+        error_code = "S3_NETWORK_ERROR"
+        logger.warning("mcp.list_buckets.network_error", extra={"boto_code": e.code})
+        raise McpError("S3_NETWORK_ERROR", str(e), {"boto_code": e.code})
+    except CredentialsExpiredError as e:
+        error_code = "CREDENTIALS_EXPIRED"
+        logger.warning("mcp.list_buckets.credentials_expired", extra={"boto_code": e.code})
+        raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
+    except S3OperationError as e:
+        # Unknown S3 subclass — still better than INTERNAL_ERROR.
+        error_code = "S3_OPERATION_ERROR"
+        logger.warning("mcp.list_buckets.s3_operation_error", extra={"boto_code": e.code})
+        raise McpError("S3_OPERATION_ERROR", str(e), {"boto_code": e.code})
     except Exception:
         error_code = "INTERNAL_ERROR"
         logger.exception("mcp.list_buckets.error")
@@ -553,6 +611,31 @@ async def list_files(
     except McpError as e:
         error_code = e.code
         raise
+    except S3AccessDeniedError as e:
+        error_code = "S3_ACCESS_DENIED"
+        logger.warning("mcp.list_files.access_denied", extra={"boto_code": e.code})
+        raise McpError("S3_ACCESS_DENIED", str(e), {"boto_code": e.code})
+    except S3NotFoundError as e:
+        error_code = "S3_NOT_FOUND"
+        logger.warning("mcp.list_files.not_found", extra={"boto_code": e.code})
+        raise McpError("S3_NOT_FOUND", str(e), {"boto_code": e.code})
+    except S3ConfigError as e:
+        error_code = "S3_CONFIG_ERROR"
+        logger.warning("mcp.list_files.config_error", extra={"boto_code": e.code})
+        raise McpError("S3_CONFIG_ERROR", str(e), {"boto_code": e.code})
+    except S3NetworkError as e:
+        error_code = "S3_NETWORK_ERROR"
+        logger.warning("mcp.list_files.network_error", extra={"boto_code": e.code})
+        raise McpError("S3_NETWORK_ERROR", str(e), {"boto_code": e.code})
+    except CredentialsExpiredError as e:
+        error_code = "CREDENTIALS_EXPIRED"
+        logger.warning("mcp.list_files.credentials_expired", extra={"boto_code": e.code})
+        raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
+    except S3OperationError as e:
+        # Unknown S3 subclass — still better than INTERNAL_ERROR.
+        error_code = "S3_OPERATION_ERROR"
+        logger.warning("mcp.list_files.s3_operation_error", extra={"boto_code": e.code})
+        raise McpError("S3_OPERATION_ERROR", str(e), {"boto_code": e.code})
     except Exception:
         error_code = "INTERNAL_ERROR"
         logger.exception("mcp.list_files.error")
@@ -596,6 +679,31 @@ async def upload_file(role: str, bucket: str, path: str, content_base64: str) ->
     except McpError as e:
         error_code = e.code
         raise
+    except S3AccessDeniedError as e:
+        error_code = "S3_ACCESS_DENIED"
+        logger.warning("mcp.upload_file.access_denied", extra={"boto_code": e.code})
+        raise McpError("S3_ACCESS_DENIED", str(e), {"boto_code": e.code})
+    except S3NotFoundError as e:
+        error_code = "S3_NOT_FOUND"
+        logger.warning("mcp.upload_file.not_found", extra={"boto_code": e.code})
+        raise McpError("S3_NOT_FOUND", str(e), {"boto_code": e.code})
+    except S3ConfigError as e:
+        error_code = "S3_CONFIG_ERROR"
+        logger.warning("mcp.upload_file.config_error", extra={"boto_code": e.code})
+        raise McpError("S3_CONFIG_ERROR", str(e), {"boto_code": e.code})
+    except S3NetworkError as e:
+        error_code = "S3_NETWORK_ERROR"
+        logger.warning("mcp.upload_file.network_error", extra={"boto_code": e.code})
+        raise McpError("S3_NETWORK_ERROR", str(e), {"boto_code": e.code})
+    except CredentialsExpiredError as e:
+        error_code = "CREDENTIALS_EXPIRED"
+        logger.warning("mcp.upload_file.credentials_expired", extra={"boto_code": e.code})
+        raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
+    except S3OperationError as e:
+        # Unknown S3 subclass — still better than INTERNAL_ERROR.
+        error_code = "S3_OPERATION_ERROR"
+        logger.warning("mcp.upload_file.s3_operation_error", extra={"boto_code": e.code})
+        raise McpError("S3_OPERATION_ERROR", str(e), {"boto_code": e.code})
     except Exception:
         error_code = "INTERNAL_ERROR"
         logger.exception("mcp.upload_file.error")
@@ -633,6 +741,31 @@ async def delete_file(role: str, bucket: str, path: str) -> dict:
     except McpError as e:
         error_code = e.code
         raise
+    except S3AccessDeniedError as e:
+        error_code = "S3_ACCESS_DENIED"
+        logger.warning("mcp.delete_file.access_denied", extra={"boto_code": e.code})
+        raise McpError("S3_ACCESS_DENIED", str(e), {"boto_code": e.code})
+    except S3NotFoundError as e:
+        error_code = "S3_NOT_FOUND"
+        logger.warning("mcp.delete_file.not_found", extra={"boto_code": e.code})
+        raise McpError("S3_NOT_FOUND", str(e), {"boto_code": e.code})
+    except S3ConfigError as e:
+        error_code = "S3_CONFIG_ERROR"
+        logger.warning("mcp.delete_file.config_error", extra={"boto_code": e.code})
+        raise McpError("S3_CONFIG_ERROR", str(e), {"boto_code": e.code})
+    except S3NetworkError as e:
+        error_code = "S3_NETWORK_ERROR"
+        logger.warning("mcp.delete_file.network_error", extra={"boto_code": e.code})
+        raise McpError("S3_NETWORK_ERROR", str(e), {"boto_code": e.code})
+    except CredentialsExpiredError as e:
+        error_code = "CREDENTIALS_EXPIRED"
+        logger.warning("mcp.delete_file.credentials_expired", extra={"boto_code": e.code})
+        raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
+    except S3OperationError as e:
+        # Unknown S3 subclass — still better than INTERNAL_ERROR.
+        error_code = "S3_OPERATION_ERROR"
+        logger.warning("mcp.delete_file.s3_operation_error", extra={"boto_code": e.code})
+        raise McpError("S3_OPERATION_ERROR", str(e), {"boto_code": e.code})
     except Exception:
         error_code = "INTERNAL_ERROR"
         logger.exception("mcp.delete_file.error")
@@ -752,6 +885,31 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
     except McpError as e:
         error_code = e.code
         raise
+    except S3AccessDeniedError as e:
+        error_code = "S3_ACCESS_DENIED"
+        logger.warning("mcp.read_file.access_denied", extra={"boto_code": e.code})
+        raise McpError("S3_ACCESS_DENIED", str(e), {"boto_code": e.code})
+    except S3NotFoundError as e:
+        error_code = "S3_NOT_FOUND"
+        logger.warning("mcp.read_file.not_found", extra={"boto_code": e.code})
+        raise McpError("S3_NOT_FOUND", str(e), {"boto_code": e.code})
+    except S3ConfigError as e:
+        error_code = "S3_CONFIG_ERROR"
+        logger.warning("mcp.read_file.config_error", extra={"boto_code": e.code})
+        raise McpError("S3_CONFIG_ERROR", str(e), {"boto_code": e.code})
+    except S3NetworkError as e:
+        error_code = "S3_NETWORK_ERROR"
+        logger.warning("mcp.read_file.network_error", extra={"boto_code": e.code})
+        raise McpError("S3_NETWORK_ERROR", str(e), {"boto_code": e.code})
+    except CredentialsExpiredError as e:
+        error_code = "CREDENTIALS_EXPIRED"
+        logger.warning("mcp.read_file.credentials_expired", extra={"boto_code": e.code})
+        raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
+    except S3OperationError as e:
+        # Unknown S3 subclass — still better than INTERNAL_ERROR.
+        error_code = "S3_OPERATION_ERROR"
+        logger.warning("mcp.read_file.s3_operation_error", extra={"boto_code": e.code})
+        raise McpError("S3_OPERATION_ERROR", str(e), {"boto_code": e.code})
     except Exception:
         error_code = "INTERNAL_ERROR"
         logger.exception("mcp.read_file.error")
