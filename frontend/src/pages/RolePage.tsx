@@ -5,6 +5,7 @@ import { Database, Settings } from "lucide-react";
 import { useBuckets } from "@/features/files/hooks/useBuckets";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
+import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
 import { ApiError, getErrorMessage } from "@/utils/apiError";
 
 export function RolePage() {
@@ -62,6 +63,14 @@ export function RolePage() {
         }
       />
     );
+  }
+
+  // Non-403 errors (500, network failure, anything else) — surface the boundary
+  // message instead of falling through to the empty-buckets EmptyState which
+  // would mislead the user into thinking the role is misconfigured. The 403
+  // case above keeps its bespoke admin/non-admin CTA copy.
+  if (error) {
+    return <QueryErrorState error={error} title="Couldn't load buckets" />;
   }
 
   if (!buckets || buckets.length === 0) {

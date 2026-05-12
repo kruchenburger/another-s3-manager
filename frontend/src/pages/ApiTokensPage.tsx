@@ -11,13 +11,14 @@ import { CreateTokenModal } from "@/components/Tokens/CreateTokenModal";
 import { TokenEditDrawer } from "@/components/Tokens/TokenEditDrawer";
 import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
+import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
 import { notifications } from "@mantine/notifications";
 import { runWithToasts } from "@/utils/mutationToast";
 import { getErrorMessage } from "@/utils/apiError";
 import type { ApiToken, ApiTokenWithPlaintext, CreateTokenPayload } from "@/types/api";
 
 export function ApiTokensPage() {
-  const { data, isLoading } = useMyTokens();
+  const { data, isLoading, error } = useMyTokens();
   const createMutation = useCreateMyToken();
   const deleteMutation = useDeleteMyToken();
   const updateMutation = useUpdateMyToken();
@@ -63,28 +64,34 @@ export function ApiTokensPage() {
   return (
     <Container size="lg" py="lg">
       <Stack gap="md">
-        <Group justify="space-between">
-          <Title order={2}>MCP tokens</Title>
-          <Button leftSection={<Plus size={16} />} onClick={create.open}>
-            Create token
-          </Button>
-        </Group>
-        <Text size="sm" c="dimmed">
-          Use these tokens to authorize AI agents (Claude Desktop, Cursor, etc.) at the{" "}
-          <Text span ff="monospace">/mcp</Text> endpoint. They do <strong>not</strong>{" "}
-          grant access to the web API — that uses your login cookie.
-        </Text>
-        {data && (
-          <Text size="sm" c="dimmed">
-            Used {data.used} of {data.limit} token slots
-          </Text>
-        )}
-        {!isLoading && (
-          <TokensTable
-            tokens={tokens}
-            onRevoke={(t) => setRevokeTarget(t)}
-            onEdit={(t) => setEditTarget(t)}
-          />
+        {error ? (
+          <QueryErrorState error={error} title="Couldn't load tokens" />
+        ) : (
+          <>
+            <Group justify="space-between">
+              <Title order={2}>MCP tokens</Title>
+              <Button leftSection={<Plus size={16} />} onClick={create.open}>
+                Create token
+              </Button>
+            </Group>
+            <Text size="sm" c="dimmed">
+              Use these tokens to authorize AI agents (Claude Desktop, Cursor, etc.) at the{" "}
+              <Text span ff="monospace">/mcp</Text> endpoint. They do <strong>not</strong>{" "}
+              grant access to the web API — that uses your login cookie.
+            </Text>
+            {data && (
+              <Text size="sm" c="dimmed">
+                Used {data.used} of {data.limit} token slots
+              </Text>
+            )}
+            {!isLoading && (
+              <TokensTable
+                tokens={tokens}
+                onRevoke={(t) => setRevokeTarget(t)}
+                onEdit={(t) => setEditTarget(t)}
+              />
+            )}
+          </>
         )}
       </Stack>
 

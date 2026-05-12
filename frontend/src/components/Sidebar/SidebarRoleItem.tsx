@@ -3,7 +3,7 @@ import { ActionIcon, NavLink, Stack, Tooltip, UnstyledButton } from "@mantine/co
 import { AlertCircle, ChevronRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useBuckets } from "@/features/files/hooks/useBuckets";
-import { ApiError } from "@/utils/apiError";
+import { ApiError, getErrorMessage } from "@/utils/apiError";
 import { RoleAvatar } from "./RoleAvatar";
 import { SidebarBucketItem } from "./SidebarBucketItem";
 import classes from "./SidebarRoleItem.module.css";
@@ -22,6 +22,9 @@ export function SidebarRoleItem({ role, collapsed }: SidebarRoleItemProps) {
   // (R2, scoped IAM tokens). Surface as a warning icon in the sidebar so the
   // user can see *which* role has a config issue without expanding it first.
   const accessDenied = error instanceof ApiError && error.status === 403;
+  // Any OTHER fetch error — surface a generic warning sub-item with the
+  // boundary message so the user isn't staring at a silent empty branch.
+  const otherError = error && !accessDenied;
 
   const navigateToRole = () => navigate(`/r/${encodeURIComponent(role)}`);
 
@@ -86,6 +89,24 @@ export function SidebarRoleItem({ role, collapsed }: SidebarRoleItemProps) {
             >
               <NavLink
                 label="Cannot list buckets"
+                leftSection={<AlertCircle size={14} />}
+                color="yellow"
+                onClick={navigateToRole}
+                pl="lg"
+              />
+            </Tooltip>
+          )}
+          {otherError && (
+            <Tooltip
+              label={getErrorMessage(error)}
+              position="right"
+              withArrow
+              multiline
+              w={260}
+            >
+              <NavLink
+                label="Couldn't load buckets"
+                description={getErrorMessage(error)}
                 leftSection={<AlertCircle size={14} />}
                 color="yellow"
                 onClick={navigateToRole}

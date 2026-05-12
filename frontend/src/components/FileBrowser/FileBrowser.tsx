@@ -18,6 +18,7 @@ import { FileBrowserHeader } from "./FileBrowserHeader";
 import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
 import { FileBrowserEmptyState } from "./FileBrowserEmptyState";
+import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
 
 export function FileBrowser() {
   const params = useParams<{ roleId: string; bucket: string; "*": string }>();
@@ -26,7 +27,7 @@ export function FileBrowser() {
   const pathFromUrl = decodePath(params["*"] ?? "");
   const navigate = useNavigate();
 
-  const { data, isLoading } = useFiles(bucket, roleId, pathFromUrl);
+  const { data, isLoading, error } = useFiles(bucket, roleId, pathFromUrl);
   const deleteMutation = useDelete();
   const uploadMutation = useUpload();
   const { mode, setMode } = useDisplayMode(roleId, bucket);
@@ -258,6 +259,13 @@ export function FileBrowser() {
         <Loader />
       </Center>
     );
+  }
+
+  // Stale-data + fresh-error race: TanStack Query may still hold cached `data`
+  // while a concurrent refetch failed. Show the error state regardless of any
+  // ghost data — without this guard the file table flashes the stale list.
+  if (error) {
+    return <QueryErrorState error={error} title="Couldn't load files" />;
   }
 
   return (

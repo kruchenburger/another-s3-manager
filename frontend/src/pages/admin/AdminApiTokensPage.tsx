@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { Button, Container, Group, Select, Stack, Title } from "@mantine/core";
+import { Alert, Button, Container, Group, Select, Stack, Title } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { Plus } from "lucide-react";
+import { AlertTriangle, Plus } from "lucide-react";
 import { useAdminTokens } from "@/features/tokens/hooks/useAdminTokens";
 import { useCreateAdminToken } from "@/features/tokens/hooks/useCreateToken";
 import { useDeleteAdminToken } from "@/features/tokens/hooks/useDeleteToken";
@@ -13,13 +13,14 @@ import { CreateTokenModal } from "@/components/Tokens/CreateTokenModal";
 import { TokenEditDrawer } from "@/components/Tokens/TokenEditDrawer";
 import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
+import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
 import { runWithToasts } from "@/utils/mutationToast";
 import { getErrorMessage } from "@/utils/apiError";
 import type { ApiToken, ApiTokenWithOwner, ApiTokenWithPlaintext, CreateTokenPayload } from "@/types/api";
 
 export function AdminApiTokensPage() {
-  const { data: tokensData, isLoading: tokensLoading } = useAdminTokens();
-  const { data: usersData } = useAdminUsers();
+  const { data: tokensData, isLoading: tokensLoading, error: tokensError } = useAdminTokens();
+  const { data: usersData, error: usersError } = useAdminUsers();
   const createMutation = useCreateAdminToken();
   const deleteMutation = useDeleteAdminToken();
   const updateMutation = useUpdateAdminToken();
@@ -77,32 +78,49 @@ export function AdminApiTokensPage() {
   return (
     <Container size="lg" py="lg">
       <Stack gap="md">
-        <Group justify="space-between">
-          <Title order={2}>MCP tokens</Title>
-          <Button leftSection={<Plus size={16} />} onClick={create.open}>
-            Issue token on behalf of user
-          </Button>
-        </Group>
+        {tokensError ? (
+          <QueryErrorState error={tokensError} title="Couldn't load tokens" />
+        ) : (
+          <>
+            <Group justify="space-between">
+              <Title order={2}>MCP tokens</Title>
+              <Button leftSection={<Plus size={16} />} onClick={create.open}>
+                Issue token on behalf of user
+              </Button>
+            </Group>
 
-        <Group>
-          <Select
-            label="User"
-            placeholder="All users"
-            clearable
-            searchable
-            data={users.map((u) => ({ value: u.username, label: u.username }))}
-            value={userFilter}
-            onChange={setUserFilter}
-          />
-        </Group>
+            {usersError && (
+              <Alert
+                icon={<AlertTriangle size={16} />}
+                color="yellow"
+                title="User filter unavailable"
+              >
+                {getErrorMessage(usersError)}
+              </Alert>
+            )}
 
-        {!tokensLoading && (
-          <TokensTable
-            tokens={filtered}
-            showOwner
-            onRevoke={(t) => setRevokeTarget(t)}
-            onEdit={(t) => setEditTarget(t as ApiTokenWithOwner)}
-          />
+            <Group>
+              <Select
+                label="User"
+                placeholder={usersError ? "Failed to load users" : "All users"}
+                clearable
+                searchable
+                disabled={!!usersError}
+                data={users.map((u) => ({ value: u.username, label: u.username }))}
+                value={userFilter}
+                onChange={setUserFilter}
+              />
+            </Group>
+
+            {!tokensLoading && (
+              <TokensTable
+                tokens={filtered}
+                showOwner
+                onRevoke={(t) => setRevokeTarget(t)}
+                onEdit={(t) => setEditTarget(t as ApiTokenWithOwner)}
+              />
+            )}
+          </>
         )}
       </Stack>
 

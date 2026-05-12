@@ -115,3 +115,40 @@ describe("RolePage auto-open single bucket", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("RolePage non-403 errors", () => {
+  beforeEach(() => {
+    navigateMock.mockReset();
+    useBucketsMock.mockReset();
+  });
+
+  it("renders the generic error state for a 500 (not the empty-buckets state)", () => {
+    useBucketsMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new ApiError(500, "Internal Server Error", {
+        detail: { code: "INTERNAL", message: "Server error — see logs" },
+      }),
+    });
+    renderPage();
+    expect(screen.getByText(/couldn't load buckets/i)).toBeInTheDocument();
+    expect(screen.getByText("Server error — see logs")).toBeInTheDocument();
+    // Empty-buckets EmptyState must NOT render when there is an error.
+    expect(screen.queryByText(/no buckets accessible/i)).not.toBeInTheDocument();
+    // 403 EmptyState must NOT render either.
+    expect(screen.queryByText(/cannot list buckets for this role/i)).not.toBeInTheDocument();
+  });
+
+  it("renders the generic error state when stale buckets coexist with a 500", () => {
+    useBucketsMock.mockReturnValue({
+      data: ["stale-bucket"],
+      isLoading: false,
+      error: new ApiError(500, "Internal Server Error", {
+        detail: { code: "INTERNAL", message: "Server error — see logs" },
+      }),
+    });
+    renderPage();
+    expect(screen.getByText(/couldn't load buckets/i)).toBeInTheDocument();
+    expect(screen.queryByText("stale-bucket")).not.toBeInTheDocument();
+  });
+});
