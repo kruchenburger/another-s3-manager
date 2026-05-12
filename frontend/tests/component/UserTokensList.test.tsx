@@ -94,3 +94,22 @@ describe("UserTokensList", () => {
   // Vitest here only guards the rendered shape; the regression where the
   // plaintext modal was missing entirely is covered by the visible markup.
 });
+
+describe("UserTokensList error rendering", () => {
+  it("renders an inline error when fetchAdminTokens fails", async () => {
+    vi.spyOn(tokensApi, "fetchAdminTokens").mockRejectedValue(
+      new (await import("@/utils/apiError")).ApiError(500, "Internal Server Error", {
+        detail: { code: "INTERNAL", message: "DB unavailable" },
+      }),
+    );
+    renderList({ username: "alice", userId: 1 });
+    await waitFor(() =>
+      expect(screen.getByText(/couldn't load tokens/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText("DB unavailable")).toBeInTheDocument();
+    // Should NOT show the "no tokens issued" empty copy when there's an error.
+    expect(
+      screen.queryByText(/no tokens issued yet/i),
+    ).not.toBeInTheDocument();
+  });
+});

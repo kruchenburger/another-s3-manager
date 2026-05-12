@@ -34,7 +34,7 @@ interface UserTokensListProps {
 }
 
 export function UserTokensList({ username, userId }: UserTokensListProps) {
-  const { data, isLoading } = useAdminTokens();
+  const { data, isLoading, error } = useAdminTokens();
   const tokens = (data?.tokens ?? []).filter(
     (t) => t.owner_username === username,
   );
@@ -65,7 +65,16 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
         </Button>
       </Group>
 
-      {isLoading ? (
+      {error ? (
+        <Stack gap={4}>
+          <Text size="sm" c="red" fw={600}>
+            Couldn't load tokens
+          </Text>
+          <Text size="sm" c="dimmed">
+            {getErrorMessage(error)}
+          </Text>
+        </Stack>
+      ) : isLoading ? (
         <Text size="sm" c="dimmed">
           Loading...
         </Text>
