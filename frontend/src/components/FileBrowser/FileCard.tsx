@@ -77,6 +77,7 @@ export function FileCard({
           <FileActions
             isDirectory={file.is_directory}
             canPreview={canPreview}
+            filename={file.name}
             onDownload={() => onDownload(file.name)}
             onCopyUrl={() => onCopyUrl(file.name)}
             onPreview={() => onPreview(file.name)}

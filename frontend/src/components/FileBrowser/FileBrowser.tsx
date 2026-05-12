@@ -9,6 +9,7 @@ import { buildDownloadUrl, getPresignedDownloadUrl } from "@/features/files/api/
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { joinPath, decodePath } from "@/utils/pathUtils";
+import { ApiError, getErrorMessage } from "@/utils/apiError";
 import { formatTimeOfDay } from "@/utils/formatDate";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
@@ -55,9 +56,42 @@ export function FileBrowser() {
     navigate(`/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(bucket)}/p/${encoded}`);
   };
 
-  const handleDownload = (name: string) => {
+  const handleDownload = async (name: string): Promise<void> => {
     const fullPath = joinPath(pathFromUrl, name);
-    window.location.href = buildDownloadUrl(bucket, roleId, fullPath);
+    const url = buildDownloadUrl(bucket, roleId, fullPath);
+    try {
+      const response = await fetch(url, { credentials: "include" });
+      if (!response.ok) {
+        // Surface the server's error message instead of navigating to the raw error page.
+        let body: unknown;
+        try {
+          body = await response.json();
+        } catch {
+          body = undefined;
+        }
+        throw new ApiError(response.status, response.statusText, body);
+      }
+      const blob = await response.blob();
+      // Filename: prefer Content-Disposition, fall back to the file's display name.
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      const filenameMatch = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+      const filename = filenameMatch ? decodeURIComponent(filenameMatch[1]!) : name;
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch (e) {
+      notifications.show({
+        color: "red",
+        title: "Download failed",
+        message: getErrorMessage(e),
+        autoClose: false,
+      });
+    }
   };
 
   const handleCopyUrl = async (name: string) => {
