@@ -1,4 +1,5 @@
 import {
+  Alert,
   Button,
   Divider,
   Drawer,
@@ -9,6 +10,7 @@ import {
   TextInput,
   Tooltip,
 } from "@mantine/core";
+import { AlertTriangle } from "lucide-react";
 import { useForm } from "@mantine/form";
 import { useEffect } from "react";
 import type { AdminUser } from "@/types/api";
@@ -167,6 +169,15 @@ export function UserDrawer({
                   password={form.values.password}
                   policy={policy}
                 />
+              )}
+              {policyFailed && (
+                <Alert
+                  color="yellow"
+                  variant="light"
+                  icon={<AlertTriangle size={16} />}
+                >
+                  Couldn't load password policy — the server will validate the new password on save.
+                </Alert>
               )}
             </Stack>
           )}
