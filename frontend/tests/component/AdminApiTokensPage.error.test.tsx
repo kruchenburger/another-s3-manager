@@ -66,7 +66,11 @@ describe("AdminApiTokensPage error rendering", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
-  it("renders the users-error when useAdminUsers fails (and tokens succeeded)", () => {
+  it("renders the tokens table even when useAdminUsers fails (degrades the user filter only)", () => {
+    // useAdminUsers feeds only the User-filter Select; tokens are independent.
+    // A users-fetch failure must NOT block the tokens table — it should
+    // surface as an inline warning + disabled filter so the admin keeps
+    // access to the actual data.
     useAdminTokensMock.mockReturnValue({
       data: { tokens: [] },
       isLoading: false,
@@ -80,8 +84,15 @@ describe("AdminApiTokensPage error rendering", () => {
       }),
     });
     renderPage();
-    expect(screen.getByText(/couldn't load users/i)).toBeInTheDocument();
+    // Inline warning is visible
+    expect(screen.getByText(/user filter unavailable/i)).toBeInTheDocument();
     expect(screen.getByText("Users service down")).toBeInTheDocument();
+    // Page content is still rendered (button + Select still present)
+    expect(
+      screen.getByRole("button", { name: /issue token on behalf of user/i }),
+    ).toBeInTheDocument();
+    // Full-page error must NOT render
+    expect(screen.queryByText(/couldn't load users/i)).not.toBeInTheDocument();
   });
 
   it("renders the table when both queries succeed", () => {

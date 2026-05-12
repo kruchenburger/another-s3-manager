@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { Button, Container, Group, Select, Stack, Title } from "@mantine/core";
+import { Alert, Button, Container, Group, Select, Stack, Title } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { Plus } from "lucide-react";
+import { AlertTriangle, Plus } from "lucide-react";
 import { useAdminTokens } from "@/features/tokens/hooks/useAdminTokens";
 import { useCreateAdminToken } from "@/features/tokens/hooks/useCreateToken";
 import { useDeleteAdminToken } from "@/features/tokens/hooks/useDeleteToken";
@@ -80,8 +80,6 @@ export function AdminApiTokensPage() {
       <Stack gap="md">
         {tokensError ? (
           <QueryErrorState error={tokensError} title="Couldn't load tokens" />
-        ) : usersError ? (
-          <QueryErrorState error={usersError} title="Couldn't load users" />
         ) : (
           <>
             <Group justify="space-between">
@@ -91,12 +89,23 @@ export function AdminApiTokensPage() {
               </Button>
             </Group>
 
+            {usersError && (
+              <Alert
+                icon={<AlertTriangle size={16} />}
+                color="yellow"
+                title="User filter unavailable"
+              >
+                {getErrorMessage(usersError)}
+              </Alert>
+            )}
+
             <Group>
               <Select
                 label="User"
-                placeholder="All users"
+                placeholder={usersError ? "Failed to load users" : "All users"}
                 clearable
                 searchable
+                disabled={!!usersError}
                 data={users.map((u) => ({ value: u.username, label: u.username }))}
                 value={userFilter}
                 onChange={setUserFilter}
