@@ -1447,6 +1447,8 @@ async def update_config(
                     raise HTTPException(status_code=400, detail="profile type requires 'profile_name'")
 
         save_config(config)
+        clear_s3_clients_cache()
+        logger.info("S3 client cache cleared after config save")
         return {"message": "Configuration updated successfully"}
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
