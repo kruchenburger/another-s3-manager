@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Center, Loader, ScrollArea, Text } from "@mantine/core";
+import { Alert, Anchor, Center, Loader, ScrollArea, Stack } from "@mantine/core";
+import { AlertTriangle } from "lucide-react";
 import { ApiError, getErrorMessage } from "@/utils/apiError";
 
 interface TextPreviewProps {
@@ -9,20 +10,27 @@ interface TextPreviewProps {
 
 const MAX_SIZE = 5 * 1024 * 1024; // 5MB
 
+type LoadState =
+  | { status: "loading" }
+  | { status: "ready"; content: string }
+  | { status: "failed"; message: string };
+
 export function TextPreview({ url, size }: TextPreviewProps) {
-  const [content, setContent] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [state, setState] = useState<LoadState>({ status: "loading" });
 
   useEffect(() => {
+    let cancelled = false;
     if (size > MAX_SIZE) {
-      setError(`File too large for preview (${(size / 1024 / 1024).toFixed(1)} MB > 5 MB). Download to view.`);
-      setLoading(false);
+      setState({
+        status: "failed",
+        message: `File too large for preview (${(size / 1024 / 1024).toFixed(1)} MB > 5 MB). Download to view.`,
+      });
       return;
     }
-    setLoading(true);
+    setState({ status: "loading" });
     fetch(url, { credentials: "include" })
       .then(async (r) => {
+        if (cancelled) return;
         if (!r.ok) {
           let body: unknown;
           try {
@@ -35,17 +43,38 @@ export function TextPreview({ url, size }: TextPreviewProps) {
         return r.text();
       })
       .then((text) => {
-        setContent(text);
-        setLoading(false);
+        if (cancelled || text === undefined) return;
+        setState({ status: "ready", content: text });
       })
       .catch((e) => {
-        setError(getErrorMessage(e));
-        setLoading(false);
+        if (cancelled) return;
+        setState({ status: "failed", message: getErrorMessage(e) });
       });
+    return () => {
+      cancelled = true;
+    };
   }, [url, size]);
 
-  if (loading) return <Center py="xl"><Loader /></Center>;
-  if (error) return <Text c="red">{error}</Text>;
+  if (state.status === "loading") {
+    return (
+      <Center py="xl">
+        <Loader />
+      </Center>
+    );
+  }
+
+  if (state.status === "failed") {
+    return (
+      <Stack gap="sm" align="center">
+        <Alert color="red" icon={<AlertTriangle size={16} />}>
+          Couldn't load this text file. {state.message}
+        </Alert>
+        <Anchor href={url} download>
+          Download
+        </Anchor>
+      </Stack>
+    );
+  }
 
   return (
     <ScrollArea h="70vh">
@@ -57,7 +86,7 @@ export function TextPreview({ url, size }: TextPreviewProps) {
         whiteSpace: "pre-wrap",
         wordBreak: "break-word",
       }}>
-        {content}
+        {state.content}
       </pre>
     </ScrollArea>
   );
