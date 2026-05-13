@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Center, Loader, ScrollArea, Text } from "@mantine/core";
+import { ApiError, getErrorMessage } from "@/utils/apiError";
 
 interface TextPreviewProps {
   url: string;
@@ -21,8 +22,16 @@ export function TextPreview({ url, size }: TextPreviewProps) {
     }
     setLoading(true);
     fetch(url, { credentials: "include" })
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      .then(async (r) => {
+        if (!r.ok) {
+          let body: unknown;
+          try {
+            body = await r.json();
+          } catch {
+            body = undefined;
+          }
+          throw new ApiError(r.status, r.statusText, body);
+        }
         return r.text();
       })
       .then((text) => {
@@ -30,7 +39,7 @@ export function TextPreview({ url, size }: TextPreviewProps) {
         setLoading(false);
       })
       .catch((e) => {
-        setError(e.message);
+        setError(getErrorMessage(e));
         setLoading(false);
       });
   }, [url, size]);
