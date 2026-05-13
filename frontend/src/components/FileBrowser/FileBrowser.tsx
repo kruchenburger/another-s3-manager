@@ -72,10 +72,19 @@ export function FileBrowser() {
         throw new ApiError(response.status, response.statusText, body);
       }
       const blob = await response.blob();
-      // Filename: prefer Content-Disposition, fall back to the file's display name.
+      // Filename: prefer the RFC 5987 `filename*=UTF-8''…` variant (preserves
+      // Cyrillic/CJK), fall back to the ASCII `filename=` param, then to the
+      // file's display name. The backend emits both per RFC 5987, with the
+      // ASCII param first — a naive `.match()` would pick that one and lose
+      // non-ASCII characters.
       const disposition = response.headers.get("Content-Disposition") ?? "";
-      const filenameMatch = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
-      const filename = filenameMatch ? decodeURIComponent(filenameMatch[1]!) : name;
+      const matches = Array.from(
+        disposition.matchAll(/filename(\*?)=(?:UTF-8'')?"?([^";]+)"?/gi),
+      );
+      const starred = matches.find((m) => m[1] === "*");
+      const plain = matches.find((m) => m[1] === "");
+      const rawFilename = starred?.[2] ?? plain?.[2];
+      const filename = rawFilename ? decodeURIComponent(rawFilename) : name;
       const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = blobUrl;

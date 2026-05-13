@@ -97,4 +97,40 @@ describe("FileBrowser handleDownload", () => {
     );
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
+
+  it("prefers the RFC 5987 filename*= UTF-8 variant over the ASCII fallback", async () => {
+    // Spy on createElement to capture the anchor and read its `download` prop.
+    // The backend emits BOTH params per RFC 5987; the ASCII `filename=` comes
+    // first with non-ASCII bytes replaced by `_`. Without picking the starred
+    // variant, the saved filename loses Cyrillic/CJK characters.
+    const realCreate = document.createElement.bind(document);
+    const createSpy = vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+      const el = realCreate(tag) as HTMLElement;
+      return el;
+    });
+
+    const blob = new Blob(["pdf-bytes"], { type: "application/pdf" });
+    const cyrillicHeader =
+      "attachment; filename=\"_____.pdf\"; filename*=UTF-8''%D1%82%D0%B5%D1%81%D1%82.pdf";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        blob: () => Promise.resolve(blob),
+        headers: new Headers({ "Content-Disposition": cyrillicHeader }),
+      }),
+    );
+    renderBrowser();
+    fireEvent.click(screen.getByLabelText(/download report\.pdf/i));
+    await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalled());
+
+    const anchors = createSpy.mock.results
+      .map((r) => r.value as HTMLElement)
+      .filter((el): el is HTMLAnchorElement => el instanceof HTMLAnchorElement);
+    const downloadAnchor = anchors.find((a) => a.download.length > 0);
+    expect(downloadAnchor).toBeDefined();
+    // The UTF-8 variant decodes to "тест.pdf"; the ASCII fallback is "_____.pdf".
+    expect(downloadAnchor!.download).toBe("тест.pdf");
+  });
 });
