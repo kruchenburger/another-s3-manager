@@ -320,26 +320,6 @@ async def serve_v2_spa(full_path: str):
         return HTMLResponse(content=f.read())
 
 
-# Clear S3 clients cache when config changes (hook into config module)
-def _on_config_change():
-    """Callback when config changes to clear S3 clients cache."""
-    clear_s3_clients_cache()
-
-
-# Hook config save to clear cache
-_original_save_config = config_module.save_config
-
-
-def save_config_with_cache_clear(config: Dict[str, Any], skip_migration: bool = False) -> None:
-    """Wrapper for save_config that clears S3 cache."""
-    _original_save_config(config, skip_migration=skip_migration)
-    _on_config_change()
-
-
-# Update config module's save_config to use our wrapper
-config_module.save_config = save_config_with_cache_clear
-
-
 def _enforce_password_policy(password: str) -> None:
     """Reject the request if the password fails the configured policy.
 
@@ -1467,6 +1447,8 @@ async def update_config(
                     raise HTTPException(status_code=400, detail="profile type requires 'profile_name'")
 
         save_config(config)
+        clear_s3_clients_cache()
+        logger.info("S3 client cache cleared after config save")
         return {"message": "Configuration updated successfully"}
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))

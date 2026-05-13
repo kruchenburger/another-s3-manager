@@ -535,6 +535,68 @@ def test_update_config(app_client):
     assert response.status_code == status.HTTP_200_OK, response.json()
 
 
+def test_update_config_clears_s3_client_cache(app_client):
+    """POST /api/config must clear the S3 client cache so subsequent requests
+    re-create clients with the new config (region, endpoint, credentials).
+
+    Regression: prior to this fix the monkey-patch on `config_module.save_config`
+    was dead code (main.py imported `save_config` directly, bypassing the patch),
+    so admin edits to a broken role's region required a container restart.
+    """
+    from another_s3_manager import s3_client
+
+    _, headers = login(app_client)
+
+    # Pre-fill cache: simulate that the role was used before the config save.
+    s3_client._s3_clients_cache["Default"] = "fake-cached-client"
+    assert "Default" in s3_client._s3_clients_cache
+
+    payload = {
+        "roles": [{"name": "Default", "type": "default", "description": "Use default credentials"}],
+        "items_per_page": 50,
+        "enable_lazy_loading": False,
+        "max_file_size": 1024 * 1024,
+    }
+    response = app_client.post("/api/config", json=payload, headers=headers)
+    assert response.status_code == 200, response.json()
+
+    assert "Default" not in s3_client._s3_clients_cache
+    assert s3_client._s3_clients_cache == {}
+
+
+def test_update_config_clears_boto3_credential_cache(app_client, monkeypatch):
+    """POST /api/config must also flush boto3/botocore's credential cache.
+
+    The bare _s3_clients_cache dict clear is insufficient for `assume_role` /
+    `profile` role types: boto3 keeps an independent credential cache on the
+    default session, so a fresh client would still pick up the OLD STS or
+    profile credentials until natural expiry (~1h). Verifies that
+    clear_s3_clients_cache calls _clear_boto3_cached_credentials.
+    """
+    from another_s3_manager import s3_client
+
+    _, headers = login(app_client)
+
+    called = {"count": 0}
+    original_clear = s3_client._clear_boto3_cached_credentials
+
+    def spy() -> None:
+        called["count"] += 1
+        original_clear()
+
+    monkeypatch.setattr(s3_client, "_clear_boto3_cached_credentials", spy)
+
+    payload = {
+        "roles": [{"name": "Default", "type": "default", "description": "Use default credentials"}],
+        "items_per_page": 50,
+        "enable_lazy_loading": False,
+        "max_file_size": 1024 * 1024,
+    }
+    response = app_client.post("/api/config", json=payload, headers=headers)
+    assert response.status_code == 200, response.json()
+    assert called["count"] >= 1, "Expected _clear_boto3_cached_credentials to be invoked"
+
+
 def test_list_buckets_with_allowed_list(app_client, monkeypatch):
     import another_s3_manager.config as config_module
 

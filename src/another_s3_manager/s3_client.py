@@ -773,9 +773,18 @@ def execute_with_s3_retry(role_name: Optional[str], operation: str, callback: Ca
 
 
 def clear_s3_clients_cache() -> None:
-    """Clear the S3 clients cache."""
+    """Clear the S3 clients cache AND the underlying boto3/botocore credential cache.
+
+    A bare dict clear is insufficient for roles backed by `assume_role` (STS) or
+    AWS `profile` credentials: boto3/botocore keeps its own credential cache on
+    the default session, so a new client built after the dict clear would still
+    inherit the OLD assumed-role / profile credentials until they naturally
+    expire (~1h for STS). The credential flush matches what the per-role
+    `invalidate_s3_client + _clear_boto3_cached_credentials` retry sites do.
+    """
     global _s3_clients_cache
     _s3_clients_cache.clear()
+    _clear_boto3_cached_credentials()
 
 
 # ---------------------------------------------------------------------------
