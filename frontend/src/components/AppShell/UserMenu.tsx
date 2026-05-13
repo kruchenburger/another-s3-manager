@@ -1,4 +1,5 @@
 import { Avatar, Menu, Text, UnstyledButton, Group } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import { Key, KeyRound, LogOut, Shield } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useMe } from "@/features/auth/hooks/useMe";
@@ -15,7 +16,14 @@ export function UserMenu() {
 
   const handleLogout = (): void => {
     logout.mutate(undefined, {
-      onSettled: () => navigate("/login", { replace: true }),
+      onSuccess: () => navigate("/login", { replace: true }),
+      onError: () =>
+        notifications.show({
+          color: "red",
+          title: "Logout failed",
+          message: "Please close the tab manually — your session may still be active on the server.",
+          autoClose: false,
+        }),
     });
   };
 

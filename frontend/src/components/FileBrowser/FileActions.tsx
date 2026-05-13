@@ -4,6 +4,8 @@ import { Download, Eye, Share2, Trash2 } from "lucide-react";
 export interface FileActionsProps {
   isDirectory: boolean;
   canPreview: boolean;
+  /** Display name of the file — used for accessible Download button label. */
+  filename?: string;
   onDownload?: () => void;
   onCopyUrl?: () => void;
   onPreview?: () => void;
@@ -17,17 +19,19 @@ const DISABLED_DELETE_LABEL = "Deletion is disabled in the server config.";
 export function FileActions({
   isDirectory,
   canPreview,
+  filename,
   onDownload,
   onCopyUrl,
   onPreview,
   onDelete,
   disabled = false,
 }: FileActionsProps) {
+  const downloadLabel = filename ? `Download ${filename}` : "Download";
   return (
     <Group gap={4} wrap="nowrap">
       {!isDirectory && onDownload && (
         <Tooltip label="Download" withArrow>
-          <ActionIcon variant="subtle" onClick={onDownload} aria-label="Download">
+          <ActionIcon variant="subtle" onClick={onDownload} aria-label={downloadLabel}>
             <Download size={16} />
           </ActionIcon>
         </Tooltip>

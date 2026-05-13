@@ -1,4 +1,5 @@
-import { Button, Container, PasswordInput, Stack, Title } from "@mantine/core";
+import { Alert, Button, Container, PasswordInput, Stack, Title } from "@mantine/core";
+import { AlertTriangle } from "lucide-react";
 import { useForm } from "@mantine/form";
 import { useNavigate } from "react-router-dom";
 import { useChangeMyPassword } from "@/features/auth/hooks/useChangeMyPassword";
@@ -54,6 +55,15 @@ export function ChangePasswordPage() {
             />
             {policy && (
               <PasswordRequirementsList password={form.values.next} policy={policy} />
+            )}
+            {policyFailed && (
+              <Alert
+                color="yellow"
+                variant="light"
+                icon={<AlertTriangle size={16} />}
+              >
+                Couldn't load password policy — the server will validate your new password on save.
+              </Alert>
             )}
             <PasswordInput
               label="Confirm new password"

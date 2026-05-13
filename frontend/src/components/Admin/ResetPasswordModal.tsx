@@ -1,5 +1,6 @@
 import { Alert, Button, Modal, PasswordInput, Stack } from "@mantine/core";
 import { useForm } from "@mantine/form";
+import { AlertTriangle } from "lucide-react";
 import { usePasswordPolicy } from "@/features/auth/hooks/usePasswordPolicy";
 import {
   PasswordRequirementsList,
@@ -61,6 +62,15 @@ export function ResetPasswordModal({
                 password={form.values.password}
                 policy={policy}
               />
+            )}
+            {policyFailed && (
+              <Alert
+                color="yellow"
+                variant="light"
+                icon={<AlertTriangle size={16} />}
+              >
+                Couldn't load password policy — the server will validate the new password on save.
+              </Alert>
             )}
           </Stack>
           <Button

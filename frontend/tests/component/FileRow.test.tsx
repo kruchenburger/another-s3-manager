@@ -82,13 +82,13 @@ describe("FileRow", () => {
 
   it("calls onDownload when download clicked (file)", () => {
     const { props } = renderRow({ name: "x.txt", is_directory: false, size: 100 });
-    fireEvent.click(screen.getByLabelText("Download"));
+    fireEvent.click(screen.getByLabelText("Download x.txt"));
     expect(props.onDownload).toHaveBeenCalledWith("x.txt");
   });
 
   it("does not show download for directory", () => {
     renderRow({ name: "folder", is_directory: true, size: 0 });
-    expect(screen.queryByLabelText("Download")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Download/)).not.toBeInTheDocument();
   });
 
   it("calls onNavigate on directory click", () => {

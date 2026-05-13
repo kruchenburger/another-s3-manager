@@ -9,6 +9,7 @@ import { buildDownloadUrl, getPresignedDownloadUrl } from "@/features/files/api/
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { joinPath, decodePath } from "@/utils/pathUtils";
+import { ApiError, getErrorMessage } from "@/utils/apiError";
 import { formatTimeOfDay } from "@/utils/formatDate";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
@@ -55,9 +56,51 @@ export function FileBrowser() {
     navigate(`/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(bucket)}/p/${encoded}`);
   };
 
-  const handleDownload = (name: string) => {
+  const handleDownload = async (name: string): Promise<void> => {
     const fullPath = joinPath(pathFromUrl, name);
-    window.location.href = buildDownloadUrl(bucket, roleId, fullPath);
+    const url = buildDownloadUrl(bucket, roleId, fullPath);
+    try {
+      const response = await fetch(url, { credentials: "include" });
+      if (!response.ok) {
+        // Surface the server's error message instead of navigating to the raw error page.
+        let body: unknown;
+        try {
+          body = await response.json();
+        } catch {
+          body = undefined;
+        }
+        throw new ApiError(response.status, response.statusText, body);
+      }
+      const blob = await response.blob();
+      // Filename: prefer the RFC 5987 `filename*=UTF-8''…` variant (preserves
+      // Cyrillic/CJK), fall back to the ASCII `filename=` param, then to the
+      // file's display name. The backend emits both per RFC 5987, with the
+      // ASCII param first — a naive `.match()` would pick that one and lose
+      // non-ASCII characters.
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      const matches = Array.from(
+        disposition.matchAll(/filename(\*?)=(?:UTF-8'')?"?([^";]+)"?/gi),
+      );
+      const starred = matches.find((m) => m[1] === "*");
+      const plain = matches.find((m) => m[1] === "");
+      const rawFilename = starred?.[2] ?? plain?.[2];
+      const filename = rawFilename ? decodeURIComponent(rawFilename) : name;
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch (e) {
+      notifications.show({
+        color: "red",
+        title: "Download failed",
+        message: getErrorMessage(e),
+        autoClose: false,
+      });
+    }
   };
 
   const handleCopyUrl = async (name: string) => {
