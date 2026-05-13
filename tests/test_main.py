@@ -535,6 +535,35 @@ def test_update_config(app_client):
     assert response.status_code == status.HTTP_200_OK, response.json()
 
 
+def test_update_config_clears_s3_client_cache(app_client):
+    """POST /api/config must clear the S3 client cache so subsequent requests
+    re-create clients with the new config (region, endpoint, credentials).
+
+    Regression: prior to this fix the monkey-patch on `config_module.save_config`
+    was dead code (main.py imported `save_config` directly, bypassing the patch),
+    so admin edits to a broken role's region required a container restart.
+    """
+    from another_s3_manager import s3_client
+
+    _, headers = login(app_client)
+
+    # Pre-fill cache: simulate that the role was used before the config save.
+    s3_client._s3_clients_cache["Default"] = "fake-cached-client"
+    assert "Default" in s3_client._s3_clients_cache
+
+    payload = {
+        "roles": [{"name": "Default", "type": "default", "description": "Use default credentials"}],
+        "items_per_page": 50,
+        "enable_lazy_loading": False,
+        "max_file_size": 1024 * 1024,
+    }
+    response = app_client.post("/api/config", json=payload, headers=headers)
+    assert response.status_code == 200, response.json()
+
+    assert "Default" not in s3_client._s3_clients_cache
+    assert s3_client._s3_clients_cache == {}
+
+
 def test_list_buckets_with_allowed_list(app_client, monkeypatch):
     import another_s3_manager.config as config_module
 
