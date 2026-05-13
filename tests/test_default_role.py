@@ -5,6 +5,28 @@ from sqlalchemy import inspect
 from another_s3_manager.database import get_engine
 
 
+def _test_password_hash() -> str:
+    """Bcrypt hash for password 'test-password-1A' — meets the default policy."""
+    from another_s3_manager.auth import hash_password
+
+    return hash_password("test-password-1A")
+
+
+def _login_as(client, username: str) -> None:
+    """Log in as the given user; sets the auth cookie + CSRF header on the test client."""
+    login_response = client.post(
+        "/api/login",
+        data={"username": username, "password": "test-password-1A"},
+    )
+    assert login_response.status_code == 200, login_response.text
+    # CSRF token is not in the login body — it lives in the JWT cookie and is
+    # exposed only via /api/me (mirrors the pattern in test_main.py::login()).
+    me_response = client.get("/api/me")
+    assert me_response.status_code == 200, me_response.text
+    csrf = me_response.json()["csrf_token"]
+    client.headers["X-CSRF-Token"] = csrf
+
+
 def test_users_table_has_default_role_column():
     """Migration must add a nullable `default_role` column to `users`."""
     inspector = inspect(get_engine())
@@ -66,3 +88,56 @@ def test_update_user_accepts_explicit_default_role(app_client):
     )
     updated = users.update_user("picker", default_role="RoleB")
     assert updated["default_role"] == "RoleB"
+
+
+def test_api_me_returns_explicit_default_role_when_in_allowed(app_client):
+    """If user.default_role is set AND is in allowed_roles → return it."""
+    from another_s3_manager import users
+
+    users.create_user(
+        username="explicit",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA", "RoleB"],
+    )
+    users.update_user("explicit", default_role="RoleB")
+
+    _login_as(app_client, "explicit")
+    response = app_client.get("/api/me")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["default_role"] == "RoleB", body
+
+
+def test_api_me_falls_back_to_first_allowed_when_default_role_missing(app_client):
+    """If user.default_role is NULL → return first of allowed_roles."""
+    from another_s3_manager import users
+
+    users.create_user(
+        username="implicit",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA", "RoleB"],
+    )
+    _login_as(app_client, "implicit")
+    response = app_client.get("/api/me")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["default_role"] == "RoleA", body
+
+
+def test_api_me_returns_null_default_role_when_no_allowed_roles(app_client):
+    """User with no allowed roles → default_role is null."""
+    from another_s3_manager import users
+
+    users.create_user(
+        username="orphan",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=[],
+    )
+    _login_as(app_client, "orphan")
+    response = app_client.get("/api/me")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["default_role"] is None, body

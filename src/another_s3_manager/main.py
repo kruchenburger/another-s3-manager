@@ -454,12 +454,22 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
     disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
     disable_deletion_config = config.get("disable_deletion", False)
     disable_deletion = disable_deletion_env or disable_deletion_config
+    # Computed default_role: explicit choice if still valid, else first of
+    # allowed_roles, else null.
+    explicit_default = current_user.get("default_role")
+    if explicit_default and explicit_default in allowed_roles:
+        default_role: Optional[str] = explicit_default
+    elif allowed_roles:
+        default_role = allowed_roles[0]
+    else:
+        default_role = None
     return {
         "username": current_user.get("username"),
         "is_admin": is_admin,
         "csrf_token": current_user.get("csrf_token"),  # Return CSRF token for client
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
         "allowed_roles": allowed_roles,
+        "default_role": default_role,
         "disable_deletion": disable_deletion,
         "app_name": APP_NAME,  # Return app name for client
         "app_version": APP_VERSION,
