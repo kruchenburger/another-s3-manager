@@ -27,6 +27,7 @@ def _user_to_dict(user: User) -> Dict[str, Any]:
         "is_admin": user.is_admin,
         "allowed_roles": [r.role_name for r in user.roles],
         "theme": user.theme,
+        "default_role": user.default_role,
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
 
@@ -156,19 +157,29 @@ def create_user(
     is_admin: bool = False,
     allowed_roles: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Create a single user. Does NOT seed default admin (that's load_users's job)."""
+    """Create a single user. Does NOT seed default admin (that's load_users's job).
+
+    Single-allowed-role users get `default_role` auto-set to that role — the
+    picker would be degenerate otherwise. Multi-role users start with
+    default_role=NULL; the computed fallback (first of allowed_roles) applies
+    until they pick explicitly.
+    """
     with session_scope() as session:
         existing = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
         if existing:
             raise ValueError(f"User {username} already exists")
+
+        roles = list(allowed_roles or [])
+        auto_default = roles[0] if len(roles) == 1 else None
 
         user = User(
             username=username,
             password_hash=password_hash,
             is_admin=is_admin,
             theme="auto",
+            default_role=auto_default,
         )
-        for role_name in allowed_roles or []:
+        for role_name in roles:
             user.roles.append(UserRole(role_name=role_name))
         session.add(user)
         session.flush()
@@ -176,7 +187,14 @@ def create_user(
 
 
 def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
-    """Update user properties. Raises ValueError if the user doesn't exist."""
+    """Update user properties. Raises ValueError if the user doesn't exist.
+
+    `default_role`:
+      - explicit: pass `default_role=<role>` or `default_role=None`
+      - implicit reset: if `allowed_roles` changes such that the current
+        default is no longer in the new set, reset to the first of the new
+        set (or NULL if the new set is empty)
+    """
     with session_scope() as session:
         user = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
         if not user:
@@ -188,11 +206,15 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
             user.is_admin = kwargs["is_admin"]
         if "theme" in kwargs:
             user.theme = kwargs["theme"]
+        if "default_role" in kwargs:
+            user.default_role = kwargs["default_role"]
         if "allowed_roles" in kwargs:
-            # Replace all roles
+            new_roles = list(kwargs["allowed_roles"])
             user.roles.clear()
-            for role_name in kwargs["allowed_roles"]:
+            for role_name in new_roles:
                 user.roles.append(UserRole(role_name=role_name))
+            if user.default_role is not None and user.default_role not in new_roles:
+                user.default_role = new_roles[0] if new_roles else None
 
         session.flush()
         return _user_to_dict(user)
