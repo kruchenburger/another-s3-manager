@@ -28,6 +28,7 @@ def _user_to_dict(user: User) -> Dict[str, Any]:
         "allowed_roles": [r.role_name for r in user.roles],
         "theme": user.theme,
         "default_role": user.default_role,
+        "must_change_password": user.must_change_password,
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
 
@@ -48,6 +49,7 @@ def _seed_default_admin_if_empty(session) -> Optional[User]:
         password_hash=hash_password(admin_password),
         is_admin=True,
         theme="auto",
+        must_change_password=False,
     )
     session.add(admin)
     session.flush()
@@ -140,6 +142,8 @@ def save_users(users_data: Dict[str, Any]) -> None:
                 existing.password_hash = user_dict["password_hash"]
                 existing.is_admin = user_dict.get("is_admin", False)
                 existing.theme = user_dict.get("theme", "auto")
+                if "must_change_password" in user_dict:
+                    existing.must_change_password = bool(user_dict["must_change_password"])
                 # Replace roles atomically.
                 # Flush after clear() so the orphan DELETEs hit the DB before
                 # the new INSERTs — otherwise a no-op edit (set Default → clear,
@@ -162,6 +166,7 @@ def save_users(users_data: Dict[str, Any]) -> None:
                     password_hash=user_dict["password_hash"],
                     is_admin=user_dict.get("is_admin", False),
                     theme=user_dict.get("theme", "auto"),
+                    must_change_password=bool(user_dict.get("must_change_password", False)),
                 )
                 for role_name in user_dict.get("allowed_roles", []):
                     user.roles.append(UserRole(role_name=role_name))
@@ -203,6 +208,7 @@ def create_user(
     password_hash: str,
     is_admin: bool = False,
     allowed_roles: Optional[List[str]] = None,
+    must_change_password: bool = True,
 ) -> Dict[str, Any]:
     """Create a single user. Does NOT seed default admin (that's load_users's job).
 
@@ -210,6 +216,11 @@ def create_user(
     picker would be degenerate otherwise. Multi-role users start with
     default_role=NULL; the computed fallback (first of allowed_roles) applies
     until they pick explicitly.
+
+    `must_change_password` defaults to True (paranoid default — admin generated
+    the password, user must change it on first login). Admin can opt out via
+    the UserDrawer checkbox or by passing False explicitly. The seed admin
+    bootstrap path (_seed_default_admin_if_empty) bypasses this with False.
     """
     with session_scope() as session:
         existing = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
@@ -225,6 +236,7 @@ def create_user(
             is_admin=is_admin,
             theme="auto",
             default_role=auto_default,
+            must_change_password=must_change_password,
         )
         for role_name in roles:
             user.roles.append(UserRole(role_name=role_name))
@@ -253,6 +265,8 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
             user.is_admin = kwargs["is_admin"]
         if "theme" in kwargs:
             user.theme = kwargs["theme"]
+        if "must_change_password" in kwargs:
+            user.must_change_password = bool(kwargs["must_change_password"])
         if "default_role" in kwargs:
             user.default_role = kwargs["default_role"]
         if "allowed_roles" in kwargs:
