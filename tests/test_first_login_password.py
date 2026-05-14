@@ -5,6 +5,24 @@ from sqlalchemy import inspect
 from another_s3_manager.database import get_engine
 
 
+def _test_password_hash() -> str:
+    from another_s3_manager.auth import hash_password
+
+    return hash_password("test-password-1A")
+
+
+def _login_as(client, username: str) -> None:
+    login_response = client.post(
+        "/api/login",
+        data={"username": username, "password": "test-password-1A"},
+    )
+    assert login_response.status_code == 200, login_response.text
+    me_response = client.get("/api/me")
+    assert me_response.status_code == 200, me_response.text
+    csrf = me_response.json()["csrf_token"]
+    client.headers["X-CSRF-Token"] = csrf
+
+
 def test_users_table_has_must_change_password_column():
     """Migration must add a non-nullable boolean `must_change_password` column."""
     inspector = inspect(get_engine())
@@ -82,3 +100,22 @@ def test_save_users_preserves_must_change_password(app_client):
 
     me = users.get_user_by_username("bulkguy")
     assert me["must_change_password"] is True
+
+
+def test_api_me_returns_must_change_password(app_client):
+    """GET /api/me must include the must_change_password flag."""
+    from another_s3_manager import users
+
+    users.create_user(
+        username="freshie",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA"],
+    )
+    # create_user defaults must_change_password=True (Task 3).
+
+    _login_as(app_client, "freshie")
+    response = app_client.get("/api/me")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["must_change_password"] is True, body

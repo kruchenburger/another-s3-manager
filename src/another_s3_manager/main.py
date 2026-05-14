@@ -504,6 +504,7 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
         "allowed_roles": allowed_roles,
         "default_role": default_role,
+        "must_change_password": bool(current_user.get("must_change_password", False)),
         "disable_deletion": disable_deletion,
         "app_name": APP_NAME,  # Return app name for client
         "app_version": APP_VERSION,
