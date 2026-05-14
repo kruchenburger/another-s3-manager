@@ -197,3 +197,65 @@ def test_put_my_default_role_null_clears_explicit_choice(app_client):
     me = app_client.get("/api/me").json()
     # Fallback to first allowed.
     assert me["default_role"] == "RoleA"
+
+
+def test_startup_migration_imports_legacy_global_default_role(app_client, monkeypatch, tmp_path):
+    """First boot copies legacy config.default_role into compatible user records."""
+    from another_s3_manager import config as config_module
+    from another_s3_manager import main as main_module
+    from another_s3_manager import users
+
+    # Pre-create a user with NULL default_role and RoleA in allowed_roles.
+    users.create_user(
+        username="legacy",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA", "RoleB"],
+    )
+    # Force NULL (create_user auto-sets when len==1; explicitly clear here for safety).
+    users.update_user("legacy", default_role=None)
+
+    # Inject a config.json with a global default_role of "RoleA".
+    cfg = config_module.load_config(force_reload=True)
+    cfg["default_role"] = "RoleA"
+    cfg.setdefault("roles", []).append({"name": "RoleA", "type": "default"})
+    cfg.setdefault("roles", []).append({"name": "RoleB", "type": "default"})
+    config_module.save_config(cfg)
+
+    # Trigger the startup migration manually.
+    main_module._migrate_legacy_default_role()
+
+    # Verify the user now has default_role=RoleA.
+    me = users.get_user_by_username("legacy")
+    assert me["default_role"] == "RoleA"
+
+
+def test_startup_migration_is_idempotent_and_skips_users_with_explicit_default(app_client):
+    """Re-running the migration does NOT overwrite users who already have a value."""
+    from another_s3_manager import config as config_module
+    from another_s3_manager import main as main_module
+    from another_s3_manager import users
+
+    users.create_user(
+        username="picky",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA", "RoleB"],
+    )
+    users.update_user("picky", default_role="RoleB")
+
+    cfg = config_module.load_config(force_reload=True)
+    cfg["default_role"] = "RoleA"
+    cfg.setdefault("roles", []).extend(
+        [
+            {"name": "RoleA", "type": "default"},
+            {"name": "RoleB", "type": "default"},
+        ]
+    )
+    config_module.save_config(cfg)
+
+    main_module._migrate_legacy_default_role()
+    main_module._migrate_legacy_default_role()  # twice — must be idempotent
+
+    me = users.get_user_by_username("picky")
+    assert me["default_role"] == "RoleB", "user's explicit choice must be preserved"

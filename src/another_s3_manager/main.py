@@ -162,14 +162,20 @@ async def lifespan(app_: FastAPI):
     except Exception:
         logger.warning("JSON migration failed; DB is still usable", exc_info=True)
 
-    # 3. Default-password security warning
+    # 3. One-time migration: legacy global config.default_role → per-user records
+    try:
+        _migrate_legacy_default_role()
+    except Exception:
+        logger.warning("Legacy default_role migration failed; continuing startup", exc_info=True)
+
+    # 4. Default-password security warning
     if os.getenv("ADMIN_PASSWORD", "change_me_pls") == "change_me_pls":
         logger.warning(
             "ADMIN_PASSWORD is the default 'change_me_pls'. CHANGE IT before exposing this app — "
             "admin is exempt from auto-ban and there is no application-level rate limit on /api/login."
         )
 
-    # 4. Enter FastMCP session manager — REQUIRED for /mcp/* to work.
+    # 5. Enter FastMCP session manager — REQUIRED for /mcp/* to work.
     async with _mcp_instance.session_manager.run():
         yield
 
@@ -318,6 +324,37 @@ async def serve_v2_spa(full_path: str):
         raise HTTPException(status_code=404, detail="React SPA not built yet")
     with open(index_file, "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
+
+
+def _migrate_legacy_default_role() -> None:
+    """Copy the legacy global `config.default_role` into compatible user records.
+
+    Runs at startup. Idempotent. Only updates users whose `default_role IS NULL`
+    AND who have the legacy role in their `allowed_roles`. Skips silently if
+    config has no legacy default. After this migration, `config.default_role`
+    is silently ignored on read (the field may still appear in config.json on
+    disk — that's fine, harmless legacy data).
+    """
+    config = load_config()
+    legacy_default = config.get("default_role")
+    if not legacy_default:
+        return
+
+    from another_s3_manager import users  # avoid circular imports
+
+    updated_count = 0
+    all_users = users.load_users().get("users", [])
+    for user in all_users:
+        if user.get("default_role") is None and legacy_default in user.get("allowed_roles", []):
+            users.update_user(user["username"], default_role=legacy_default)
+            updated_count += 1
+
+    if updated_count > 0:
+        logger.info(
+            "Migrated legacy config.default_role='%s' to %d user records",
+            legacy_default,
+            updated_count,
+        )
 
 
 def _enforce_password_policy(password: str) -> None:
