@@ -1200,17 +1200,14 @@ async def get_config(
         from another_s3_manager.config import is_config_writable
         from another_s3_manager.constants import get_data_dir
 
-        # Apply default_role if specified
-        default_role = config.get("default_role", "")
-        if default_role and any(r.get("name") == default_role for r in config.get("roles", [])):
-            effective_role = default_role
-        else:
-            # Use first role if default_role is not set or invalid
-            effective_role = config.get("roles", [{}])[0].get("name", "") if config.get("roles") else ""
+        # default_role removed from config in Phase 6a-4 (now per-user via /api/me).
+        # effective_role falls back to the first configured role for the vanilla UI;
+        # React UI reads per-user default_role from /api/me instead.
+        roles_list = config.get("roles", [])
+        effective_role = roles_list[0].get("name", "") if roles_list else ""
 
         safe_config = {
             "roles": [sanitize_role(role) for role in config.get("roles", [])],
-            "default_role": default_role,  # Return default_role so admin can see/edit it
             "current_role": effective_role,  # Computed value for frontend (not stored in config)
             "items_per_page": items_per_page,
             "disable_deletion": disable_deletion,
@@ -1254,15 +1251,9 @@ async def get_config(
     # Filter roles and sanitize
     filtered_roles = [sanitize_role(role) for role in config.get("roles", []) if role.get("name") in allowed_roles]
 
-    # Apply default_role if specified and available
-    default_role = config.get("default_role", "")
-
-    # If default_role is set and is in allowed_roles, use it
-    if default_role and default_role in allowed_roles:
-        effective_role = default_role
-    # Otherwise, use first allowed role or empty
-    else:
-        effective_role = allowed_roles[0] if allowed_roles else ""
+    # default_role removed from config in Phase 6a-4 (now per-user via /api/me).
+    # React UI reads per-user default_role from /api/me; vanilla UI falls back to first allowed role.
+    effective_role = allowed_roles[0] if allowed_roles else ""
 
     return {
         "roles": filtered_roles,
