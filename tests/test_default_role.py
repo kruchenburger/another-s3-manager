@@ -259,3 +259,118 @@ def test_startup_migration_is_idempotent_and_skips_users_with_explicit_default(a
 
     me = users.get_user_by_username("picky")
     assert me["default_role"] == "RoleB", "user's explicit choice must be preserved"
+
+
+# ---------------------------------------------------------------------------
+# Pure helper unit tests — no app_client fixture needed.
+# ---------------------------------------------------------------------------
+
+
+def test_compute_default_role_returns_explicit_when_still_allowed():
+    from another_s3_manager.users import compute_default_role
+
+    assert compute_default_role("RoleB", ["RoleA", "RoleB", "RoleC"]) == "RoleB"
+
+
+def test_compute_default_role_falls_back_to_first_when_explicit_invalid():
+    from another_s3_manager.users import compute_default_role
+
+    assert compute_default_role("RoleZ", ["RoleA", "RoleB"]) == "RoleA"
+
+
+def test_compute_default_role_falls_back_to_first_when_no_explicit():
+    from another_s3_manager.users import compute_default_role
+
+    assert compute_default_role(None, ["RoleA", "RoleB"]) == "RoleA"
+
+
+def test_compute_default_role_returns_none_when_no_allowed_roles():
+    from another_s3_manager.users import compute_default_role
+
+    assert compute_default_role("RoleA", []) is None
+    assert compute_default_role(None, []) is None
+
+
+def test_validate_default_role_choice_accepts_none_and_in_set():
+    from another_s3_manager.users import validate_default_role_choice
+
+    # Neither call should raise.
+    validate_default_role_choice(None, ["RoleA"])
+    validate_default_role_choice("RoleA", ["RoleA", "RoleB"])
+
+
+def test_validate_default_role_choice_rejects_role_not_in_set():
+    import pytest
+
+    from another_s3_manager.users import validate_default_role_choice
+
+    with pytest.raises(ValueError, match="RoleZ"):
+        validate_default_role_choice("RoleZ", ["RoleA", "RoleB"])
+
+
+def test_save_users_resets_default_role_when_role_removed(app_client):
+    """save_users (admin bulk-upsert path) must reset a now-orphaned default_role.
+
+    Regression: before this fix, save_users left a dangling default_role in
+    the DB when an admin removed the role from a user's allowed_roles via
+    PUT /api/admin/users/{username}. /api/me masked the dangling value with
+    its computed fallback, but the DB row was inconsistent.
+    """
+    from another_s3_manager import users
+
+    users.create_user(
+        username="dangler",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA", "RoleB"],
+    )
+    users.update_user("dangler", default_role="RoleA")
+
+    # Admin bulk-upsert removes RoleA from the user's allowed_roles.
+    users.save_users(
+        {
+            "users": [
+                {
+                    "username": "dangler",
+                    "password_hash": _test_password_hash(),
+                    "is_admin": False,
+                    "theme": "auto",
+                    "allowed_roles": ["RoleB"],
+                }
+            ]
+        }
+    )
+
+    me = users.get_user_by_username("dangler")
+    assert me["default_role"] == "RoleB", me
+
+
+def test_save_users_preserves_default_role_when_still_allowed(app_client):
+    """save_users must NOT touch default_role if the current value is still valid."""
+    from another_s3_manager import users
+
+    users.create_user(
+        username="keeper",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA", "RoleB"],
+    )
+    users.update_user("keeper", default_role="RoleB")
+
+    # allowed_roles still contains RoleB — default must survive.
+    users.save_users(
+        {
+            "users": [
+                {
+                    "username": "keeper",
+                    "password_hash": _test_password_hash(),
+                    "is_admin": False,
+                    "theme": "auto",
+                    "allowed_roles": ["RoleB", "RoleC"],
+                }
+            ]
+        }
+    )
+
+    me = users.get_user_by_username("keeper")
+    assert me["default_role"] == "RoleB", me

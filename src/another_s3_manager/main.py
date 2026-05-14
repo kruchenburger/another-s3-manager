@@ -492,14 +492,11 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
     disable_deletion_config = config.get("disable_deletion", False)
     disable_deletion = disable_deletion_env or disable_deletion_config
     # Computed default_role: explicit choice if still valid, else first of
-    # allowed_roles, else null.
-    explicit_default = current_user.get("default_role")
-    if explicit_default and explicit_default in allowed_roles:
-        default_role: Optional[str] = explicit_default
-    elif allowed_roles:
-        default_role = allowed_roles[0]
-    else:
-        default_role = None
+    # allowed_roles, else null. Helper lives in users.py so the rule lives
+    # next to the data layer that stores explicit_default.
+    from another_s3_manager.users import compute_default_role
+
+    default_role = compute_default_role(current_user.get("default_role"), allowed_roles)
     return {
         "username": current_user.get("username"),
         "is_admin": is_admin,
@@ -702,40 +699,52 @@ class UpdateDefaultRolePayload(BaseModel):
     role: Optional[str] = None
 
 
-@app.put("/api/me/default-role")
+class UpdateDefaultRoleResponse(BaseModel):
+    default_role: Optional[str]
+
+
+def _effective_allowed_roles(current_user: Dict[str, Any]) -> list[str]:
+    """Same admin-vs-user role resolution used by GET /api/me.
+
+    Admins see every configured role; regular users see only their assigned
+    `allowed_roles`. Extracted so the PUT endpoint validates against the same
+    set the GET endpoint reports.
+    """
+    if current_user.get("is_admin", False):
+        config = load_config()
+        return [r["name"] for r in config.get("roles", []) if r.get("name")]
+    return current_user.get("allowed_roles", [])
+
+
+@app.put("/api/me/default-role", response_model=UpdateDefaultRoleResponse)
 async def update_my_default_role(
     payload: UpdateDefaultRolePayload,
     current_user: Dict[str, Any] = Depends(get_current_user),
     csrf_verified: bool = Depends(verify_csrf_token),
-):
+) -> UpdateDefaultRoleResponse:
     """Set the authenticated user's default role.
 
     Payload: {"role": "<role-name>" | null}. `null` clears the explicit choice
     so the computed fallback applies (first of allowed_roles, or null).
     Returns 400 if the role is not in the user's allowed set.
     """
-    new_role = payload.role
-    if new_role is not None:
-        # Validate against the user's CURRENT allowed_roles (not the legacy
-        # global config). Admin gets the full role list per /api/me logic.
-        is_admin = current_user.get("is_admin", False)
-        if is_admin:
-            config = load_config()
-            allowed = [r["name"] for r in config.get("roles", []) if r.get("name")]
-        else:
-            allowed = current_user.get("allowed_roles", [])
-        if new_role not in allowed:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Role '{new_role}' is not in your allowed roles",
-            )
-    from another_s3_manager.users import update_user as users_update_user_role
+    from another_s3_manager.users import (
+        update_user as users_update_user_role,
+    )
+    from another_s3_manager.users import (
+        validate_default_role_choice,
+    )
 
     try:
-        users_update_user_role(current_user["username"], default_role=new_role)
+        validate_default_role_choice(payload.role, _effective_allowed_roles(current_user))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        users_update_user_role(current_user["username"], default_role=payload.role)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    return {"default_role": new_role}
+    return UpdateDefaultRoleResponse(default_role=payload.role)
 
 
 # ---------------------------------------------------------------------------

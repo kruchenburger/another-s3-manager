@@ -67,6 +67,47 @@ def load_users() -> Dict[str, Any]:
         return {"users": [_user_to_dict(u) for u in users]}
 
 
+def _reconcile_default_role(current: Optional[str], new_roles: List[str]) -> Optional[str]:
+    """Return a `default_role` value consistent with `new_roles`.
+
+    If `current` is in `new_roles` (or is None), keep it. Otherwise fall back
+    to the first of `new_roles`, or None if the list is empty. Used by both
+    `update_user` (single-user kwarg path) and `save_users` (admin bulk-upsert
+    path) so a removed allowed_role never leaves a dangling default behind.
+    """
+    if current is None or current in new_roles:
+        return current
+    return new_roles[0] if new_roles else None
+
+
+def compute_default_role(
+    explicit_default: Optional[str],
+    allowed_roles: List[str],
+) -> Optional[str]:
+    """Pick the effective default role for a user.
+
+    Resolution order:
+      1. `explicit_default` if it's still in `allowed_roles`
+      2. first of `allowed_roles`
+      3. None (no allowed roles)
+    """
+    if explicit_default and explicit_default in allowed_roles:
+        return explicit_default
+    if allowed_roles:
+        return allowed_roles[0]
+    return None
+
+
+def validate_default_role_choice(role: Optional[str], allowed_roles: List[str]) -> None:
+    """Raise ValueError if `role` is not None and not in `allowed_roles`.
+
+    Centralises the validation used by `PUT /api/me/default-role` so the
+    router stays a thin HTTP wrapper.
+    """
+    if role is not None and role not in allowed_roles:
+        raise ValueError(f"Role '{role}' is not in the allowed roles")
+
+
 def save_users(users_data: Dict[str, Any]) -> None:
     """Replace the user set with the given list using upsert semantics.
 
@@ -107,8 +148,14 @@ def save_users(users_data: Dict[str, Any]) -> None:
                 # SQLAlchemy emits INSERTs before processing the orphan-disconnect.
                 existing.roles.clear()
                 session.flush()
-                for role_name in user_dict.get("allowed_roles", []):
+                new_roles = user_dict.get("allowed_roles", [])
+                for role_name in new_roles:
                     existing.roles.append(UserRole(role_name=role_name))
+                # If the previous default_role is no longer in the new role
+                # set, reset to the first of the new set (or None). Matches
+                # the behavior of update_user() so admin bulk-upsert doesn't
+                # leave dangling defaults behind.
+                existing.default_role = _reconcile_default_role(existing.default_role, new_roles)
             else:
                 user = User(
                     username=user_dict["username"],
@@ -213,8 +260,7 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
             user.roles.clear()
             for role_name in new_roles:
                 user.roles.append(UserRole(role_name=role_name))
-            if user.default_role is not None and user.default_role not in new_roles:
-                user.default_role = new_roles[0] if new_roles else None
+            user.default_role = _reconcile_default_role(user.default_role, new_roles)
 
         session.flush()
         return _user_to_dict(user)
