@@ -1,7 +1,7 @@
-import { useState, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { ActionIcon, NavLink, Stack, Tooltip, UnstyledButton } from "@mantine/core";
 import { AlertCircle, ChevronRight } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useMatch, useNavigate } from "react-router-dom";
 import { useBuckets } from "@/features/files/hooks/useBuckets";
 import { ApiError, getErrorMessage } from "@/utils/apiError";
 import { RoleAvatar } from "./RoleAvatar";
@@ -14,7 +14,20 @@ interface SidebarRoleItemProps {
 }
 
 export function SidebarRoleItem({ role, collapsed }: SidebarRoleItemProps) {
-  const [open, setOpen] = useState(false);
+  // Auto-expand and highlight when the current URL is inside this role.
+  // Pre-PR users had to click the chevron to see where they were — gave
+  // no visual confirmation of the active role on landing or page reload.
+  const roleMatch = useMatch(`/r/${role}/*`);
+  const isActiveRole = !!roleMatch;
+  const [open, setOpen] = useState(isActiveRole);
+  // Keep `open` in sync when the URL changes (e.g. user switches role via
+  // DefaultRolePicker → HomePage redirect → /r/RoleX). Without this effect
+  // a previously-opened role would stay open and the new active role would
+  // start collapsed. Only auto-OPEN on match — never auto-collapse, so a
+  // manually-opened sibling stays open.
+  useEffect(() => {
+    if (isActiveRole) setOpen(true);
+  }, [isActiveRole]);
   const navigate = useNavigate();
   const { data: buckets, isLoading, error } = useBuckets(open ? role : undefined);
 

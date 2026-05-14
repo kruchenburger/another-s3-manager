@@ -15,7 +15,6 @@ import type { AppConfig } from "@/types/api";
 export function toWritableConfig(config: AppConfig): AppConfig {
   return {
     roles: config.roles,
-    default_role: config.default_role,
     items_per_page: config.items_per_page,
     enable_lazy_loading: config.enable_lazy_loading,
     max_file_size: config.max_file_size,

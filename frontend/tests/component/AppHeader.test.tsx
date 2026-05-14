@@ -15,6 +15,9 @@ vi.mock("@/components/AppShell/ThemeToggle", () => ({
 vi.mock("@/components/AppShell/UserMenu", () => ({
   UserMenu: () => null,
 }));
+vi.mock("@/components/AppShell/DefaultRolePicker", () => ({
+  DefaultRolePicker: () => null,
+}));
 vi.mock("@/components/BurgerLogo/BurgerLogo", () => ({
   BurgerLogo: () => <span data-testid="burger-logo" />,
 }));

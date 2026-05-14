@@ -27,6 +27,7 @@ def _user_to_dict(user: User) -> Dict[str, Any]:
         "is_admin": user.is_admin,
         "allowed_roles": [r.role_name for r in user.roles],
         "theme": user.theme,
+        "default_role": user.default_role,
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
 
@@ -64,6 +65,47 @@ def load_users() -> Dict[str, Any]:
             # Race: someone else seeded between our check and now — re-fetch
             users = session.execute(select(User).options(selectinload(User.roles))).scalars().all()
         return {"users": [_user_to_dict(u) for u in users]}
+
+
+def _reconcile_default_role(current: Optional[str], new_roles: List[str]) -> Optional[str]:
+    """Return a `default_role` value consistent with `new_roles`.
+
+    If `current` is in `new_roles` (or is None), keep it. Otherwise fall back
+    to the first of `new_roles`, or None if the list is empty. Used by both
+    `update_user` (single-user kwarg path) and `save_users` (admin bulk-upsert
+    path) so a removed allowed_role never leaves a dangling default behind.
+    """
+    if current is None or current in new_roles:
+        return current
+    return new_roles[0] if new_roles else None
+
+
+def compute_default_role(
+    explicit_default: Optional[str],
+    allowed_roles: List[str],
+) -> Optional[str]:
+    """Pick the effective default role for a user.
+
+    Resolution order:
+      1. `explicit_default` if it's still in `allowed_roles`
+      2. first of `allowed_roles`
+      3. None (no allowed roles)
+    """
+    if explicit_default and explicit_default in allowed_roles:
+        return explicit_default
+    if allowed_roles:
+        return allowed_roles[0]
+    return None
+
+
+def validate_default_role_choice(role: Optional[str], allowed_roles: List[str]) -> None:
+    """Raise ValueError if `role` is not None and not in `allowed_roles`.
+
+    Centralises the validation used by `PUT /api/me/default-role` so the
+    router stays a thin HTTP wrapper.
+    """
+    if role is not None and role not in allowed_roles:
+        raise ValueError(f"Role '{role}' is not in the allowed roles")
 
 
 def save_users(users_data: Dict[str, Any]) -> None:
@@ -106,8 +148,14 @@ def save_users(users_data: Dict[str, Any]) -> None:
                 # SQLAlchemy emits INSERTs before processing the orphan-disconnect.
                 existing.roles.clear()
                 session.flush()
-                for role_name in user_dict.get("allowed_roles", []):
+                new_roles = user_dict.get("allowed_roles", [])
+                for role_name in new_roles:
                     existing.roles.append(UserRole(role_name=role_name))
+                # If the previous default_role is no longer in the new role
+                # set, reset to the first of the new set (or None). Matches
+                # the behavior of update_user() so admin bulk-upsert doesn't
+                # leave dangling defaults behind.
+                existing.default_role = _reconcile_default_role(existing.default_role, new_roles)
             else:
                 user = User(
                     username=user_dict["username"],
@@ -156,19 +204,29 @@ def create_user(
     is_admin: bool = False,
     allowed_roles: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Create a single user. Does NOT seed default admin (that's load_users's job)."""
+    """Create a single user. Does NOT seed default admin (that's load_users's job).
+
+    Single-allowed-role users get `default_role` auto-set to that role — the
+    picker would be degenerate otherwise. Multi-role users start with
+    default_role=NULL; the computed fallback (first of allowed_roles) applies
+    until they pick explicitly.
+    """
     with session_scope() as session:
         existing = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
         if existing:
             raise ValueError(f"User {username} already exists")
+
+        roles = list(allowed_roles or [])
+        auto_default = roles[0] if len(roles) == 1 else None
 
         user = User(
             username=username,
             password_hash=password_hash,
             is_admin=is_admin,
             theme="auto",
+            default_role=auto_default,
         )
-        for role_name in allowed_roles or []:
+        for role_name in roles:
             user.roles.append(UserRole(role_name=role_name))
         session.add(user)
         session.flush()
@@ -176,7 +234,14 @@ def create_user(
 
 
 def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
-    """Update user properties. Raises ValueError if the user doesn't exist."""
+    """Update user properties. Raises ValueError if the user doesn't exist.
+
+    `default_role`:
+      - explicit: pass `default_role=<role>` or `default_role=None`
+      - implicit reset: if `allowed_roles` changes such that the current
+        default is no longer in the new set, reset to the first of the new
+        set (or NULL if the new set is empty)
+    """
     with session_scope() as session:
         user = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
         if not user:
@@ -188,11 +253,14 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
             user.is_admin = kwargs["is_admin"]
         if "theme" in kwargs:
             user.theme = kwargs["theme"]
+        if "default_role" in kwargs:
+            user.default_role = kwargs["default_role"]
         if "allowed_roles" in kwargs:
-            # Replace all roles
+            new_roles = list(kwargs["allowed_roles"])
             user.roles.clear()
-            for role_name in kwargs["allowed_roles"]:
+            for role_name in new_roles:
                 user.roles.append(UserRole(role_name=role_name))
+            user.default_role = _reconcile_default_role(user.default_role, new_roles)
 
         session.flush()
         return _user_to_dict(user)

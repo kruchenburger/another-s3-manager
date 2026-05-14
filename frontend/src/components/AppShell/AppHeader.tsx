@@ -5,6 +5,7 @@ import { useMe } from "@/features/auth/hooks/useMe";
 import { BurgerLogo } from "@/components/BurgerLogo/BurgerLogo";
 import { ThemeToggle } from "@/components/AppShell/ThemeToggle";
 import { UserMenu } from "@/components/AppShell/UserMenu";
+import { DefaultRolePicker } from "@/components/AppShell/DefaultRolePicker";
 
 interface AppHeaderProps {
   navOpened: boolean;
@@ -49,6 +50,7 @@ export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
             </ActionIcon>
           </Tooltip>
         )}
+        <DefaultRolePicker />
         <ThemeToggle />
         <UserMenu />
       </Group>

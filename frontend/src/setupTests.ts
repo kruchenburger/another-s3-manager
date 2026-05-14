@@ -34,6 +34,14 @@ if (typeof globalThis.ResizeObserver === "undefined") {
   });
 }
 
+// jsdom doesn't implement Element.scrollIntoView, but Mantine's Combobox/Select
+// calls it asynchronously (via setTimeout) after option selection to scroll the
+// chosen item into view. Without this shim, an unhandled TypeError fires AFTER
+// the test passes, polluting the test report.
+if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = function () {};
+}
+
 // jsdom doesn't implement matchMedia, but Mantine + our BurgerLogo (and many
 // component-test-friendly libs) call it during render. Stub a no-op shim that
 // always reports "doesn't match" so reduced-motion paths pick the animated branch.

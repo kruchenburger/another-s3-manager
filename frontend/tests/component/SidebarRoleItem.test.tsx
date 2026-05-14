@@ -11,10 +11,10 @@ vi.mock("@/features/files/hooks/useBuckets", () => ({
 
 import { SidebarRoleItem } from "@/components/Sidebar/SidebarRoleItem";
 
-function renderItem() {
+function renderItem(initialPath = "/") {
   return render(
     <MantineProvider>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[initialPath]}>
         <SidebarRoleItem role="MyRole" collapsed={false} />
       </MemoryRouter>
     </MantineProvider>,
@@ -65,5 +65,42 @@ describe("SidebarRoleItem error states", () => {
     expect(screen.getByText("bucket-a")).toBeInTheDocument();
     expect(screen.getByText("bucket-b")).toBeInTheDocument();
     expect(screen.queryByText(/couldn't load buckets/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("SidebarRoleItem auto-expand for active URL", () => {
+  beforeEach(() => useBucketsMock.mockReset());
+
+  it("auto-expands and shows buckets when the URL matches the role", () => {
+    useBucketsMock.mockReturnValue({
+      data: ["bucket-a"],
+      isLoading: false,
+      error: null,
+    });
+    renderItem("/r/MyRole");
+    // Buckets are visible without clicking the chevron — the role item
+    // auto-expanded because the URL matches.
+    expect(screen.getByText("bucket-a")).toBeInTheDocument();
+  });
+
+  it("auto-expands when the URL is inside a bucket of the role", () => {
+    useBucketsMock.mockReturnValue({
+      data: ["bucket-a"],
+      isLoading: false,
+      error: null,
+    });
+    renderItem("/r/MyRole/b/bucket-a/p/some/path");
+    expect(screen.getByText("bucket-a")).toBeInTheDocument();
+  });
+
+  it("starts collapsed when the URL does not match this role", () => {
+    useBucketsMock.mockReturnValue({
+      data: ["bucket-a"],
+      isLoading: false,
+      error: null,
+    });
+    renderItem("/r/OtherRole");
+    // Bucket list is hidden until user clicks the chevron.
+    expect(screen.queryByText("bucket-a")).not.toBeInTheDocument();
   });
 });

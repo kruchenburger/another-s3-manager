@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { HomePage } from "@/pages/HomePage";
 
 const navigateMock = vi.fn();
@@ -42,11 +42,13 @@ describe("HomePage auto-open single role", () => {
     expect(navigateMock).toHaveBeenCalledWith("/r/solo-role", { replace: true });
   });
 
-  it("does not redirect when more than one role", () => {
-    useMeMock.mockReturnValue({ data: { allowed_roles: ["r1", "r2"] } });
+  it("redirects to allowed_roles[0] when there are multiple roles and no default_role", () => {
+    // Behaviour changed in Phase 6a-4: multi-role users are now redirected to
+    // allowed_roles[0] as a fallback; DefaultRolePicker in the header lets them switch.
+    useMeMock.mockReturnValue({ data: { allowed_roles: ["r1", "r2"], default_role: null } });
     renderPage();
-    expect(navigateMock).not.toHaveBeenCalled();
-    expect(screen.getByText(/pick a role to get started/i)).toBeInTheDocument();
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).toHaveBeenCalledWith("/r/r1", { replace: true });
   });
 
   it("does not redirect when allowed_roles is empty", () => {
@@ -82,6 +84,44 @@ describe("HomePage auto-open single role", () => {
     expect(navigateMock).not.toHaveBeenCalled();
     // Don't blank-screen either — the picker text should still render so the
     // user has a fallback.
+    expect(screen.getByText(/pick a role to get started/i)).toBeInTheDocument();
+  });
+});
+
+describe("HomePage default_role redirect", () => {
+  beforeEach(() => {
+    navigateMock.mockReset();
+    useMeMock.mockReset();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("redirects to the explicit default_role over allowed_roles[0]", () => {
+    useMeMock.mockReturnValue({
+      data: { allowed_roles: ["RoleA", "RoleB"], default_role: "RoleB" },
+      error: null,
+    });
+    renderPage();
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).toHaveBeenCalledWith("/r/RoleB", { replace: true });
+  });
+
+  it("redirects to allowed_roles[0] when default_role is null", () => {
+    useMeMock.mockReturnValue({
+      data: { allowed_roles: ["RoleA", "RoleB"], default_role: null },
+      error: null,
+    });
+    renderPage();
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).toHaveBeenCalledWith("/r/RoleA", { replace: true });
+  });
+
+  it("does NOT redirect when error is set (stale-data guard)", () => {
+    useMeMock.mockReturnValue({
+      data: { allowed_roles: ["RoleA", "RoleB"], default_role: "RoleB" },
+      error: new Error("session expired"),
+    });
+    renderPage();
+    expect(navigateMock).not.toHaveBeenCalled();
     expect(screen.getByText(/pick a role to get started/i)).toBeInTheDocument();
   });
 });

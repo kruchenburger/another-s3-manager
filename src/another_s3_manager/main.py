@@ -162,14 +162,20 @@ async def lifespan(app_: FastAPI):
     except Exception:
         logger.warning("JSON migration failed; DB is still usable", exc_info=True)
 
-    # 3. Default-password security warning
+    # 3. One-time migration: legacy global config.default_role → per-user records
+    try:
+        _migrate_legacy_default_role()
+    except Exception:
+        logger.warning("Legacy default_role migration failed; continuing startup", exc_info=True)
+
+    # 4. Default-password security warning
     if os.getenv("ADMIN_PASSWORD", "change_me_pls") == "change_me_pls":
         logger.warning(
             "ADMIN_PASSWORD is the default 'change_me_pls'. CHANGE IT before exposing this app — "
             "admin is exempt from auto-ban and there is no application-level rate limit on /api/login."
         )
 
-    # 4. Enter FastMCP session manager — REQUIRED for /mcp/* to work.
+    # 5. Enter FastMCP session manager — REQUIRED for /mcp/* to work.
     async with _mcp_instance.session_manager.run():
         yield
 
@@ -320,6 +326,37 @@ async def serve_v2_spa(full_path: str):
         return HTMLResponse(content=f.read())
 
 
+def _migrate_legacy_default_role() -> None:
+    """Copy the legacy global `config.default_role` into compatible user records.
+
+    Runs at startup. Idempotent. Only updates users whose `default_role IS NULL`
+    AND who have the legacy role in their `allowed_roles`. Skips silently if
+    config has no legacy default. After this migration, `config.default_role`
+    is silently ignored on read (the field may still appear in config.json on
+    disk — that's fine, harmless legacy data).
+    """
+    config = load_config()
+    legacy_default = config.get("default_role")
+    if not legacy_default:
+        return
+
+    from another_s3_manager import users  # avoid circular imports
+
+    updated_count = 0
+    all_users = users.load_users().get("users", [])
+    for user in all_users:
+        if user.get("default_role") is None and legacy_default in user.get("allowed_roles", []):
+            users.update_user(user["username"], default_role=legacy_default)
+            updated_count += 1
+
+    if updated_count > 0:
+        logger.info(
+            "Migrated legacy config.default_role='%s' to %d user records",
+            legacy_default,
+            updated_count,
+        )
+
+
 def _enforce_password_policy(password: str) -> None:
     """Reject the request if the password fails the configured policy.
 
@@ -454,12 +491,19 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
     disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
     disable_deletion_config = config.get("disable_deletion", False)
     disable_deletion = disable_deletion_env or disable_deletion_config
+    # Computed default_role: explicit choice if still valid, else first of
+    # allowed_roles, else null. Helper lives in users.py so the rule lives
+    # next to the data layer that stores explicit_default.
+    from another_s3_manager.users import compute_default_role
+
+    default_role = compute_default_role(current_user.get("default_role"), allowed_roles)
     return {
         "username": current_user.get("username"),
         "is_admin": is_admin,
         "csrf_token": current_user.get("csrf_token"),  # Return CSRF token for client
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
         "allowed_roles": allowed_roles,
+        "default_role": default_role,
         "disable_deletion": disable_deletion,
         "app_name": APP_NAME,  # Return app name for client
         "app_version": APP_VERSION,
@@ -649,6 +693,58 @@ async def change_my_password(
 
     users_update_user(username, password_hash=hash_password(payload.new_password))
     return {"ok": True}
+
+
+class UpdateDefaultRolePayload(BaseModel):
+    role: Optional[str] = None
+
+
+class UpdateDefaultRoleResponse(BaseModel):
+    default_role: Optional[str]
+
+
+def _effective_allowed_roles(current_user: Dict[str, Any]) -> list[str]:
+    """Same admin-vs-user role resolution used by GET /api/me.
+
+    Admins see every configured role; regular users see only their assigned
+    `allowed_roles`. Extracted so the PUT endpoint validates against the same
+    set the GET endpoint reports.
+    """
+    if current_user.get("is_admin", False):
+        config = load_config()
+        return [r["name"] for r in config.get("roles", []) if r.get("name")]
+    return current_user.get("allowed_roles", [])
+
+
+@app.put("/api/me/default-role", response_model=UpdateDefaultRoleResponse)
+async def update_my_default_role(
+    payload: UpdateDefaultRolePayload,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+) -> UpdateDefaultRoleResponse:
+    """Set the authenticated user's default role.
+
+    Payload: {"role": "<role-name>" | null}. `null` clears the explicit choice
+    so the computed fallback applies (first of allowed_roles, or null).
+    Returns 400 if the role is not in the user's allowed set.
+    """
+    from another_s3_manager.users import (
+        update_user as users_update_user_role,
+    )
+    from another_s3_manager.users import (
+        validate_default_role_choice,
+    )
+
+    try:
+        validate_default_role_choice(payload.role, _effective_allowed_roles(current_user))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        users_update_user_role(current_user["username"], default_role=payload.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return UpdateDefaultRoleResponse(default_role=payload.role)
 
 
 # ---------------------------------------------------------------------------
@@ -1113,17 +1209,14 @@ async def get_config(
         from another_s3_manager.config import is_config_writable
         from another_s3_manager.constants import get_data_dir
 
-        # Apply default_role if specified
-        default_role = config.get("default_role", "")
-        if default_role and any(r.get("name") == default_role for r in config.get("roles", [])):
-            effective_role = default_role
-        else:
-            # Use first role if default_role is not set or invalid
-            effective_role = config.get("roles", [{}])[0].get("name", "") if config.get("roles") else ""
+        # default_role removed from config in Phase 6a-4 (now per-user via /api/me).
+        # effective_role falls back to the first configured role for the vanilla UI;
+        # React UI reads per-user default_role from /api/me instead.
+        roles_list = config.get("roles", [])
+        effective_role = roles_list[0].get("name", "") if roles_list else ""
 
         safe_config = {
             "roles": [sanitize_role(role) for role in config.get("roles", [])],
-            "default_role": default_role,  # Return default_role so admin can see/edit it
             "current_role": effective_role,  # Computed value for frontend (not stored in config)
             "items_per_page": items_per_page,
             "disable_deletion": disable_deletion,
@@ -1167,15 +1260,9 @@ async def get_config(
     # Filter roles and sanitize
     filtered_roles = [sanitize_role(role) for role in config.get("roles", []) if role.get("name") in allowed_roles]
 
-    # Apply default_role if specified and available
-    default_role = config.get("default_role", "")
-
-    # If default_role is set and is in allowed_roles, use it
-    if default_role and default_role in allowed_roles:
-        effective_role = default_role
-    # Otherwise, use first allowed role or empty
-    else:
-        effective_role = allowed_roles[0] if allowed_roles else ""
+    # default_role removed from config in Phase 6a-4 (now per-user via /api/me).
+    # React UI reads per-user default_role from /api/me; vanilla UI falls back to first allowed role.
+    effective_role = allowed_roles[0] if allowed_roles else ""
 
     return {
         "roles": filtered_roles,
