@@ -1,4 +1,5 @@
-import { Select } from "@mantine/core";
+import { Select, Tooltip } from "@mantine/core";
+import { Star } from "lucide-react";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useUpdateMyDefaultRole } from "@/features/auth/hooks/useUpdateMyDefaultRole";
 import { runWithToasts } from "@/utils/mutationToast";
@@ -12,19 +13,22 @@ export function DefaultRolePicker() {
   if (!me || me.allowed_roles.length < 2) return null;
 
   return (
-    <Select
-      size="sm"
-      w={180}
-      value={me.default_role}
-      data={me.allowed_roles}
-      onChange={(value) => {
-        if (value === null || value === me.default_role) return;
-        runWithToasts(update, value, "Default role updated");
-      }}
-      aria-label="Default role"
-      placeholder="No default"
-      allowDeselect={false}
-      comboboxProps={{ withinPortal: true }}
-    />
+    <Tooltip label="Default role on login" position="bottom" withArrow>
+      <Select
+        size="sm"
+        w={180}
+        value={me.default_role}
+        data={me.allowed_roles}
+        onChange={(value) => {
+          if (value === null || value === me.default_role) return;
+          runWithToasts(update, value, "Default role updated");
+        }}
+        aria-label="Default role"
+        placeholder="No default"
+        allowDeselect={false}
+        leftSection={<Star size={14} />}
+        comboboxProps={{ withinPortal: true }}
+      />
+    </Tooltip>
   );
 }
