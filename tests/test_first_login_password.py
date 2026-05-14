@@ -119,3 +119,56 @@ def test_api_me_returns_must_change_password(app_client):
     assert response.status_code == 200
     body = response.json()
     assert body["must_change_password"] is True, body
+
+
+def test_self_password_change_clears_must_change_password(app_client):
+    """After PUT /api/me/password the flag must flip to False."""
+    from another_s3_manager import users
+
+    users.create_user(
+        username="resetter",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA"],
+    )
+    _login_as(app_client, "resetter")
+    # Confirm flag is True initially (from Task 3 default).
+    assert app_client.get("/api/me").json()["must_change_password"] is True
+
+    response = app_client.put(
+        "/api/me/password",
+        json={
+            "current_password": "test-password-1A",
+            "new_password": "fresh-pass-1A!",
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    # /api/me now shows False.
+    me = app_client.get("/api/me").json()
+    assert me["must_change_password"] is False, me
+
+
+def test_self_password_change_with_wrong_current_does_not_clear_flag(app_client):
+    """Failed password change must NOT clear the flag."""
+    from another_s3_manager import users
+
+    users.create_user(
+        username="failer",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA"],
+    )
+    _login_as(app_client, "failer")
+
+    response = app_client.put(
+        "/api/me/password",
+        json={
+            "current_password": "wrong-password-1A",
+            "new_password": "anything-fresh-1A!",
+        },
+    )
+    assert response.status_code == 401
+
+    me = app_client.get("/api/me").json()
+    assert me["must_change_password"] is True, "flag must not change on auth failure"

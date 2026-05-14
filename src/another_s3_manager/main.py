@@ -692,7 +692,11 @@ async def change_my_password(
     # update_user endpoint defined below.
     from another_s3_manager.users import update_user as users_update_user
 
-    users_update_user(username, password_hash=hash_password(payload.new_password))
+    users_update_user(
+        username,
+        password_hash=hash_password(payload.new_password),
+        must_change_password=False,
+    )
     return {"ok": True}
 
 
