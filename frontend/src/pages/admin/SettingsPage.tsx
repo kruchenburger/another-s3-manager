@@ -2,7 +2,6 @@ import {
   Alert,
   Button,
   NumberInput,
-  Select,
   Stack,
   Switch,
   TagsInput,
@@ -26,7 +25,6 @@ export function SettingsPage() {
 
   const form = useForm({
     initialValues: {
-      default_role: "",
       items_per_page: 200,
       disable_deletion: false,
       enable_lazy_loading: true,
@@ -48,7 +46,6 @@ export function SettingsPage() {
   useEffect(() => {
     if (!config) return;
     const populated = {
-      default_role: config.default_role ?? "",
       items_per_page: config.items_per_page,
       disable_deletion: config.disable_deletion,
       enable_lazy_loading: config.enable_lazy_loading,
@@ -87,12 +84,9 @@ export function SettingsPage() {
   if (!config) return null;
 
   const readOnly = config.is_read_only === true;
-  const roleOptions = config.roles.map((r) => ({ value: r.name, label: r.name }));
-
   const onSubmit = form.onSubmit((values) => {
     const next: AppConfig = {
       ...toWritableConfig(config),
-      default_role: values.default_role || undefined,
       items_per_page: values.items_per_page,
       disable_deletion: values.disable_deletion,
       enable_lazy_loading: values.enable_lazy_loading,
@@ -131,14 +125,6 @@ export function SettingsPage() {
 
       <form onSubmit={onSubmit}>
         <Stack gap="md" maw={520}>
-          <Select
-            label="Default role"
-            description="Role pre-selected for users who have access to it."
-            data={roleOptions}
-            disabled={readOnly}
-            clearable
-            {...form.getInputProps("default_role")}
-          />
           <NumberInput
             label="Items per page"
             min={10}
