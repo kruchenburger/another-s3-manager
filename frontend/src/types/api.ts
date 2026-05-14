@@ -13,6 +13,10 @@ export interface MeResponse {
   app_name: string;
   app_version: string;
   allowed_roles: string[];
+  /** User's chosen default role. Computed: explicit choice if still in
+   *  allowed_roles, else first of allowed_roles, else null. Set via
+   *  PUT /api/me/default-role. */
+  default_role: string | null;
   /**
    * True when admin set `disable_deletion: true` in config.json OR the
    * `DISABLE_DELETION` env var is set. UI uses this to disable delete controls
