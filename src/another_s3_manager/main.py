@@ -588,16 +588,31 @@ async def create_user(
     return {"message": "User created successfully", "username": username}
 
 
+class AdminResetPasswordRequest(BaseModel):
+    """Body for PUT /api/admin/users/{username}/password."""
+
+    password: str = Field(..., min_length=1, description="New password")
+    must_change_password: bool = Field(
+        default=True,
+        description=(
+            "Force the user to change this password on next login. "
+            "Default True (paranoid). Set False for service accounts."
+        ),
+    )
+
+
 @app.put("/api/admin/users/{username}/password")
 async def update_user_password(
     request: Request,
     username: str,
-    password: str = Body(..., embed=True, description="New password"),
+    payload: AdminResetPasswordRequest,
     current_user: Dict[str, Any] = Depends(get_current_admin_user),
     csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Update user password (admin only)"""
-    if not password or len(password.strip()) == 0:
+    # Pydantic's min_length=1 catches empty strings (returns 422). This catches
+    # whitespace-only passwords like "   " which pass min_length but are invalid.
+    if len(payload.password.strip()) == 0:
         raise HTTPException(status_code=400, detail="Password cannot be empty")
 
     users = load_users()
@@ -606,12 +621,13 @@ async def update_user_password(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    _enforce_password_policy(password)
+    _enforce_password_policy(payload.password)
 
     # Hash password using auth module
-    hashed_password = hash_password(password)
+    hashed_password = hash_password(payload.password)
 
     user["password_hash"] = hashed_password
+    user["must_change_password"] = payload.must_change_password
     save_users(users)
 
     return {"message": f"Password updated successfully for user {username}"}

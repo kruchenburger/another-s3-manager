@@ -172,3 +172,66 @@ def test_self_password_change_with_wrong_current_does_not_clear_flag(app_client)
 
     me = app_client.get("/api/me").json()
     assert me["must_change_password"] is True, "flag must not change on auth failure"
+
+
+def test_admin_reset_password_default_sets_must_change_password_true(app_client):
+    """Admin reset without explicit flag defaults to True."""
+    from another_s3_manager import users
+
+    # Trigger admin seeding before adding another user.
+    users.load_users()
+
+    users.create_user(
+        username="target_default",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA"],
+    )
+    users.update_user("target_default", must_change_password=False)
+    assert users.get_user_by_username("target_default")["must_change_password"] is False
+
+    # Log in as admin (password set by ADMIN_PASSWORD env which defaults to admin123 in tests).
+    app_client.post("/api/login", data={"username": "admin", "password": "admin123"})
+    csrf = app_client.get("/api/me").json()["csrf_token"]
+    app_client.headers["X-CSRF-Token"] = csrf
+
+    # Admin resets without specifying must_change_password — default = True.
+    response = app_client.put(
+        "/api/admin/users/target_default/password",
+        json={"password": "admin-reset-1A!"},
+    )
+    assert response.status_code == 200, response.text
+
+    target = users.get_user_by_username("target_default")
+    assert target["must_change_password"] is True, target
+
+
+def test_admin_reset_password_can_opt_out(app_client):
+    """Admin can explicitly set must_change_password=False (service account use case)."""
+    from another_s3_manager import users
+
+    # Trigger admin seeding before adding another user.
+    users.load_users()
+
+    users.create_user(
+        username="target_optout",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA"],
+    )
+    users.update_user("target_optout", must_change_password=False)
+
+    # Log in as admin (password set by ADMIN_PASSWORD env which defaults to admin123 in tests).
+    app_client.post("/api/login", data={"username": "admin", "password": "admin123"})
+    csrf = app_client.get("/api/me").json()["csrf_token"]
+    app_client.headers["X-CSRF-Token"] = csrf
+
+    # Admin resets with explicit must_change_password=False.
+    response = app_client.put(
+        "/api/admin/users/target_optout/password",
+        json={"password": "admin-reset-1A!", "must_change_password": False},
+    )
+    assert response.status_code == 200, response.text
+
+    target = users.get_user_by_username("target_optout")
+    assert target["must_change_password"] is False, target
