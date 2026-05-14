@@ -235,3 +235,56 @@ def test_admin_reset_password_can_opt_out(app_client):
 
     target = users.get_user_by_username("target_optout")
     assert target["must_change_password"] is False, target
+
+
+def test_admin_create_user_default_sets_must_change_password_true(app_client):
+    """POST /api/admin/users without explicit flag defaults must_change_password=True."""
+    from another_s3_manager import users
+
+    # Force admin seeding via load_users() (test conftest pattern).
+    users.load_users()
+
+    # Log in as admin.
+    app_client.post("/api/login", data={"username": "admin", "password": "admin123"})
+    csrf = app_client.get("/api/me").json()["csrf_token"]
+    app_client.headers["X-CSRF-Token"] = csrf
+
+    response = app_client.post(
+        "/api/admin/users",
+        data={
+            "username": "freshcreated",
+            "password": "fresh-create-1A!",
+            "is_admin": "false",
+            "allowed_roles": "",
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    new_user = users.get_user_by_username("freshcreated")
+    assert new_user["must_change_password"] is True, new_user
+
+
+def test_admin_create_user_can_opt_out(app_client):
+    """Admin can opt out via form field (service account use case)."""
+    from another_s3_manager import users
+
+    users.load_users()
+
+    app_client.post("/api/login", data={"username": "admin", "password": "admin123"})
+    csrf = app_client.get("/api/me").json()["csrf_token"]
+    app_client.headers["X-CSRF-Token"] = csrf
+
+    response = app_client.post(
+        "/api/admin/users",
+        data={
+            "username": "servicecreated",
+            "password": "service-create-1A!",
+            "is_admin": "false",
+            "allowed_roles": "",
+            "must_change_password": "false",
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    new_user = users.get_user_by_username("servicecreated")
+    assert new_user["must_change_password"] is False, new_user

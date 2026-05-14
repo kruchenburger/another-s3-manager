@@ -547,6 +547,7 @@ async def create_user(
     password: str = Form(...),
     is_admin: bool = Form(False),
     allowed_roles: str = Form("", description="Comma-separated list of allowed role names"),
+    must_change_password: bool = Form(True, description="Force user to change password on next login"),
     current_user: Dict[str, Any] = Depends(get_current_admin_user),
     csrf_verified: bool = Depends(verify_csrf_token),
 ):
@@ -579,6 +580,7 @@ async def create_user(
         "is_admin": is_admin,
         "allowed_roles": roles_list,
         "theme": "auto",  # Default to auto (system preference)
+        "must_change_password": must_change_password,
         "created_at": datetime.now().isoformat(),
     }
 
