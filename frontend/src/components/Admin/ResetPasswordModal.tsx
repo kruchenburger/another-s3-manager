@@ -1,4 +1,11 @@
-import { Alert, Button, Modal, PasswordInput, Stack } from "@mantine/core";
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Modal,
+  PasswordInput,
+  Stack,
+} from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { AlertTriangle } from "lucide-react";
 import { usePasswordPolicy } from "@/features/auth/hooks/usePasswordPolicy";
@@ -11,7 +18,7 @@ interface ResetPasswordModalProps {
   opened: boolean;
   username?: string;
   onClose: () => void;
-  onSubmit: (newPassword: string) => void;
+  onSubmit: (newPassword: string, mustChangePassword: boolean) => void;
   loading?: boolean;
 }
 
@@ -24,7 +31,7 @@ export function ResetPasswordModal({
 }: ResetPasswordModalProps) {
   const { data: policy, isError: policyFailed } = usePasswordPolicy();
   const form = useForm({
-    initialValues: { password: "" },
+    initialValues: { password: "", must_change_password: true },
     validate: {
       password: (v) => {
         if (!policy) return v && v.length > 0 ? null : "Required";
@@ -42,7 +49,7 @@ export function ResetPasswordModal({
     >
       <form
         onSubmit={form.onSubmit((v) => {
-          onSubmit(v.password);
+          onSubmit(v.password, v.must_change_password);
           form.reset();
         })}
       >
@@ -72,6 +79,14 @@ export function ResetPasswordModal({
                 Couldn't load password policy — the server will validate the new password on save.
               </Alert>
             )}
+            <Checkbox
+              mt={4}
+              label="Require password change on next login"
+              description="If unchecked, the user can keep this password."
+              {...form.getInputProps("must_change_password", {
+                type: "checkbox",
+              })}
+            />
           </Stack>
           <Button
             type="submit"

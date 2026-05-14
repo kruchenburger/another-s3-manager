@@ -81,6 +81,7 @@ export interface CreateUserPayload {
   password: string;
   is_admin: boolean;
   allowed_roles: string[];
+  must_change_password?: boolean;
 }
 
 export interface UpdateUserPayload {
