@@ -661,6 +661,46 @@ async def change_my_password(
     return {"ok": True}
 
 
+class UpdateDefaultRolePayload(BaseModel):
+    role: Optional[str] = None
+
+
+@app.put("/api/me/default-role")
+async def update_my_default_role(
+    payload: UpdateDefaultRolePayload,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    """Set the authenticated user's default role.
+
+    Payload: {"role": "<role-name>" | null}. `null` clears the explicit choice
+    so the computed fallback applies (first of allowed_roles, or null).
+    Returns 400 if the role is not in the user's allowed set.
+    """
+    new_role = payload.role
+    if new_role is not None:
+        # Validate against the user's CURRENT allowed_roles (not the legacy
+        # global config). Admin gets the full role list per /api/me logic.
+        is_admin = current_user.get("is_admin", False)
+        if is_admin:
+            config = load_config()
+            allowed = [r["name"] for r in config.get("roles", []) if r.get("name")]
+        else:
+            allowed = current_user.get("allowed_roles", [])
+        if new_role not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Role '{new_role}' is not in your allowed roles",
+            )
+    from another_s3_manager.users import update_user as users_update_user_role
+
+    try:
+        users_update_user_role(current_user["username"], default_role=new_role)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"default_role": new_role}
+
+
 # ---------------------------------------------------------------------------
 # Token CRUD helpers
 # ---------------------------------------------------------------------------

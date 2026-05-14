@@ -141,3 +141,59 @@ def test_api_me_returns_null_default_role_when_no_allowed_roles(app_client):
     assert response.status_code == 200
     body = response.json()
     assert body["default_role"] is None, body
+
+
+def test_put_my_default_role_sets_explicit_value(app_client):
+    """PUT /api/me/default-role with a valid role updates the user's record."""
+    from another_s3_manager import users
+
+    users.create_user(
+        username="picker_e",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA", "RoleB"],
+    )
+    _login_as(app_client, "picker_e")
+
+    response = app_client.put("/api/me/default-role", json={"role": "RoleB"})
+    assert response.status_code == 200, response.text
+
+    me = app_client.get("/api/me").json()
+    assert me["default_role"] == "RoleB"
+
+
+def test_put_my_default_role_rejects_role_not_in_allowed(app_client):
+    """PUT /api/me/default-role with a role outside allowed_roles returns 400."""
+    from another_s3_manager import users
+
+    users.create_user(
+        username="picker_x",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA"],
+    )
+    _login_as(app_client, "picker_x")
+
+    response = app_client.put("/api/me/default-role", json={"role": "RoleZ"})
+    assert response.status_code == 400, response.text
+
+
+def test_put_my_default_role_null_clears_explicit_choice(app_client):
+    """PUT with role=null clears the explicit choice (fallback to first allowed)."""
+    from another_s3_manager import users
+
+    users.create_user(
+        username="picker_n",
+        password_hash=_test_password_hash(),
+        is_admin=False,
+        allowed_roles=["RoleA", "RoleB"],
+    )
+    users.update_user("picker_n", default_role="RoleB")
+    _login_as(app_client, "picker_n")
+
+    response = app_client.put("/api/me/default-role", json={"role": None})
+    assert response.status_code == 200, response.text
+
+    me = app_client.get("/api/me").json()
+    # Fallback to first allowed.
+    assert me["default_role"] == "RoleA"
