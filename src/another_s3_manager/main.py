@@ -603,14 +603,20 @@ class AdminResetPasswordRequest(BaseModel):
     )
 
 
-@app.put("/api/admin/users/{username}/password")
+class AdminResetPasswordResponse(BaseModel):
+    """Response for PUT /api/admin/users/{username}/password."""
+
+    message: str
+
+
+@app.put("/api/admin/users/{username}/password", response_model=AdminResetPasswordResponse)
 async def update_user_password(
     request: Request,
     username: str,
     payload: AdminResetPasswordRequest,
     current_user: Dict[str, Any] = Depends(get_current_admin_user),
     csrf_verified: bool = Depends(verify_csrf_token),
-):
+) -> AdminResetPasswordResponse:
     """Update user password (admin only)"""
     # Pydantic's min_length=1 catches empty strings (returns 422). This catches
     # whitespace-only passwords like "   " which pass min_length but are invalid.
@@ -632,7 +638,7 @@ async def update_user_password(
     user["must_change_password"] = payload.must_change_password
     save_users(users)
 
-    return {"message": f"Password updated successfully for user {username}"}
+    return AdminResetPasswordResponse(message=f"Password updated successfully for user {username}")
 
 
 class ChangePasswordRequest(BaseModel):
