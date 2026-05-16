@@ -41,7 +41,10 @@ export function useDeleteUser() {
 
 export function useResetUserPassword() {
   return useMutation({
-    mutationFn: (args: { username: string; newPassword: string }) =>
-      resetUserPassword(args.username, args.newPassword),
+    mutationFn: (args: {
+      username: string;
+      newPassword: string;
+      mustChangePassword?: boolean;
+    }) => resetUserPassword(args.username, args.newPassword, args.mustChangePassword),
   });
 }

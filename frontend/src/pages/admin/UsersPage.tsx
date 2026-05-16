@@ -66,6 +66,7 @@ export function UsersPage() {
         password: payload.password,
         is_admin: payload.is_admin,
         allowed_roles: payload.allowed_roles,
+        must_change_password: payload.must_change_password,
       },
       `User ${username} created`,
       () => setDrawerMode(null),
@@ -99,12 +100,15 @@ export function UsersPage() {
     );
   };
 
-  const onResetSubmit = (newPassword: string): void => {
+  const onResetSubmit = (
+    newPassword: string,
+    mustChangePassword: boolean,
+  ): void => {
     if (!resetTarget) return;
     const username = resetTarget.username;
     runWithToasts(
       resetPwd,
-      { username, newPassword },
+      { username, newPassword, mustChangePassword },
       `Password reset for ${username}`,
       () => setResetTarget(undefined),
     );

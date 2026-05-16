@@ -13,6 +13,11 @@ vi.mock("@/features/auth/hooks/useChangeMyPassword", () => ({
   useChangeMyPassword: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
 }));
 
+const useMeMock = vi.fn();
+vi.mock("@/features/auth/hooks/useMe", () => ({
+  useMe: () => useMeMock(),
+}));
+
 import { ChangePasswordPage } from "@/pages/ChangePasswordPage";
 
 function renderPage() {
@@ -30,7 +35,12 @@ function renderPage() {
 }
 
 describe("ChangePasswordPage password-policy warning", () => {
-  beforeEach(() => usePasswordPolicyMock.mockReset());
+  beforeEach(() => {
+    usePasswordPolicyMock.mockReset();
+    useMeMock.mockReset();
+    // Default: must_change_password is false so existing tests are unaffected
+    useMeMock.mockReturnValue({ data: { must_change_password: false } });
+  });
 
   it("renders an inline warning when the policy fetch fails", () => {
     usePasswordPolicyMock.mockReturnValue({ data: undefined, isError: true });
@@ -59,6 +69,24 @@ describe("ChangePasswordPage password-policy warning", () => {
     renderPage();
     expect(
       screen.queryByText(/couldn't load password policy/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the must-change-password alert when me.must_change_password is true", () => {
+    usePasswordPolicyMock.mockReturnValue({ data: undefined, isError: false });
+    useMeMock.mockReturnValue({ data: { must_change_password: true } });
+    renderPage();
+    expect(
+      screen.getByText(/set or reset by an administrator/i),
+    ).toBeInTheDocument();
+  });
+
+  it("does not render the must-change-password alert when me.must_change_password is false", () => {
+    usePasswordPolicyMock.mockReturnValue({ data: undefined, isError: false });
+    useMeMock.mockReturnValue({ data: { must_change_password: false } });
+    renderPage();
+    expect(
+      screen.queryByText(/set or reset by an administrator/i),
     ).not.toBeInTheDocument();
   });
 });

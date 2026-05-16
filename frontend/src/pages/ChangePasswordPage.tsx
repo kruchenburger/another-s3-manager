@@ -1,8 +1,9 @@
 import { Alert, Button, Container, PasswordInput, Stack, Title } from "@mantine/core";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Info } from "lucide-react";
 import { useForm } from "@mantine/form";
 import { useNavigate } from "react-router-dom";
 import { useChangeMyPassword } from "@/features/auth/hooks/useChangeMyPassword";
+import { useMe } from "@/features/auth/hooks/useMe";
 import { usePasswordPolicy } from "@/features/auth/hooks/usePasswordPolicy";
 import {
   PasswordRequirementsList,
@@ -13,6 +14,7 @@ import { runWithToasts } from "@/utils/mutationToast";
 export function ChangePasswordPage() {
   const navigate = useNavigate();
   const mutation = useChangeMyPassword();
+  const { data: me } = useMe();
   const { data: policy, isError: policyFailed } = usePasswordPolicy();
 
   const form = useForm({
@@ -40,6 +42,12 @@ export function ChangePasswordPage() {
   return (
     <Container size="xs" py="xl">
       <Stack gap="md">
+        {me?.must_change_password && (
+          <Alert color="yellow" icon={<Info size={16} />}>
+            Your password was set or reset by an administrator. Please choose a
+            new one before using the app.
+          </Alert>
+        )}
         <Title order={2}>Change password</Title>
         <form onSubmit={form.onSubmit(handleSubmit)}>
           <Stack gap="md">

@@ -761,7 +761,8 @@ def test_update_user_password_empty(app_client):
         json={"password": ""},
         headers=headers,
     )
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    # Pydantic rejects empty string via min_length=1 before the handler runs.
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
 def test_update_user_password_missing_user(app_client):

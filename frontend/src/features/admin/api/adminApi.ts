@@ -57,6 +57,9 @@ export async function createUser(payload: CreateUserPayload): Promise<void> {
   body.append("password", payload.password);
   body.append("is_admin", String(payload.is_admin));
   body.append("allowed_roles", payload.allowed_roles.join(","));
+  if (payload.must_change_password !== undefined) {
+    body.append("must_change_password", String(payload.must_change_password));
+  }
   await apiRequest<void>("/api/admin/users", { method: "POST", body });
 }
 
@@ -89,6 +92,7 @@ export async function deleteUser(username: string): Promise<void> {
 export async function resetUserPassword(
   username: string,
   newPassword: string,
+  mustChangePassword?: boolean,
 ): Promise<void> {
   // Backend uses JSON body with field "password" via Body(..., embed=True).
   // See main.py `@app.put("/api/admin/users/{username}/password")` handler.
@@ -97,7 +101,12 @@ export async function resetUserPassword(
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: newPassword }),
+      body: JSON.stringify({
+        password: newPassword,
+        ...(mustChangePassword !== undefined && {
+          must_change_password: mustChangePassword,
+        }),
+      }),
     },
   );
 }

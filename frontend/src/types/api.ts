@@ -17,6 +17,11 @@ export interface MeResponse {
    *  allowed_roles, else first of allowed_roles, else null. Set via
    *  PUT /api/me/default-role. */
   default_role: string | null;
+  /** True when admin created or reset the user's password and required them
+   *  to change it on next login. Cleared by PUT /api/me/password on success.
+   *  Frontend RequireFreshPassword guard redirects to /change-password while
+   *  this is true. */
+  must_change_password: boolean;
   /**
    * True when admin set `disable_deletion: true` in config.json OR the
    * `DISABLE_DELETION` env var is set. UI uses this to disable delete controls
@@ -76,6 +81,7 @@ export interface CreateUserPayload {
   password: string;
   is_admin: boolean;
   allowed_roles: string[];
+  must_change_password?: boolean;
 }
 
 export interface UpdateUserPayload {

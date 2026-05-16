@@ -1,6 +1,7 @@
 import {
   Alert,
   Button,
+  Checkbox,
   Divider,
   Drawer,
   PasswordInput,
@@ -29,6 +30,7 @@ export interface UserDrawerCreatePayload {
   password: string; // required
   is_admin: boolean;
   allowed_roles: string[];
+  must_change_password: boolean;
 }
 
 export interface UserDrawerEditPayload {
@@ -76,6 +78,7 @@ export function UserDrawer({
       password: "",
       is_admin: false,
       allowed_roles: [] as string[],
+      must_change_password: true,
     },
     validate: {
       username: (v) =>
@@ -139,6 +142,7 @@ export function UserDrawer({
               password: values.password,
               is_admin: values.is_admin,
               allowed_roles: values.allowed_roles,
+              must_change_password: values.must_change_password,
             });
           } else {
             onSubmit({
@@ -179,6 +183,14 @@ export function UserDrawer({
                   Couldn't load password policy — the server will validate the new password on save.
                 </Alert>
               )}
+              <Checkbox
+                mt={4}
+                label="Require password change on next login"
+                description="If unchecked, the user can keep this password. Recommended for service accounts or pre-shared credentials."
+                {...form.getInputProps("must_change_password", {
+                  type: "checkbox",
+                })}
+              />
             </Stack>
           )}
           <Tooltip
