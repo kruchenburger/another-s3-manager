@@ -73,7 +73,11 @@ from another_s3_manager.metrics import (
     http_request_duration_seconds,
     http_requests_total,
 )
-from another_s3_manager.s3_client import clear_s3_clients_cache, execute_with_s3_retry
+from another_s3_manager.s3_client import (
+    clear_s3_clients_cache,
+    execute_with_s3_retry,
+    list_buckets_for_role,
+)
 from another_s3_manager.s3_client import (
     generate_presigned_url_for_role as s3_generate_presigned_url_for_role,
 )
@@ -1620,49 +1624,19 @@ async def list_buckets(
     role: Optional[str] = Query(None, description="Role name to use"),
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """List available S3 buckets - either from allowed_buckets config or by listing all buckets"""
+    """List available S3 buckets - delegates to s3_client.list_buckets_for_role."""
     try:
-        # Validate role access
-        validated_role = validate_role_access(role, current_user)
-
-        # Load config to check for allowed_buckets
-        from another_s3_manager.config import load_config as _load_config
-
-        config = _load_config(force_reload=False)
-        roles = config.get("roles", [])
-
-        # Find the role configuration
-        role_config = None
-        if validated_role:
-            role_config = next((r for r in roles if r.get("name") == validated_role), None)
-        else:
-            # Use first role
-            role_config = roles[0] if roles else None
-
-        # Check if role has allowed_buckets configured
-        if role_config and "allowed_buckets" in role_config and role_config["allowed_buckets"]:
-            # Return configured buckets without requiring list_buckets permission
-            allowed_buckets = role_config["allowed_buckets"]
-            if isinstance(allowed_buckets, list):
-                # Verify buckets exist and user has access (optional - can be disabled for performance)
-                # For now, just return the list as-is
-                return allowed_buckets
-            else:
-                raise HTTPException(status_code=400, detail="allowed_buckets must be a list")
-
-        # Fallback to listing all buckets (requires s3:ListAllMyBuckets permission)
-        def fetch_buckets(s3_client):
-            response = s3_client.list_buckets()
-            return [bucket["Name"] for bucket in response["Buckets"]]
-
-        return execute_with_s3_retry(validated_role, "list", fetch_buckets)
+        return list_buckets_for_role(role, current_user)
     except HTTPException:
         raise
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
-        # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
-        error_msg = str(e)
-        logger.error(f"Configuration error when listing buckets: {error_msg}", exc_info=True)
-        raise HTTPException(status_code=400, detail=error_msg)
+        # e.g. malformed allowed_buckets, missing credentials, assume_role failure
+        logger.error(f"Configuration error when listing buckets: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(e))
     except (ClientError, BotoCoreError) as e:
         # Detect "credentials cannot list all buckets" — common for R2, MinIO scoped tokens,
         # AWS IAM with bucket-scoped policies. Return 403 with actionable guidance pointing

@@ -484,72 +484,20 @@ async def test_update_config_unexpected_error(monkeypatch, reload_main):
     assert "Failed to update config" in exc.value.detail["message"]
 
 
-@pytest.mark.asyncio
-async def test_list_buckets_allowed_buckets(monkeypatch, reload_main):
-    main = reload_main
-
-    config_data = {
-        "roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["bucket-1", "bucket-2"]}],
-        "current_role": "RoleA",
-    }
-
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: None)
-    patch_load_config(monkeypatch, main, config_data)
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        raise AssertionError("should not call")
-
-    import another_s3_manager.main as main
-
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
-
-    buckets = await main.list_buckets(None, {"is_admin": True})
-    assert buckets == ["bucket-1", "bucket-2"]
-
-
-@pytest.mark.asyncio
-async def test_list_buckets_invalid_allowed_type(monkeypatch, reload_main):
-    main = reload_main
-
-    config_data = {
-        "roles": [{"name": "RoleA", "type": "default", "allowed_buckets": "not-a-list"}],
-        "current_role": "RoleA",
-    }
-
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: None)
-    patch_load_config(monkeypatch, main, config_data)
-
-    with pytest.raises(HTTPException) as exc:
-        await main.list_buckets(None, {"is_admin": True})
-    assert exc.value.status_code == 400
-    assert "allowed_buckets" in exc.value.detail
+# Note: test_list_buckets_allowed_buckets and test_list_buckets_invalid_allowed_type
+# moved to tests/test_s3_client.py — the allowed_buckets short-circuit + isinstance
+# validation now live inside list_buckets_for_role (s3_client.py), not in the route.
 
 
 @pytest.mark.asyncio
 async def test_list_buckets_with_explicit_role(monkeypatch, reload_main):
     main = reload_main
 
-    config_data = {
-        "roles": [
-            {"name": "RoleA", "type": "default"},
-            {"name": "RoleB", "type": "default"},
-        ],
-        "current_role": "RoleA",
-    }
-
-    class FakeClient:
-        def list_buckets(self):
-            return {"Buckets": [{"Name": "bucket-x"}]}
-
-    patch_load_config(monkeypatch, main, config_data)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(FakeClient())
-
-    import another_s3_manager.main as main
-
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(
+        main,
+        "list_buckets_for_role",
+        lambda role, user: ["bucket-x"],
+    )
 
     buckets = await main.list_buckets("RoleB", {"is_admin": True})
     assert buckets == ["bucket-x"]
@@ -559,13 +507,11 @@ async def test_list_buckets_with_explicit_role(monkeypatch, reload_main):
 async def test_list_buckets_defaults_to_first_role(monkeypatch, reload_main):
     main = reload_main
 
-    config_data = {
-        "roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["bucket-a"]}],
-        "current_role": "",
-    }
-
-    patch_load_config(monkeypatch, main, config_data)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: None)
+    monkeypatch.setattr(
+        main,
+        "list_buckets_for_role",
+        lambda role, user: ["bucket-a"],
+    )
 
     buckets = await main.list_buckets(None, {"is_admin": True})
     assert buckets == ["bucket-a"]
@@ -575,10 +521,10 @@ async def test_list_buckets_defaults_to_first_role(monkeypatch, reload_main):
 async def test_list_buckets_value_error(monkeypatch, reload_main):
     main = reload_main
 
-    patch_load_config(monkeypatch, main, {"roles": []})
-    monkeypatch.setattr(
-        main, "validate_role_access", lambda role, current_user: (_ for _ in ()).throw(ValueError("bad"))
-    )
+    def _raise_value_error(role, user):
+        raise ValueError("bad")
+
+    monkeypatch.setattr(main, "list_buckets_for_role", _raise_value_error)
 
     with pytest.raises(HTTPException) as exc:
         await main.list_buckets(None, {"is_admin": True})
@@ -589,20 +535,10 @@ async def test_list_buckets_value_error(monkeypatch, reload_main):
 async def test_list_buckets_generic_exception(monkeypatch, reload_main):
     main = reload_main
 
-    config_data = {
-        "roles": [{"name": "RoleA", "type": "default"}],
-        "current_role": "RoleA",
-    }
-
-    patch_load_config(monkeypatch, main, config_data)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: None)
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
+    def _raise_runtime(role, user):
         raise RuntimeError("boom")
 
-    import another_s3_manager.main as main
-
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(main, "list_buckets_for_role", _raise_runtime)
 
     with pytest.raises(HTTPException) as exc:
         await main.list_buckets(None, {"is_admin": True})
@@ -790,24 +726,10 @@ async def test_list_buckets_boto_error(monkeypatch, reload_main):
     still map to 500 — see test_list_buckets_generic_boto_error_returns_500 below."""
     main = reload_main
 
-    config_data = {
-        "roles": [{"name": "RoleA", "type": "default"}],
-        "current_role": "RoleA",
-    }
+    def _raise_access_denied(role, user):
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "ListBuckets")
 
-    class FakeClient:
-        def list_buckets(self):
-            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "ListBuckets")
-
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: None)
-    patch_load_config(monkeypatch, main, config_data)
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(FakeClient())
-
-    import another_s3_manager.main as main
-
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(main, "list_buckets_for_role", _raise_access_denied)
 
     with pytest.raises(HTTPException) as exc:
         await main.list_buckets(None, {"is_admin": True})

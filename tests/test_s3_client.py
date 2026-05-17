@@ -685,6 +685,47 @@ def test_list_buckets_for_role_permission_denied():
         mod.list_buckets_for_role("RoleX", _make_user(allowed_roles=["RoleA"]))
 
 
+def test_list_buckets_for_role_allowed_buckets_short_circuit(mocker):
+    """When a role has allowed_buckets configured, the helper returns it without
+    hitting S3 — moved from tests/test_main_logic.py::test_list_buckets_allowed_buckets
+    when the route refactor moved this logic into the helper."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={
+            "roles": [
+                {
+                    "name": "RoleA",
+                    "type": "default",
+                    "allowed_buckets": ["bucket-1", "bucket-2"],
+                }
+            ],
+        },
+    )
+    # Fail loudly if anything tries to reach S3 — short-circuit must skip it.
+    mocker.patch.object(mod, "get_s3_client", side_effect=AssertionError("should not call"))
+
+    result = mod.list_buckets_for_role("RoleA", _make_user(allowed_roles=["RoleA"]))
+    assert result == ["bucket-1", "bucket-2"]
+
+
+def test_list_buckets_for_role_invalid_allowed_type_raises_value_error(mocker):
+    """When allowed_buckets is not a list, the helper raises ValueError —
+    moved from tests/test_main_logic.py::test_list_buckets_invalid_allowed_type
+    when the route refactor moved this validation into the helper."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={
+            "roles": [{"name": "RoleA", "type": "default", "allowed_buckets": "not-a-list"}],
+        },
+    )
+    with pytest.raises(ValueError, match="allowed_buckets"):
+        mod.list_buckets_for_role("RoleA", _make_user(allowed_roles=["RoleA"]))
+
+
 # --- list_objects_for_role ---
 
 
