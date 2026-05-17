@@ -546,37 +546,28 @@ async def test_list_buckets_generic_exception(monkeypatch, reload_main):
 
 
 @pytest.mark.asyncio
-async def test_list_files_success(monkeypatch, reload_main, fake_s3_client):
-    fake_s3_client.set_paginator_pages(
-        [
-            {
-                "CommonPrefixes": [{"Prefix": "folder1/sub/"}],
-                "Contents": [
-                    {
-                        "Key": "folder1/file.txt",
-                        "Size": 123,
-                        "LastModified": datetime.now(UTC),
-                    },
-                    {
-                        "Key": "folder1/marker/",
-                        "Size": 0,
-                        "LastModified": datetime.now(UTC),
-                    },
-                ],
-            }
-        ]
-    )
-
+async def test_list_files_success(monkeypatch, reload_main):
+    """list_files route wraps the helper's list result in the legacy
+    {files, path, total_count} envelope the frontend expects."""
     main = reload_main
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(fake_s3_client)
+    def _fake_helper(role, bucket, path, user):
+        # Helper returns a flat list of {name, is_directory, size, ...} dicts.
+        return [
+            {"name": "sub", "is_directory": True, "size": 0},
+            {
+                "name": "file.txt",
+                "is_directory": False,
+                "size": 123,
+                "last_modified": datetime.now(UTC).isoformat(),
+            },
+        ]
 
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
+    monkeypatch.setattr(main, "list_objects_for_role", _fake_helper)
 
     result = await main.list_files("bucket", path="folder1", role=None, current_user={"is_admin": True})
     assert result["total_count"] == 2
+    assert result["path"] == "folder1"
     names = {entry["name"] for entry in result["files"]}
     assert names == {"sub", "file.txt"}
 
@@ -692,27 +683,16 @@ async def test_upload_file_success(monkeypatch, reload_main, fake_s3_client):
 
 @pytest.mark.asyncio
 async def test_list_files_s3_error(monkeypatch, reload_main):
+    """Helper raises ClientError(NoSuchBucket) -> route maps to 404."""
     main = reload_main
-
-    class FailingPaginator:
-        def paginate(self, **kwargs):
-            raise ClientError({"Error": {"Code": "NoSuchBucket"}}, "ListObjectsV2")
-
-    class FakeClient:
-        def get_paginator(self, name):
-            assert name == "list_objects_v2"
-            return FailingPaginator()
 
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(FakeClient())
+    def _raise(role, bucket, path, user):
+        raise ClientError({"Error": {"Code": "NoSuchBucket"}}, "ListObjectsV2")
 
-    import another_s3_manager.main as main
-
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(main, "list_objects_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
         await main.list_files("bucket", path="", role=None, current_user={"is_admin": True})
@@ -739,26 +719,16 @@ async def test_list_buckets_boto_error(monkeypatch, reload_main):
 
 @pytest.mark.asyncio
 async def test_list_files_generic_exception(monkeypatch, reload_main):
+    """Helper raises generic RuntimeError -> route maps to 500."""
     main = reload_main
-
-    class FailingPaginator:
-        def paginate(self, **kwargs):
-            raise RuntimeError("fail")
-
-    class FakeClient:
-        def get_paginator(self, name):
-            return FailingPaginator()
 
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(FakeClient())
+    def _raise(role, bucket, path, user):
+        raise RuntimeError("fail")
 
-    import another_s3_manager.main as main
-
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(main, "list_objects_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
         await main.list_files("bucket", path="", role=None, current_user={"is_admin": True})
@@ -767,26 +737,17 @@ async def test_list_files_generic_exception(monkeypatch, reload_main):
 
 @pytest.mark.asyncio
 async def test_list_files_client_error_other(monkeypatch, reload_main):
+    """Helper raises ClientError(AccessDenied) — not the friendly NoSuchBucket
+    branch — so the route falls through to 500 via format_boto_error."""
     main = reload_main
-
-    class FailingPaginator:
-        def paginate(self, **kwargs):
-            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "ListObjectsV2")
-
-    class FakeClient:
-        def get_paginator(self, name):
-            return FailingPaginator()
 
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(FakeClient())
+    def _raise(role, bucket, path, user):
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "ListObjectsV2")
 
-    import another_s3_manager.main as main
-
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(main, "list_objects_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
         await main.list_files("bucket", path="", role=None, current_user={"is_admin": True})

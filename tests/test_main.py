@@ -620,32 +620,29 @@ def test_list_buckets_uses_s3(app_client, moto_s3):
     assert response.json() == ["bucket"]
 
 
-def test_list_files(app_client, mocker):
+def test_list_files(app_client, moto_s3):
+    """B1: route -> list_objects_for_role -> moto. Verifies the delimiter='/'
+    response surfaces top-level files + immediate subdirectories without
+    leaking deeper keys, and that the route wraps the helper's list in the
+    legacy {files, path, total_count} envelope the React frontend expects."""
     _, headers = login(app_client)
-    paginator_mock = mocker.MagicMock()
-    paginator_mock.paginate.return_value = [
-        {
-            "CommonPrefixes": [{"Prefix": "folder/"}],
-            "Contents": [
-                {
-                    "Key": "folder/file.txt",
-                    "Size": 10,
-                    "LastModified": datetime.now(UTC),
-                }
-            ],
-        }
-    ]
-    s3_mock = mocker.MagicMock()
-    s3_mock.get_paginator.return_value = paginator_mock
+    moto_s3.create_bucket(Bucket="files-bucket")
+    moto_s3.put_object(Bucket="files-bucket", Key="root.txt", Body=b"hi")
+    moto_s3.put_object(Bucket="files-bucket", Key="sub/inner.txt", Body=b"deep")
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(s3_mock)
+    response = app_client.get("/api/buckets/files-bucket/files?path=", headers=headers)
 
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
-    response = app_client.get("/api/buckets/test-bucket/files", headers=headers)
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
+    assert data["path"] == ""
     assert data["total_count"] == 2
+    names = {item["name"] for item in data["files"]}
+    assert "root.txt" in names
+    assert "sub" in names
+    # delimiter='/' must scope to depth-1 — nested keys must not leak
+    assert "inner.txt" not in names
+    sub_entry = next(item for item in data["files"] if item["name"] == "sub")
+    assert sub_entry["is_directory"] is True
 
 
 def test_upload_file(app_client, mocker):
@@ -964,12 +961,13 @@ def test_list_buckets_other_client_error_still_returns_500(app_client, mocker):
 
 
 def test_list_files_handles_error(app_client, mocker):
+    """B2: helper raises ClientError(NoSuchBucket) -> route maps to 404."""
     _, headers = login(app_client)
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        raise ClientError({"Error": {"Code": "NoSuchBucket", "Message": "Missing"}}, "ListObjectsV2")
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch(
+        "another_s3_manager.main.list_objects_for_role",
+        side_effect=ClientError({"Error": {"Code": "NoSuchBucket", "Message": "Missing"}}, "ListObjectsV2"),
+    )
     response = app_client.get("/api/buckets/test-bucket/files", headers=headers)
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
@@ -1884,10 +1882,10 @@ def test_list_files_typed_no_such_bucket_returns_404_with_dict_detail(app_client
     """list_files maps S3NotFoundError to 404 with structured detail."""
     from another_s3_manager.errors import S3NotFoundError
 
-    def _boom(role_name, operation, callback):
-        raise S3NotFoundError("NoSuchBucket", "bucket missing")
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=_boom)
+    mocker.patch(
+        "another_s3_manager.main.list_objects_for_role",
+        side_effect=S3NotFoundError("NoSuchBucket", "bucket missing"),
+    )
     _, headers = login(app_client)
     resp = app_client.get("/api/buckets/missing-bucket/files", headers=headers)
     assert resp.status_code == 404
@@ -1901,10 +1899,10 @@ def test_list_files_generic_exception_logs_and_returns_500(app_client, mocker, c
     AND the server logs include the stack trace (was missing before)."""
     import logging
 
-    def _boom(role_name, operation, callback):
-        raise RuntimeError("totally unexpected")
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=_boom)
+    mocker.patch(
+        "another_s3_manager.main.list_objects_for_role",
+        side_effect=RuntimeError("totally unexpected"),
+    )
     _, headers = login(app_client)
 
     with caplog.at_level(logging.ERROR, logger="another_s3_manager.main"):

@@ -77,6 +77,7 @@ from another_s3_manager.s3_client import (
     clear_s3_clients_cache,
     execute_with_s3_retry,
     list_buckets_for_role,
+    list_objects_for_role,
 )
 from another_s3_manager.s3_client import (
     generate_presigned_url_for_role as s3_generate_presigned_url_for_role,
@@ -1678,7 +1679,7 @@ async def list_files(
     role: Optional[str] = Query(None, description="Role name to use"),
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """List files and directories in a bucket at the specified path"""
+    """List files and directories - delegates to s3_client.list_objects_for_role."""
     try:
         # Validate and sanitize inputs
         try:
@@ -1687,48 +1688,19 @@ async def list_files(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        # Validate role access
-        validated_role = validate_role_access(role, current_user)
-        # Normalize path - remove leading/trailing slashes
-        prefix = path + "/" if path else ""
-
-        def fetch_files(s3_client):
-            files = []
-            directories = set()  # Track directories to avoid duplicates
-
-            paginator = s3_client.get_paginator("list_objects_v2")
-            pages = paginator.paginate(Bucket=bucket_name, Prefix=prefix, Delimiter="/")
-
-            for page in pages:
-                if "CommonPrefixes" in page:
-                    for prefix_obj in page["CommonPrefixes"]:
-                        dir_name = prefix_obj["Prefix"][len(prefix) :].rstrip("/")
-                        if dir_name and dir_name not in directories:
-                            directories.add(dir_name)
-                            files.append({"name": dir_name, "is_directory": True, "size": 0})
-
-                if "Contents" in page:
-                    for obj in page["Contents"]:
-                        if obj["Key"].endswith("/") and obj["Size"] == 0:
-                            continue
-
-                        file_name = obj["Key"][len(prefix) :]
-                        if file_name:
-                            files.append(
-                                {
-                                    "name": file_name,
-                                    "is_directory": False,
-                                    "size": obj["Size"],
-                                    "last_modified": obj["LastModified"].isoformat(),
-                                }
-                            )
-
-            files.sort(key=lambda x: (not x["is_directory"], x["name"].lower()))
-            return {"files": files, "path": path, "total_count": len(files)}
-
-        return execute_with_s3_retry(validated_role, "list", fetch_files)
+        # Helper handles role validation, bucket access check, pagination, and
+        # the CommonPrefixes/Contents flattening. Returns a sorted list of
+        # {name, is_directory, size, [last_modified]} dicts. Route wraps in the
+        # legacy response envelope {files, path, total_count} that the React
+        # frontend depends on.
+        files = list_objects_for_role(role, bucket_name, path, current_user)
+        return {"files": files, "path": path, "total_count": len(files)}
     except HTTPException:
         raise
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
         error_msg = str(e)
