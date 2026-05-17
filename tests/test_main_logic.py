@@ -656,19 +656,28 @@ async def test_upload_file_streaming_limit(monkeypatch, reload_main):
 
 
 @pytest.mark.asyncio
-async def test_upload_file_success(monkeypatch, reload_main, fake_s3_client):
+async def test_upload_file_success(monkeypatch, reload_main):
+    """B1-style logic test: helper accepts the upload and returns successfully."""
     main = reload_main
 
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda key: key)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(fake_s3_client)
+    calls = []
 
-    import another_s3_manager.main as main
+    def fake_put(role, bucket, path, content, user_dict, content_type=None, content_disposition=None):
+        calls.append(
+            {
+                "role": role,
+                "bucket": bucket,
+                "path": path,
+                "content": content,
+                "content_type": content_type,
+                "content_disposition": content_disposition,
+            }
+        )
 
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(main, "put_object_for_role", fake_put)
     patch_load_config(monkeypatch, main, {"max_file_size": 50})
 
     request = SimpleNamespace(headers={})
@@ -678,7 +687,8 @@ async def test_upload_file_success(monkeypatch, reload_main, fake_s3_client):
         request, "bucket", upload, key="folder/ok.txt", role=None, current_user={"is_admin": True}
     )
     assert response["message"] == "File uploaded successfully"
-    assert fake_s3_client.uploads[0]["Key"] == "folder/ok.txt"
+    assert calls[0]["path"] == "folder/ok.txt"
+    assert calls[0]["content"] == b"12345"
 
 
 @pytest.mark.asyncio
@@ -771,21 +781,22 @@ async def test_upload_file_invalid_key(monkeypatch, reload_main):
 
 
 @pytest.mark.asyncio
-async def test_upload_file_env_max_file_size(monkeypatch, reload_main, fake_s3_client):
+async def test_upload_file_env_max_file_size(monkeypatch, reload_main):
+    """Verifies MAX_FILE_SIZE env var is honored end-to-end when config omits
+    max_file_size and the body fits under the env-configured cap."""
     main = reload_main
 
     patch_load_config(monkeypatch, main, {"roles": []})
     monkeypatch.setenv("MAX_FILE_SIZE", "4096")
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda key: key)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(fake_s3_client)
+    called = []
 
-    import another_s3_manager.main as main
+    def fake_put(role, bucket, path, content, user_dict, content_type=None, content_disposition=None):
+        called.append(True)
 
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(main, "put_object_for_role", fake_put)
 
     request = SimpleNamespace(headers={})
     upload = SimpleUploadFile(b"abcd")
@@ -794,32 +805,25 @@ async def test_upload_file_env_max_file_size(monkeypatch, reload_main, fake_s3_c
         request, "bucket", upload, key="file.txt", role=None, current_user={"is_admin": True}
     )
     assert response["message"] == "File uploaded successfully"
+    assert called == [True]
 
 
 @pytest.mark.asyncio
 async def test_upload_file_invalid_content_length(monkeypatch, reload_main):
+    """Pre-S3 path: malformed Content-Length header is silently ignored, body
+    streamed instead. Helper still called once with the actual body."""
     main = reload_main
 
     patch_load_config(monkeypatch, main, {"max_file_size": 1024})
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda key: key)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
-    class DummyClient:
-        def __init__(self):
-            self.called = False
+    called = []
 
-        def put_object(self, **kwargs):
-            self.called = True
+    def fake_put(role, bucket, path, content, user_dict, content_type=None, content_disposition=None):
+        called.append(content)
 
-    client = DummyClient()
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(client)
-
-    import another_s3_manager.main as main
-
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(main, "put_object_for_role", fake_put)
 
     request = SimpleNamespace(headers={"content-length": "abc"})
     upload = SimpleUploadFile(b"abcd")
@@ -828,28 +832,22 @@ async def test_upload_file_invalid_content_length(monkeypatch, reload_main):
         request, "bucket", upload, key="file.txt", role=None, current_user={"is_admin": True}
     )
     assert response["message"] == "File uploaded successfully"
-    assert client.called is True
+    assert called == [b"abcd"]
 
 
 @pytest.mark.asyncio
 async def test_upload_file_client_error(monkeypatch, reload_main):
+    """B2: helper raises ClientError(AccessDenied) -> route maps to 403."""
     main = reload_main
-
-    class ErrorClient:
-        def put_object(self, **kwargs):
-            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "PutObject")
 
     patch_load_config(monkeypatch, main, {"max_file_size": 1024})
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda key: key)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(ErrorClient())
+    def _raise(role, bucket, path, content, user_dict, content_type=None, content_disposition=None):
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "PutObject")
 
-    import another_s3_manager.main as main
-
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(main, "put_object_for_role", _raise)
 
     request = SimpleNamespace(headers={})
     upload = SimpleUploadFile(b"abcd")

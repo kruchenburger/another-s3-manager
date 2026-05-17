@@ -78,6 +78,7 @@ from another_s3_manager.s3_client import (
     execute_with_s3_retry,
     list_buckets_for_role,
     list_objects_for_role,
+    put_object_for_role,
 )
 from another_s3_manager.s3_client import (
     generate_presigned_url_for_role as s3_generate_presigned_url_for_role,
@@ -1732,7 +1733,11 @@ async def upload_file(
     current_user: Dict[str, Any] = Depends(get_current_user),
     csrf_verified: bool = Depends(verify_csrf_token),
 ):
-    """Upload a file to S3 bucket using streaming to minimize memory usage"""
+    """Upload a file to S3 bucket - delegates the put to s3_client.put_object_for_role.
+
+    The route keeps streaming/size-limit enforcement and the auto_inline_extensions
+    content-disposition logic. The helper does role validation, bucket-access
+    validation, and metric accounting."""
     try:
         # Validate and sanitize inputs
         try:
@@ -1741,8 +1746,6 @@ async def upload_file(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        # Validate role access
-        validated_role = validate_role_access(role, current_user)
         # Get max_file_size from config (with fallback to env var)
         config = load_config(force_reload=False)
         max_file_size = config.get("max_file_size")
@@ -1801,35 +1804,29 @@ async def upload_file(
 
         # Check if file extension should have Content-Disposition: inline
         auto_inline_extensions = config.get("auto_inline_extensions", [])
-        content_disposition = None
+        content_disposition: Optional[str] = None
         if auto_inline_extensions:
             # Get file extension from key (path)
             file_ext = Path(key).suffix.lstrip(".").lower()
             if file_ext in auto_inline_extensions:
                 content_disposition = "inline"
 
-        def upload_object(s3_client):
-            put_object_params = {
-                "Bucket": bucket_name,
-                "Key": key,
-                "Body": content,
-                "ContentType": file.content_type or "application/octet-stream",
-            }
-            if content_disposition:
-                put_object_params["ContentDisposition"] = content_disposition
-            s3_client.put_object(**put_object_params)
-            return {"message": "File uploaded successfully", "key": key}
-
-        result = execute_with_s3_retry(validated_role, "put", upload_object)
-        # Record bytes uploaded after a successful put
-        from another_s3_manager.metrics import s3_bytes_uploaded_total, safe_role_label
-
-        s3_bytes_uploaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket_name).inc(
-            len(content)
+        # The helper increments s3_bytes_uploaded_total internally - do NOT also
+        # increment it here, doing so would double-count.
+        put_object_for_role(
+            role,
+            bucket_name,
+            key,
+            content,
+            current_user,
+            content_type=file.content_type or "application/octet-stream",
+            content_disposition=content_disposition,
         )
-        return result
+        return {"message": "File uploaded successfully", "key": key}
     except HTTPException:
         raise
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
         # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
         error_msg = str(e)
@@ -1859,7 +1856,7 @@ async def upload_file(
         log_extra = {
             "bucket": bucket_name,
             "key": key,
-            "role": validated_role,
+            "role": role,
             "error_type": error_type,
             "error_code": error_code,
             "file_size": total_read if "total_read" in locals() else None,
@@ -1887,7 +1884,7 @@ async def upload_file(
             extra={
                 "bucket": bucket_name,
                 "key": key,
-                "role": validated_role,
+                "role": role,
                 "error_type": type(e).__name__,
                 "file_size": total_read if "total_read" in locals() else None,
             },

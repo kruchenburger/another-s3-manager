@@ -645,23 +645,47 @@ def test_list_files(app_client, moto_s3):
     assert sub_entry["is_directory"] is True
 
 
-def test_upload_file(app_client, mocker):
+def test_upload_file(app_client, moto_s3):
+    """B1: route -> put_object_for_role -> boto3 -> moto stores the object."""
     _, headers = login(app_client)
-    s3_mock = mocker.MagicMock()
+    moto_s3.create_bucket(Bucket="up-bucket")
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(s3_mock)
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
-    file_content = io.BytesIO(b"content")
     response = app_client.post(
-        "/api/buckets/test-bucket/upload",
-        data={"key": "file.txt"},
-        files={"file": ("file.txt", file_content, "text/plain")},
+        "/api/buckets/up-bucket/upload",
+        data={"key": "hello.txt"},
+        files={"file": ("hello.txt", b"world", "text/plain")},
+        headers=headers,
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    stored = moto_s3.get_object(Bucket="up-bucket", Key="hello.txt")
+    assert stored["Body"].read() == b"world"
+    assert stored["ContentType"] == "text/plain"
+
+
+def test_upload_increments_bytes_metric_once(app_client, moto_s3):
+    """Regression: the route used to manually increment s3_bytes_uploaded_total
+    AFTER calling the helper, which itself increments the metric internally.
+    That double-counted the bytes. After this refactor only the helper bumps
+    the metric — the route's manual increment was removed."""
+    from another_s3_manager.metrics import s3_bytes_uploaded_total
+
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="metric-bucket")
+    labels = {"role": "Default", "bucket": "metric-bucket"}
+    before = s3_bytes_uploaded_total.labels(**labels)._value.get()
+
+    payload = b"a" * 100
+    response = app_client.post(
+        "/api/buckets/metric-bucket/upload",
+        data={"key": "m.bin", "role": "Default"},
+        files={"file": ("m.bin", payload, "application/octet-stream")},
         headers=headers,
     )
     assert response.status_code == status.HTTP_200_OK
-    s3_mock.put_object.assert_called_once()
+
+    after = s3_bytes_uploaded_total.labels(**labels)._value.get()
+    assert after - before == 100, f"metric must increment once, got {after - before}"
 
 
 def test_upload_file_too_large(app_client, mocker):
@@ -973,12 +997,12 @@ def test_list_files_handles_error(app_client, mocker):
 
 
 def test_upload_file_handles_exception(app_client, mocker):
+    """B2: helper raises ValueError (e.g. assume_role failure) -> route returns 400."""
     _, headers = login(app_client)
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        raise ValueError("boom")
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch(
+        "another_s3_manager.main.put_object_for_role",
+        side_effect=ValueError("boom"),
+    )
     response = app_client.post(
         "/api/buckets/test-bucket/upload",
         data={"key": "file.txt"},
