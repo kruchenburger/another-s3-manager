@@ -1911,6 +1911,104 @@ def test_list_files_generic_exception_logs_and_returns_500(app_client, mocker, c
     assert any("totally unexpected" in record.message or record.exc_info is not None for record in caplog.records)
 
 
+# Regression coverage for the S3OperationError ladder + structured `{"code":"INTERNAL", ...}`
+# fallback on the three remaining routes (upload/download/delete). The Phase 6a-7 refactor
+# moved the raise sites from `execute_with_s3_retry` (which the routes used to mock) into
+# the s3_client._for_role helpers — coverage for these branches re-anchors via the helper
+# mocks here.
+
+
+def test_upload_typed_s3_error_returns_mapped_status_with_dict_detail(app_client, mocker):
+    """put_object_for_role raises S3AccessDeniedError → 403 with structured detail."""
+    from another_s3_manager.errors import S3AccessDeniedError
+
+    mocker.patch(
+        "another_s3_manager.main.put_object_for_role",
+        side_effect=S3AccessDeniedError("AccessDenied", "scoped token rejected"),
+    )
+    _, headers = login(app_client)
+    resp = app_client.post(
+        "/api/buckets/any/upload",
+        data={"key": "x.bin", "role": "Default"},
+        files={"file": ("x.bin", b"abc", "application/octet-stream")},
+        headers=headers,
+    )
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["detail"]["code"] == "AccessDenied"
+
+
+def test_upload_generic_exception_returns_structured_500(app_client, mocker):
+    """A non-typed RuntimeError from the helper hits the structured INTERNAL fallback."""
+    mocker.patch(
+        "another_s3_manager.main.put_object_for_role",
+        side_effect=RuntimeError("kaboom"),
+    )
+    _, headers = login(app_client)
+    resp = app_client.post(
+        "/api/buckets/any/upload",
+        data={"key": "x.bin", "role": "Default"},
+        files={"file": ("x.bin", b"abc", "application/octet-stream")},
+        headers=headers,
+    )
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == {"code": "INTERNAL", "message": "Upload failed — see server logs"}
+
+
+def test_download_typed_s3_error_returns_mapped_status_with_dict_detail(app_client, mocker):
+    """iter_object_for_role raises S3NotFoundError → 404 with structured detail."""
+    from another_s3_manager.errors import S3NotFoundError
+
+    mocker.patch(
+        "another_s3_manager.main.iter_object_for_role",
+        side_effect=S3NotFoundError("NoSuchKey", "missing"),
+    )
+    _, headers = login(app_client)
+    resp = app_client.get("/api/buckets/any/download?path=missing.txt&role=Default", headers=headers)
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["detail"]["code"] == "NoSuchKey"
+
+
+def test_download_generic_exception_returns_structured_500(app_client, mocker):
+    """A non-typed RuntimeError from the streaming helper hits the structured INTERNAL fallback."""
+    mocker.patch(
+        "another_s3_manager.main.iter_object_for_role",
+        side_effect=RuntimeError("kaboom"),
+    )
+    _, headers = login(app_client)
+    resp = app_client.get("/api/buckets/any/download?path=x.bin&role=Default", headers=headers)
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == {"code": "INTERNAL", "message": "Download failed — see server logs"}
+
+
+def test_delete_typed_s3_error_returns_mapped_status_with_dict_detail(app_client, mocker):
+    """delete_object_for_role raises S3AccessDeniedError → 403 with structured detail."""
+    from another_s3_manager.errors import S3AccessDeniedError
+
+    mocker.patch(
+        "another_s3_manager.main.delete_object_for_role",
+        side_effect=S3AccessDeniedError("AccessDenied", "denied"),
+    )
+    _, headers = login(app_client)
+    resp = app_client.delete("/api/buckets/any/files?path=x.bin&role=Default", headers=headers)
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["detail"]["code"] == "AccessDenied"
+
+
+def test_delete_generic_exception_returns_structured_500(app_client, mocker):
+    """A non-typed RuntimeError from the delete helper hits the structured INTERNAL fallback."""
+    mocker.patch(
+        "another_s3_manager.main.delete_object_for_role",
+        side_effect=RuntimeError("kaboom"),
+    )
+    _, headers = login(app_client)
+    resp = app_client.delete("/api/buckets/any/files?path=x.bin&role=Default", headers=headers)
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == {"code": "INTERNAL", "message": "Delete failed — see server logs"}
+
+
 def test_get_user_for_download_does_not_swallow_db_errors(monkeypatch):
     """A non-JWT exception (e.g. SQLite OperationalError) during user lookup
     must NOT be silently swallowed and turned into 401 — it should propagate."""
