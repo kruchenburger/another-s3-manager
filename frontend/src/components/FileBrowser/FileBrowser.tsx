@@ -15,6 +15,7 @@ import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
 import { UploadProgress, type UploadProgressItem } from "@/components/Upload/UploadProgress";
+import { type FileWithRelativePath } from "@/utils/folderUpload";
 import { FileBrowserHeader } from "./FileBrowserHeader";
 import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
@@ -226,8 +227,8 @@ export function FileBrowser() {
   };
 
   const handleUpload = useCallback(
-    async (files: File[]) => {
-      const items: UploadProgressItem[] = files.map((f) => ({ name: f.name, status: "pending" }));
+    async (files: FileWithRelativePath[]) => {
+      const items: UploadProgressItem[] = files.map((f) => ({ name: f.file.name, status: "pending" }));
 
       const notifId = notifications.show({
         message: <UploadProgress items={items} />,
@@ -237,7 +238,7 @@ export function FileBrowser() {
 
       const updated = [...items];
       for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+        const item = files[i];
         updated[i] = { ...updated[i], status: "uploading" };
         notifications.update({
           id: notifId,
@@ -246,12 +247,12 @@ export function FileBrowser() {
           withCloseButton: false,
         });
         try {
-          const key = pathFromUrl ? `${pathFromUrl}/${file.name}` : file.name;
+          const key = pathFromUrl ? `${pathFromUrl}/${item.relativePath}` : item.relativePath;
           await uploadMutation.mutateAsync({
             bucket,
             role: roleId,
             key,
-            file,
+            file: item.file,
             currentPath: pathFromUrl,
           });
           updated[i] = { ...updated[i], status: "done" };
@@ -291,8 +292,16 @@ export function FileBrowser() {
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    if (files.length > 0) handleUpload(files);
+    const fileList = e.target.files;
+    if (fileList && fileList.length > 0) {
+      // Plain-file input has no folder semantics — wrap each File as a
+      // top-level FileWithRelativePath (relativePath = file.name).
+      const items: FileWithRelativePath[] = Array.from(fileList).map((file) => ({
+        file,
+        relativePath: file.name,
+      }));
+      handleUpload(items);
+    }
     e.target.value = "";
   };
 
@@ -366,7 +375,19 @@ export function FileBrowser() {
           />
         )}
       </Stack>
-      <UploadDropZone currentPath={pathFromUrl} onDrop={handleUpload} active />
+      <UploadDropZone
+        currentPath={pathFromUrl}
+        onDrop={(files) => {
+          // Temporary adapter — Task 5 upgrades UploadDropZone to call
+          // expandDirectoryEntries() and emit FileWithRelativePath[] directly.
+          const items: FileWithRelativePath[] = files.map((file) => ({
+            file,
+            relativePath: file.name,
+          }));
+          handleUpload(items);
+        }}
+        active
+      />
       <ConfirmDeleteModal
         opened={confirmOpen}
         onClose={() => setConfirmOpen(false)}
