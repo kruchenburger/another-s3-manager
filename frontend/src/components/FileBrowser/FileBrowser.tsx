@@ -402,19 +402,7 @@ export function FileBrowser() {
           />
         )}
       </Stack>
-      <UploadDropZone
-        currentPath={pathFromUrl}
-        onDrop={(files) => {
-          // Temporary adapter — Task 5 upgrades UploadDropZone to call
-          // expandDirectoryEntries() and emit FileWithRelativePath[] directly.
-          const items: FileWithRelativePath[] = files.map((file) => ({
-            file,
-            relativePath: file.name,
-          }));
-          handleUpload(items);
-        }}
-        active
-      />
+      <UploadDropZone currentPath={pathFromUrl} onDrop={handleUpload} active />
       <ConfirmDeleteModal
         opened={confirmOpen}
         onClose={() => setConfirmOpen(false)}
