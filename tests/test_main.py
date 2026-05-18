@@ -4,7 +4,7 @@ import importlib
 import io
 import os
 import time
-from datetime import UTC, datetime
+from datetime import datetime
 
 os.environ.setdefault("APP_VERSION", "0.1.0")
 
@@ -610,65 +610,82 @@ def test_list_buckets_with_allowed_list(app_client, monkeypatch):
     assert response.json() == ["bucket-a", "bucket-b"]
 
 
-def test_list_buckets_uses_s3(app_client, mocker):
+def test_list_buckets_uses_s3(app_client, moto_s3):
+    """B1: route -> list_buckets_for_role -> boto3 -> moto returns real bucket names."""
     _, headers = login(app_client)
-    s3_mock = mocker.MagicMock()
-    s3_mock.list_buckets.return_value = {"Buckets": [{"Name": "bucket"}]}
+    moto_s3.create_bucket(Bucket="bucket")
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(s3_mock)
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets", headers=headers)
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == ["bucket"]
 
 
-def test_list_files(app_client, mocker):
+def test_list_files(app_client, moto_s3):
+    """B1: route -> list_objects_for_role -> moto. Verifies the delimiter='/'
+    response surfaces top-level files + immediate subdirectories without
+    leaking deeper keys, and that the route wraps the helper's list in the
+    legacy {files, path, total_count} envelope the React frontend expects."""
     _, headers = login(app_client)
-    paginator_mock = mocker.MagicMock()
-    paginator_mock.paginate.return_value = [
-        {
-            "CommonPrefixes": [{"Prefix": "folder/"}],
-            "Contents": [
-                {
-                    "Key": "folder/file.txt",
-                    "Size": 10,
-                    "LastModified": datetime.now(UTC),
-                }
-            ],
-        }
-    ]
-    s3_mock = mocker.MagicMock()
-    s3_mock.get_paginator.return_value = paginator_mock
+    moto_s3.create_bucket(Bucket="files-bucket")
+    moto_s3.put_object(Bucket="files-bucket", Key="root.txt", Body=b"hi")
+    moto_s3.put_object(Bucket="files-bucket", Key="sub/inner.txt", Body=b"deep")
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(s3_mock)
+    response = app_client.get("/api/buckets/files-bucket/files?path=", headers=headers)
 
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
-    response = app_client.get("/api/buckets/test-bucket/files", headers=headers)
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
+    assert data["path"] == ""
     assert data["total_count"] == 2
+    names = {item["name"] for item in data["files"]}
+    assert "root.txt" in names
+    assert "sub" in names
+    # delimiter='/' must scope to depth-1 — nested keys must not leak
+    assert "inner.txt" not in names
+    sub_entry = next(item for item in data["files"] if item["name"] == "sub")
+    assert sub_entry["is_directory"] is True
 
 
-def test_upload_file(app_client, mocker):
+def test_upload_file(app_client, moto_s3):
+    """B1: route -> put_object_for_role -> boto3 -> moto stores the object."""
     _, headers = login(app_client)
-    s3_mock = mocker.MagicMock()
+    moto_s3.create_bucket(Bucket="up-bucket")
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(s3_mock)
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
-    file_content = io.BytesIO(b"content")
     response = app_client.post(
-        "/api/buckets/test-bucket/upload",
-        data={"key": "file.txt"},
-        files={"file": ("file.txt", file_content, "text/plain")},
+        "/api/buckets/up-bucket/upload",
+        data={"key": "hello.txt"},
+        files={"file": ("hello.txt", b"world", "text/plain")},
+        headers=headers,
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    stored = moto_s3.get_object(Bucket="up-bucket", Key="hello.txt")
+    assert stored["Body"].read() == b"world"
+    assert stored["ContentType"] == "text/plain"
+
+
+def test_upload_increments_bytes_metric_once(app_client, moto_s3):
+    """Regression: the route used to manually increment s3_bytes_uploaded_total
+    AFTER calling the helper, which itself increments the metric internally.
+    That double-counted the bytes. After this refactor only the helper bumps
+    the metric — the route's manual increment was removed."""
+    from another_s3_manager.metrics import s3_bytes_uploaded_total
+
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="metric-bucket")
+    labels = {"role": "Default", "bucket": "metric-bucket"}
+    before = s3_bytes_uploaded_total.labels(**labels)._value.get()
+
+    payload = b"a" * 100
+    response = app_client.post(
+        "/api/buckets/metric-bucket/upload",
+        data={"key": "m.bin", "role": "Default"},
+        files={"file": ("m.bin", payload, "application/octet-stream")},
         headers=headers,
     )
     assert response.status_code == status.HTTP_200_OK
-    s3_mock.put_object.assert_called_once()
+
+    after = s3_bytes_uploaded_total.labels(**labels)._value.get()
+    assert after - before == 100, f"metric must increment once, got {after - before}"
 
 
 def test_upload_file_too_large(app_client, mocker):
@@ -687,42 +704,32 @@ def test_upload_file_too_large(app_client, mocker):
     assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
-def test_download_file(app_client, mocker):
+def test_download_file(app_client, moto_s3):
+    """B1: route -> iter_object_for_role -> boto3 -> moto streams the stored body."""
     _, headers = login(app_client)
-    body_mock = mocker.MagicMock()
-    # Make read() return data on first call, then empty bytes to signal end
-    body_mock.read.side_effect = [b"data", b""]
-    s3_mock = mocker.MagicMock()
-    s3_mock.get_object.return_value = {
-        "Body": body_mock,
-        "ContentType": "text/plain",
-    }
+    moto_s3.create_bucket(Bucket="dl-bucket")
+    moto_s3.put_object(Bucket="dl-bucket", Key="file.txt", Body=b"data", ContentType="text/plain")
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(s3_mock)
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
-    response = app_client.get("/api/buckets/test-bucket/download", params={"path": "file.txt"}, headers=headers)
+    response = app_client.get("/api/buckets/dl-bucket/download", params={"path": "file.txt"}, headers=headers)
     assert response.status_code == status.HTTP_200_OK
     assert response.content == b"data"
+    # Streaming must preserve the upstream Content-Type
+    assert response.headers["content-type"].startswith("text/plain")
 
 
-def test_delete_file(app_client, mocker):
+def test_delete_file(app_client, moto_s3):
+    """B1: route -> delete_object_for_role -> boto3 -> moto removes the object."""
     _, headers = login(app_client)
-    paginator_mock = mocker.MagicMock()
-    paginator_mock.paginate.return_value = [
-        {"Contents": [{"Key": "path/file.txt", "Size": 1, "LastModified": datetime.now(UTC)}]}
-    ]
-    s3_mock = mocker.MagicMock()
-    s3_mock.get_paginator.return_value = paginator_mock
+    moto_s3.create_bucket(Bucket="test-bucket")
+    moto_s3.put_object(Bucket="test-bucket", Key="path/file.txt", Body=b"data")
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(s3_mock)
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.delete("/api/buckets/test-bucket/files", params={"path": "path"}, headers=headers)
     assert response.status_code == status.HTTP_200_OK
-    s3_mock.delete_objects.assert_called_once()
+    body = response.json()
+    assert body["count"] == 1
+    # Verify the file is actually gone from the moto-backed bucket
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="test-bucket").get("Contents", [])}
+    assert "path/file.txt" not in remaining
 
 
 def test_login_user_not_found(app_client):
@@ -943,11 +950,10 @@ def test_list_buckets_access_denied_returns_friendly_403(app_client, mocker):
     """When ListBuckets fails with AccessDenied (e.g. R2 bucket-scoped tokens, AWS IAM
     bucket-scoped policies), the API must return 403 with a generic explanation —
     not a raw 500 boto error. The frontend layers role-appropriate CTAs on top."""
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListBuckets")
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch(
+        "another_s3_manager.main.list_buckets_for_role",
+        side_effect=ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListBuckets"),
+    )
     _, headers = login(app_client)
     response = app_client.get("/api/buckets", headers=headers)
     assert response.status_code == status.HTTP_403_FORBIDDEN
@@ -959,34 +965,34 @@ def test_list_buckets_access_denied_returns_friendly_403(app_client, mocker):
 def test_list_buckets_other_client_error_still_returns_500(app_client, mocker):
     """Non-403 boto errors should still surface as 500 — the friendly-error path
     is specifically for 'cannot list buckets' permission failures, not generic ones."""
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        raise ClientError({"Error": {"Code": "InternalError", "Message": "boom"}}, "ListBuckets")
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch(
+        "another_s3_manager.main.list_buckets_for_role",
+        side_effect=ClientError({"Error": {"Code": "InternalError", "Message": "boom"}}, "ListBuckets"),
+    )
     _, headers = login(app_client)
     response = app_client.get("/api/buckets", headers=headers)
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
 def test_list_files_handles_error(app_client, mocker):
+    """B2: helper raises ClientError(NoSuchBucket) -> route maps to 404."""
     _, headers = login(app_client)
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        raise ClientError({"Error": {"Code": "NoSuchBucket", "Message": "Missing"}}, "ListObjectsV2")
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch(
+        "another_s3_manager.main.list_objects_for_role",
+        side_effect=ClientError({"Error": {"Code": "NoSuchBucket", "Message": "Missing"}}, "ListObjectsV2"),
+    )
     response = app_client.get("/api/buckets/test-bucket/files", headers=headers)
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 def test_upload_file_handles_exception(app_client, mocker):
+    """B2: helper raises ValueError (e.g. assume_role failure) -> route returns 400."""
     _, headers = login(app_client)
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        raise ValueError("boom")
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    mocker.patch(
+        "another_s3_manager.main.put_object_for_role",
+        side_effect=ValueError("boom"),
+    )
     response = app_client.post(
         "/api/buckets/test-bucket/upload",
         data={"key": "file.txt"},
@@ -998,25 +1004,21 @@ def test_upload_file_handles_exception(app_client, mocker):
 
 
 def test_download_file_not_found(app_client, mocker):
+    """B2: helper raises FileNotFoundError -> route returns 404."""
     _, headers = login(app_client)
-    client_mock = mocker.MagicMock()
-    client_mock.get_object.side_effect = ClientError(
-        {"Error": {"Code": "404", "Message": "Missing"}},
-        "GetObject",
+    mocker.patch(
+        "another_s3_manager.main.iter_object_for_role",
+        side_effect=FileNotFoundError("Object 'ghost.txt' not found in bucket 'test-bucket'"),
     )
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(client_mock)
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets/test-bucket/download", params={"path": "ghost.txt"}, headers=headers)
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 def test_delete_file_handles_error(app_client, mocker):
+    """B2: helper raises ClientError -> route returns 500."""
     _, headers = login(app_client)
     mocker.patch(
-        "another_s3_manager.s3_client.get_s3_client",
+        "another_s3_manager.main.delete_object_for_role",
         side_effect=ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListObjectsV2"),
     )
     response = app_client.delete("/api/buckets/test-bucket/files", params={"path": "path"}, headers=headers)
@@ -1431,27 +1433,15 @@ def test_startup_runs_migrations_and_json_import(monkeypatch, tmp_path):
     assert get_user_by_username("imported") is not None
 
 
-def test_download_file_with_colon_in_key(app_client, mocker):
+def test_download_file_with_colon_in_key(app_client, moto_s3):
     """REGRESSION: files with `:` in S3 key (e.g. ISO timestamps) must be downloadable.
-    Previously sanitize_path rejected `:` outright, breaking download/delete for these keys."""
+    Previously sanitize_path rejected `:` outright, breaking download/delete for these keys.
+    B1: route -> iter_object_for_role -> moto."""
     key_with_colon = "logs/2026-04-30T15:00:00.log"
     file_content = b"hello from a colon-named file"
 
-    # Build a mock S3 response whose Body.read() supports the chunk_size argument
-    # used by the streaming generator in download_file().
-    body_mock = mocker.MagicMock()
-    # First call returns the full content; second signals EOF.
-    body_mock.read.side_effect = [file_content, b""]
-    s3_mock = mocker.MagicMock()
-    s3_mock.get_object.return_value = {
-        "Body": body_mock,
-        "ContentType": "text/plain",
-    }
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(s3_mock)
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    moto_s3.create_bucket(Bucket="test-bucket")
+    moto_s3.put_object(Bucket="test-bucket", Key=key_with_colon, Body=file_content, ContentType="text/plain")
 
     # Login to obtain session cookie + CSRF token
     _, headers = login(app_client)
@@ -1874,10 +1864,10 @@ def test_list_buckets_typed_access_denied_returns_403_with_dict_detail(app_clien
     returns 403 with detail={'code': 'AccessDenied', 'message': '...'}."""
     from another_s3_manager.errors import S3AccessDeniedError
 
-    def _boom(role_name, operation, callback):
-        raise S3AccessDeniedError("AccessDenied", "scoped token cannot list")
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=_boom)
+    mocker.patch(
+        "another_s3_manager.main.list_buckets_for_role",
+        side_effect=S3AccessDeniedError("AccessDenied", "scoped token cannot list"),
+    )
     _, headers = login(app_client)
     resp = app_client.get("/api/buckets", headers=headers)
     assert resp.status_code == 403
@@ -1890,10 +1880,10 @@ def test_list_files_typed_no_such_bucket_returns_404_with_dict_detail(app_client
     """list_files maps S3NotFoundError to 404 with structured detail."""
     from another_s3_manager.errors import S3NotFoundError
 
-    def _boom(role_name, operation, callback):
-        raise S3NotFoundError("NoSuchBucket", "bucket missing")
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=_boom)
+    mocker.patch(
+        "another_s3_manager.main.list_objects_for_role",
+        side_effect=S3NotFoundError("NoSuchBucket", "bucket missing"),
+    )
     _, headers = login(app_client)
     resp = app_client.get("/api/buckets/missing-bucket/files", headers=headers)
     assert resp.status_code == 404
@@ -1907,10 +1897,10 @@ def test_list_files_generic_exception_logs_and_returns_500(app_client, mocker, c
     AND the server logs include the stack trace (was missing before)."""
     import logging
 
-    def _boom(role_name, operation, callback):
-        raise RuntimeError("totally unexpected")
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=_boom)
+    mocker.patch(
+        "another_s3_manager.main.list_objects_for_role",
+        side_effect=RuntimeError("totally unexpected"),
+    )
     _, headers = login(app_client)
 
     with caplog.at_level(logging.ERROR, logger="another_s3_manager.main"):
@@ -1919,6 +1909,104 @@ def test_list_files_generic_exception_logs_and_returns_500(app_client, mocker, c
     assert resp.status_code == 500
     # Must contain the stack trace (logger.exception writes ERROR level + exc_info).
     assert any("totally unexpected" in record.message or record.exc_info is not None for record in caplog.records)
+
+
+# Regression coverage for the S3OperationError ladder + structured `{"code":"INTERNAL", ...}`
+# fallback on the three remaining routes (upload/download/delete). The Phase 6a-7 refactor
+# moved the raise sites from `execute_with_s3_retry` (which the routes used to mock) into
+# the s3_client._for_role helpers — coverage for these branches re-anchors via the helper
+# mocks here.
+
+
+def test_upload_typed_s3_error_returns_mapped_status_with_dict_detail(app_client, mocker):
+    """put_object_for_role raises S3AccessDeniedError → 403 with structured detail."""
+    from another_s3_manager.errors import S3AccessDeniedError
+
+    mocker.patch(
+        "another_s3_manager.main.put_object_for_role",
+        side_effect=S3AccessDeniedError("AccessDenied", "scoped token rejected"),
+    )
+    _, headers = login(app_client)
+    resp = app_client.post(
+        "/api/buckets/any/upload",
+        data={"key": "x.bin", "role": "Default"},
+        files={"file": ("x.bin", b"abc", "application/octet-stream")},
+        headers=headers,
+    )
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["detail"]["code"] == "AccessDenied"
+
+
+def test_upload_generic_exception_returns_structured_500(app_client, mocker):
+    """A non-typed RuntimeError from the helper hits the structured INTERNAL fallback."""
+    mocker.patch(
+        "another_s3_manager.main.put_object_for_role",
+        side_effect=RuntimeError("kaboom"),
+    )
+    _, headers = login(app_client)
+    resp = app_client.post(
+        "/api/buckets/any/upload",
+        data={"key": "x.bin", "role": "Default"},
+        files={"file": ("x.bin", b"abc", "application/octet-stream")},
+        headers=headers,
+    )
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == {"code": "INTERNAL", "message": "Upload failed — see server logs"}
+
+
+def test_download_typed_s3_error_returns_mapped_status_with_dict_detail(app_client, mocker):
+    """iter_object_for_role raises S3NotFoundError → 404 with structured detail."""
+    from another_s3_manager.errors import S3NotFoundError
+
+    mocker.patch(
+        "another_s3_manager.main.iter_object_for_role",
+        side_effect=S3NotFoundError("NoSuchKey", "missing"),
+    )
+    _, headers = login(app_client)
+    resp = app_client.get("/api/buckets/any/download?path=missing.txt&role=Default", headers=headers)
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["detail"]["code"] == "NoSuchKey"
+
+
+def test_download_generic_exception_returns_structured_500(app_client, mocker):
+    """A non-typed RuntimeError from the streaming helper hits the structured INTERNAL fallback."""
+    mocker.patch(
+        "another_s3_manager.main.iter_object_for_role",
+        side_effect=RuntimeError("kaboom"),
+    )
+    _, headers = login(app_client)
+    resp = app_client.get("/api/buckets/any/download?path=x.bin&role=Default", headers=headers)
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == {"code": "INTERNAL", "message": "Download failed — see server logs"}
+
+
+def test_delete_typed_s3_error_returns_mapped_status_with_dict_detail(app_client, mocker):
+    """delete_object_for_role raises S3AccessDeniedError → 403 with structured detail."""
+    from another_s3_manager.errors import S3AccessDeniedError
+
+    mocker.patch(
+        "another_s3_manager.main.delete_object_for_role",
+        side_effect=S3AccessDeniedError("AccessDenied", "denied"),
+    )
+    _, headers = login(app_client)
+    resp = app_client.delete("/api/buckets/any/files?path=x.bin&role=Default", headers=headers)
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["detail"]["code"] == "AccessDenied"
+
+
+def test_delete_generic_exception_returns_structured_500(app_client, mocker):
+    """A non-typed RuntimeError from the delete helper hits the structured INTERNAL fallback."""
+    mocker.patch(
+        "another_s3_manager.main.delete_object_for_role",
+        side_effect=RuntimeError("kaboom"),
+    )
+    _, headers = login(app_client)
+    resp = app_client.delete("/api/buckets/any/files?path=x.bin&role=Default", headers=headers)
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == {"code": "INTERNAL", "message": "Delete failed — see server logs"}
 
 
 def test_get_user_for_download_does_not_swallow_db_errors(monkeypatch):

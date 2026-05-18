@@ -685,6 +685,47 @@ def test_list_buckets_for_role_permission_denied():
         mod.list_buckets_for_role("RoleX", _make_user(allowed_roles=["RoleA"]))
 
 
+def test_list_buckets_for_role_allowed_buckets_short_circuit(mocker):
+    """When a role has allowed_buckets configured, the helper returns it without
+    hitting S3 — moved from tests/test_main_logic.py::test_list_buckets_allowed_buckets
+    when the route refactor moved this logic into the helper."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={
+            "roles": [
+                {
+                    "name": "RoleA",
+                    "type": "default",
+                    "allowed_buckets": ["bucket-1", "bucket-2"],
+                }
+            ],
+        },
+    )
+    # Fail loudly if anything tries to reach S3 — short-circuit must skip it.
+    mocker.patch.object(mod, "get_s3_client", side_effect=AssertionError("should not call"))
+
+    result = mod.list_buckets_for_role("RoleA", _make_user(allowed_roles=["RoleA"]))
+    assert result == ["bucket-1", "bucket-2"]
+
+
+def test_list_buckets_for_role_invalid_allowed_type_raises_value_error(mocker):
+    """When allowed_buckets is not a list, the helper raises ValueError —
+    moved from tests/test_main_logic.py::test_list_buckets_invalid_allowed_type
+    when the route refactor moved this validation into the helper."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={
+            "roles": [{"name": "RoleA", "type": "default", "allowed_buckets": "not-a-list"}],
+        },
+    )
+    with pytest.raises(ValueError, match="allowed_buckets"):
+        mod.list_buckets_for_role("RoleA", _make_user(allowed_roles=["RoleA"]))
+
+
 # --- list_objects_for_role ---
 
 
@@ -816,6 +857,83 @@ def test_read_object_for_role_permission_denied():
 
     with pytest.raises(PermissionError):
         mod.read_object_for_role("RoleX", "bucket", "f", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- iter_object_for_role ---
+
+
+def test_iter_object_for_role_streams_body(moto_s3):
+    """B1: helper yields the stored body in chunks of at most chunk_size bytes."""
+    moto_s3.create_bucket(Bucket="stream-b")
+    moto_s3.put_object(
+        Bucket="stream-b",
+        Key="x.bin",
+        Body=b"hello world",
+        ContentType="application/octet-stream",
+    )
+
+    from another_s3_manager.s3_client import iter_object_for_role
+
+    metadata, body_iter = iter_object_for_role(
+        None,
+        "stream-b",
+        "x.bin",
+        {"username": "admin", "is_admin": True, "allowed_roles": []},
+        chunk_size=4,
+    )
+
+    assert metadata["content_length"] == 11
+    assert metadata["content_type"] == "application/octet-stream"
+    chunks = list(body_iter)
+    assert b"".join(chunks) == b"hello world"
+    # Verify chunks respect chunk_size
+    assert all(len(c) <= 4 for c in chunks)
+
+
+def test_iter_object_for_role_missing_raises_filenotfound(moto_s3):
+    """B1: missing object surfaces as FileNotFoundError (not a raw ClientError)."""
+    moto_s3.create_bucket(Bucket="missing-b")
+
+    from another_s3_manager.s3_client import iter_object_for_role
+
+    with pytest.raises(FileNotFoundError):
+        iter_object_for_role(
+            None,
+            "missing-b",
+            "absent.txt",
+            {"username": "admin", "is_admin": True, "allowed_roles": []},
+        )
+
+
+def test_iter_object_for_role_increments_metric(moto_s3):
+    """B1: s3_bytes_downloaded_total increments exactly once with ContentLength,
+    BEFORE the body iterator is consumed."""
+    moto_s3.create_bucket(Bucket="metric-b")
+    moto_s3.put_object(Bucket="metric-b", Key="m.bin", Body=b"a" * 50)
+
+    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+    from another_s3_manager.s3_client import iter_object_for_role
+
+    labels = {"role": safe_role_label("unknown"), "bucket": "metric-b"}
+    before = s3_bytes_downloaded_total.labels(**labels)._value.get()
+
+    metadata, body_iter = iter_object_for_role(
+        None,
+        "metric-b",
+        "m.bin",
+        {"username": "admin", "is_admin": True, "allowed_roles": []},
+    )
+
+    # Metric already incremented before iterator consumption
+    mid = s3_bytes_downloaded_total.labels(**labels)._value.get()
+    assert mid - before == 50, "metric must increment at metadata-fetch time"
+
+    # consume iterator to exhaust the stream
+    list(body_iter)
+
+    after = s3_bytes_downloaded_total.labels(**labels)._value.get()
+    assert after - before == 50, "metric must increment exactly once per download"
+    assert metadata["content_length"] == 50
 
 
 # --- read_object_range_for_role ---

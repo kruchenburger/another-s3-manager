@@ -238,3 +238,22 @@ def db_session(monkeypatch, tmp_path):
         yield session
 
     database.reset_engine_for_tests()
+
+
+@pytest.fixture
+def moto_s3():
+    """In-memory S3 backend via moto. Yields a boto3 client bound to the mock backend
+    so tests can pre-create buckets/objects. The mock_aws context manager intercepts
+    boto3.client('s3', ...) calls globally, so s3_client._for_role helpers also hit
+    the mock backend without extra wiring."""
+    import boto3
+    from moto import mock_aws
+
+    # Force test credentials so boto3 doesn't try to read ~/.aws or env profiles
+    os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
+    os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
+    os.environ.setdefault("AWS_SESSION_TOKEN", "testing")
+
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        yield client
