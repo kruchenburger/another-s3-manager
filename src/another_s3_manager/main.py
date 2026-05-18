@@ -75,7 +75,7 @@ from another_s3_manager.metrics import (
 )
 from another_s3_manager.s3_client import (
     clear_s3_clients_cache,
-    execute_with_s3_retry,
+    delete_object_for_role,
     iter_object_for_role,
     list_buckets_for_role,
     list_objects_for_role,
@@ -2106,53 +2106,20 @@ async def delete_file(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        # Validate role access
-        validated_role = validate_role_access(role, current_user)
-        # Normalize path
-        prefix = path
-        if not prefix:
+        if not path:
             raise HTTPException(status_code=400, detail="Cannot delete root path")
 
-        # Check if it's a directory (ends with /) or a file
-        is_directory = prefix.endswith("/")
-        if is_directory:
-            prefix = prefix.rstrip("/")
-
-        def perform_delete(s3_client):
-            deleted_count = 0
-            paginator = s3_client.get_paginator("list_objects_v2")
-            pages = paginator.paginate(Bucket=bucket_name, Prefix=prefix + ("/" if is_directory else ""))
-
-            objects_to_delete = []
-            for page in pages:
-                if "Contents" in page:
-                    for obj in page["Contents"]:
-                        objects_to_delete.append({"Key": obj["Key"]})
-
-            if not is_directory and not objects_to_delete:
-                try:
-                    s3_client.delete_object(Bucket=bucket_name, Key=prefix)
-                    deleted_count = 1
-                except ClientError as e:
-                    error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
-                    if error_code in ("404", "NoSuchKey"):
-                        raise HTTPException(status_code=404, detail=f"File or directory '{path}' not found")
-                    raise
-            else:
-                if objects_to_delete:
-                    for i in range(0, len(objects_to_delete), 1000):
-                        batch = objects_to_delete[i : i + 1000]
-                        s3_client.delete_objects(Bucket=bucket_name, Delete={"Objects": batch, "Quiet": True})
-                        deleted_count += len(batch)
-
-            if deleted_count == 0:
-                raise HTTPException(status_code=404, detail=f"File or directory '{path}' not found")
-
-            return {"message": f"Successfully deleted {deleted_count} object(s)", "count": deleted_count}
-
-        return execute_with_s3_retry(validated_role, "delete", perform_delete)
+        # Delegate to s3_client.delete_object_for_role. The helper does its own
+        # role/bucket access validation, paginates list_objects_v2, falls back
+        # to delete_object for single-file paths, and raises FileNotFoundError
+        # when nothing matches. Returns {"message": ..., "count": N}.
+        return delete_object_for_role(role, bucket_name, path, current_user)
     except HTTPException:
         raise
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
         # Check if it's a configuration error (contains role_arn or assume role related text)

@@ -4,7 +4,7 @@ import importlib
 import io
 import os
 import time
-from datetime import UTC, datetime
+from datetime import datetime
 
 os.environ.setdefault("APP_VERSION", "0.1.0")
 
@@ -717,22 +717,19 @@ def test_download_file(app_client, moto_s3):
     assert response.headers["content-type"].startswith("text/plain")
 
 
-def test_delete_file(app_client, mocker):
+def test_delete_file(app_client, moto_s3):
+    """B1: route -> delete_object_for_role -> boto3 -> moto removes the object."""
     _, headers = login(app_client)
-    paginator_mock = mocker.MagicMock()
-    paginator_mock.paginate.return_value = [
-        {"Contents": [{"Key": "path/file.txt", "Size": 1, "LastModified": datetime.now(UTC)}]}
-    ]
-    s3_mock = mocker.MagicMock()
-    s3_mock.get_paginator.return_value = paginator_mock
+    moto_s3.create_bucket(Bucket="test-bucket")
+    moto_s3.put_object(Bucket="test-bucket", Key="path/file.txt", Body=b"data")
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(s3_mock)
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.delete("/api/buckets/test-bucket/files", params={"path": "path"}, headers=headers)
     assert response.status_code == status.HTTP_200_OK
-    s3_mock.delete_objects.assert_called_once()
+    body = response.json()
+    assert body["count"] == 1
+    # Verify the file is actually gone from the moto-backed bucket
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="test-bucket").get("Contents", [])}
+    assert "path/file.txt" not in remaining
 
 
 def test_login_user_not_found(app_client):
@@ -1018,9 +1015,10 @@ def test_download_file_not_found(app_client, mocker):
 
 
 def test_delete_file_handles_error(app_client, mocker):
+    """B2: helper raises ClientError -> route returns 500."""
     _, headers = login(app_client)
     mocker.patch(
-        "another_s3_manager.s3_client.get_s3_client",
+        "another_s3_manager.main.delete_object_for_role",
         side_effect=ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListObjectsV2"),
     )
     response = app_client.delete("/api/buckets/test-bucket/files", params={"path": "path"}, headers=headers)
