@@ -704,24 +704,17 @@ def test_upload_file_too_large(app_client, mocker):
     assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
-def test_download_file(app_client, mocker):
+def test_download_file(app_client, moto_s3):
+    """B1: route -> iter_object_for_role -> boto3 -> moto streams the stored body."""
     _, headers = login(app_client)
-    body_mock = mocker.MagicMock()
-    # Make read() return data on first call, then empty bytes to signal end
-    body_mock.read.side_effect = [b"data", b""]
-    s3_mock = mocker.MagicMock()
-    s3_mock.get_object.return_value = {
-        "Body": body_mock,
-        "ContentType": "text/plain",
-    }
+    moto_s3.create_bucket(Bucket="dl-bucket")
+    moto_s3.put_object(Bucket="dl-bucket", Key="file.txt", Body=b"data", ContentType="text/plain")
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(s3_mock)
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
-    response = app_client.get("/api/buckets/test-bucket/download", params={"path": "file.txt"}, headers=headers)
+    response = app_client.get("/api/buckets/dl-bucket/download", params={"path": "file.txt"}, headers=headers)
     assert response.status_code == status.HTTP_200_OK
     assert response.content == b"data"
+    # Streaming must preserve the upstream Content-Type
+    assert response.headers["content-type"].startswith("text/plain")
 
 
 def test_delete_file(app_client, mocker):
@@ -1014,17 +1007,12 @@ def test_upload_file_handles_exception(app_client, mocker):
 
 
 def test_download_file_not_found(app_client, mocker):
+    """B2: helper raises FileNotFoundError -> route returns 404."""
     _, headers = login(app_client)
-    client_mock = mocker.MagicMock()
-    client_mock.get_object.side_effect = ClientError(
-        {"Error": {"Code": "404", "Message": "Missing"}},
-        "GetObject",
+    mocker.patch(
+        "another_s3_manager.main.iter_object_for_role",
+        side_effect=FileNotFoundError("Object 'ghost.txt' not found in bucket 'test-bucket'"),
     )
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(client_mock)
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
     response = app_client.get("/api/buckets/test-bucket/download", params={"path": "ghost.txt"}, headers=headers)
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
@@ -1447,27 +1435,15 @@ def test_startup_runs_migrations_and_json_import(monkeypatch, tmp_path):
     assert get_user_by_username("imported") is not None
 
 
-def test_download_file_with_colon_in_key(app_client, mocker):
+def test_download_file_with_colon_in_key(app_client, moto_s3):
     """REGRESSION: files with `:` in S3 key (e.g. ISO timestamps) must be downloadable.
-    Previously sanitize_path rejected `:` outright, breaking download/delete for these keys."""
+    Previously sanitize_path rejected `:` outright, breaking download/delete for these keys.
+    B1: route -> iter_object_for_role -> moto."""
     key_with_colon = "logs/2026-04-30T15:00:00.log"
     file_content = b"hello from a colon-named file"
 
-    # Build a mock S3 response whose Body.read() supports the chunk_size argument
-    # used by the streaming generator in download_file().
-    body_mock = mocker.MagicMock()
-    # First call returns the full content; second signals EOF.
-    body_mock.read.side_effect = [file_content, b""]
-    s3_mock = mocker.MagicMock()
-    s3_mock.get_object.return_value = {
-        "Body": body_mock,
-        "ContentType": "text/plain",
-    }
-
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(s3_mock)
-
-    mocker.patch("another_s3_manager.main.execute_with_s3_retry", side_effect=mock_execute_with_s3_retry)
+    moto_s3.create_bucket(Bucket="test-bucket")
+    moto_s3.put_object(Bucket="test-bucket", Key=key_with_colon, Body=file_content, ContentType="text/plain")
 
     # Login to obtain session cookie + CSRF token
     _, headers = login(app_client)

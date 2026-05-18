@@ -873,22 +873,16 @@ async def test_download_file_invalid_path(monkeypatch, reload_main):
 
 @pytest.mark.asyncio
 async def test_download_file_s3_not_found(monkeypatch, reload_main):
+    """B2: helper raises FileNotFoundError -> route returns 404."""
     main = reload_main
-
-    class FakeClient:
-        def get_object(self, Bucket, Key):
-            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
 
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(FakeClient())
+    def _raise(role, bucket, path, user_dict, chunk_size=8192):
+        raise FileNotFoundError(f"Object '{path}' not found in bucket '{bucket}'")
 
-    import another_s3_manager.main as main
-
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(main, "iter_object_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
         await main.download_file("bucket", path="missing.txt", role=None, current_user={"is_admin": True})
@@ -897,46 +891,37 @@ async def test_download_file_s3_not_found(monkeypatch, reload_main):
 
 @pytest.mark.asyncio
 async def test_download_file_generic_exception(monkeypatch, reload_main):
+    """B2: helper raises a generic non-S3 exception -> route returns 500 with structured detail."""
     main = reload_main
-
-    class FakeClient:
-        def get_object(self, Bucket, Key):
-            raise RuntimeError("boom")
 
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(FakeClient())
+    def _raise(role, bucket, path, user_dict, chunk_size=8192):
+        raise RuntimeError("boom")
 
-    import another_s3_manager.main as main
-
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(main, "iter_object_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
         await main.download_file("bucket", path="file.txt", role=None, current_user={"is_admin": True})
     assert exc.value.status_code == 500
+    # Structured INTERNAL fallback per error-handling rules
+    assert isinstance(exc.value.detail, dict)
+    assert exc.value.detail.get("code") == "INTERNAL"
 
 
 @pytest.mark.asyncio
 async def test_download_file_client_error_other(monkeypatch, reload_main):
+    """B2: helper raises a non-404 ClientError -> route returns 500."""
     main = reload_main
-
-    class FakeClient:
-        def get_object(self, Bucket, Key):
-            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "GetObject")
 
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
-    monkeypatch.setattr(main, "validate_role_access", lambda role, current_user: role)
 
-    def mock_execute_with_s3_retry(role_name, operation, callback):
-        return callback(FakeClient())
+    def _raise(role, bucket, path, user_dict, chunk_size=8192):
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "GetObject")
 
-    import another_s3_manager.main as main
-
-    monkeypatch.setattr(main, "execute_with_s3_retry", mock_execute_with_s3_retry)
+    monkeypatch.setattr(main, "iter_object_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
         await main.download_file("bucket", path="file.txt", role=None, current_user={"is_admin": True})
@@ -945,6 +930,7 @@ async def test_download_file_client_error_other(monkeypatch, reload_main):
 
 @pytest.mark.asyncio
 async def test_download_file_outer_value_error(monkeypatch, reload_main):
+    """Pre-S3 validation: sanitize_bucket_name raising ValueError -> 400."""
     main = reload_main
 
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: (_ for _ in ()).throw(ValueError("bad bucket")))
@@ -956,13 +942,16 @@ async def test_download_file_outer_value_error(monkeypatch, reload_main):
 
 @pytest.mark.asyncio
 async def test_download_file_validate_role_value_error(monkeypatch, reload_main):
+    """B2: helper raises ValueError (role/credentials config issue) -> 400."""
     main = reload_main
 
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda path: path)
-    monkeypatch.setattr(
-        main, "validate_role_access", lambda role, current_user: (_ for _ in ()).throw(ValueError("bad role"))
-    )
+
+    def _raise(role, bucket, path, user_dict, chunk_size=8192):
+        raise ValueError("bad role")
+
+    monkeypatch.setattr(main, "iter_object_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
         await main.download_file("bucket", path="file.txt", role=None, current_user={"is_admin": True})

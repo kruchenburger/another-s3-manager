@@ -76,6 +76,7 @@ from another_s3_manager.metrics import (
 from another_s3_manager.s3_client import (
     clear_s3_clients_cache,
     execute_with_s3_retry,
+    iter_object_for_role,
     list_buckets_for_role,
     list_objects_for_role,
     put_object_for_role,
@@ -1955,7 +1956,7 @@ async def download_file(
     role: Optional[str] = Query(None, description="Role name to use"),
     current_user: Dict[str, Any] = Depends(get_user_for_download),
 ):
-    """Download a file from S3 bucket directly"""
+    """Download a file from S3 - delegates to s3_client.iter_object_for_role for true streaming."""
     try:
         # Validate and sanitize inputs
         try:
@@ -1964,51 +1965,31 @@ async def download_file(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        # Validate role access
-        validated_role = validate_role_access(role, current_user)
+        # Stream the object via the helper. The helper increments the
+        # s3_bytes_downloaded_total metric exactly once at metadata-fetch time
+        # and returns a lazy iterator — MUST NOT be materialized to bytes here
+        # so 100MB downloads don't get buffered in process memory.
+        metadata, body_iter = iter_object_for_role(role, bucket_name, path, current_user)
+        filename = path.split("/")[-1]
 
-        def fetch_object(s3_client):
-            return s3_client.get_object(Bucket=bucket_name, Key=path)
-
-        response = execute_with_s3_retry(validated_role, "get", fetch_object)
-        # Record bytes downloaded; ContentLength is available in get_object metadata
-        content_length = response.get("ContentLength", 0)
-        if content_length:
-            from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
-
-            s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket_name).inc(
-                content_length
-            )
-        content_type = response.get("ContentType", "application/octet-stream")
-        filename = path.split("/")[-1]  # Get filename from path
-
-        # Create generator to stream file directly from S3 without loading into memory
-        # FastAPI StreamingResponse can handle regular generators for streaming
-        def generate():
-            body = response["Body"]
-            chunk_size = 8192  # 8KB chunks
-            try:
-                while True:
-                    chunk = body.read(chunk_size)
-                    if not chunk:
-                        break
-                    yield chunk
-            finally:
-                # Ensure body is closed properly
-                if hasattr(body, "close"):
-                    try:
-                        body.close()
-                    except Exception:
-                        pass
-
-        # Return file as streaming response - stream directly from S3
         from fastapi.responses import StreamingResponse
 
+        headers = {"Content-Disposition": format_content_disposition(filename)}
+        content_length = metadata.get("content_length", 0)
+        if content_length:
+            headers["Content-Length"] = str(content_length)
+
         return StreamingResponse(
-            generate(), media_type=content_type, headers={"Content-Disposition": format_content_disposition(filename)}
+            body_iter,
+            media_type=metadata["content_type"],
+            headers=headers,
         )
     except HTTPException:
         raise
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
         # Check if it's a configuration error (contains role_arn or assume role related text)

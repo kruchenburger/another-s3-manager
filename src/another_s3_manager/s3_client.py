@@ -5,7 +5,7 @@ S3 client management module
 import logging
 import time
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional, TypeVar
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple, TypeVar
 from typing import Any as AnyType
 
 import boto3
@@ -1061,6 +1061,73 @@ def read_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str,
             raise
 
     return execute_with_s3_retry(validated_role, "get", do_get)
+
+
+def iter_object_for_role(
+    role: str,
+    bucket: str,
+    path: str,
+    user_dict: Dict[str, Any],
+    chunk_size: int = 8192,
+) -> Tuple[Dict[str, Any], Iterator[bytes]]:
+    """Stream object body in chunks for ``role``.
+
+    Returns ``(metadata, body_iterator)`` where ``metadata`` is::
+
+        {"content_length": int, "content_type": str}
+
+    and ``body_iterator`` lazily yields ``bytes`` chunks of at most
+    ``chunk_size`` bytes. Increments ``s3_bytes_downloaded_total`` exactly
+    once with the full ``content_length`` BEFORE the body starts flowing,
+    so the metric reflects the requested object size even if the client
+    disconnects mid-stream (mirrors ``read_object_for_role``).
+
+    Raises ``PermissionError`` on role/bucket access violation.
+    Raises ``FileNotFoundError`` if the object does not exist.
+    """
+    from botocore.exceptions import ClientError as _ClientError
+
+    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_fetch(s3_client):
+        try:
+            return s3_client.get_object(Bucket=bucket, Key=path)
+        except _ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+            if error_code in {"404", "NoSuchKey"}:
+                raise FileNotFoundError(f"Object '{path}' not found in bucket '{bucket}'") from e
+            raise
+
+    response = execute_with_s3_retry(validated_role, "get", do_fetch)
+
+    content_length = response.get("ContentLength", 0)
+    content_type = response.get("ContentType", "application/octet-stream")
+
+    if content_length:
+        s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
+            content_length
+        )
+
+    def body_iter() -> Iterator[bytes]:
+        body = response["Body"]
+        try:
+            while True:
+                chunk = body.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if hasattr(body, "close"):
+                try:
+                    body.close()
+                except Exception:
+                    pass
+
+    metadata = {"content_length": content_length, "content_type": content_type}
+    return metadata, body_iter()
 
 
 def read_object_range_for_role(
