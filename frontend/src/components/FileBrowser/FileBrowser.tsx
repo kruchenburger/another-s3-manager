@@ -15,7 +15,7 @@ import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
 import { UploadProgress, type UploadProgressItem } from "@/components/Upload/UploadProgress";
-import { type FileWithRelativePath } from "@/utils/folderUpload";
+import { type FileWithRelativePath, filesFromFolderInput } from "@/utils/folderUpload";
 import { FileBrowserHeader } from "./FileBrowserHeader";
 import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
@@ -41,6 +41,7 @@ export function FileBrowser() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const pendingDelete = useRef<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const filteredFiles = useMemo(() => {
     if (!data?.files) return [];
@@ -291,6 +292,10 @@ export function FileBrowser() {
     fileInputRef.current?.click();
   };
 
+  const handleUploadFolderClick = () => {
+    folderInputRef.current?.click();
+  };
+
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (fileList && fileList.length > 0) {
@@ -301,6 +306,15 @@ export function FileBrowser() {
         relativePath: file.name,
       }));
       handleUpload(items);
+    }
+    e.target.value = "";
+  };
+
+  const handleFolderInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files;
+    if (fileList && fileList.length > 0) {
+      const items = filesFromFolderInput(fileList);
+      if (items.length > 0) handleUpload(items);
     }
     e.target.value = "";
   };
@@ -334,6 +348,7 @@ export function FileBrowser() {
         onBulkDelete={() => requestDelete(Array.from(selected))}
         onBulkCopyUrl={handleBulkCopyUrl}
         onUploadClick={handleUploadClick}
+        onUploadFolderClick={handleUploadFolderClick}
         disableDeletion={disableDeletion}
         objectCount={data?.files?.length ?? 0}
       />
@@ -342,6 +357,18 @@ export function FileBrowser() {
         ref={fileInputRef}
         onChange={handleFileInput}
         multiple
+        style={{ display: "none" }}
+      />
+      <input
+        type="file"
+        ref={folderInputRef}
+        onChange={handleFolderInput}
+        multiple
+        // `webkitdirectory` is a non-standard attribute that React doesn't type;
+        // pass it via spread to bypass the type check. All major browsers honor it
+        // (Chrome, Firefox, Safari, Edge); the fallback is the drag-drop path which
+        // works on browsers that don't support webkitdirectory inputs.
+        {...({ webkitdirectory: "" } as Record<string, string>)}
         style={{ display: "none" }}
       />
       <Stack gap="md">

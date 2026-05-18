@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 import { FileBrowserHeader } from "@/components/FileBrowser/FileBrowserHeader";
@@ -22,6 +23,7 @@ function renderHeader(
           onBulkDelete={vi.fn()}
           onBulkCopyUrl={vi.fn()}
           onUploadClick={vi.fn()}
+          onUploadFolderClick={vi.fn()}
           {...overrides}
         />
       </MemoryRouter>
@@ -54,5 +56,16 @@ describe("FileBrowserHeader object count", () => {
     const { container } = renderHeader();
     // Mantine's SegmentedControl exposes role="radiogroup".
     expect(container.querySelector('[role="radiogroup"]')).not.toBeNull();
+  });
+});
+
+describe("FileBrowserHeader — Upload folder button", () => {
+  it("renders the 'Upload folder' button and calls onUploadFolderClick when clicked", async () => {
+    const onUploadFolderClick = vi.fn();
+    renderHeader({ onUploadFolderClick });
+    const button = screen.getByRole("button", { name: /upload folder/i });
+    expect(button).toBeInTheDocument();
+    await userEvent.click(button);
+    expect(onUploadFolderClick).toHaveBeenCalledTimes(1);
   });
 });
