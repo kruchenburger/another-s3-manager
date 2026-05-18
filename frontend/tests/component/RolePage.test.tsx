@@ -70,7 +70,9 @@ describe("RolePage auto-open single bucket", () => {
     useBucketsMock.mockReturnValue({
       data: undefined,
       isLoading: false,
-      error: new ApiError(403, "forbidden"),
+      error: new ApiError(403, "forbidden", {
+        detail: "Your credentials don't have permission to list all buckets. This is normal for scoped tokens.",
+      }),
     });
     renderPage();
     expect(navigateMock).not.toHaveBeenCalled();
@@ -104,7 +106,9 @@ describe("RolePage auto-open single bucket", () => {
     useBucketsMock.mockReturnValue({
       data: ["stale-bucket"],
       isLoading: false,
-      error: new ApiError(403, "forbidden"),
+      error: new ApiError(403, "forbidden", {
+        detail: "Your credentials don't have permission to list all buckets.",
+      }),
     });
     renderPage();
     expect(navigateMock).not.toHaveBeenCalled();
@@ -113,6 +117,54 @@ describe("RolePage auto-open single bucket", () => {
     expect(
       screen.getByText(/cannot list buckets for this role/i),
     ).toBeInTheDocument();
+  });
+});
+
+describe("RolePage 403 message disambiguation", () => {
+  // The previous version rendered the same "configure Allowed Buckets" copy for
+  // BOTH a role-level deny (user simply doesn't have the role) AND an
+  // S3-credentials-level deny (role has the wrong credentials). The role-level
+  // case had nothing to do with allowed_buckets, so the hint was misleading.
+  // These tests pin the two backend messages to two distinct UI branches.
+
+  beforeEach(() => {
+    navigateMock.mockReset();
+    useBucketsMock.mockReset();
+  });
+
+  it("shows 'Role not available' copy when backend says user can't use the role", () => {
+    useBucketsMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new ApiError(403, "forbidden", {
+        detail: "Access denied: You don't have permission to use role 'MinIO-e2e'",
+      }),
+    });
+    renderPage();
+
+    expect(screen.getByText(/role not available/i)).toBeInTheDocument();
+    expect(screen.getByText(/grant you access to this role/i)).toBeInTheDocument();
+    // The misleading "Allowed Buckets" hint must NOT appear for this case.
+    expect(screen.queryByText(/allowed buckets/i)).not.toBeInTheDocument();
+    // The role-level message must be surfaced verbatim.
+    expect(screen.getByText(/Access denied: You don't have permission/i)).toBeInTheDocument();
+  });
+
+  it("shows 'Cannot list buckets' copy when backend says credentials lack ListAllMyBuckets", () => {
+    useBucketsMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new ApiError(403, "forbidden", {
+        detail:
+          "Your credentials don't have permission to list all buckets. This is normal for scoped tokens (R2, MinIO, AWS IAM with bucket-scoped policies).",
+      }),
+    });
+    renderPage();
+
+    expect(screen.getByText(/cannot list buckets for this role/i)).toBeInTheDocument();
+    expect(screen.getByText(/allowed buckets/i)).toBeInTheDocument();
+    // The role-level title must NOT appear for this case.
+    expect(screen.queryByText(/role not available/i)).not.toBeInTheDocument();
   });
 });
 
