@@ -1,9 +1,14 @@
 import { useState } from "react";
 import { Anchor, List, Stack, Text } from "@mantine/core";
+import { AutoCloseProgress } from "./AutoCloseProgress";
 import type { UploadProgressItem } from "./UploadProgress";
 
 interface UploadSummaryProps {
   items: UploadProgressItem[];
+  /** When the parent toast has an autoClose timer, pass the duration here so
+   *  the summary can render a thin animated bar that empties at the same rate
+   *  the toast will dismiss. Omit (or set to 0) to hide the indicator. */
+  autoCloseMs?: number;
 }
 
 /**
@@ -25,7 +30,7 @@ interface UploadSummaryProps {
  * Spoiler — Spoiler measures real DOM heights via ResizeObserver, which
  * doesn't work in jsdom, breaking the component tests.
  */
-export function UploadSummary({ items }: UploadSummaryProps) {
+export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
   const total = items.length;
   const done = items.filter((i) => i.status === "done").length;
   const failed = items.filter((i) => i.status === "error");
@@ -34,19 +39,29 @@ export function UploadSummary({ items }: UploadSummaryProps) {
   // become a wall of text on a large batch with many failures).
   const [expanded, setExpanded] = useState(failed.length <= 3);
 
+  // Reusable trailing indicator. Rendered after the body of every branch so
+  // the user gets a consistent "this toast will dismiss" hint.
+  const timer = autoCloseMs && autoCloseMs > 0 ? <AutoCloseProgress durationMs={autoCloseMs} /> : null;
+
   if (failed.length === 0 && cancelled === 0) {
     return (
-      <Text size="sm" fw={500}>
-        Uploaded {total} {total === 1 ? "file" : "files"}
-      </Text>
+      <Stack gap={0}>
+        <Text size="sm" fw={500}>
+          Uploaded {total} {total === 1 ? "file" : "files"}
+        </Text>
+        {timer}
+      </Stack>
     );
   }
 
   if (failed.length === 0 && cancelled > 0) {
     return (
-      <Text size="sm" fw={500}>
-        Upload cancelled — {done} of {total} files uploaded
-      </Text>
+      <Stack gap={0}>
+        <Text size="sm" fw={500}>
+          Upload cancelled — {done} of {total} files uploaded
+        </Text>
+        {timer}
+      </Stack>
     );
   }
 
@@ -99,6 +114,7 @@ export function UploadSummary({ items }: UploadSummaryProps) {
           )}
         </>
       )}
+      {timer}
     </Stack>
   );
 }

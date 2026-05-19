@@ -17,6 +17,10 @@ import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
 import { UploadProgress, type UploadProgressItem } from "@/components/Upload/UploadProgress";
 import { UploadSummary } from "@/components/Upload/UploadSummary";
+import {
+  FolderUploadHintModal,
+  hasDismissedFolderUploadHint,
+} from "@/components/Upload/FolderUploadHintModal";
 import { type FileWithRelativePath, filesFromFolderInput } from "@/utils/folderUpload";
 import { FileBrowserHeader } from "./FileBrowserHeader";
 import { FileTable } from "./FileTable";
@@ -41,6 +45,7 @@ export function FileBrowser() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [folderHintOpen, setFolderHintOpen] = useState(false);
   const pendingDelete = useRef<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -344,11 +349,12 @@ export function FileBrowser() {
       const allDone = updated.every((u) => u.status === "done");
       const hasErrors = updated.some((u) => u.status === "error");
       const wasCancelled = updated.some((u) => u.status === "cancelled");
+      const autoCloseMs = 10_000;
       notifications.update({
         id: notifId,
-        message: <UploadSummary items={updated} />,
+        message: <UploadSummary items={updated} autoCloseMs={autoCloseMs} />,
         color: allDone ? "green" : wasCancelled && !hasErrors ? "gray" : "yellow",
-        autoClose: 10_000,
+        autoClose: autoCloseMs,
         withCloseButton: true,
       });
     },
@@ -360,7 +366,25 @@ export function FileBrowser() {
   };
 
   const handleUploadFolderClick = () => {
-    folderInputRef.current?.click();
+    // First-time users (or anyone who hasn't checked "Don't show again") get
+    // the hint modal explaining drag-and-drop as the better path. The modal's
+    // "Open folder picker" CTA then triggers the actual input click. Returning
+    // users with the localStorage flag set bypass the modal and go straight
+    // to the picker, matching the React behavior before this change.
+    if (hasDismissedFolderUploadHint()) {
+      folderInputRef.current?.click();
+    } else {
+      setFolderHintOpen(true);
+    }
+  };
+
+  const handleFolderHintProceed = () => {
+    setFolderHintOpen(false);
+    // Wait a tick before opening the native picker so the modal's close
+    // animation isn't competing with the file dialog for focus. setTimeout(0)
+    // is enough — the Modal exit animation continues in parallel but the
+    // picker now has the user gesture context it needs to open.
+    setTimeout(() => folderInputRef.current?.click(), 0);
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -470,6 +494,11 @@ export function FileBrowser() {
         )}
       </Stack>
       <UploadDropZone currentPath={pathFromUrl} onDrop={handleUpload} active />
+      <FolderUploadHintModal
+        opened={folderHintOpen}
+        onClose={() => setFolderHintOpen(false)}
+        onProceed={handleFolderHintProceed}
+      />
       <ConfirmDeleteModal
         opened={confirmOpen}
         onClose={() => setConfirmOpen(false)}
