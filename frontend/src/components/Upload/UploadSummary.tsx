@@ -53,19 +53,10 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
   // Override to `visible` here so the entire message area (headline + scroll
   // window + timer bar) renders without Mantine truncation. `position: relative`
   // anchors the absolutely-positioned timer bar to this Stack.
-  // When the failed list is shown expanded, the toast holds a lot more
-  // content than a one-liner success, and Mantine's default 440px notification
-  // width leaves a visually distracting empty column to the right of the
-  // scrolling list. Widen the message body in that case so the file rows
-  // fill the space (Mantine notification root flexes to match its widest
-  // child). Single-line states (success / pure cancel / collapsed) stay at
-  // the default width so they don't visually shout.
-  const widen = expanded && failed.length > 0;
   const wrapperStyle: CSSProperties = {
     position: "relative",
     overflow: "visible",
     textOverflow: "clip",
-    ...(widen ? { width: 540 } : {}),
     ...(timer ? { paddingBottom: 6 } : {}),
   };
 
