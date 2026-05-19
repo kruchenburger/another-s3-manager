@@ -40,12 +40,17 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
   const [expanded, setExpanded] = useState(failed.length <= 3);
 
   // Reusable trailing indicator. Rendered after the body of every branch so
-  // the user gets a consistent "this toast will dismiss" hint.
+  // the user gets a consistent "this toast will dismiss" hint. AutoCloseProgress
+  // is absolutely positioned along the bottom edge — the wrapping Stack
+  // therefore needs `position: relative` so the indicator stays inside its
+  // containing block instead of bubbling up to the nearest positioned ancestor
+  // (Mantine's notification root, which would visually look fine but is brittle).
   const timer = autoCloseMs && autoCloseMs > 0 ? <AutoCloseProgress durationMs={autoCloseMs} /> : null;
+  const wrapperStyle = timer ? { position: "relative" as const, paddingBottom: 6 } : undefined;
 
   if (failed.length === 0 && cancelled === 0) {
     return (
-      <Stack gap={0}>
+      <Stack gap={0} style={wrapperStyle}>
         <Text size="sm" fw={500}>
           Uploaded {total} {total === 1 ? "file" : "files"}
         </Text>
@@ -56,7 +61,7 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
 
   if (failed.length === 0 && cancelled > 0) {
     return (
-      <Stack gap={0}>
+      <Stack gap={0} style={wrapperStyle}>
         <Text size="sm" fw={500}>
           Upload cancelled — {done} of {total} files uploaded
         </Text>
@@ -71,7 +76,7 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
       : `${done}/${total} files uploaded — ${failed.length} failed`;
 
   return (
-    <Stack gap={6}>
+    <Stack gap={6} style={wrapperStyle}>
       <Text size="sm" fw={500}>
         {headline}
       </Text>

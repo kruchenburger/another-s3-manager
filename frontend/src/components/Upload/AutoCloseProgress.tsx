@@ -1,59 +1,53 @@
-import { useEffect, useState } from "react";
-import { Progress } from "@mantine/core";
+import "./AutoCloseProgress.css";
 
 interface AutoCloseProgressProps {
-  /** Duration of the bar's fill animation in milliseconds. Should match the
-   *  `autoClose` value on the parent Mantine notification so the bar empties
-   *  exactly when the toast disappears. */
+  /** Duration of the bar's shrink in milliseconds. Should match the parent
+   *  notification's autoClose so the bar empties when the toast dismisses. */
   durationMs: number;
 }
 
 /**
- * A thin bar that animates from 100% to 0% over `durationMs`, sitting at the
- * bottom of a notification's message body to indicate when the toast will
- * auto-dismiss.
+ * A 2px bar along the bottom edge of the toast that shrinks from full width
+ * to zero over `durationMs` purely via CSS keyframe animation — no React
+ * state, no useEffect, no re-renders.
  *
- * Implementation: a Mantine `<Progress>` whose `value` snaps from 100 to 0
- * inside a `useEffect`. Mantine applies its own CSS transition on the inner
- * bar (`width` transition with a curve), and we override `transitionDuration`
- * via inline style so it stretches over the full `durationMs`. The single
- * value snap (not a per-tick `setInterval`) means zero re-renders during the
- * animation — the browser handles it on the compositor.
+ * Earlier attempts used `useState` + double-rAF to transition from
+ * scaleX(1) to scaleX(0). That subtly broke Mantine's autoClose timing
+ * because the internal `setState` inside the message body caused
+ * notification stack re-renders at unexpected moments, and the
+ * Mantine NotificationContainer's `useEffect([autoCloseDuration])` cleanup
+ * fired earlier than the configured 10s. Going back to a pure CSS
+ * keyframes animation isolates this component from React's render cycle
+ * entirely — the bar shrinks in the browser compositor and the React tree
+ * stays stable.
  *
- * Why this shape instead of a hand-rolled CSS keyframes animation: keyframes
- * + CSS modules scoping was fragile in production (bar invisible despite the
- * keyframe being emitted into the bundle). Mantine's Progress with a CSS
- * transition has consistent rendering across all our supported browsers.
- *
- * Mantine notifications don't expose a built-in timer indicator — `autoClose`
- * is a plain setTimeout. Hovering a toast pauses Mantine's timer but this
- * bar keeps shrinking; the two may briefly desync on hover. Accepted —
- * the visual hint that "this toast is on a timer" is worth more than
- * millisecond accuracy.
+ * Sync caveat: the animation start is the AutoCloseProgress mount time,
+ * while Mantine's autoClose timer starts on its own useEffect dep change.
+ * They are NOT mechanically linked. Across stacked toasts the bars may
+ * visually desync from their toast's actual dismissal time. Hovering a
+ * toast pauses Mantine's setTimeout but the bar keeps shrinking. Accepted —
+ * the bar is a decorative hint, not authoritative; the X button is the
+ * source of truth for "I want this gone now".
  */
 export function AutoCloseProgress({ durationMs }: AutoCloseProgressProps) {
-  // Start at 100% on mount, snap to 0% on the next paint so the transition
-  // takes full `durationMs`. The double rAF guarantees the initial 100% is
-  // painted before we change the value — without it, React batches the
-  // initial render and the setState, and the transition starts from 0%.
-  const [value, setValue] = useState(100);
-
-  useEffect(() => {
-    const id = requestAnimationFrame(() => {
-      requestAnimationFrame(() => setValue(0));
-    });
-    return () => cancelAnimationFrame(id);
-  }, [durationMs]);
-
   return (
-    <Progress
-      value={value}
-      size="xs"
-      color="gray"
-      radius="xs"
-      transitionDuration={durationMs}
-      mt="xs"
-      role="presentation"
+    <div
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        height: 2,
+        backgroundColor: "currentColor",
+        opacity: 0.35,
+        transformOrigin: "left center",
+        // Animation handles the shrink entirely on the compositor — no
+        // setState here means no React re-renders inside the toast body
+        // while the bar shrinks.
+        animation: `autocloseProgressShrink ${durationMs}ms linear forwards`,
+        pointerEvents: "none",
+      }}
     />
   );
 }
