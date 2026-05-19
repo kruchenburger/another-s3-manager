@@ -46,7 +46,10 @@ export function FileBrowser() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [folderHintOpen, setFolderHintOpen] = useState(false);
+  const [uploadHint, setUploadHint] = useState<{ open: boolean; mode: "files" | "folder" }>({
+    open: false,
+    mode: "files",
+  });
   const pendingDelete = useRef<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -378,30 +381,41 @@ export function FileBrowser() {
     [bucket, roleId, pathFromUrl, uploadMutation, me.data?.max_file_size],
   );
 
+  // Both upload buttons gate on the same dismissed-hint flag:
+  //   - First click (any button): open the hint modal that teaches drag-drop.
+  //     The folder mode keeps the dismiss checkbox unchecked (deliberate
+  //     confirmation step, matches vanilla); the files mode pre-checks it
+  //     (high-frequency action, single dismiss is enough).
+  //   - Subsequent clicks (flag set): skip the modal, open the picker.
+  // Drag-drop bypasses the modal entirely — the user already knows about
+  // drag-drop if they're using it.
   const handleUploadClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleUploadFolderClick = () => {
-    // First-time users (or anyone who hasn't checked "Don't show again") get
-    // the hint modal explaining drag-and-drop as the better path. The modal's
-    // "Open folder picker" CTA then triggers the actual input click. Returning
-    // users with the localStorage flag set bypass the modal and go straight
-    // to the picker, matching the React behavior before this change.
     if (hasDismissedFolderUploadHint()) {
-      folderInputRef.current?.click();
+      fileInputRef.current?.click();
     } else {
-      setFolderHintOpen(true);
+      setUploadHint({ open: true, mode: "files" });
     }
   };
 
-  const handleFolderHintProceed = () => {
-    setFolderHintOpen(false);
+  const handleUploadFolderClick = () => {
+    if (hasDismissedFolderUploadHint()) {
+      folderInputRef.current?.click();
+    } else {
+      setUploadHint({ open: true, mode: "folder" });
+    }
+  };
+
+  const handleHintProceed = () => {
+    const mode = uploadHint.mode;
+    setUploadHint({ open: false, mode });
     // Wait a tick before opening the native picker so the modal's close
     // animation isn't competing with the file dialog for focus. setTimeout(0)
     // is enough — the Modal exit animation continues in parallel but the
-    // picker now has the user gesture context it needs to open.
-    setTimeout(() => folderInputRef.current?.click(), 0);
+    // picker has the user gesture context it needs to open.
+    setTimeout(() => {
+      if (mode === "folder") folderInputRef.current?.click();
+      else fileInputRef.current?.click();
+    }, 0);
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -512,9 +526,10 @@ export function FileBrowser() {
       </Stack>
       <UploadDropZone currentPath={pathFromUrl} onDrop={handleUpload} active />
       <FolderUploadHintModal
-        opened={folderHintOpen}
-        onClose={() => setFolderHintOpen(false)}
-        onProceed={handleFolderHintProceed}
+        opened={uploadHint.open}
+        mode={uploadHint.mode}
+        onClose={() => setUploadHint((prev) => ({ ...prev, open: false }))}
+        onProceed={handleHintProceed}
       />
       <ConfirmDeleteModal
         opened={confirmOpen}

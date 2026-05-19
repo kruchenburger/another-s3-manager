@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button, Checkbox, Modal, Stack, Text, ThemeIcon } from "@mantine/core";
 import { MousePointerClick, Sparkles } from "lucide-react";
 
-const STORAGE_KEY = "upload:folderHintDismissed";
+const STORAGE_KEY = "upload:hintDismissed";
 
 /** Returns true when the user previously checked "don't show again". Reading is
  *  defensive — localStorage can be disabled (private mode, embedded WebViews),
@@ -27,31 +27,43 @@ function setDismissed() {
   }
 }
 
+type UploadMode = "files" | "folder";
+
 interface FolderUploadHintModalProps {
   /** Controlled open state. Parent owns the open/close transitions. */
   opened: boolean;
+  /** Which entry point the user invoked. Controls the modal title and the
+   *  primary CTA label, plus whether the "Don't show again" checkbox is
+   *  pre-checked (folder picker is the more deliberate action — keep nagging;
+   *  the plain upload button is high-frequency — pre-check the dismiss). */
+  mode: UploadMode;
   /** Close the modal without proceeding (X button, click outside, Escape). */
   onClose: () => void;
-  /** User chose "Open folder picker" — proceed with the browser dialog. */
+  /** User chose the primary CTA — proceed with the picker matching `mode`. */
   onProceed: () => void;
 }
 
 /**
- * One-time onboarding modal explaining the two ways to upload a folder.
+ * One-time onboarding modal that teaches drag-and-drop as the recommended
+ * upload path. Shown the first time a user clicks "Upload" or "Upload folder";
+ * a localStorage flag (`upload:hintDismissed=1`) suppresses it afterward.
  *
- * Vanilla UI showed a similar modal before triggering the browser's folder
- * picker. The React port skipped this step, which surprised users who knew
- * the vanilla behavior — and missed a chance to teach new users that
- * drag-and-drop preserves folder structure (it's the better path: no native
- * picker dialog, works with multiple folders at once, immediate feedback).
+ * Why on plain Upload too: the React UI lost the vanilla's dedicated drop
+ * zone visual, making drag-and-drop discoverable only by accident. Surfacing
+ * the hint on first Upload click gives every new user a chance to learn the
+ * better path, while the pre-checked "Don't show again" keeps the friction
+ * to a single dismiss.
  *
- * A "Don't show again" checkbox stores a localStorage flag so power users
- * aren't nagged on every upload. The flag is per-browser (intentional —
- * if a user clears storage or moves to a new device, the hint comes back
- * as a refresher, not as a permanent annoyance).
+ * The folder-mode call site keeps the modal as a deliberate "do you really
+ * want the picker" step (matches the vanilla UI), so for that mode the
+ * dismiss checkbox starts unchecked.
  */
-export function FolderUploadHintModal({ opened, onClose, onProceed }: FolderUploadHintModalProps) {
-  const [dontShowAgain, setDontShowAgain] = useState(false);
+export function FolderUploadHintModal({ opened, mode, onClose, onProceed }: FolderUploadHintModalProps) {
+  // Pre-check the dismiss for plain-files mode (high-frequency action; we
+  // don't want to nag); start unchecked for folder mode where the modal
+  // doubles as the picker confirmation step.
+  const initialDismiss = mode === "files";
+  const [dontShowAgain, setDontShowAgain] = useState(initialDismiss);
 
   const handleProceed = () => {
     if (dontShowAgain) setDismissed();
@@ -63,18 +75,25 @@ export function FolderUploadHintModal({ opened, onClose, onProceed }: FolderUplo
     onClose();
   };
 
+  const title = mode === "folder" ? "Upload a folder" : "Upload files";
+  const proceedLabel = mode === "folder" ? "Open folder picker" : "Choose files";
+  const subtitle =
+    mode === "folder"
+      ? "Two ways to upload a folder, both preserve its structure:"
+      : "You can also drag and drop — often faster:";
+
   return (
     <Modal
       opened={opened}
       onClose={handleClose}
-      title="Upload a folder"
+      title={title}
       centered
       size="md"
       radius="lg"
     >
       <Stack gap="md">
         <Text size="sm" c="dimmed">
-          Two ways to upload a folder, both preserve its structure:
+          {subtitle}
         </Text>
 
         <Stack gap="sm">
@@ -86,8 +105,9 @@ export function FolderUploadHintModal({ opened, onClose, onProceed }: FolderUplo
               <Text fw={600}>Drag and drop (recommended)</Text>
             </Stack>
             <Text size="sm" c="dimmed" ml={44}>
-              Drag a folder from your file manager onto this page. Works with
-              multiple folders at once and skips the native picker dialog.
+              {mode === "folder"
+                ? "Drag a folder from your file manager onto this page. Works with multiple folders at once and skips the native picker dialog."
+                : "Drag files from your file manager onto this page. Works with multiple files or whole folders at once."}
             </Text>
           </Stack>
 
@@ -96,10 +116,14 @@ export function FolderUploadHintModal({ opened, onClose, onProceed }: FolderUplo
               <ThemeIcon variant="light" color="gray" size="md" radius="md">
                 <MousePointerClick size={16} />
               </ThemeIcon>
-              <Text fw={600}>Browser folder picker</Text>
+              <Text fw={600}>
+                {mode === "folder" ? "Browser folder picker" : "Browser file picker"}
+              </Text>
             </Stack>
             <Text size="sm" c="dimmed" ml={44}>
-              Click below to open your browser's folder selection dialog.
+              {mode === "folder"
+                ? "Click below to open your browser's folder selection dialog."
+                : "Click below to open your browser's file selection dialog."}
             </Text>
           </Stack>
         </Stack>
@@ -115,7 +139,7 @@ export function FolderUploadHintModal({ opened, onClose, onProceed }: FolderUplo
           <Button variant="default" onClick={handleClose}>
             Cancel
           </Button>
-          <Button onClick={handleProceed}>Open folder picker</Button>
+          <Button onClick={handleProceed}>{proceedLabel}</Button>
         </Stack>
       </Stack>
     </Modal>

@@ -8,36 +8,12 @@
   overflow-y: auto;
 
   /* Breathing room below the last row. Without this, the last visible row
-     can look clipped because there's no margin between the text baseline
-     and the scroll-area's bottom edge. */
-  padding-bottom: 8px;
+     sits flush against the scroll-area's bottom edge and looks clipped. */
+  padding-bottom: 12px;
 
   /* Firefox */
   scrollbar-width: thin;
   scrollbar-color: var(--mantine-color-dimmed) transparent;
-}
-
-/* "More below" fade: pseudo-element layered over the bottom of the scroll
-   panel, hinting that content continues past the visible window. Sits on
-   the toast (not on the scroll-area itself) so the scrollbar stays fully
-   visible — masking the scroll-area would also hide the scrollbar thumb. */
-.scrollWrapper {
-  position: relative;
-}
-
-.scrollWrapper::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 8px; /* leave room for the slim scrollbar */
-  bottom: 0;
-  height: 16px;
-  pointer-events: none;
-  background: linear-gradient(
-    to bottom,
-    transparent,
-    light-dark(var(--mantine-color-white), var(--mantine-color-dark-6))
-  );
 }
 
 /* WebKit (Chrome, Edge, Safari) — the only way to thin the scrollbar
