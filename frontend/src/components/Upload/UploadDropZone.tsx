@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react";
 import { Center, Stack, Text } from "@mantine/core";
 import { Upload } from "lucide-react";
+import {
+  type FileWithRelativePath,
+  expandDirectoryEntries,
+} from "@/utils/folderUpload";
+import { showToast } from "@/utils/toast";
+import { getErrorMessage } from "@/utils/apiError";
 
 interface UploadDropZoneProps {
   currentPath: string;
-  onDrop: (files: File[]) => void;
+  onDrop: (files: FileWithRelativePath[]) => void;
   /** Whether to actually attach window listeners. False during drawer/modal mode. */
   active?: boolean;
 }
@@ -52,8 +58,47 @@ export function UploadDropZone({ currentPath, onDrop, active = true }: UploadDro
       e.preventDefault();
       setIsDragging(false);
       setCounter(0);
-      const files = Array.from(e.dataTransfer?.files ?? []);
-      if (files.length > 0) onDrop(files);
+      if (!e.dataTransfer) return;
+
+      // Prefer `items + webkitGetAsEntry` so dropped folders are walked
+      // recursively. Fall back to `files` for browsers/contexts where
+      // webkitGetAsEntry is missing — they can't drop folders anyway.
+      const items = Array.from(e.dataTransfer.items);
+      const hasEntryApi = items.some(
+        (item) => typeof item.webkitGetAsEntry === "function",
+      );
+
+      if (hasEntryApi) {
+        // Asynchronous walker — fire-and-forget the promise; the onDrop callback
+        // is invoked once the walk completes. We deliberately do NOT await here
+        // because the handler is a DOM event listener; instead the consumer
+        // receives the resolved file list when ready. A `.catch` is mandatory:
+        // `readEntries` can reject mid-walk (e.g. user revokes filesystem
+        // permission during the traversal) and without it the drop silently
+        // vanishes with zero user feedback.
+        expandDirectoryEntries(items)
+          .then((files) => {
+            if (files.length > 0) onDrop(files);
+          })
+          .catch((err: unknown) => {
+            showToast({
+              color: "red",
+              title: "Could not read dropped folder",
+              message: getErrorMessage(err),
+              autoClose: 10000,
+            });
+          });
+        return;
+      }
+
+      // Legacy fallback: flat FileList only. Wrap each File so the consumer's
+      // signature stays uniform (relativePath === file.name for loose files).
+      const flat = Array.from(e.dataTransfer.files);
+      if (flat.length > 0) {
+        onDrop(
+          flat.map((file) => ({ file, relativePath: file.name })),
+        );
+      }
     };
 
     window.addEventListener("dragenter", handleDragEnter);

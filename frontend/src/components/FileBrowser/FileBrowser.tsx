@@ -10,11 +10,19 @@ import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { joinPath, decodePath } from "@/utils/pathUtils";
 import { ApiError, getErrorMessage } from "@/utils/apiError";
+import { formatBytes } from "@/utils/formatBytes";
 import { formatTimeOfDay } from "@/utils/formatDate";
+import { showToast, TOAST_DURATIONS } from "@/utils/toast";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
 import { UploadProgress, type UploadProgressItem } from "@/components/Upload/UploadProgress";
+import { UploadSummary } from "@/components/Upload/UploadSummary";
+import {
+  FolderUploadHintModal,
+  hasDismissedFolderUploadHint,
+} from "@/components/Upload/FolderUploadHintModal";
+import { type FileWithRelativePath, filesFromFolderInput } from "@/utils/folderUpload";
 import { FileBrowserHeader } from "./FileBrowserHeader";
 import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
@@ -38,8 +46,13 @@ export function FileBrowser() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [uploadHint, setUploadHint] = useState<{ open: boolean; mode: "files" | "folder" }>({
+    open: false,
+    mode: "files",
+  });
   const pendingDelete = useRef<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const filteredFiles = useMemo(() => {
     if (!data?.files) return [];
@@ -94,11 +107,11 @@ export function FileBrowser() {
       link.remove();
       URL.revokeObjectURL(blobUrl);
     } catch (e) {
-      notifications.show({
+      showToast({
         color: "red",
         title: "Download failed",
         message: getErrorMessage(e),
-        autoClose: false,
+        autoClose: TOAST_DURATIONS.error,
       });
     }
   };
@@ -112,17 +125,18 @@ export function FileBrowser() {
         fullPath,
       );
       await navigator.clipboard.writeText(url);
-      notifications.show({
+      showToast({
         color: "green",
         title: "Presigned URL copied",
         message: `${name} — anyone with this link can download it until ${formatTimeOfDay(expires_at)} (expires in 1 hour). No login needed.`,
-        autoClose: 6000,
+        autoClose: TOAST_DURATIONS.infoLong,
       });
     } catch (e) {
-      notifications.show({
+      showToast({
         color: "red",
         title: "Copy failed",
         message: e instanceof Error ? e.message : "unknown error",
+        autoClose: TOAST_DURATIONS.error,
       });
     }
   };
@@ -139,19 +153,20 @@ export function FileBrowser() {
       await navigator.clipboard.writeText(urls);
       // All URLs in a bulk copy share the same backend timestamp (same request batch).
       const expiry = responses[0]?.expires_at;
-      notifications.show({
+      showToast({
         color: "green",
         title: `${responses.length} presigned URLs copied`,
         message: expiry
           ? `Anyone with these links can download until ${formatTimeOfDay(expiry)} (expires in 1 hour). No login needed.`
           : "Anyone with these links can download for 1 hour. No login needed.",
-        autoClose: 6000,
+        autoClose: TOAST_DURATIONS.infoLong,
       });
     } catch (e) {
-      notifications.show({
+      showToast({
         color: "red",
         title: "Copy failed",
         message: e instanceof Error ? e.message : "unknown error",
+        autoClose: TOAST_DURATIONS.error,
       });
     }
   };
@@ -196,14 +211,19 @@ export function FileBrowser() {
         });
         success++;
       } catch (e) {
-        notifications.show({
+        showToast({
           color: "red",
           message: `Failed to delete ${name}: ${e instanceof Error ? e.message : "unknown error"}`,
+          autoClose: TOAST_DURATIONS.error,
         });
       }
     }
     if (success > 0) {
-      notifications.show({ color: "green", message: `Deleted ${success} item${success === 1 ? "" : "s"}` });
+      showToast({
+        color: "green",
+        message: `Deleted ${success} item${success === 1 ? "" : "s"}`,
+        autoClose: TOAST_DURATIONS.success,
+      });
     }
     setSelected(new Set());
   };
@@ -226,73 +246,198 @@ export function FileBrowser() {
   };
 
   const handleUpload = useCallback(
-    async (files: File[]) => {
-      const items: UploadProgressItem[] = files.map((f) => ({ name: f.name, status: "pending" }));
+    async (files: FileWithRelativePath[]) => {
+      const maxFileSize = me.data?.max_file_size;
+      const items: UploadProgressItem[] = files.map((f) => ({ name: f.file.name, status: "pending" }));
+
+      // Single AbortController for the whole batch. Cancel button triggers
+      // abort() which both stops the in-flight XHR (via signal) AND sets
+      // signal.aborted=true so the loop bails before starting the next file.
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+
+      // Hold the latest snapshot so the cancel button can show a sensible
+      // final-state toast (otherwise the toast keeps re-rendering with stale
+      // "uploading" status after the abort).
+      const updated = [...items];
+
+      const renderToast = () => {
+        notifications.update({
+          id: notifId,
+          message: <UploadProgress items={updated} onCancel={cancel} />,
+          autoClose: false,
+          withCloseButton: false,
+        });
+      };
 
       const notifId = notifications.show({
-        message: <UploadProgress items={items} />,
+        message: <UploadProgress items={items} onCancel={cancel} />,
         autoClose: false,
         withCloseButton: false,
       });
 
-      const updated = [...items];
       for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        updated[i] = { ...updated[i], status: "uploading" };
-        notifications.update({
-          id: notifId,
-          message: <UploadProgress items={updated} />,
-          autoClose: false,
-          withCloseButton: false,
-        });
+        // Cancel-aware loop guard. Once the user clicks cancel, mark every
+        // remaining file as "cancelled" so the summary tells them what was
+        // skipped, rather than leaving them as forever-"pending".
+        if (controller.signal.aborted) {
+          for (let j = i; j < files.length; j++) {
+            updated[j] = { ...updated[j], status: "cancelled" };
+          }
+          break;
+        }
+
+        const item = files[i];
+
+        // Pre-flight size check — skip the server round-trip for files we
+        // already know will be rejected. The backend enforces the same limit
+        // (streaming check in upload route), but doing it client-side first
+        // means the user sees "doc.zip is 419 MB, limit is 100 MB" instead of
+        // a generic 400 after the file has streamed up. Without this, batches
+        // with one oversize file in the middle just silently skip it and the
+        // user has no way to tell which file failed.
+        //
+        // Use formatBytes (binary KiB/MiB/GiB labeled as KB/MB/GB) so the size
+        // shown here matches what the file table elsewhere in the UI shows for
+        // the same file — consistency across the app beats decimal correctness.
+        if (maxFileSize !== undefined && item.file.size > maxFileSize) {
+          updated[i] = {
+            ...updated[i],
+            status: "error",
+            error: `File is ${formatBytes(item.file.size)}, limit is ${formatBytes(maxFileSize)}`,
+          };
+          renderToast();
+          continue;
+        }
+
+        updated[i] = { ...updated[i], status: "uploading", progress: 0 };
+        renderToast();
         try {
-          const key = pathFromUrl ? `${pathFromUrl}/${file.name}` : file.name;
+          const key = pathFromUrl ? `${pathFromUrl}/${item.relativePath}` : item.relativePath;
           await uploadMutation.mutateAsync({
             bucket,
             role: roleId,
             key,
-            file,
+            file: item.file,
             currentPath: pathFromUrl,
+            signal: controller.signal,
+            onProgress: (percent) => {
+              // Throttle by skipping no-op updates — every progress event would
+              // otherwise trigger a Mantine notifications re-render.
+              if (updated[i].progress === percent) return;
+              updated[i] = { ...updated[i], progress: percent };
+              renderToast();
+            },
           });
-          updated[i] = { ...updated[i], status: "done" };
+          updated[i] = { ...updated[i], status: "done", progress: 100 };
         } catch (e) {
+          // Abort isn't a real failure — it's a user action. Distinguish so
+          // the summary doesn't shout "ERROR" at the user who clicked cancel.
+          const isAbort =
+            e instanceof DOMException && e.name === "AbortError";
+          // Use getErrorMessage so the backend's `detail` field is surfaced
+          // (e.g. "File size exceeds maximum allowed size of 400MB") instead
+          // of the generic `xhr.statusText` ("Internal Server Error" /
+          // "Bad Request") that ApiError.message defaults to. The structured
+          // `{detail: {code, message}}` shape from Phase 6a error-handling is
+          // handled by the same helper.
           updated[i] = {
             ...updated[i],
-            status: "error",
-            error: e instanceof Error ? e.message : "unknown error",
+            status: isAbort ? "cancelled" : "error",
+            error: isAbort ? undefined : getErrorMessage(e),
           };
         }
-        notifications.update({
-          id: notifId,
-          message: <UploadProgress items={updated} />,
-          autoClose: false,
-          withCloseButton: false,
-        });
+        renderToast();
       }
 
-      // Final summary toast
+      // Final summary toast — `UploadSummary` surfaces failed filenames + their
+      // error messages so a 223/224 batch tells the user WHICH file failed.
+      // Successful batches dismiss quickly (the file table updates on success,
+      // which is the real confirmation); failed / cancelled batches stay
+      // longer so the user has time to read the failed list.
       const allDone = updated.every((u) => u.status === "done");
-      const doneCount = updated.filter((u) => u.status === "done").length;
+      const hasErrors = updated.some((u) => u.status === "error");
+      const wasCancelled = updated.some((u) => u.status === "cancelled");
+      const autoCloseMs = allDone ? TOAST_DURATIONS.success : TOAST_DURATIONS.error;
       notifications.update({
         id: notifId,
-        message: allDone
-          ? `Uploaded ${updated.length} file${updated.length === 1 ? "" : "s"}`
-          : `${doneCount}/${updated.length} files uploaded`,
-        color: allDone ? "green" : "yellow",
-        autoClose: 5000,
+        message: <UploadSummary items={updated} autoCloseMs={autoCloseMs} />,
+        color: allDone ? "green" : wasCancelled && !hasErrors ? "gray" : "yellow",
+        autoClose: autoCloseMs,
         withCloseButton: true,
+        // Override Mantine's baked-in body clipping. Without these, the
+        // notification root's `align-items: center` + `overflow: hidden` on
+        // the description body would cut the headline off the top and the
+        // last list row off the bottom of a tall failed-files summary. We
+        // want the message to render in full and let the inner scroll-area
+        // (UploadSummary's maxHeight container) be the only clipping point.
+        styles: {
+          root: { alignItems: "stretch" },
+          body: { overflow: "visible" },
+          description: { overflow: "visible", textOverflow: "clip" },
+        },
       });
     },
-    [bucket, roleId, pathFromUrl, uploadMutation],
+    [bucket, roleId, pathFromUrl, uploadMutation, me.data?.max_file_size],
   );
 
+  // Both upload buttons gate on the same dismissed-hint flag:
+  //   - First click (any button): open the hint modal that teaches drag-drop.
+  //     The folder mode keeps the dismiss checkbox unchecked (deliberate
+  //     confirmation step, matches vanilla); the files mode pre-checks it
+  //     (high-frequency action, single dismiss is enough).
+  //   - Subsequent clicks (flag set): skip the modal, open the picker.
+  // Drag-drop bypasses the modal entirely — the user already knows about
+  // drag-drop if they're using it.
   const handleUploadClick = () => {
-    fileInputRef.current?.click();
+    if (hasDismissedFolderUploadHint()) {
+      fileInputRef.current?.click();
+    } else {
+      setUploadHint({ open: true, mode: "files" });
+    }
+  };
+
+  const handleUploadFolderClick = () => {
+    if (hasDismissedFolderUploadHint()) {
+      folderInputRef.current?.click();
+    } else {
+      setUploadHint({ open: true, mode: "folder" });
+    }
+  };
+
+  const handleHintProceed = () => {
+    const mode = uploadHint.mode;
+    setUploadHint({ open: false, mode });
+    // Wait a tick before opening the native picker so the modal's close
+    // animation isn't competing with the file dialog for focus. setTimeout(0)
+    // is enough — the Modal exit animation continues in parallel but the
+    // picker has the user gesture context it needs to open.
+    setTimeout(() => {
+      if (mode === "folder") folderInputRef.current?.click();
+      else fileInputRef.current?.click();
+    }, 0);
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    if (files.length > 0) handleUpload(files);
+    const fileList = e.target.files;
+    if (fileList && fileList.length > 0) {
+      // Plain-file input has no folder semantics — wrap each File as a
+      // top-level FileWithRelativePath (relativePath = file.name).
+      const items: FileWithRelativePath[] = Array.from(fileList).map((file) => ({
+        file,
+        relativePath: file.name,
+      }));
+      handleUpload(items);
+    }
+    e.target.value = "";
+  };
+
+  const handleFolderInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files;
+    if (fileList && fileList.length > 0) {
+      const items = filesFromFolderInput(fileList);
+      if (items.length > 0) handleUpload(items);
+    }
     e.target.value = "";
   };
 
@@ -325,6 +470,7 @@ export function FileBrowser() {
         onBulkDelete={() => requestDelete(Array.from(selected))}
         onBulkCopyUrl={handleBulkCopyUrl}
         onUploadClick={handleUploadClick}
+        onUploadFolderClick={handleUploadFolderClick}
         disableDeletion={disableDeletion}
         objectCount={data?.files?.length ?? 0}
       />
@@ -333,6 +479,18 @@ export function FileBrowser() {
         ref={fileInputRef}
         onChange={handleFileInput}
         multiple
+        style={{ display: "none" }}
+      />
+      <input
+        type="file"
+        ref={folderInputRef}
+        onChange={handleFolderInput}
+        multiple
+        // `webkitdirectory` is a non-standard attribute that React doesn't type;
+        // pass it via spread to bypass the type check. All major browsers honor it
+        // (Chrome, Firefox, Safari, Edge); the fallback is the drag-drop path which
+        // works on browsers that don't support webkitdirectory inputs.
+        {...({ webkitdirectory: "" } as Record<string, string>)}
         style={{ display: "none" }}
       />
       <Stack gap="md">
@@ -367,6 +525,12 @@ export function FileBrowser() {
         )}
       </Stack>
       <UploadDropZone currentPath={pathFromUrl} onDrop={handleUpload} active />
+      <FolderUploadHintModal
+        opened={uploadHint.open}
+        mode={uploadHint.mode}
+        onClose={() => setUploadHint((prev) => ({ ...prev, open: false }))}
+        onProceed={handleHintProceed}
+      />
       <ConfirmDeleteModal
         opened={confirmOpen}
         onClose={() => setConfirmOpen(false)}

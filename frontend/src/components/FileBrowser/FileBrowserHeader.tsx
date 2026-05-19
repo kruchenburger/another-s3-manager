@@ -1,5 +1,5 @@
 import { Button, Center, Group, SegmentedControl, Text, TextInput, Tooltip } from "@mantine/core";
-import { LayoutGrid, List as ListIcon, Search, Share2, Trash2, Upload } from "lucide-react";
+import { FolderUp, LayoutGrid, List as ListIcon, Search, Share2, Trash2, Upload } from "lucide-react";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import type { DisplayMode } from "@/hooks/useDisplayMode";
 
@@ -15,6 +15,8 @@ interface FileBrowserHeaderProps {
   onBulkDelete: () => void;
   onBulkCopyUrl: () => void;
   onUploadClick: () => void;
+  /** Open the folder picker (webkitdirectory input). */
+  onUploadFolderClick: () => void;
   /** When true, bulk Delete is rendered disabled with a config-aware tooltip. */
   disableDeletion?: boolean;
   /**
@@ -40,6 +42,7 @@ export function FileBrowserHeader({
   onBulkDelete,
   onBulkCopyUrl,
   onUploadClick,
+  onUploadFolderClick,
   disableDeletion = false,
   objectCount,
 }: FileBrowserHeaderProps) {
@@ -118,6 +121,14 @@ export function FileBrowserHeader({
             </Tooltip>
           </>
         )}
+        <Button
+          leftSection={<FolderUp size={14} />}
+          onClick={onUploadFolderClick}
+          size="sm"
+          variant="default"
+        >
+          Upload folder
+        </Button>
         <Button leftSection={<Upload size={14} />} onClick={onUploadClick} size="sm">
           Upload
         </Button>

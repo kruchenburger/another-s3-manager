@@ -35,6 +35,7 @@ describe("useMe", () => {
       default_role: null,
       must_change_password: false,
       disable_deletion: true,
+      max_file_size: 100 * 1024 * 1024,
       app_name: "S3",
       app_version: "1.0.0",
     });
@@ -53,6 +54,7 @@ describe("useMe", () => {
       default_role: null,
       must_change_password: false,
       disable_deletion: false,
+      max_file_size: 100 * 1024 * 1024,
       app_name: "S3",
       app_version: "1.0.0",
     });

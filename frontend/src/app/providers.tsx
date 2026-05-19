@@ -18,7 +18,7 @@ export function AppProviders({ children }: AppProvidersProps) {
   return (
     <QueryClientProvider client={queryClient}>
       <MantineProvider theme={theme} defaultColorScheme="dark">
-        <Notifications position="top-right" />
+        <Notifications position="bottom-right" />
         {children}
       </MantineProvider>
     </QueryClientProvider>

@@ -1,0 +1,13 @@
+/* Global keyframe — not scoped via CSS modules.
+   The AutoCloseProgress component references this animation by name from an
+   inline `style.animation` property. CSS modules would mangle the keyframe
+   name (`shrink` → `_shrink_abc123`), breaking the lookup from inline style.
+   A plain .css file keeps the identifier intact for inline-style consumers. */
+@keyframes autocloseProgressShrink {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}

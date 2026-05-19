@@ -504,6 +504,15 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
     from another_s3_manager.users import compute_default_role
 
     default_role = compute_default_role(current_user.get("default_role"), allowed_roles)
+    # max_file_size: surface to client so it can validate sizes BEFORE the
+    # multipart POST and show a useful error per file. Without this, the
+    # browser uploads up to the limit, the backend rejects with 400, and the
+    # user sees a generic toast that doesn't say "this file is N MB, limit is M".
+    max_file_size_from_config = config.get("max_file_size")
+    if max_file_size_from_config is None:
+        max_file_size = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
+    else:
+        max_file_size = int(max_file_size_from_config)
     return {
         "username": current_user.get("username"),
         "is_admin": is_admin,
@@ -513,6 +522,7 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
         "default_role": default_role,
         "must_change_password": bool(current_user.get("must_change_password", False)),
         "disable_deletion": disable_deletion,
+        "max_file_size": max_file_size,
         "app_name": APP_NAME,  # Return app name for client
         "app_version": APP_VERSION,
     }
