@@ -92,21 +92,38 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
       )}
       {expanded && (
         <>
-          <List size="xs" spacing={2} withPadding>
-            {failed.map((item) => (
-              <List.Item key={item.name}>
-                <Text size="xs" component="span" fw={500}>
-                  {item.name}
-                </Text>
-                {item.error && (
-                  <Text size="xs" component="span" c="dimmed">
-                    {" — "}
-                    {item.error}
+          {failed.length > 3 && (
+            // Heading on big lists makes the toast self-describing once the
+            // list scrolls past the headline. Kept off small lists since the
+            // headline is right above and the heading would be redundant.
+            <Text size="xs" c="dimmed" fw={500}>
+              Failed files:
+            </Text>
+          )}
+          <div
+            // Cap the list at ~7 rows; longer lists scroll inside the toast
+            // instead of stretching the toast off-screen. Mantine pauses the
+            // notification's autoClose timer on mouseEnter — so while the
+            // user is reading / scrolling through the failed list, the toast
+            // won't dismiss out from under them.
+            style={{ maxHeight: 200, overflowY: "auto" }}
+          >
+            <List size="xs" spacing={2} withPadding>
+              {failed.map((item) => (
+                <List.Item key={item.name}>
+                  <Text size="xs" component="span" fw={500}>
+                    {item.name}
                   </Text>
-                )}
-              </List.Item>
-            ))}
-          </List>
+                  {item.error && (
+                    <Text size="xs" component="span" c="dimmed">
+                      {" — "}
+                      {item.error}
+                    </Text>
+                  )}
+                </List.Item>
+              ))}
+            </List>
+          </div>
           {failed.length > 3 && (
             <Anchor
               component="button"

@@ -12,6 +12,7 @@ import { joinPath, decodePath } from "@/utils/pathUtils";
 import { ApiError, getErrorMessage } from "@/utils/apiError";
 import { formatBytes } from "@/utils/formatBytes";
 import { formatTimeOfDay } from "@/utils/formatDate";
+import { showToast, TOAST_DURATIONS } from "@/utils/toast";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
@@ -103,11 +104,11 @@ export function FileBrowser() {
       link.remove();
       URL.revokeObjectURL(blobUrl);
     } catch (e) {
-      notifications.show({
+      showToast({
         color: "red",
         title: "Download failed",
         message: getErrorMessage(e),
-        autoClose: false,
+        autoClose: TOAST_DURATIONS.error,
       });
     }
   };
@@ -121,17 +122,18 @@ export function FileBrowser() {
         fullPath,
       );
       await navigator.clipboard.writeText(url);
-      notifications.show({
+      showToast({
         color: "green",
         title: "Presigned URL copied",
         message: `${name} — anyone with this link can download it until ${formatTimeOfDay(expires_at)} (expires in 1 hour). No login needed.`,
-        autoClose: 6000,
+        autoClose: TOAST_DURATIONS.infoLong,
       });
     } catch (e) {
-      notifications.show({
+      showToast({
         color: "red",
         title: "Copy failed",
         message: e instanceof Error ? e.message : "unknown error",
+        autoClose: TOAST_DURATIONS.error,
       });
     }
   };
@@ -148,19 +150,20 @@ export function FileBrowser() {
       await navigator.clipboard.writeText(urls);
       // All URLs in a bulk copy share the same backend timestamp (same request batch).
       const expiry = responses[0]?.expires_at;
-      notifications.show({
+      showToast({
         color: "green",
         title: `${responses.length} presigned URLs copied`,
         message: expiry
           ? `Anyone with these links can download until ${formatTimeOfDay(expiry)} (expires in 1 hour). No login needed.`
           : "Anyone with these links can download for 1 hour. No login needed.",
-        autoClose: 6000,
+        autoClose: TOAST_DURATIONS.infoLong,
       });
     } catch (e) {
-      notifications.show({
+      showToast({
         color: "red",
         title: "Copy failed",
         message: e instanceof Error ? e.message : "unknown error",
+        autoClose: TOAST_DURATIONS.error,
       });
     }
   };
@@ -205,14 +208,19 @@ export function FileBrowser() {
         });
         success++;
       } catch (e) {
-        notifications.show({
+        showToast({
           color: "red",
           message: `Failed to delete ${name}: ${e instanceof Error ? e.message : "unknown error"}`,
+          autoClose: TOAST_DURATIONS.error,
         });
       }
     }
     if (success > 0) {
-      notifications.show({ color: "green", message: `Deleted ${success} item${success === 1 ? "" : "s"}` });
+      showToast({
+        color: "green",
+        message: `Deleted ${success} item${success === 1 ? "" : "s"}`,
+        autoClose: TOAST_DURATIONS.success,
+      });
     }
     setSelected(new Set());
   };
@@ -341,15 +349,13 @@ export function FileBrowser() {
 
       // Final summary toast — `UploadSummary` surfaces failed filenames + their
       // error messages so a 223/224 batch tells the user WHICH file failed.
-      // Toast auto-closes after 10s for all final states. Originally the
-      // failure/cancel paths used `autoClose: false`, but a stack of permanent
-      // toasts is visual spam — 10 seconds is enough to read the failed list,
-      // and the user can hover-to-pause Mantine's autoClose timer or click
-      // the X to dismiss earlier.
+      // Successful batches dismiss quickly (the file table updates on success,
+      // which is the real confirmation); failed / cancelled batches stay
+      // longer so the user has time to read the failed list.
       const allDone = updated.every((u) => u.status === "done");
       const hasErrors = updated.some((u) => u.status === "error");
       const wasCancelled = updated.some((u) => u.status === "cancelled");
-      const autoCloseMs = 10_000;
+      const autoCloseMs = allDone ? TOAST_DURATIONS.success : TOAST_DURATIONS.error;
       notifications.update({
         id: notifId,
         message: <UploadSummary items={updated} autoCloseMs={autoCloseMs} />,
