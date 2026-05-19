@@ -21,14 +21,24 @@ interface UploadProgressProps {
 }
 
 /**
- * Two-level progress for a batched upload:
+ * Smooth, single-bar progress for a batched upload.
  *
- *   - the outer bar is the BATCH progress (N of M files done) — same as before
- *   - the inner Text shows the CURRENT file's name + its own byte-level
- *     percentage, so a single large file no longer looks like a frozen toast
- *     at "0/1" for minutes
+ * Two display modes by batch size:
  *
- * The cancel button is rendered next to the headline so it's easy to find
+ *   1. Single-file batch (total === 1): the bar fills with the file's own
+ *      byte-level upload percentage. The user sees the filename + a moving
+ *      bar — no "0/1" counter (it would just sit at 0 until the file finishes,
+ *      which is exactly the "looks frozen" UX complaint).
+ *
+ *   2. Multi-file batch (total > 1): the bar fills smoothly with
+ *      "files-fully-done plus the current file's fractional progress" instead
+ *      of jumping in discrete steps at each file boundary. For a 224-file
+ *      batch with 100 done and the 101st at 50%, the bar reads
+ *      (100 + 0.5) / 224 ≈ 44.9%. The counter still shows "100/224" so the
+ *      user can read both the rate of file completions AND the smoothness of
+ *      transfer.
+ *
+ * The cancel button is rendered next to the counter so it's easy to find
  * during a long batch; clicking it aborts the in-flight XHR via the consumer's
  * AbortController and stops subsequent files in the loop from starting.
  */
@@ -38,12 +48,22 @@ export function UploadProgress({ items, onCancel }: UploadProgressProps) {
   const errors = items.filter((i) => i.status === "error").length;
   const cancelled = items.filter((i) => i.status === "cancelled").length;
   const settled = done + errors + cancelled;
-  const batchPercent = total === 0 ? 0 : Math.round((settled / total) * 100);
 
-  // The currently-uploading file (at most one at a time — uploads run
-  // sequentially). Use this to surface byte-level progress for big files.
+  // At most one file uploads at a time (the loop awaits each), so .find() is
+  // unambiguous. Returns undefined when the batch is fully settled, or while
+  // the loop is between files (e.g. resolving onSuccess of file N before
+  // starting N+1).
   const current = items.find((i) => i.status === "uploading");
   const currentPercent = current?.progress ?? 0;
+
+  // Fractional batch percent. Counting the in-flight file's partial progress
+  // (e.g. 50%) as 0.5 of a completed file makes the bar move continuously
+  // rather than jumping at each file boundary. Use 0..1 fractions then * 100.
+  // For a single-file batch this naturally collapses to currentPercent.
+  const fractionalSettled = settled + (current ? currentPercent / 100 : 0);
+  const batchPercent = total === 0 ? 0 : (fractionalSettled / total) * 100;
+
+  const isSingle = total === 1;
 
   return (
     <Stack gap={6}>
@@ -52,9 +72,11 @@ export function UploadProgress({ items, onCancel }: UploadProgressProps) {
           Uploading {total} {total === 1 ? "file" : "files"}
         </Text>
         <Group gap="xs" wrap="nowrap">
-          <Text size="sm" c="dimmed">
-            {settled}/{total} {errors > 0 && `(${errors} failed)`}
-          </Text>
+          {!isSingle && (
+            <Text size="sm" c="dimmed">
+              {settled}/{total} {errors > 0 && `(${errors} failed)`}
+            </Text>
+          )}
           {onCancel && (
             <Tooltip label="Cancel upload" withArrow>
               <ActionIcon
@@ -71,13 +93,25 @@ export function UploadProgress({ items, onCancel }: UploadProgressProps) {
         </Group>
       </Group>
       <Progress value={batchPercent} color={errors > 0 ? "yellow" : "amber"} />
-      {current && (
+      {current && !isSingle && (
+        // For multi-file batches, show the current filename below the bar so
+        // the user knows which file is being uploaded. Skip for single-file
+        // batches — the headline already says "Uploading 1 file" and adding
+        // the filename would just be visual noise.
+        <Text size="xs" c="dimmed" truncate>
+          {current.name}
+        </Text>
+      )}
+      {current && isSingle && (
+        // For single-file batches, the bar IS the file's progress (per the
+        // formula above), so we still want to show the filename + the byte
+        // percent under it for the user to see *which* file and *how far*.
         <Group justify="space-between" wrap="nowrap" gap="xs">
           <Text size="xs" c="dimmed" truncate style={{ flex: 1, minWidth: 0 }}>
             {current.name}
           </Text>
           <Text size="xs" c="dimmed">
-            {currentPercent}%
+            {Math.round(currentPercent)}%
           </Text>
         </Group>
       )}

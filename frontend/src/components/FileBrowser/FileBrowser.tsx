@@ -10,6 +10,7 @@ import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { joinPath, decodePath } from "@/utils/pathUtils";
 import { ApiError, getErrorMessage } from "@/utils/apiError";
+import { formatBytes } from "@/utils/formatBytes";
 import { formatTimeOfDay } from "@/utils/formatDate";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
@@ -279,13 +280,15 @@ export function FileBrowser() {
         // a generic 400 after the file has streamed up. Without this, batches
         // with one oversize file in the middle just silently skip it and the
         // user has no way to tell which file failed.
+        //
+        // Use formatBytes (binary KiB/MiB/GiB labeled as KB/MB/GB) so the size
+        // shown here matches what the file table elsewhere in the UI shows for
+        // the same file — consistency across the app beats decimal correctness.
         if (maxFileSize !== undefined && item.file.size > maxFileSize) {
-          const fileMb = (item.file.size / (1024 * 1024)).toFixed(1);
-          const limitMb = (maxFileSize / (1024 * 1024)).toFixed(0);
           updated[i] = {
             ...updated[i],
             status: "error",
-            error: `File is ${fileMb} MB, limit is ${limitMb} MB`,
+            error: `File is ${formatBytes(item.file.size)}, limit is ${formatBytes(maxFileSize)}`,
           };
           renderToast();
           continue;
@@ -316,10 +319,16 @@ export function FileBrowser() {
           // the summary doesn't shout "ERROR" at the user who clicked cancel.
           const isAbort =
             e instanceof DOMException && e.name === "AbortError";
+          // Use getErrorMessage so the backend's `detail` field is surfaced
+          // (e.g. "File size exceeds maximum allowed size of 400MB") instead
+          // of the generic `xhr.statusText` ("Internal Server Error" /
+          // "Bad Request") that ApiError.message defaults to. The structured
+          // `{detail: {code, message}}` shape from Phase 6a error-handling is
+          // handled by the same helper.
           updated[i] = {
             ...updated[i],
             status: isAbort ? "cancelled" : "error",
-            error: isAbort ? undefined : e instanceof Error ? e.message : "unknown error",
+            error: isAbort ? undefined : getErrorMessage(e),
           };
         }
         renderToast();
@@ -327,8 +336,11 @@ export function FileBrowser() {
 
       // Final summary toast — `UploadSummary` surfaces failed filenames + their
       // error messages so a 223/224 batch tells the user WHICH file failed.
-      // When there are errors or cancellations we leave the toast open
-      // (autoClose: false) so the user can actually read the result.
+      // Toast auto-closes after 10s for all final states. Originally the
+      // failure/cancel paths used `autoClose: false`, but a stack of permanent
+      // toasts is visual spam — 10 seconds is enough to read the failed list,
+      // and the user can hover-to-pause Mantine's autoClose timer or click
+      // the X to dismiss earlier.
       const allDone = updated.every((u) => u.status === "done");
       const hasErrors = updated.some((u) => u.status === "error");
       const wasCancelled = updated.some((u) => u.status === "cancelled");
@@ -336,7 +348,7 @@ export function FileBrowser() {
         id: notifId,
         message: <UploadSummary items={updated} />,
         color: allDone ? "green" : wasCancelled && !hasErrors ? "gray" : "yellow",
-        autoClose: hasErrors || wasCancelled ? false : 5000,
+        autoClose: 10_000,
         withCloseButton: true,
       });
     },
