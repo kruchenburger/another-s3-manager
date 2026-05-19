@@ -1,0 +1,28 @@
+/*
+ * Global CSS overrides.
+ *
+ * Loaded AFTER Mantine's styles in `providers.tsx` so any cascading overrides
+ * win over Mantine's defaults.
+ *
+ * --mantine-color-dimmed override:
+ *   Mantine 8 defaults this to #828282 in dark mode, which gives a contrast
+ *   ratio of 4.03:1 against the standard dark body background #242424 —
+ *   below the WCAG 2.1 AA threshold of 4.5:1 for normal text. axe-core
+ *   flags this on every page that uses <Text c="dimmed"> or similar
+ *   (which is roughly every page in the app, since "dimmed" is our standard
+ *   for hint and helper text).
+ *
+ *   We bump to #969696 which gives 4.69:1 against #242424 — passes AA with
+ *   a small margin for sub-pixel rendering. Same colour family, no visible
+ *   shift in the UI (verified manually).
+ *
+ *   The light-mode default already passes (#5c5f66 on #ffffff = 7.04:1),
+ *   so we only override the dark-mode token via the data-mantine-color-scheme
+ *   selector that Mantine sets on <html>.
+ */
+/* Use :root[...] (specificity 0,2,0) to match Mantine's own selector.
+   A bare [data-mantine-color-scheme="dark"] (specificity 0,1,0) loses the
+   cascade tiebreak even when our stylesheet is imported AFTER Mantine. */
+:root[data-mantine-color-scheme="dark"] {
+  --mantine-color-dimmed: #969696;
+}

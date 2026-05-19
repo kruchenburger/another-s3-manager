@@ -4,6 +4,8 @@ import { Notifications } from "@mantine/notifications";
 import { QueryClientProvider } from "@tanstack/react-query";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
+// Loaded AFTER Mantine styles so our overrides win in the cascade.
+import "@/app/global.css";
 import { theme } from "@/app/theme";
 import { queryClient } from "@/app/queryClient";
 

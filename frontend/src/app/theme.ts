@@ -8,6 +8,14 @@ export const theme = createTheme({
   primaryColor: "amber",
   primaryShade: { light: 6, dark: 5 },
 
+  // Ask Mantine to pick a high-contrast text colour for filled buttons /
+  // badges / etc. on the basis of the background's luminance, instead of the
+  // hard-coded white that ships by default. Our amber primary (#ffc107 in
+  // dark mode) is too light for white text — contrast falls to 1.63:1, well
+  // under WCAG AA 4.5:1. With autoContrast Mantine flips the text to near-
+  // black on bright amber and to white on dark colours like red/green.
+  autoContrast: true,
+
   fontFamily: "'DM Sans', system-ui, sans-serif",
   fontFamilyMonospace: "'JetBrains Mono', ui-monospace, monospace",
   defaultRadius: "md",
