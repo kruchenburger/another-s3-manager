@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from "react";
-import { Anchor, Group, List, Stack, Text } from "@mantine/core";
+import { Anchor, Group, List, Stack, Text, Tooltip } from "@mantine/core";
 import { AutoCloseProgress } from "./AutoCloseProgress";
 import type { UploadProgressItem } from "./UploadProgress";
 import classes from "./UploadSummary.module.css";
@@ -124,33 +124,31 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
             <List size="xs" spacing={4} withPadding>
               {failed.map((item) => (
                 <List.Item key={item.name}>
-                  {/* Single-line row: filename shrinks with ellipsis if needed,
-                      but the error message (the actual actionable info — e.g.
-                      "File is 395.2 MB, limit is 100.0 MB") stays in full and
-                      gets its own room. Filename + ellipsis is acceptable
-                      information loss; error message + ellipsis is NOT — the
-                      user needs the whole error to know why upload failed. */}
-                  <Group gap={4} wrap="nowrap" style={{ maxWidth: "100%" }}>
-                    <Text
-                      size="xs"
-                      component="span"
-                      fw={500}
-                      truncate
-                      style={{ flex: "1 1 auto", minWidth: 0 }}
-                    >
-                      {item.name}
-                    </Text>
-                    {item.error && (
-                      <Text
-                        size="xs"
-                        component="span"
-                        c="dimmed"
-                        style={{ flex: "0 0 auto", whiteSpace: "nowrap" }}
-                      >
-                        — {item.error}
+                  {/* Each row is exactly one line tall — filename truncates
+                      with ellipsis, error stays inline. This makes the scroll
+                      container a clean multiple of row height, so a partial
+                      row at the bottom shows half a row (looks like normal
+                      scroll behavior) instead of a wrapped row chopped mid-line
+                      (looks broken). Tooltip surfaces the full name+error
+                      on hover so the truncation isn't information loss. */}
+                  <Tooltip
+                    label={item.error ? `${item.name} — ${item.error}` : item.name}
+                    withArrow
+                    position="left"
+                    multiline
+                    w={300}
+                  >
+                    <Group gap={4} wrap="nowrap" style={{ maxWidth: "100%" }}>
+                      <Text size="xs" component="span" fw={500} truncate style={{ flex: "0 1 auto", minWidth: 0 }}>
+                        {item.name}
                       </Text>
-                    )}
-                  </Group>
+                      {item.error && (
+                        <Text size="xs" component="span" c="dimmed" truncate style={{ flex: "1 1 auto", minWidth: 0 }}>
+                          — {item.error}
+                        </Text>
+                      )}
+                    </Group>
+                  </Tooltip>
                 </List.Item>
               ))}
             </List>
