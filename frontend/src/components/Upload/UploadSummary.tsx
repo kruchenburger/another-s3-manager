@@ -112,30 +112,34 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
               Failed files:
             </Text>
           )}
-          <div
-            // Cap the list at ~7 rows; longer lists scroll inside the toast
-            // instead of stretching the toast off-screen. Mantine pauses the
-            // notification's autoClose timer on mouseEnter — so while the
-            // user is reading / scrolling through the failed list, the toast
-            // won't dismiss out from under them. CSS module also slims the
-            // browser scrollbar so it doesn't dominate the panel.
-            className={classes.scrollArea}
-          >
-            <List size="xs" spacing={2} withPadding>
-              {failed.map((item) => (
-                <List.Item key={item.name}>
-                  <Text size="xs" component="span" fw={500}>
-                    {item.name}
-                  </Text>
-                  {item.error && (
-                    <Text size="xs" component="span" c="dimmed">
-                      {" — "}
-                      {item.error}
+          {/* Wrap the scroll area so a "more below" fade pseudo-element can
+              be layered over its bottom edge without masking the scrollbar. */}
+          <div className={classes.scrollWrapper}>
+            <div
+              // Cap the list at ~7 rows; longer lists scroll inside the toast
+              // instead of stretching the toast off-screen. Mantine pauses the
+              // notification's autoClose timer on mouseEnter — so while the
+              // user is reading / scrolling through the failed list, the toast
+              // won't dismiss out from under them. CSS module also slims the
+              // browser scrollbar so it doesn't dominate the panel.
+              className={classes.scrollArea}
+            >
+              <List size="xs" spacing={2} withPadding>
+                {failed.map((item) => (
+                  <List.Item key={item.name}>
+                    <Text size="xs" component="span" fw={500}>
+                      {item.name}
                     </Text>
-                  )}
-                </List.Item>
-              ))}
-            </List>
+                    {item.error && (
+                      <Text size="xs" component="span" c="dimmed">
+                        {" — "}
+                        {item.error}
+                      </Text>
+                    )}
+                  </List.Item>
+                ))}
+              </List>
+            </div>
           </div>
           {failed.length > 3 && (
             <Anchor
