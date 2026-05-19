@@ -90,6 +90,9 @@ cd frontend && npm install
 cd frontend && npm run dev   # opens on http://localhost:5173
 
 # Production build → bundles into ../src/another_s3_manager/static/v2/
+# Vendor libs are split into separate chunks (react / mantine / tanstack / icons / gsap)
+# via `manualChunks` in `vite.config.ts` so browsers can cache them independently of
+# our app code — main entrypoint stays under the 500 KB warning threshold.
 cd frontend && npm run build
 
 # Unit tests (Vitest)
@@ -106,6 +109,15 @@ cd frontend && npx playwright test
 `playwright.config.ts`). Run `docker compose up --build -d` first, otherwise
 all E2E tests fail with connection refused. Override target via
 `E2E_BASE_URL=http://otherhost:port npx playwright test`.
+
+**Accessibility baseline:** `frontend/tests/e2e/a11y.spec.ts` runs axe-core
+(via `@axe-core/playwright`) against every authenticated route and fails the
+build on any `critical`/`serious` violation. WCAG 2.1 AA + best-practice tags.
+`moderate`/`minor` are logged but non-blocking. See
+[`docs/accessibility.md`](docs/accessibility.md) for the full route list, how
+to fix common violations, and the rationale for our two theme overrides
+(`autoContrast: true` in `theme.ts` + `--mantine-color-dimmed` in
+`src/app/global.css`).
 
 #### E2E specs that need a real S3 backend (MinIO)
 
