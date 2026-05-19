@@ -111,13 +111,13 @@ all E2E tests fail with connection refused. Override target via
 `E2E_BASE_URL=http://otherhost:port npx playwright test`.
 
 **Accessibility baseline:** `frontend/tests/e2e/a11y.spec.ts` runs axe-core
-(via `@axe-core/playwright`) against every authenticated route and fails the
-build on any `critical`/`serious` violation. WCAG 2.1 AA + best-practice tags.
-`moderate`/`minor` are logged but non-blocking. See
+(via `@axe-core/playwright`) against every covered route in `/v2/` and fails
+the build on any `critical`/`serious` violation. WCAG 2.1 AA + best-practice
+tags. `moderate`/`minor` are logged but non-blocking. See
 [`docs/accessibility.md`](docs/accessibility.md) for the full route list, how
-to fix common violations, and the rationale for our two theme overrides
-(`autoContrast: true` in `theme.ts` + `--mantine-color-dimmed` in
-`src/app/global.css`).
+to fix common violations, and the rationale for our two theme adjustments
+(`autoContrast: true` scoped to Button + Badge, and `--mantine-color-dimmed`
+overridden via `cssVariablesResolver`, both in `src/app/theme.ts`).
 
 #### E2E specs that need a real S3 backend (MinIO)
 

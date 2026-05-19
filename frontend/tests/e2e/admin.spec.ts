@@ -1,19 +1,5 @@
 import { test, expect } from "@playwright/test";
-
-const ADMIN_USER = process.env.E2E_ADMIN_USERNAME ?? "admin";
-const ADMIN_PASSWORD =
-  process.env.E2E_ADMIN_PASSWORD ??
-  process.env.ADMIN_PASSWORD ??
-  "test-admin-pw-12345";
-
-async function loginAsAdmin(page: import("@playwright/test").Page) {
-  await page.goto("/v2/login");
-  await page.getByLabel("Username").fill(ADMIN_USER);
-  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: "Login" }).click();
-  // URL may be /v2 or /v2/ depending on router
-  await expect(page).toHaveURL(/\/v2\/?$/);
-}
+import { loginAsAdmin } from "./fixtures/auth-helpers";
 
 test.describe("Admin pages", () => {
   test("admin can navigate to /v2/admin/users via UserMenu", async ({

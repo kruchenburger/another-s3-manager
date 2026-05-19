@@ -1,7 +1,5 @@
 import { test, expect } from "@playwright/test";
-
-const ADMIN_USER = "admin";
-const ADMIN_PASS = process.env.ADMIN_PASSWORD ?? "test-admin-pw-12345";
+import { ADMIN_USER, ADMIN_PASSWORD as ADMIN_PASS } from "./fixtures/auth-helpers";
 
 test("login and logout flow", async ({ page }) => {
   // Visit /v2/, expect redirect to /v2/login

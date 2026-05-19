@@ -1,18 +1,9 @@
 import { test, expect } from "@playwright/test";
+import { loginAsAdmin as login } from "./fixtures/auth-helpers";
 
-const ADMIN_USER = process.env.E2E_ADMIN_USERNAME ?? "admin";
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "TestPass1";
 const ROLE = process.env.E2E_MINIO_ROLE ?? "MinIO-e2e";
 const BUCKET = process.env.E2E_MINIO_BUCKET ?? "e2e-test";
 const SPECIAL_NAME = "test:colon#hash?question.txt";
-
-async function login(page: import("@playwright/test").Page): Promise<void> {
-  await page.goto("/v2/login");
-  await page.getByLabel("Username").fill(ADMIN_USER);
-  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: "Login" }).click();
-  await page.waitForURL(/\/v2\/?$/);
-}
 
 test.describe("Special characters in S3 keys", () => {
   test("file with : # ? in name uploads, renders, downloads, deletes", async ({ page }) => {

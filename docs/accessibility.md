@@ -1,9 +1,9 @@
 # Accessibility
 
 `another-s3-manager` runs an automated accessibility baseline against every
-authenticated route on every PR via [`@axe-core/playwright`][axe-pw]. The goal
-is to keep real assistive-tech blockers from regressing — not to chase a
-perfect 100 / 100 lighthouse score.
+covered route in `/v2/` (login + post-login + admin) on every PR via
+[`@axe-core/playwright`][axe-pw]. The goal is to keep real assistive-tech
+blockers from regressing — not to chase a perfect 100 / 100 lighthouse score.
 
 [axe-pw]: https://www.npmjs.com/package/@axe-core/playwright
 
@@ -21,10 +21,10 @@ perfect 100 / 100 lighthouse score.
 
 ## What's covered
 
-The spec at `frontend/tests/e2e/a11y.spec.ts` walks every static authenticated
-route:
+The spec at `frontend/tests/e2e/a11y.spec.ts` walks every static route
+under `/v2/` (login + the post-login app shell + admin pages):
 
-- `/v2/login`
+- `/v2/login` (unauthenticated — first thing every user sees, so worth a check)
 - `/v2/` (home, after login)
 - `/v2/change-password`
 - `/v2/api-tokens` (self-serve MCP tokens)
@@ -83,7 +83,8 @@ offending elements. Common fixes:
 - `button-name` / `link-name` — add `aria-label` to icon-only controls
 - `label` — wrap inputs with `<TextInput label="...">` or add `aria-label`
 - `color-contrast` — pick a brand-book token with sufficient contrast, or
-  override the offending Mantine CSS variable in `frontend/src/app/global.css`
+  override the offending Mantine CSS variable in `cssVariablesResolver`
+  inside `frontend/src/app/theme.ts`
 - `landmark-one-main` — ensure exactly one `<main>` per page
 - `region` — wrap content in semantic landmarks (`<main>`, `<nav>`, `<aside>`)
 
@@ -97,19 +98,25 @@ axe-core docs for each rule: [https://dequeuniversity.com/rules/axe/4.11/](https
 
 ## Theme overrides for contrast compliance
 
-Two changes in `frontend/src/app/` shifted the baseline from "10 failing routes"
-to "10 passing routes":
+Two changes in `frontend/src/app/theme.ts` shifted the baseline from
+"10 failing routes" to "10 passing routes":
 
-1. `theme.ts` enables `autoContrast: true` so Mantine picks a high-contrast
-   text colour for filled buttons / badges instead of hard-coded white.
-   Important for our amber primary in dark mode (`#ffc107`) where white text
-   produced 1.63:1.
+1. `Button` and `Badge` components opt in to `autoContrast: true` via
+   `Button.extend(...)` / `Badge.extend(...)` in `components`. Mantine then
+   picks a high-contrast text colour for filled variants instead of the
+   hard-coded white default. Important for our amber primary in dark mode
+   (`#ffc107`) where white text produced 1.63:1. autoContrast only affects
+   `variant="filled"` (per Mantine 8 docs), so outline / subtle / transparent
+   variants are unaffected and keep their explicit colours.
 
-2. `global.css` overrides `--mantine-color-dimmed` from `#828282` to `#969696`
-   in dark mode. Mantine's default failed 4.5:1 against the standard dark
-   body background `#242424` (came in at 4.03:1). The replacement passes AA
-   at 4.69:1 with no visible UI shift.
+2. `cssVariablesResolver` overrides `--mantine-color-dimmed` from `#828282`
+   to `#969696` in dark mode. Mantine's default failed 4.5:1 against the
+   standard dark body background `#242424` (came in at 4.03:1). The
+   replacement passes AA at 4.69:1 with no visible UI shift. Using the
+   resolver (instead of a separate stylesheet) keeps the theme config in one
+   place and dodges the CSS-specificity dance that would otherwise be needed
+   to beat Mantine's own selectors.
 
 Future contrast fixes should follow the same pattern: prefer overriding the
-relevant Mantine CSS variable in `global.css` over per-component overrides,
-so the change applies everywhere uniformly.
+relevant Mantine CSS variable via `cssVariablesResolver` over per-component
+style overrides, so the change applies everywhere uniformly.

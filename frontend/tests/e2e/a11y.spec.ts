@@ -1,28 +1,14 @@
-import { test, expect } from "@playwright/test";
+import { test } from "@playwright/test";
 import { expectNoSeriousAxeViolations } from "./fixtures/a11y-helpers";
-
-const ADMIN_USER = process.env.E2E_ADMIN_USERNAME ?? "admin";
-const ADMIN_PASSWORD =
-  process.env.E2E_ADMIN_PASSWORD ??
-  process.env.ADMIN_PASSWORD ??
-  "test-admin-pw-12345";
-
-async function loginAsAdmin(page: import("@playwright/test").Page) {
-  await page.goto("/v2/login");
-  await page.getByLabel("Username").fill(ADMIN_USER);
-  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: "Login" }).click();
-  await expect(page).toHaveURL(/\/v2\/?$/);
-}
+import { loginAsAdmin } from "./fixtures/auth-helpers";
 
 /**
  * Accessibility baseline — see docs/accessibility.md.
  *
- * Walks every authenticated route and asserts no critical/serious axe-core
- * violations. Designed to keep the bar high (catches real assistive-tech
- * blockers) without drowning in subjective rule complaints.
- *
- * If a future page is added, register it here with a `test(...)` block.
+ * Walks every covered route in /v2/ (login + post-login + admin) and asserts
+ * no critical/serious axe-core violations. Designed to keep the bar high
+ * (catches real assistive-tech blockers) without drowning in subjective rule
+ * complaints. Add new routes here with a fresh `test(...)` block.
  */
 test.describe("a11y baseline", () => {
   test("login page", async ({ page }) => {
