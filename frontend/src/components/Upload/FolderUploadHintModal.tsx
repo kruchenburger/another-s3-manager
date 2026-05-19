@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Button, Checkbox, Modal, Stack, Text, ThemeIcon } from "@mantine/core";
+import { useEffect, useState } from "react";
+import { Button, Checkbox, Group, Modal, Stack, Text, ThemeIcon } from "@mantine/core";
 import { MousePointerClick, Sparkles } from "lucide-react";
 
 const STORAGE_KEY = "upload:hintDismissed";
@@ -62,8 +62,16 @@ export function FolderUploadHintModal({ opened, mode, onClose, onProceed }: Fold
   // Pre-check the dismiss for plain-files mode (high-frequency action; we
   // don't want to nag); start unchecked for folder mode where the modal
   // doubles as the picker confirmation step.
-  const initialDismiss = mode === "files";
-  const [dontShowAgain, setDontShowAgain] = useState(initialDismiss);
+  const [dontShowAgain, setDontShowAgain] = useState(() => mode === "files");
+  // Parent controls the modal with `opened` and keeps the component mounted
+  // across reopens — so we must re-sync the checkbox when the `mode` prop
+  // changes, otherwise the previous mode's pre-check state leaks into the
+  // next invocation. Anything the user has explicitly toggled while the modal
+  // is open should NOT survive a mode switch either — the mode change is
+  // semantically a "different modal".
+  useEffect(() => {
+    setDontShowAgain(mode === "files");
+  }, [mode]);
 
   const handleProceed = () => {
     if (dontShowAgain) setDismissed();
@@ -98,12 +106,12 @@ export function FolderUploadHintModal({ opened, mode, onClose, onProceed }: Fold
 
         <Stack gap="sm">
           <Stack gap={4}>
-            <Stack gap={4} style={{ flexDirection: "row", alignItems: "center" }}>
+            <Group gap={4} align="center">
               <ThemeIcon variant="light" color="amber" size="md" radius="md">
                 <Sparkles size={16} />
               </ThemeIcon>
               <Text fw={600}>Drag and drop (recommended)</Text>
-            </Stack>
+            </Group>
             <Text size="sm" c="dimmed" ml={44}>
               {mode === "folder"
                 ? "Drag a folder from your file manager onto this page. Works with multiple folders at once and skips the native picker dialog."
@@ -112,14 +120,14 @@ export function FolderUploadHintModal({ opened, mode, onClose, onProceed }: Fold
           </Stack>
 
           <Stack gap={4}>
-            <Stack gap={4} style={{ flexDirection: "row", alignItems: "center" }}>
+            <Group gap={4} align="center">
               <ThemeIcon variant="light" color="gray" size="md" radius="md">
                 <MousePointerClick size={16} />
               </ThemeIcon>
               <Text fw={600}>
                 {mode === "folder" ? "Browser folder picker" : "Browser file picker"}
               </Text>
-            </Stack>
+            </Group>
             <Text size="sm" c="dimmed" ml={44}>
               {mode === "folder"
                 ? "Click below to open your browser's folder selection dialog."
@@ -135,12 +143,12 @@ export function FolderUploadHintModal({ opened, mode, onClose, onProceed }: Fold
           size="sm"
         />
 
-        <Stack gap={8} style={{ flexDirection: "row", justifyContent: "flex-end" }}>
+        <Group gap={8} justify="flex-end">
           <Button variant="default" onClick={handleClose}>
             Cancel
           </Button>
           <Button onClick={handleProceed}>{proceedLabel}</Button>
-        </Stack>
+        </Group>
       </Stack>
     </Modal>
   );

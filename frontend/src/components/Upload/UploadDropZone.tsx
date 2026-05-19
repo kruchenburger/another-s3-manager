@@ -5,6 +5,8 @@ import {
   type FileWithRelativePath,
   expandDirectoryEntries,
 } from "@/utils/folderUpload";
+import { showToast } from "@/utils/toast";
+import { getErrorMessage } from "@/utils/apiError";
 
 interface UploadDropZoneProps {
   currentPath: string;
@@ -70,10 +72,22 @@ export function UploadDropZone({ currentPath, onDrop, active = true }: UploadDro
         // Asynchronous walker — fire-and-forget the promise; the onDrop callback
         // is invoked once the walk completes. We deliberately do NOT await here
         // because the handler is a DOM event listener; instead the consumer
-        // receives the resolved file list when ready.
-        expandDirectoryEntries(items).then((files) => {
-          if (files.length > 0) onDrop(files);
-        });
+        // receives the resolved file list when ready. A `.catch` is mandatory:
+        // `readEntries` can reject mid-walk (e.g. user revokes filesystem
+        // permission during the traversal) and without it the drop silently
+        // vanishes with zero user feedback.
+        expandDirectoryEntries(items)
+          .then((files) => {
+            if (files.length > 0) onDrop(files);
+          })
+          .catch((err: unknown) => {
+            showToast({
+              color: "red",
+              title: "Could not read dropped folder",
+              message: getErrorMessage(err),
+              autoClose: 10000,
+            });
+          });
         return;
       }
 

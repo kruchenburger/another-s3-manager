@@ -72,16 +72,26 @@ export function uploadFile(
       };
     }
 
+    // Centralised cleanup so we never leak the abort listener on the (often
+    // batch-shared) AbortSignal. Every terminal handler (`onload`, `onerror`,
+    // `onabort`) calls this first thing.
+    const cleanup = () => {
+      if (options.signal) options.signal.removeEventListener("abort", onAbort);
+    };
+
     const onAbort = () => {
+      // Trigger XHR cancellation. The actual promise rejection happens in
+      // `xhr.onabort` so browser-initiated aborts (e.g. page navigation) are
+      // also covered — without `xhr.onabort` they would leave the promise
+      // hanging forever.
       xhr.abort();
-      reject(new DOMException("Upload aborted", "AbortError"));
     };
     if (options.signal) {
       options.signal.addEventListener("abort", onAbort);
     }
 
     xhr.onload = () => {
-      if (options.signal) options.signal.removeEventListener("abort", onAbort);
+      cleanup();
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve();
         return;
@@ -97,11 +107,16 @@ export function uploadFile(
     };
 
     xhr.onerror = () => {
-      if (options.signal) options.signal.removeEventListener("abort", onAbort);
+      cleanup();
       // Network failure — no HTTP status. Mirror the apiRequest fetch path which
       // surfaces this as a TypeError; we surface as an ApiError(0, ...) so the
       // upload toast has a consistent shape across HTTP and network failures.
       reject(new ApiError(0, "Network error during upload", null));
+    };
+
+    xhr.onabort = () => {
+      cleanup();
+      reject(new DOMException("Upload aborted", "AbortError"));
     };
 
     xhr.send(body);

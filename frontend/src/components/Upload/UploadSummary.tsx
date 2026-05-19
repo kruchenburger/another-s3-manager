@@ -52,17 +52,20 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
   // toast edge — last row gets cut, headline disappears as the viewport shifts.
   // Override to `visible` here so the entire message area (headline + scroll
   // window + timer bar) renders without Mantine truncation. `position: relative`
-  // anchors the absolutely-positioned timer bar to this Stack.
+  // anchors the absolutely-positioned timer bar to this Stack. These three
+  // properties have no Mantine prop equivalents, so an inline style is the
+  // only way to express them. Padding-bottom for the timer bar IS a Mantine
+  // prop (`pb`) and goes through the `Stack` API instead.
   const wrapperStyle: CSSProperties = {
     position: "relative",
     overflow: "visible",
     textOverflow: "clip",
-    ...(timer ? { paddingBottom: 6 } : {}),
   };
+  const wrapperPb = timer ? 6 : 0;
 
   if (failed.length === 0 && cancelled === 0) {
     return (
-      <Stack gap={0} style={wrapperStyle}>
+      <Stack gap={0} pb={wrapperPb} style={wrapperStyle}>
         <Text size="sm" fw={500}>
           Uploaded {total} {total === 1 ? "file" : "files"}
         </Text>
@@ -73,7 +76,7 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
 
   if (failed.length === 0 && cancelled > 0) {
     return (
-      <Stack gap={0} style={wrapperStyle}>
+      <Stack gap={0} pb={wrapperPb} style={wrapperStyle}>
         <Text size="sm" fw={500}>
           Upload cancelled — {done} of {total} files uploaded
         </Text>
@@ -88,7 +91,7 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
       : `${done}/${total} files uploaded — ${failed.length} failed`;
 
   return (
-    <Stack gap={6} style={wrapperStyle}>
+    <Stack gap={6} pb={wrapperPb} style={wrapperStyle}>
       <Text size="sm" fw={500}>
         {headline}
       </Text>
