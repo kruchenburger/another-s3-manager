@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { Anchor, List, Stack, Text } from "@mantine/core";
 import { AutoCloseProgress } from "./AutoCloseProgress";
 import type { UploadProgressItem } from "./UploadProgress";
+import classes from "./UploadSummary.module.css";
 
 interface UploadSummaryProps {
   items: UploadProgressItem[];
@@ -46,7 +47,18 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
   // containing block instead of bubbling up to the nearest positioned ancestor
   // (Mantine's notification root, which would visually look fine but is brittle).
   const timer = autoCloseMs && autoCloseMs > 0 ? <AutoCloseProgress durationMs={autoCloseMs} /> : null;
-  const wrapperStyle = timer ? { position: "relative" as const, paddingBottom: 6 } : undefined;
+  // Mantine's notification message body has `overflow: hidden` and `text-overflow: ellipsis`
+  // baked into the .m_3d733a3a class, which clips our scrollable list at the
+  // toast edge — last row gets cut, headline disappears as the viewport shifts.
+  // Override to `visible` here so the entire message area (headline + scroll
+  // window + timer bar) renders without Mantine truncation. `position: relative`
+  // anchors the absolutely-positioned timer bar to this Stack.
+  const wrapperStyle: CSSProperties = {
+    position: "relative",
+    overflow: "visible",
+    textOverflow: "clip",
+    ...(timer ? { paddingBottom: 6 } : {}),
+  };
 
   if (failed.length === 0 && cancelled === 0) {
     return (
@@ -105,8 +117,9 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
             // instead of stretching the toast off-screen. Mantine pauses the
             // notification's autoClose timer on mouseEnter — so while the
             // user is reading / scrolling through the failed list, the toast
-            // won't dismiss out from under them.
-            style={{ maxHeight: 200, overflowY: "auto" }}
+            // won't dismiss out from under them. CSS module also slims the
+            // browser scrollbar so it doesn't dominate the panel.
+            className={classes.scrollArea}
           >
             <List size="xs" spacing={2} withPadding>
               {failed.map((item) => (
