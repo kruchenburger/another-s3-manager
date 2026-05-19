@@ -362,6 +362,17 @@ export function FileBrowser() {
         color: allDone ? "green" : wasCancelled && !hasErrors ? "gray" : "yellow",
         autoClose: autoCloseMs,
         withCloseButton: true,
+        // Override Mantine's baked-in body clipping. Without these, the
+        // notification root's `align-items: center` + `overflow: hidden` on
+        // the description body would cut the headline off the top and the
+        // last list row off the bottom of a tall failed-files summary. We
+        // want the message to render in full and let the inner scroll-area
+        // (UploadSummary's maxHeight container) be the only clipping point.
+        styles: {
+          root: { alignItems: "stretch" },
+          body: { overflow: "visible" },
+          description: { overflow: "visible", textOverflow: "clip" },
+        },
       });
     },
     [bucket, roleId, pathFromUrl, uploadMutation, me.data?.max_file_size],
