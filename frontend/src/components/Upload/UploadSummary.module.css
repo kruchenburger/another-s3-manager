@@ -8,7 +8,11 @@
    scrollbar is the indicator that there's more content below. */
 
 .scrollArea {
-  max-height: 200px;
+  /* Tuned to fit ~6 typical failed rows (filename + error wrapping to 2 lines
+     each) before the user has to scroll. Combined with the wider 540px toast
+     in expanded mode, this fits the common case (file too large) on a single
+     line of error text per item, so 6 rows = 6 distinct failures visible. */
+  max-height: 240px;
   overflow-y: auto;
 
   /* Firefox */
