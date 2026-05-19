@@ -28,6 +28,13 @@ export interface MeResponse {
    * before the user clicks (avoids the "click → 403" UX dead-end).
    */
   disable_deletion: boolean;
+  /**
+   * Server-enforced per-file upload limit in bytes. Surfaced to the client so
+   * uploads that would fail server-side can be rejected pre-flight with a
+   * useful "file X is N MB, limit is M MB" message — without this the user
+   * just sees a generic 400 after the file has already streamed over the wire.
+   */
+  max_file_size: number;
 }
 
 export interface AppInfo {

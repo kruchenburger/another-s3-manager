@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 import { UploadProgress } from "@/components/Upload/UploadProgress";
 
@@ -20,7 +21,7 @@ describe("UploadProgress", () => {
     expect(screen.getByText(/0\/3/)).toBeInTheDocument();
   });
 
-  it("shows error count when failures occur", () => {
+  it("shows error count when failures occur (settled includes done + errors)", () => {
     render(
       <MantineProvider>
         <UploadProgress
@@ -32,7 +33,9 @@ describe("UploadProgress", () => {
         />
       </MantineProvider>,
     );
-    expect(screen.getByText(/2\/3.*1 failed/)).toBeInTheDocument();
+    // The counter shows settled / total, where settled = done + error + cancelled.
+    // 2 done + 1 error = 3 settled out of 3 total.
+    expect(screen.getByText(/3\/3.*1 failed/)).toBeInTheDocument();
   });
 
   it("uses singular for one file", () => {
@@ -42,5 +45,47 @@ describe("UploadProgress", () => {
       </MantineProvider>,
     );
     expect(screen.getByText(/Uploading 1 file$/)).toBeInTheDocument();
+  });
+
+  it("renders the current file's name and percentage while uploading", () => {
+    render(
+      <MantineProvider>
+        <UploadProgress
+          items={[
+            { name: "big-video.mp4", status: "uploading", progress: 42 },
+            { name: "later.txt", status: "pending" },
+          ]}
+        />
+      </MantineProvider>,
+    );
+    // Per-file progress for the big-video file — answers the user complaint
+    // that a single big-file upload "just hangs at 0/1".
+    expect(screen.getByText("big-video.mp4")).toBeInTheDocument();
+    expect(screen.getByText("42%")).toBeInTheDocument();
+  });
+
+  it("renders the cancel button and invokes onCancel when clicked", async () => {
+    const onCancel = vi.fn();
+    render(
+      <MantineProvider>
+        <UploadProgress
+          items={[{ name: "x.txt", status: "uploading", progress: 10 }]}
+          onCancel={onCancel}
+        />
+      </MantineProvider>,
+    );
+    const button = screen.getByRole("button", { name: /cancel upload/i });
+    expect(button).toBeInTheDocument();
+    await userEvent.click(button);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the cancel button when onCancel is not provided (final summary state)", () => {
+    render(
+      <MantineProvider>
+        <UploadProgress items={[{ name: "x.txt", status: "done" }]} />
+      </MantineProvider>,
+    );
+    expect(screen.queryByRole("button", { name: /cancel upload/i })).not.toBeInTheDocument();
   });
 });

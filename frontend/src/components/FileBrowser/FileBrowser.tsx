@@ -15,6 +15,7 @@ import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
 import { UploadProgress, type UploadProgressItem } from "@/components/Upload/UploadProgress";
+import { UploadSummary } from "@/components/Upload/UploadSummary";
 import { type FileWithRelativePath, filesFromFolderInput } from "@/utils/folderUpload";
 import { FileBrowserHeader } from "./FileBrowserHeader";
 import { FileTable } from "./FileTable";
@@ -229,24 +230,69 @@ export function FileBrowser() {
 
   const handleUpload = useCallback(
     async (files: FileWithRelativePath[]) => {
+      const maxFileSize = me.data?.max_file_size;
       const items: UploadProgressItem[] = files.map((f) => ({ name: f.file.name, status: "pending" }));
 
+      // Single AbortController for the whole batch. Cancel button triggers
+      // abort() which both stops the in-flight XHR (via signal) AND sets
+      // signal.aborted=true so the loop bails before starting the next file.
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+
+      // Hold the latest snapshot so the cancel button can show a sensible
+      // final-state toast (otherwise the toast keeps re-rendering with stale
+      // "uploading" status after the abort).
+      const updated = [...items];
+
+      const renderToast = () => {
+        notifications.update({
+          id: notifId,
+          message: <UploadProgress items={updated} onCancel={cancel} />,
+          autoClose: false,
+          withCloseButton: false,
+        });
+      };
+
       const notifId = notifications.show({
-        message: <UploadProgress items={items} />,
+        message: <UploadProgress items={items} onCancel={cancel} />,
         autoClose: false,
         withCloseButton: false,
       });
 
-      const updated = [...items];
       for (let i = 0; i < files.length; i++) {
+        // Cancel-aware loop guard. Once the user clicks cancel, mark every
+        // remaining file as "cancelled" so the summary tells them what was
+        // skipped, rather than leaving them as forever-"pending".
+        if (controller.signal.aborted) {
+          for (let j = i; j < files.length; j++) {
+            updated[j] = { ...updated[j], status: "cancelled" };
+          }
+          break;
+        }
+
         const item = files[i];
-        updated[i] = { ...updated[i], status: "uploading" };
-        notifications.update({
-          id: notifId,
-          message: <UploadProgress items={updated} />,
-          autoClose: false,
-          withCloseButton: false,
-        });
+
+        // Pre-flight size check — skip the server round-trip for files we
+        // already know will be rejected. The backend enforces the same limit
+        // (streaming check in upload route), but doing it client-side first
+        // means the user sees "doc.zip is 419 MB, limit is 100 MB" instead of
+        // a generic 400 after the file has streamed up. Without this, batches
+        // with one oversize file in the middle just silently skip it and the
+        // user has no way to tell which file failed.
+        if (maxFileSize !== undefined && item.file.size > maxFileSize) {
+          const fileMb = (item.file.size / (1024 * 1024)).toFixed(1);
+          const limitMb = (maxFileSize / (1024 * 1024)).toFixed(0);
+          updated[i] = {
+            ...updated[i],
+            status: "error",
+            error: `File is ${fileMb} MB, limit is ${limitMb} MB`,
+          };
+          renderToast();
+          continue;
+        }
+
+        updated[i] = { ...updated[i], status: "uploading", progress: 0 };
+        renderToast();
         try {
           const key = pathFromUrl ? `${pathFromUrl}/${item.relativePath}` : item.relativePath;
           await uploadMutation.mutateAsync({
@@ -255,37 +301,46 @@ export function FileBrowser() {
             key,
             file: item.file,
             currentPath: pathFromUrl,
+            signal: controller.signal,
+            onProgress: (percent) => {
+              // Throttle by skipping no-op updates — every progress event would
+              // otherwise trigger a Mantine notifications re-render.
+              if (updated[i].progress === percent) return;
+              updated[i] = { ...updated[i], progress: percent };
+              renderToast();
+            },
           });
-          updated[i] = { ...updated[i], status: "done" };
+          updated[i] = { ...updated[i], status: "done", progress: 100 };
         } catch (e) {
+          // Abort isn't a real failure — it's a user action. Distinguish so
+          // the summary doesn't shout "ERROR" at the user who clicked cancel.
+          const isAbort =
+            e instanceof DOMException && e.name === "AbortError";
           updated[i] = {
             ...updated[i],
-            status: "error",
-            error: e instanceof Error ? e.message : "unknown error",
+            status: isAbort ? "cancelled" : "error",
+            error: isAbort ? undefined : e instanceof Error ? e.message : "unknown error",
           };
         }
-        notifications.update({
-          id: notifId,
-          message: <UploadProgress items={updated} />,
-          autoClose: false,
-          withCloseButton: false,
-        });
+        renderToast();
       }
 
-      // Final summary toast
+      // Final summary toast — `UploadSummary` surfaces failed filenames + their
+      // error messages so a 223/224 batch tells the user WHICH file failed.
+      // When there are errors or cancellations we leave the toast open
+      // (autoClose: false) so the user can actually read the result.
       const allDone = updated.every((u) => u.status === "done");
-      const doneCount = updated.filter((u) => u.status === "done").length;
+      const hasErrors = updated.some((u) => u.status === "error");
+      const wasCancelled = updated.some((u) => u.status === "cancelled");
       notifications.update({
         id: notifId,
-        message: allDone
-          ? `Uploaded ${updated.length} file${updated.length === 1 ? "" : "s"}`
-          : `${doneCount}/${updated.length} files uploaded`,
-        color: allDone ? "green" : "yellow",
-        autoClose: 5000,
+        message: <UploadSummary items={updated} />,
+        color: allDone ? "green" : wasCancelled && !hasErrors ? "gray" : "yellow",
+        autoClose: hasErrors || wasCancelled ? false : 5000,
         withCloseButton: true,
       });
     },
-    [bucket, roleId, pathFromUrl, uploadMutation],
+    [bucket, roleId, pathFromUrl, uploadMutation, me.data?.max_file_size],
   );
 
   const handleUploadClick = () => {

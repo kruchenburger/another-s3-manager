@@ -1,4 +1,6 @@
 import { apiRequest } from "@/hooks/useApiClient";
+import { ApiError } from "@/utils/apiError";
+import { getCsrfToken } from "@/utils/csrf";
 import type { BucketList, FileListResponse } from "@/types/api";
 
 export async function listBuckets(role: string): Promise<BucketList> {
@@ -12,19 +14,97 @@ export async function listFiles(bucket: string, role: string, path: string): Pro
   return apiRequest<FileListResponse>(`/api/buckets/${encodeURIComponent(bucket)}/files?${params}`);
 }
 
-export async function uploadFile(
+export interface UploadFileOptions {
+  /** Called periodically with 0..100 percent of the file body uploaded. The
+   *  browser fires `progress` events on the request body stream as bytes
+   *  leave the network buffer; for files smaller than ~1MB this can fire
+   *  zero or one times. */
+  onProgress?: (percent: number) => void;
+  /** AbortSignal — when triggered, the in-flight upload is cancelled and
+   *  the promise rejects with `new DOMException("...", "AbortError")`. */
+  signal?: AbortSignal;
+}
+
+/**
+ * POST a single file to the upload endpoint.
+ *
+ * Uses XMLHttpRequest (not fetch) because the fetch API has no built-in
+ * upload-progress events and no streaming-request abort that works in all
+ * supported browsers. XHR's `upload.onprogress` and `xhr.abort()` cover both
+ * features needed for a UX that respects the user's time on large or many-file
+ * uploads.
+ *
+ * Throws an `ApiError` on non-2xx (with the parsed JSON body when available),
+ * or a DOMException with `name === "AbortError"` if the caller's signal fires.
+ */
+export function uploadFile(
   bucket: string,
   role: string,
   key: string,
   file: File,
+  options: UploadFileOptions = {},
 ): Promise<void> {
-  const body = new FormData();
-  body.append("file", file);
-  body.append("key", key);
-  body.append("role", role);
-  await apiRequest<void>(`/api/buckets/${encodeURIComponent(bucket)}/upload`, {
-    method: "POST",
-    body,
+  return new Promise((resolve, reject) => {
+    // Abort BEFORE we even open the request — bail out without sending.
+    if (options.signal?.aborted) {
+      reject(new DOMException("Upload aborted", "AbortError"));
+      return;
+    }
+
+    const body = new FormData();
+    body.append("file", file);
+    body.append("key", key);
+    body.append("role", role);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/buckets/${encodeURIComponent(bucket)}/upload`, true);
+    xhr.withCredentials = true;
+    const csrf = getCsrfToken();
+    if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
+    xhr.setRequestHeader("Accept", "application/json");
+
+    if (options.onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          options.onProgress!(percent);
+        }
+      };
+    }
+
+    const onAbort = () => {
+      xhr.abort();
+      reject(new DOMException("Upload aborted", "AbortError"));
+    };
+    if (options.signal) {
+      options.signal.addEventListener("abort", onAbort);
+    }
+
+    xhr.onload = () => {
+      if (options.signal) options.signal.removeEventListener("abort", onAbort);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+        return;
+      }
+      // Try to parse the server's structured error body for the toast.
+      let body: unknown = null;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        // non-JSON error body — keep null
+      }
+      reject(new ApiError(xhr.status, xhr.statusText || `HTTP ${xhr.status}`, body));
+    };
+
+    xhr.onerror = () => {
+      if (options.signal) options.signal.removeEventListener("abort", onAbort);
+      // Network failure — no HTTP status. Mirror the apiRequest fetch path which
+      // surfaces this as a TypeError; we surface as an ApiError(0, ...) so the
+      // upload toast has a consistent shape across HTTP and network failures.
+      reject(new ApiError(0, "Network error during upload", null));
+    };
+
+    xhr.send(body);
   });
 }
 
