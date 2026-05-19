@@ -1,15 +1,15 @@
-/* Thin scrollbar for the failed-files list inside the upload summary toast.
+/* Slim scrollbar for the failed-files list inside the upload summary toast.
    Default browser scrollbars are 12-16px wide — too heavy for a small panel
    embedded inside a toast. We aim for ~4px so it's visible enough to grab
-   but doesn't dominate the panel. */
+   but doesn't dominate the panel.
+
+   Partial-row clipping at the bottom edge is intentional — it's how scroll
+   containers work everywhere (Discord, Slack, GitHub PR diffs). The slim
+   scrollbar is the indicator that there's more content below. */
 
 .scrollArea {
   max-height: 200px;
   overflow-y: auto;
-
-  /* Breathing room below the last row. Without this, the last visible row
-     sits flush against the scroll-area's bottom edge and looks clipped. */
-  padding-bottom: 12px;
 
   /* Firefox */
   scrollbar-width: thin;
