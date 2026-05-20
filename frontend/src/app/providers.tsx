@@ -4,7 +4,7 @@ import { Notifications } from "@mantine/notifications";
 import { QueryClientProvider } from "@tanstack/react-query";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
-import { theme } from "@/app/theme";
+import { cssVariablesResolver, theme } from "@/app/theme";
 import { queryClient } from "@/app/queryClient";
 
 interface AppProvidersProps {
@@ -17,7 +17,11 @@ interface AppProvidersProps {
 export function AppProviders({ children }: AppProvidersProps) {
   return (
     <QueryClientProvider client={queryClient}>
-      <MantineProvider theme={theme} defaultColorScheme="dark">
+      <MantineProvider
+        theme={theme}
+        defaultColorScheme="dark"
+        cssVariablesResolver={cssVariablesResolver}
+      >
         <Notifications position="bottom-right" />
         {children}
       </MantineProvider>

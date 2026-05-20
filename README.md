@@ -165,6 +165,10 @@ JWT_SECRET_KEY=dev-secret uv run python -m another_s3_manager.main
 # Persists SQLite + config.json under ./data (per .env.example)
 ```
 
+**Accessibility:** see [`docs/accessibility.md`](docs/accessibility.md) for the
+WCAG 2.1 AA baseline (axe-core via Playwright) and how to run the a11y spec
+locally.
+
 ## IAM Policy
 
 Minimum permissions needed:
