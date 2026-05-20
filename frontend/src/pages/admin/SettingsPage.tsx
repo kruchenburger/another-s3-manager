@@ -1,13 +1,4 @@
-import {
-  Alert,
-  Button,
-  NumberInput,
-  Stack,
-  Switch,
-  TagsInput,
-  Text,
-  Title,
-} from "@mantine/core";
+import { Alert, Stack, Tabs, Title } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useEffect } from "react";
 import { useAdminConfig, useSaveConfig } from "@/features/admin/hooks/useAdminConfig";
@@ -16,36 +7,71 @@ import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { runWithToasts } from "@/utils/mutationToast";
 import { getErrorMessage } from "@/utils/apiError";
 import type { AppConfig } from "@/types/api";
+import { SettingsGeneralTab } from "./SettingsGeneralTab";
+import { SettingsSecurityTab } from "./SettingsSecurityTab";
+import { SettingsMcpTab } from "./SettingsMcpTab";
 
 const MB = 1024 * 1024;
 
+/** Shape of the Settings form values. Exported so each tab body can type its
+ *  `form` prop precisely — keeps `getInputProps("foo")` type-safe across the
+ *  split components. */
+export interface SettingsFormValues {
+  items_per_page: number;
+  disable_deletion: boolean;
+  enable_lazy_loading: boolean;
+  max_file_size_mb: number;
+  auto_inline_extensions: string[];
+  password_min_length: number;
+  password_min_uppercase: number;
+  password_min_lowercase: number;
+  password_min_digits: number;
+  password_min_special: number;
+  mcp_enabled: boolean;
+  mcp_disable_writes: boolean;
+  mcp_text_extensions: string[];
+  mcp_global_max_read_bytes_mb: number;
+}
+
+/**
+ * Admin Settings page.
+ *
+ * Layout is split across three Mantine tabs (General / Security / MCP) so the
+ * Save button is visible on every tab without scrolling — the long unified
+ * form was below the fold on most viewports.
+ *
+ * One shared useForm + one wrapping <form> means clicking Save in any tab
+ * submits the whole config to POST /api/config — which is atomic anyway, so
+ * splitting into per-tab POSTs would be a fiction. Dirty state is shared
+ * across tabs: editing General then opening Security and clicking Save
+ * persists both edits.
+ */
 export function SettingsPage() {
   const { data: config, isLoading, error } = useAdminConfig();
   const save = useSaveConfig();
 
-  const form = useForm({
+  const form = useForm<SettingsFormValues>({
     initialValues: {
       items_per_page: 200,
       disable_deletion: false,
       enable_lazy_loading: true,
       max_file_size_mb: 100,
-      auto_inline_extensions: [] as string[],
+      auto_inline_extensions: [],
       password_min_length: 8,
       password_min_uppercase: 1,
       password_min_lowercase: 1,
       password_min_digits: 1,
       password_min_special: 0,
-      // MCP server fields (MB-converted value stored separately)
       mcp_enabled: true,
       mcp_disable_writes: false,
-      mcp_text_extensions: [] as string[],
+      mcp_text_extensions: [],
       mcp_global_max_read_bytes_mb: 10,
     },
   });
 
   useEffect(() => {
     if (!config) return;
-    const populated = {
+    const populated: SettingsFormValues = {
       items_per_page: config.items_per_page,
       disable_deletion: config.disable_deletion,
       enable_lazy_loading: config.enable_lazy_loading,
@@ -84,6 +110,7 @@ export function SettingsPage() {
   if (!config) return null;
 
   const readOnly = config.is_read_only === true;
+
   const onSubmit = form.onSubmit((values) => {
     const next: AppConfig = {
       ...toWritableConfig(config),
@@ -104,7 +131,7 @@ export function SettingsPage() {
       mcp_enabled: values.mcp_enabled,
       mcp_disable_writes: values.mcp_disable_writes,
       mcp_text_extensions: values.mcp_text_extensions,
-      // Preserve original byte precision when user didn't touch the MB field
+      // Same byte-precision preservation for the MCP read-cap MB field.
       mcp_global_max_read_bytes: form.isDirty("mcp_global_max_read_bytes_mb")
         ? Math.round(values.mcp_global_max_read_bytes_mb * MB)
         : config.mcp_global_max_read_bytes,
@@ -124,136 +151,29 @@ export function SettingsPage() {
       )}
 
       <form onSubmit={onSubmit}>
-        <Stack gap="md" maw={520}>
-          <NumberInput
-            label="Items per page"
-            min={10}
-            max={1000}
-            step={10}
-            disabled={readOnly}
-            {...form.getInputProps("items_per_page")}
-          />
-          <Switch
-            label="Disable deletion"
-            description="When on, S3 file/folder delete operations return 403 server-side. Admin actions (deleting users, removing bans, deleting roles) are NOT affected."
-            disabled={readOnly}
-            {...form.getInputProps("disable_deletion", { type: "checkbox" })}
-          />
-          <Switch
-            label="Enable lazy loading"
-            description="Pagination on file lists for large buckets."
-            disabled={readOnly}
-            {...form.getInputProps("enable_lazy_loading", { type: "checkbox" })}
-          />
-          <NumberInput
-            label="Max upload file size (MB)"
-            min={1}
-            max={5120}
-            disabled={readOnly}
-            {...form.getInputProps("max_file_size_mb")}
-          />
-          <TagsInput
-            label="Auto-inline extensions"
-            description="Files with these extensions render inline in the preview modal. e.g. txt, md, json"
-            disabled={readOnly}
-            {...form.getInputProps("auto_inline_extensions")}
-          />
-          <Title order={3} mt="md">
-            Password policy
-          </Title>
-          <Text size="sm" c="dimmed">
-            Enforced when a user changes their own password or an admin
-            creates/resets another user&apos;s password. Set any value to 0 to
-            disable that requirement. Existing passwords are not re-validated.
-          </Text>
-          <NumberInput
-            label="Minimum length"
-            description="Set to 0 to disable"
-            min={0}
-            max={50}
-            step={1}
-            disabled={readOnly}
-            {...form.getInputProps("password_min_length")}
-          />
-          <NumberInput
-            label="Minimum uppercase letters"
-            description="Set to 0 to disable"
-            min={0}
-            max={50}
-            step={1}
-            disabled={readOnly}
-            {...form.getInputProps("password_min_uppercase")}
-          />
-          <NumberInput
-            label="Minimum lowercase letters"
-            description="Set to 0 to disable"
-            min={0}
-            max={50}
-            step={1}
-            disabled={readOnly}
-            {...form.getInputProps("password_min_lowercase")}
-          />
-          <NumberInput
-            label="Minimum digits"
-            description="Set to 0 to disable"
-            min={0}
-            max={50}
-            step={1}
-            disabled={readOnly}
-            {...form.getInputProps("password_min_digits")}
-          />
-          <NumberInput
-            label="Minimum special characters"
-            description="Set to 0 to disable"
-            min={0}
-            max={50}
-            step={1}
-            disabled={readOnly}
-            {...form.getInputProps("password_min_special")}
-          />
-          <Title order={3} mt="md">
-            MCP Server
-          </Title>
-          <Text size="sm" c="dimmed">
-            Model Context Protocol server for AI agents. Changes take effect
-            immediately after save. Token-level caps still apply on top of these
-            global limits.
-          </Text>
-          <Switch
-            label="Enable MCP server"
-            description="When off, /mcp/* endpoints return 503."
-            disabled={readOnly}
-            {...form.getInputProps("mcp_enabled", { type: "checkbox" })}
-          />
-          <Switch
-            label="Disable writes via MCP"
-            description="Forces all MCP tokens to read-only regardless of their per-token flag."
-            disabled={readOnly}
-            {...form.getInputProps("mcp_disable_writes", { type: "checkbox" })}
-          />
-          <NumberInput
-            label="Global max read bytes (MB)"
-            description="Server-wide cap on read_file response size. Applied as min(token cap, this). Hard ceiling: 10 MB."
-            min={0.001}
-            max={10}
-            step={0.5}
-            decimalScale={3}
-            disabled={readOnly}
-            {...form.getInputProps("mcp_global_max_read_bytes_mb")}
-          />
-          <TagsInput
-            label="Additional text extensions for read_file"
-            description="Per-deployment whitelist extensions beyond built-in defaults (e.g. mdx, rst, adoc)."
-            placeholder="Add extension and press Enter"
-            disabled={readOnly}
-            {...form.getInputProps("mcp_text_extensions")}
-          />
-          {!readOnly && (
-            <Button type="submit" loading={save.isPending}>
-              Save settings
-            </Button>
-          )}
-        </Stack>
+        {/* keepMounted: keeps inactive tab panels in the DOM so their inputs
+            participate in the form, screen-readers can announce them, and
+            React Testing Library can find them by label without a tab click.
+            Field count is small (14 total), perf cost is negligible. */}
+        <Tabs defaultValue="general" keepMounted>
+          <Tabs.List>
+            <Tabs.Tab value="general">General</Tabs.Tab>
+            <Tabs.Tab value="security">Security</Tabs.Tab>
+            <Tabs.Tab value="mcp">MCP</Tabs.Tab>
+          </Tabs.List>
+
+          <Tabs.Panel value="general">
+            <SettingsGeneralTab form={form} readOnly={readOnly} isPending={save.isPending} />
+          </Tabs.Panel>
+
+          <Tabs.Panel value="security">
+            <SettingsSecurityTab form={form} readOnly={readOnly} isPending={save.isPending} />
+          </Tabs.Panel>
+
+          <Tabs.Panel value="mcp">
+            <SettingsMcpTab form={form} readOnly={readOnly} isPending={save.isPending} />
+          </Tabs.Panel>
+        </Tabs>
       </form>
     </Stack>
   );
