@@ -49,9 +49,12 @@ function renderPage() {
   );
 }
 
-/** With <Tabs keepMounted>, every panel renders its Save button to the DOM.
- *  All three buttons are `type="submit"` on the same parent <form>, so
- *  clicking any one submits identically — pick the first. */
+/** The Save button lives in the page-level sticky footer (outside the
+ *  Tabs.Panel subtree), so there's exactly one such button per page. The
+ *  helper uses `getAllByRole(...)[0]` rather than `getByRole(...)` so that
+ *  the read-only path (where the footer is unmounted and no Save button
+ *  exists) can use `queryAllByRole(...)` and assert length 0 without
+ *  ambiguity. */
 function clickSaveSettings() {
   const buttons = screen.getAllByRole("button", { name: /save settings/i });
   fireEvent.click(buttons[0]!);
@@ -92,8 +95,9 @@ describe("SettingsPage", () => {
     await waitFor(() =>
       expect(screen.getByText(/mounted read-only/i)).toBeInTheDocument(),
     );
-    // Every tab hides its own Save button in read-only mode — there should
-    // be zero buttons with the name across the whole page.
+    // The entire sticky Save bar is unmounted in read-only mode (no
+    // editing → no need for Save/Discard at all), so the page should
+    // contain zero buttons with the name.
     expect(
       screen.queryAllByRole("button", { name: /save settings/i }),
     ).toHaveLength(0);
@@ -282,5 +286,146 @@ describe("SettingsPage", () => {
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
     expect(submitted.items_per_page).toBe(500);
     expect(submitted.password_min_length).toBe(12);
+  });
+
+  // -------------------------------------------------------------------------
+  // Regression tests for the form-state hygiene fixes (PR #37 code review).
+  // -------------------------------------------------------------------------
+
+  it("does not fire a second saveConfig call when Save is double-clicked while a save is in-flight", async () => {
+    // Hold saveConfig open until we explicitly resolve, simulating slow network.
+    let resolveSave!: () => void;
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockReturnValue(
+      new Promise<void>((res) => {
+        resolveSave = res;
+      }),
+    );
+    renderPage();
+
+    await waitForSaveButton();
+    // Dirty a field so Save is enabled
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "300" },
+    });
+    // First click — should trigger one mutation
+    clickSaveSettings();
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+
+    // Mutation is in-flight: Save must be disabled (loading + disabled).
+    // A double-click here in the old behavior would fire a second POST.
+    const saveBtn = screen.getAllByRole("button", { name: /save settings/i })[0]!;
+    expect(saveBtn).toBeDisabled();
+    fireEvent.click(saveBtn);
+    fireEvent.click(saveBtn);
+    // Still exactly one call.
+    expect(saveConfig).toHaveBeenCalledTimes(1);
+
+    // Let the save complete so the test doesn't hang on unresolved promise.
+    resolveSave();
+    await waitFor(() => expect(saveBtn).toBeDisabled());
+  });
+
+  it("does NOT overwrite user edits when the config query refetches in the background", async () => {
+    // Simulate a refetch returning a NEW config object reference with the same
+    // values — the populate effect should bail out because the form is dirty.
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    const { rerender } = renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Items per page")).toBeInTheDocument(),
+    );
+
+    // User starts editing
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "750" },
+    });
+    expect(screen.getByLabelText("Items per page")).toHaveValue("750");
+
+    // Simulate a background refetch by re-resolving getConfig with a fresh
+    // object — same payload, new reference. The component re-renders;
+    // useEffect([config]) would fire and call setValues(populated) without
+    // the dirty guard, clobbering the user's "750" back to "200".
+    vi.mocked(getConfig).mockResolvedValueOnce({ ...baseConfig });
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
+        <MantineProvider>
+          <Notifications />
+          <MemoryRouter>
+            <SettingsPage />
+          </MemoryRouter>
+        </MantineProvider>
+      </QueryClientProvider>,
+    );
+    // After "refetch", the user's typed value must still be 750 — NOT 200.
+    // (This is the dirty-guard contract: while form.isDirty(), do not repopulate.)
+    expect(screen.getByLabelText("Items per page")).toHaveValue("750");
+  });
+
+  it("shows an inline error on Items per page when value exceeds the S3 1000-key cap", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+    renderPage();
+    await waitForSaveButton();
+
+    // Push value over the backend's 1000 cap
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "1500" },
+    });
+
+    // Inline error renders under the input
+    await waitFor(() =>
+      expect(screen.getByText(/maximum is 1000/i)).toBeInTheDocument(),
+    );
+
+    // Save is blocked while the form has validation errors — even though
+    // the field is dirty, the backend would reject this value with a 400.
+    const saveBtn = screen.getAllByRole("button", { name: /save settings/i })[0]!;
+    expect(saveBtn).toBeDisabled();
+    // Confirm no POST fires
+    fireEvent.click(saveBtn);
+    expect(saveConfig).not.toHaveBeenCalled();
+  });
+
+  it("captures live form values in the dirty-reset, not the closure snapshot at submit time", async () => {
+    // Slow saveConfig so we can edit between submit and onSuccess.
+    let resolveSave!: () => void;
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockReturnValue(
+      new Promise<void>((res) => {
+        resolveSave = res;
+      }),
+    );
+    renderPage();
+    await waitForSaveButton();
+
+    // Initial edit + click Save
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "300" },
+    });
+    clickSaveSettings();
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+
+    // While Save is in-flight, user types ANOTHER edit. With the buggy
+    // closure-captured `values`, this newer edit would be promoted to the
+    // baseline on save success and silently lost (button goes disabled,
+    // current value stays in the input but isDirty() returns false). The
+    // fix uses form.getValues() so the live value stays dirty.
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "400" },
+    });
+
+    // Resolve the save — onSuccess runs and resets the baseline to the
+    // CURRENT live values (300 was submitted, but live is 400 — baseline
+    // becomes 400, so isDirty() is correctly false against the live value
+    // 400, NOT against the stale closure 300).
+    resolveSave();
+    const saveBtn = () =>
+      screen.getAllByRole("button", { name: /save settings/i })[0]!;
+    await waitFor(() => expect(saveBtn()).toBeDisabled());
+
+    // The value the user typed last must still be visible — not snapped
+    // back to anything else.
+    expect(screen.getByLabelText("Items per page")).toHaveValue("400");
   });
 });

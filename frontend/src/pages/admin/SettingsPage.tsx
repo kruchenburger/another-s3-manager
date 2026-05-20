@@ -69,10 +69,32 @@ export function SettingsPage() {
       mcp_text_extensions: [],
       mcp_global_max_read_bytes_mb: 10,
     },
+    // Inline validation as the user types — so a value like 1500 in
+    // "Items per page" lights up the input in red with a tooltip-style
+    // helper underneath, instead of waiting until Save is clicked. Same
+    // visual pattern (red border + descriptive text under the input)
+    // works for any field added here later.
+    validateInputOnChange: true,
+    validate: {
+      items_per_page: (value) => {
+        if (value < 10) return "Minimum is 10";
+        // Backend caps at 1000 (S3 list_objects_v2 protocol limit).
+        if (value > 1000) return "Maximum is 1000 — S3 lists at most 1000 keys per request";
+        return null;
+      },
+    },
   });
 
   useEffect(() => {
     if (!config) return;
+    // Background refetch guard: useAdminConfig invalidates on save and may
+    // also refetch on its own (the query has no staleTime: Infinity opt-out).
+    // If the user has uncommitted edits, a refetch that fires while they're
+    // typing would silently clobber their work via setValues(populated). The
+    // dirty check bails out in that window — when the user clicks Save (or
+    // Discard) we explicitly advance the baseline below, which clears
+    // isDirty and lets the next refetch populate normally.
+    if (form.isDirty()) return;
     const populated: SettingsFormValues = {
       items_per_page: config.items_per_page,
       disable_deletion: config.disable_deletion,
@@ -113,6 +135,11 @@ export function SettingsPage() {
 
   const readOnly = config.is_read_only === true;
   const isDirty = form.isDirty();
+  // Block Save while any field fails inline validation — otherwise the user
+  // could submit a known-bad value (e.g. items_per_page=1500) and watch the
+  // backend bounce it with a 400. Validating client-side first keeps the
+  // error close to the offending input.
+  const hasValidationErrors = Object.keys(form.errors).length > 0;
 
   const onSubmit = form.onSubmit((values) => {
     const next: AppConfig = {
@@ -139,18 +166,22 @@ export function SettingsPage() {
         ? Math.round(values.mcp_global_max_read_bytes_mb * MB)
         : config.mcp_global_max_read_bytes,
     };
-    // On success, advance the form's "baseline" to the just-saved values so
-    // form.isDirty() returns false again. Without this, the Save bar stays
-    // active forever after the first save — even though there are no more
-    // pending edits — because Mantine's dirty-check compares against the
-    // stale baseline that was set when the page first loaded. The
-    // adminConfig query invalidates separately (useSaveConfig already does
-    // that), but a refetch that returns the same shape WON'T trigger the
-    // useEffect above (config object identity may stay stable), so this
-    // explicit reset is the reliable path.
+    // On success, advance the form's "baseline" to the values that exist at
+    // the moment the response comes back — NOT the closure-captured `values`
+    // snapshot from submit time. If the user edited a field while the POST
+    // was in flight, the in-flight closure would mark those newer edits as
+    // "clean" and silently lose them on the next reload. form.getValues()
+    // reads the live React state, so any concurrent edits stay dirty and
+    // visible.
+    //
+    // Why we reset here even though useSaveConfig invalidates the query:
+    // the populate effect bails out when form.isDirty() is true (background
+    // refetch guard), so the refetch alone can't be relied on to advance
+    // the baseline after a save. Explicit reset closes that gap.
     runWithToasts(save, next, "Settings saved", () => {
-      form.setInitialValues(values);
-      form.resetDirty(values);
+      const current = form.getValues();
+      form.setInitialValues(current);
+      form.resetDirty(current);
     });
   });
 
@@ -236,7 +267,14 @@ export function SettingsPage() {
               <Button
                 type="submit"
                 loading={save.isPending}
-                disabled={!isDirty}
+                // Belt-and-braces: Mantine's `loading` prop hides the label
+                // and shows a spinner, but in v8 it does not unconditionally
+                // block clicks (the underlying button stays enabled unless
+                // disabled is also set). Without this extra guard a rapid
+                // double-click during the network round-trip fires two
+                // POST /api/config calls — same bug pattern flagged on the
+                // RoleDrawer Save button in PR #24.
+                disabled={!isDirty || save.isPending || hasValidationErrors}
               >
                 Save settings
               </Button>
