@@ -49,6 +49,25 @@ function renderPage() {
   );
 }
 
+/** The Save button lives in the page-level sticky footer (outside the
+ *  Tabs.Panel subtree), so there's exactly one such button per page. The
+ *  helper uses `getAllByRole(...)[0]` rather than `getByRole(...)` so that
+ *  the read-only path (where the footer is unmounted and no Save button
+ *  exists) can use `queryAllByRole(...)` and assert length 0 without
+ *  ambiguity. */
+function clickSaveSettings() {
+  const buttons = screen.getAllByRole("button", { name: /save settings/i });
+  fireEvent.click(buttons[0]!);
+}
+
+async function waitForSaveButton() {
+  await waitFor(() =>
+    expect(
+      screen.getAllByRole("button", { name: /save settings/i }).length,
+    ).toBeGreaterThan(0),
+  );
+}
+
 describe("SettingsPage", () => {
   beforeEach(() => {
     vi.mocked(getConfig).mockReset();
@@ -76,7 +95,12 @@ describe("SettingsPage", () => {
     await waitFor(() =>
       expect(screen.getByText(/mounted read-only/i)).toBeInTheDocument(),
     );
-    expect(screen.queryByRole("button", { name: /save settings/i })).not.toBeInTheDocument();
+    // The entire sticky Save bar is unmounted in read-only mode (no
+    // editing → no need for Save/Discard at all), so the page should
+    // contain zero buttons with the name.
+    expect(
+      screen.queryAllByRole("button", { name: /save settings/i }),
+    ).toHaveLength(0);
   });
 
   it("disables form inputs in read-only mode", async () => {
@@ -95,15 +119,19 @@ describe("SettingsPage", () => {
     vi.mocked(saveConfig).mockResolvedValue(undefined);
     renderPage();
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /save settings/i })).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    await waitForSaveButton();
+    // Save is disabled until something is dirty (matches standard form UX).
+    // Bump items_per_page to enable Save without changing the MB field —
+    // that lets us verify the byte-precision-preserved path on max_file_size.
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "300" },
+    });
+    clickSaveSettings();
 
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
-    expect(submitted.items_per_page).toBe(200);
-    expect(submitted.max_file_size).toBe(100 * 1024 * 1024);   // converted from MB
+    expect(submitted.items_per_page).toBe(300);
+    expect(submitted.max_file_size).toBe(100 * 1024 * 1024);   // preserved from original
     expect(submitted.disable_deletion).toBe(false);
   });
 
@@ -114,11 +142,15 @@ describe("SettingsPage", () => {
     vi.mocked(saveConfig).mockResolvedValue(undefined);
     renderPage();
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /save settings/i })).toBeInTheDocument(),
-    );
-    // Don't touch the MB field — just submit
-    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    await waitForSaveButton();
+    // Dirty an UNRELATED field so Save is enabled. The MB field must stay
+    // untouched — that's what this test is verifying. items_per_page lives
+    // in the General tab too, but its dirty state only affects the items
+    // field; max_file_size_mb stays clean and triggers the byte-preserve path.
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "300" },
+    });
+    clickSaveSettings();
 
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
@@ -142,10 +174,12 @@ describe("SettingsPage", () => {
     });
     vi.mocked(saveConfig).mockResolvedValue(undefined);
     renderPage();
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /save settings/i })).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    await waitForSaveButton();
+    // Dirty any field so Save is enabled
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "300" },
+    });
+    clickSaveSettings();
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0] as unknown as Record<string, unknown>;
     expect("data_dir" in submitted).toBe(false);
@@ -178,10 +212,220 @@ describe("SettingsPage", () => {
     // change min_length to 12
     const minLength = screen.getByLabelText(/minimum length/i);
     fireEvent.change(minLength, { target: { value: "12" } });
-    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    clickSaveSettings();
     await waitFor(() => expect(saveConfig).toHaveBeenCalled());
     const sentConfig = vi.mocked(saveConfig).mock.calls[0]![0];
     expect(sentConfig.password_min_length).toBe(12);
     expect(sentConfig.password_min_uppercase).toBe(1);
+  });
+
+  it("renders the three tabs (General / Security / MCP)", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /general/i })).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("tab", { name: /security/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /mcp/i })).toBeInTheDocument();
+
+    // General is the default tab — its fields are reachable by label.
+    expect(screen.getByLabelText("Items per page")).toBeInTheDocument();
+    // Security and MCP tab panels are also mounted (keepMounted) so RTL
+    // can find their fields by label even without clicking the tab.
+    expect(screen.getByLabelText(/minimum length/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/enable mcp server/i)).toBeInTheDocument();
+  });
+
+  it("clears dirty state after a successful save (Save button goes back to disabled)", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+    renderPage();
+
+    await waitForSaveButton();
+
+    // Save starts disabled (nothing dirty yet)
+    const saveButton = () =>
+      screen.getByRole("button", { name: /save settings/i });
+    expect(saveButton()).toBeDisabled();
+
+    // Dirty a field → Save activates
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "500" },
+    });
+    expect(saveButton()).not.toBeDisabled();
+
+    // Click Save → mutation resolves → baseline should advance to current
+    // values, so isDirty() returns false again and Save goes back to disabled.
+    clickSaveSettings();
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(saveButton()).toBeDisabled());
+  });
+
+  it("persists edits from multiple tabs in a single submit (shared form)", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Items per page")).toBeInTheDocument(),
+    );
+
+    // Edit a General field
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "500" },
+    });
+    // Edit a Security field (no tab switch needed — keepMounted exposes it)
+    fireEvent.change(screen.getByLabelText(/minimum length/i), {
+      target: { value: "12" },
+    });
+
+    // Save — should persist BOTH edits in one POST /api/config call
+    clickSaveSettings();
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
+    expect(submitted.items_per_page).toBe(500);
+    expect(submitted.password_min_length).toBe(12);
+  });
+
+  // -------------------------------------------------------------------------
+  // Regression tests for the form-state hygiene fixes (PR #37 code review).
+  // -------------------------------------------------------------------------
+
+  it("does not fire a second saveConfig call when Save is double-clicked while a save is in-flight", async () => {
+    // Hold saveConfig open until we explicitly resolve, simulating slow network.
+    let resolveSave!: () => void;
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockReturnValue(
+      new Promise<void>((res) => {
+        resolveSave = res;
+      }),
+    );
+    renderPage();
+
+    await waitForSaveButton();
+    // Dirty a field so Save is enabled
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "300" },
+    });
+    // First click — should trigger one mutation
+    clickSaveSettings();
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+
+    // Mutation is in-flight: Save must be disabled (loading + disabled).
+    // A double-click here in the old behavior would fire a second POST.
+    const saveBtn = screen.getAllByRole("button", { name: /save settings/i })[0]!;
+    expect(saveBtn).toBeDisabled();
+    fireEvent.click(saveBtn);
+    fireEvent.click(saveBtn);
+    // Still exactly one call.
+    expect(saveConfig).toHaveBeenCalledTimes(1);
+
+    // Let the save complete so the test doesn't hang on unresolved promise.
+    resolveSave();
+    await waitFor(() => expect(saveBtn).toBeDisabled());
+  });
+
+  it("does NOT overwrite user edits when the config query refetches in the background", async () => {
+    // Simulate a refetch returning a NEW config object reference with the same
+    // values — the populate effect should bail out because the form is dirty.
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    const { rerender } = renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Items per page")).toBeInTheDocument(),
+    );
+
+    // User starts editing
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "750" },
+    });
+    expect(screen.getByLabelText("Items per page")).toHaveValue("750");
+
+    // Simulate a background refetch by re-resolving getConfig with a fresh
+    // object — same payload, new reference. The component re-renders;
+    // useEffect([config]) would fire and call setValues(populated) without
+    // the dirty guard, clobbering the user's "750" back to "200".
+    vi.mocked(getConfig).mockResolvedValueOnce({ ...baseConfig });
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
+        <MantineProvider>
+          <Notifications />
+          <MemoryRouter>
+            <SettingsPage />
+          </MemoryRouter>
+        </MantineProvider>
+      </QueryClientProvider>,
+    );
+    // After "refetch", the user's typed value must still be 750 — NOT 200.
+    // (This is the dirty-guard contract: while form.isDirty(), do not repopulate.)
+    expect(screen.getByLabelText("Items per page")).toHaveValue("750");
+  });
+
+  it("shows an inline error on Items per page when value exceeds the S3 1000-key cap", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+    renderPage();
+    await waitForSaveButton();
+
+    // Push value over the backend's 1000 cap
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "1500" },
+    });
+
+    // Inline error renders under the input
+    await waitFor(() =>
+      expect(screen.getByText(/maximum is 1000/i)).toBeInTheDocument(),
+    );
+
+    // Save is blocked while the form has validation errors — even though
+    // the field is dirty, the backend would reject this value with a 400.
+    const saveBtn = screen.getAllByRole("button", { name: /save settings/i })[0]!;
+    expect(saveBtn).toBeDisabled();
+    // Confirm no POST fires
+    fireEvent.click(saveBtn);
+    expect(saveConfig).not.toHaveBeenCalled();
+  });
+
+  it("captures live form values in the dirty-reset, not the closure snapshot at submit time", async () => {
+    // Slow saveConfig so we can edit between submit and onSuccess.
+    let resolveSave!: () => void;
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockReturnValue(
+      new Promise<void>((res) => {
+        resolveSave = res;
+      }),
+    );
+    renderPage();
+    await waitForSaveButton();
+
+    // Initial edit + click Save
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "300" },
+    });
+    clickSaveSettings();
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+
+    // While Save is in-flight, user types ANOTHER edit. With the buggy
+    // closure-captured `values`, this newer edit would be promoted to the
+    // baseline on save success and silently lost (button goes disabled,
+    // current value stays in the input but isDirty() returns false). The
+    // fix uses form.getValues() so the live value stays dirty.
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "400" },
+    });
+
+    // Resolve the save — onSuccess runs and resets the baseline to the
+    // CURRENT live values (300 was submitted, but live is 400 — baseline
+    // becomes 400, so isDirty() is correctly false against the live value
+    // 400, NOT against the stale closure 300).
+    resolveSave();
+    const saveBtn = () =>
+      screen.getAllByRole("button", { name: /save settings/i })[0]!;
+    await waitFor(() => expect(saveBtn()).toBeDisabled());
+
+    // The value the user typed last must still be visible — not snapped
+    // back to anything else.
+    expect(screen.getByLabelText("Items per page")).toHaveValue("400");
   });
 });
