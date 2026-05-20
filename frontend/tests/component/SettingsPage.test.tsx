@@ -49,6 +49,22 @@ function renderPage() {
   );
 }
 
+/** With <Tabs keepMounted>, every panel renders its Save button to the DOM.
+ *  All three buttons are `type="submit"` on the same parent <form>, so
+ *  clicking any one submits identically — pick the first. */
+function clickSaveSettings() {
+  const buttons = screen.getAllByRole("button", { name: /save settings/i });
+  fireEvent.click(buttons[0]!);
+}
+
+async function waitForSaveButton() {
+  await waitFor(() =>
+    expect(
+      screen.getAllByRole("button", { name: /save settings/i }).length,
+    ).toBeGreaterThan(0),
+  );
+}
+
 describe("SettingsPage", () => {
   beforeEach(() => {
     vi.mocked(getConfig).mockReset();
@@ -76,7 +92,11 @@ describe("SettingsPage", () => {
     await waitFor(() =>
       expect(screen.getByText(/mounted read-only/i)).toBeInTheDocument(),
     );
-    expect(screen.queryByRole("button", { name: /save settings/i })).not.toBeInTheDocument();
+    // Every tab hides its own Save button in read-only mode — there should
+    // be zero buttons with the name across the whole page.
+    expect(
+      screen.queryAllByRole("button", { name: /save settings/i }),
+    ).toHaveLength(0);
   });
 
   it("disables form inputs in read-only mode", async () => {
@@ -95,15 +115,19 @@ describe("SettingsPage", () => {
     vi.mocked(saveConfig).mockResolvedValue(undefined);
     renderPage();
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /save settings/i })).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    await waitForSaveButton();
+    // Save is disabled until something is dirty (matches standard form UX).
+    // Bump items_per_page to enable Save without changing the MB field —
+    // that lets us verify the byte-precision-preserved path on max_file_size.
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "300" },
+    });
+    clickSaveSettings();
 
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
-    expect(submitted.items_per_page).toBe(200);
-    expect(submitted.max_file_size).toBe(100 * 1024 * 1024);   // converted from MB
+    expect(submitted.items_per_page).toBe(300);
+    expect(submitted.max_file_size).toBe(100 * 1024 * 1024);   // preserved from original
     expect(submitted.disable_deletion).toBe(false);
   });
 
@@ -114,11 +138,15 @@ describe("SettingsPage", () => {
     vi.mocked(saveConfig).mockResolvedValue(undefined);
     renderPage();
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /save settings/i })).toBeInTheDocument(),
-    );
-    // Don't touch the MB field — just submit
-    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    await waitForSaveButton();
+    // Dirty an UNRELATED field so Save is enabled. The MB field must stay
+    // untouched — that's what this test is verifying. items_per_page lives
+    // in the General tab too, but its dirty state only affects the items
+    // field; max_file_size_mb stays clean and triggers the byte-preserve path.
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "300" },
+    });
+    clickSaveSettings();
 
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
@@ -142,10 +170,12 @@ describe("SettingsPage", () => {
     });
     vi.mocked(saveConfig).mockResolvedValue(undefined);
     renderPage();
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /save settings/i })).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    await waitForSaveButton();
+    // Dirty any field so Save is enabled
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "300" },
+    });
+    clickSaveSettings();
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0] as unknown as Record<string, unknown>;
     expect("data_dir" in submitted).toBe(false);
@@ -178,10 +208,54 @@ describe("SettingsPage", () => {
     // change min_length to 12
     const minLength = screen.getByLabelText(/minimum length/i);
     fireEvent.change(minLength, { target: { value: "12" } });
-    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    clickSaveSettings();
     await waitFor(() => expect(saveConfig).toHaveBeenCalled());
     const sentConfig = vi.mocked(saveConfig).mock.calls[0]![0];
     expect(sentConfig.password_min_length).toBe(12);
     expect(sentConfig.password_min_uppercase).toBe(1);
+  });
+
+  it("renders the three tabs (General / Security / MCP)", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /general/i })).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("tab", { name: /security/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /mcp/i })).toBeInTheDocument();
+
+    // General is the default tab — its fields are reachable by label.
+    expect(screen.getByLabelText("Items per page")).toBeInTheDocument();
+    // Security and MCP tab panels are also mounted (keepMounted) so RTL
+    // can find their fields by label even without clicking the tab.
+    expect(screen.getByLabelText(/minimum length/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/enable mcp server/i)).toBeInTheDocument();
+  });
+
+  it("persists edits from multiple tabs in a single submit (shared form)", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Items per page")).toBeInTheDocument(),
+    );
+
+    // Edit a General field
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "500" },
+    });
+    // Edit a Security field (no tab switch needed — keepMounted exposes it)
+    fireEvent.change(screen.getByLabelText(/minimum length/i), {
+      target: { value: "12" },
+    });
+
+    // Save — should persist BOTH edits in one POST /api/config call
+    clickSaveSettings();
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
+    expect(submitted.items_per_page).toBe(500);
+    expect(submitted.password_min_length).toBe(12);
   });
 });
