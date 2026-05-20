@@ -86,9 +86,21 @@ export function FileCard({
           />
         </div>
       </Group>
-      <Group justify="center" mb="sm" mih={48}>
+      {/* Central preview/icon area. mih matches the max thumbnail size
+          (120px in FileBrowser.module.css) so every card in a grid row
+          reserves the same vertical space whether it shows a 120px image
+          thumbnail, a 64px Lucide icon, or nothing yet (presigned URL
+          still loading). Without matching mih, folders/icon-fallback
+          cards looked compact while neighbouring thumbnail cards were
+          tall — visible layout drift in mixed grid rows.
+
+          Icons stay at 64px (not 120px): Lucide line icons render best
+          at small/medium sizes; 120px would make them look like
+          oversized stickers. Centering inside the 120px box keeps the
+          visual centerline consistent across all card types. */}
+      <Group justify="center" align="center" mb="sm" mih={120}>
         {file.is_directory ? (
-          <Folder size={48} style={{ color: "var(--mantine-color-amber-6)" }} />
+          <Folder size={64} style={{ color: "var(--mantine-color-amber-6)" }} />
         ) : kind === "image" && presigned.data?.url && !mediaError ? (
           <img
             src={presigned.data.url}
@@ -108,7 +120,7 @@ export function FileCard({
             className={classes.thumbnail}
           />
         ) : (
-          <FileIcon size={48} style={{ color: "var(--mantine-color-slate-5)" }} />
+          <FileIcon size={64} style={{ color: "var(--mantine-color-slate-5)" }} />
         )}
       </Group>
       <Text size="sm" ta="center" lineClamp={2} title={file.name}>
