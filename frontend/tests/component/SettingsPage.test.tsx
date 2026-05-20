@@ -233,6 +233,31 @@ describe("SettingsPage", () => {
     expect(screen.getByLabelText(/enable mcp server/i)).toBeInTheDocument();
   });
 
+  it("clears dirty state after a successful save (Save button goes back to disabled)", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+    renderPage();
+
+    await waitForSaveButton();
+
+    // Save starts disabled (nothing dirty yet)
+    const saveButton = () =>
+      screen.getByRole("button", { name: /save settings/i });
+    expect(saveButton()).toBeDisabled();
+
+    // Dirty a field → Save activates
+    fireEvent.change(screen.getByLabelText("Items per page"), {
+      target: { value: "500" },
+    });
+    expect(saveButton()).not.toBeDisabled();
+
+    // Click Save → mutation resolves → baseline should advance to current
+    // values, so isDirty() returns false again and Save goes back to disabled.
+    clickSaveSettings();
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(saveButton()).toBeDisabled());
+  });
+
   it("persists edits from multiple tabs in a single submit (shared form)", async () => {
     vi.mocked(getConfig).mockResolvedValue(baseConfig);
     vi.mocked(saveConfig).mockResolvedValue(undefined);

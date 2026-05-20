@@ -1,14 +1,13 @@
-import { Button, NumberInput, Stack, Switch, TagsInput } from "@mantine/core";
+import { NumberInput, Stack, Switch, TagsInput } from "@mantine/core";
 import type { UseFormReturnType } from "@mantine/form";
 import type { SettingsFormValues } from "./SettingsPage";
 
 interface SettingsGeneralTabProps {
   form: UseFormReturnType<SettingsFormValues>;
   readOnly: boolean;
-  isPending: boolean;
 }
 
-export function SettingsGeneralTab({ form, readOnly, isPending }: SettingsGeneralTabProps) {
+export function SettingsGeneralTab({ form, readOnly }: SettingsGeneralTabProps) {
   return (
     <Stack gap="md" maw={520} mt="md">
       <NumberInput
@@ -44,11 +43,6 @@ export function SettingsGeneralTab({ form, readOnly, isPending }: SettingsGenera
         disabled={readOnly}
         {...form.getInputProps("auto_inline_extensions")}
       />
-      {!readOnly && (
-        <Button type="submit" loading={isPending} disabled={!form.isDirty()}>
-          Save settings
-        </Button>
-      )}
     </Stack>
   );
 }

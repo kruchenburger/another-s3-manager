@@ -1,14 +1,13 @@
-import { Button, NumberInput, Stack, Switch, TagsInput, Text } from "@mantine/core";
+import { NumberInput, Stack, Switch, TagsInput, Text } from "@mantine/core";
 import type { UseFormReturnType } from "@mantine/form";
 import type { SettingsFormValues } from "./SettingsPage";
 
 interface SettingsMcpTabProps {
   form: UseFormReturnType<SettingsFormValues>;
   readOnly: boolean;
-  isPending: boolean;
 }
 
-export function SettingsMcpTab({ form, readOnly, isPending }: SettingsMcpTabProps) {
+export function SettingsMcpTab({ form, readOnly }: SettingsMcpTabProps) {
   return (
     <Stack gap="md" maw={520} mt="md">
       <Text size="sm" c="dimmed">
@@ -45,11 +44,6 @@ export function SettingsMcpTab({ form, readOnly, isPending }: SettingsMcpTabProp
         disabled={readOnly}
         {...form.getInputProps("mcp_text_extensions")}
       />
-      {!readOnly && (
-        <Button type="submit" loading={isPending} disabled={!form.isDirty()}>
-          Save settings
-        </Button>
-      )}
     </Stack>
   );
 }

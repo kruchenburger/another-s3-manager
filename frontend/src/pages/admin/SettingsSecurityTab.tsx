@@ -1,14 +1,13 @@
-import { Button, NumberInput, Stack, Text } from "@mantine/core";
+import { NumberInput, Stack, Text } from "@mantine/core";
 import type { UseFormReturnType } from "@mantine/form";
 import type { SettingsFormValues } from "./SettingsPage";
 
 interface SettingsSecurityTabProps {
   form: UseFormReturnType<SettingsFormValues>;
   readOnly: boolean;
-  isPending: boolean;
 }
 
-export function SettingsSecurityTab({ form, readOnly, isPending }: SettingsSecurityTabProps) {
+export function SettingsSecurityTab({ form, readOnly }: SettingsSecurityTabProps) {
   return (
     <Stack gap="md" maw={520} mt="md">
       <Text size="sm" c="dimmed">
@@ -61,11 +60,6 @@ export function SettingsSecurityTab({ form, readOnly, isPending }: SettingsSecur
         disabled={readOnly}
         {...form.getInputProps("password_min_special")}
       />
-      {!readOnly && (
-        <Button type="submit" loading={isPending} disabled={!form.isDirty()}>
-          Save settings
-        </Button>
-      )}
     </Stack>
   );
 }

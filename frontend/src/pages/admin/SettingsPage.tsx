@@ -1,4 +1,4 @@
-import { Alert, Stack, Tabs, Title } from "@mantine/core";
+import { Alert, Button, Group, Paper, Stack, Tabs, Text, Title } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useEffect } from "react";
 import { useAdminConfig, useSaveConfig } from "@/features/admin/hooks/useAdminConfig";
@@ -36,15 +36,17 @@ export interface SettingsFormValues {
 /**
  * Admin Settings page.
  *
- * Layout is split across three Mantine tabs (General / Security / MCP) so the
- * Save button is visible on every tab without scrolling — the long unified
- * form was below the fold on most viewports.
+ * Layout is split across three Mantine tabs (General / Security / MCP) so
+ * editing each section stays focused. One shared useForm + one wrapping
+ * <form> means clicking Save submits the whole config to POST /api/config
+ * — which is atomic anyway, so splitting into per-tab POSTs would be a
+ * fiction. Dirty state is shared across tabs: editing General then opening
+ * Security and clicking Save persists both edits.
  *
- * One shared useForm + one wrapping <form> means clicking Save in any tab
- * submits the whole config to POST /api/config — which is atomic anyway, so
- * splitting into per-tab POSTs would be a fiction. Dirty state is shared
- * across tabs: editing General then opening Security and clicking Save
- * persists both edits.
+ * The Save bar is sticky-pinned to the bottom of the page so it never
+ * disappears below the fold no matter which tab the user is on or how
+ * far down they've scrolled. It shows "You have unsaved changes" copy
+ * when dirty so the user always knows their state.
  */
 export function SettingsPage() {
   const { data: config, isLoading, error } = useAdminConfig();
@@ -110,6 +112,7 @@ export function SettingsPage() {
   if (!config) return null;
 
   const readOnly = config.is_read_only === true;
+  const isDirty = form.isDirty();
 
   const onSubmit = form.onSubmit((values) => {
     const next: AppConfig = {
@@ -136,11 +139,29 @@ export function SettingsPage() {
         ? Math.round(values.mcp_global_max_read_bytes_mb * MB)
         : config.mcp_global_max_read_bytes,
     };
-    runWithToasts(save, next, "Settings saved");
+    // On success, advance the form's "baseline" to the just-saved values so
+    // form.isDirty() returns false again. Without this, the Save bar stays
+    // active forever after the first save — even though there are no more
+    // pending edits — because Mantine's dirty-check compares against the
+    // stale baseline that was set when the page first loaded. The
+    // adminConfig query invalidates separately (useSaveConfig already does
+    // that), but a refetch that returns the same shape WON'T trigger the
+    // useEffect above (config object identity may stay stable), so this
+    // explicit reset is the reliable path.
+    runWithToasts(save, next, "Settings saved", () => {
+      form.setInitialValues(values);
+      form.resetDirty(values);
+    });
   });
 
+  const handleReset = () => {
+    // Snap back to the last-saved baseline (whatever setInitialValues set
+    // it to most recently — either initial server load or the previous save).
+    form.reset();
+  };
+
   return (
-    <Stack gap="md">
+    <Stack gap="md" pb={readOnly ? 0 : 80}>
       <Title order={2}>Settings</Title>
 
       {readOnly && (
@@ -163,17 +184,65 @@ export function SettingsPage() {
           </Tabs.List>
 
           <Tabs.Panel value="general">
-            <SettingsGeneralTab form={form} readOnly={readOnly} isPending={save.isPending} />
+            <SettingsGeneralTab form={form} readOnly={readOnly} />
           </Tabs.Panel>
 
           <Tabs.Panel value="security">
-            <SettingsSecurityTab form={form} readOnly={readOnly} isPending={save.isPending} />
+            <SettingsSecurityTab form={form} readOnly={readOnly} />
           </Tabs.Panel>
 
           <Tabs.Panel value="mcp">
-            <SettingsMcpTab form={form} readOnly={readOnly} isPending={save.isPending} />
+            <SettingsMcpTab form={form} readOnly={readOnly} />
           </Tabs.Panel>
         </Tabs>
+
+        {/* Sticky Save bar — visible across every tab, never moves with
+            content scroll. Hidden entirely in read-only mode (no edits
+            possible, no Save needed). Pinned to the bottom edge of the
+            main content area: `left` uses Mantine's
+            `--app-shell-navbar-width` CSS variable so the bar respects the
+            sidebar width (260px expanded, 60px collapsed) and never slides
+            under the navbar. */}
+        {!readOnly && (
+          <Paper
+            shadow="md"
+            p="sm"
+            radius={0}
+            withBorder
+            style={{
+              position: "fixed",
+              left: "var(--app-shell-navbar-width, 0px)",
+              right: 0,
+              bottom: 0,
+              zIndex: 100,
+              borderLeft: 0,
+              borderRight: 0,
+              borderBottom: 0,
+            }}
+          >
+            <Group justify="flex-end" gap="sm" px="md">
+              {isDirty && (
+                <Text size="sm" c="dimmed" mr="auto">
+                  You have unsaved changes
+                </Text>
+              )}
+              <Button
+                variant="default"
+                onClick={handleReset}
+                disabled={!isDirty || save.isPending}
+              >
+                Discard
+              </Button>
+              <Button
+                type="submit"
+                loading={save.isPending}
+                disabled={!isDirty}
+              >
+                Save settings
+              </Button>
+            </Group>
+          </Paper>
+        )}
       </form>
     </Stack>
   );
