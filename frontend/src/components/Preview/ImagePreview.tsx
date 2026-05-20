@@ -32,6 +32,12 @@ export function ImagePreview({ url, alt }: ImagePreviewProps) {
       src={url}
       alt={alt}
       onError={() => setFailed(true)}
+      // fit="contain" so portrait / panoramic images render in full —
+      // Mantine's <Image> defaults to object-fit: cover, which combined
+      // with mah="70vh" was cropping the long axis of any non-4:3 image.
+      // The user expectation in a preview modal is "see the whole thing",
+      // not "see the centre slice".
+      fit="contain"
       maw="100%"
       mah="70vh"
       display="block"
