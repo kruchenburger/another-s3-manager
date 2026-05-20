@@ -42,4 +42,15 @@ describe("ImagePreview", () => {
     expect(screen.getByRole("img", { name: "good.png" })).toBeInTheDocument();
     expect(screen.queryByText(/couldn't load this image/i)).not.toBeInTheDocument();
   });
+
+  it("renders with object-fit: contain so non-square images aren't cropped at the edges", () => {
+    // Mantine <Image fit="contain"> writes the value into the
+    // --image-object-fit inline CSS custom property on the <img> element.
+    // Regression guard for the user-reported "image cropped by edges in
+    // preview modal" complaint — if a future refactor flips back to the
+    // Mantine default (object-fit: cover), this test catches it.
+    renderPreview();
+    const img = screen.getByRole("img", { name: "broken.png" });
+    expect(img.getAttribute("style") ?? "").toContain("--image-object-fit: contain");
+  });
 });
