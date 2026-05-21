@@ -9,8 +9,13 @@ export interface BulkDeleteProgressProps {
   currentName: string | null;
 }
 
-export function BulkDeleteProgress({ completed, total, currentName }: BulkDeleteProgressProps) {
-  const percent = total === 0 ? 0 : Math.min(100, Math.round((completed / total) * 100));
+export function BulkDeleteProgress({
+  completed,
+  total,
+  currentName,
+}: BulkDeleteProgressProps) {
+  const percent =
+    total === 0 ? 0 : Math.min(100, Math.round((completed / total) * 100));
   const headline =
     completed >= total
       ? `Deleting ${total} of ${total}…`

@@ -5,7 +5,10 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useFiles } from "@/features/files/hooks/useFiles";
 import { useDelete } from "@/features/files/hooks/useDelete";
 import { useUpload } from "@/features/files/hooks/useUpload";
-import { buildDownloadUrl, getPresignedDownloadUrl } from "@/features/files/api/filesApi";
+import {
+  buildDownloadUrl,
+  getPresignedDownloadUrl,
+} from "@/features/files/api/filesApi";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { joinPath, decodePath } from "@/utils/pathUtils";
@@ -16,13 +19,19 @@ import { showToast, TOAST_DURATIONS } from "@/utils/toast";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
-import { UploadProgress, type UploadProgressItem } from "@/components/Upload/UploadProgress";
+import {
+  UploadProgress,
+  type UploadProgressItem,
+} from "@/components/Upload/UploadProgress";
 import { UploadSummary } from "@/components/Upload/UploadSummary";
 import {
   FolderUploadHintModal,
   hasDismissedFolderUploadHint,
 } from "@/components/Upload/FolderUploadHintModal";
-import { type FileWithRelativePath, filesFromFolderInput } from "@/utils/folderUpload";
+import {
+  type FileWithRelativePath,
+  filesFromFolderInput,
+} from "@/utils/folderUpload";
 import { FileBrowserHeader } from "./FileBrowserHeader";
 import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
@@ -47,7 +56,10 @@ export function FileBrowser() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [uploadHint, setUploadHint] = useState<{ open: boolean; mode: "files" | "folder" }>({
+  const [uploadHint, setUploadHint] = useState<{
+    open: boolean;
+    mode: "files" | "folder";
+  }>({
     open: false,
     mode: "files",
   });
@@ -67,7 +79,9 @@ export function FileBrowser() {
     setSearchQuery("");
     const next = joinPath(pathFromUrl, folderName);
     const encoded = next.split("/").map(encodeURIComponent).join("/");
-    navigate(`/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(bucket)}/p/${encoded}`);
+    navigate(
+      `/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(bucket)}/p/${encoded}`,
+    );
   };
 
   const handleDownload = async (name: string): Promise<void> => {
@@ -204,6 +218,9 @@ export function FileBrowser() {
     let success = 0;
     let failed = 0;
 
+    // Note: renderProgress() is called at the START of each iteration,
+    // so "Deleting N of M: X" means X is IN-FLIGHT (not yet completed).
+    // This is by design — the UI tracks initiated, not completed items.
     const renderProgress = (completed: number, currentName: string | null) => {
       if (!showProgress) return;
       notifications.update({
@@ -225,7 +242,11 @@ export function FileBrowser() {
       notifications.show({
         id: notifId,
         message: (
-          <BulkDeleteProgress completed={0} total={names.length} currentName={names[0]} />
+          <BulkDeleteProgress
+            completed={0}
+            total={names.length}
+            currentName={names[0]}
+          />
         ),
         autoClose: false,
         withCloseButton: false,
@@ -291,7 +312,10 @@ export function FileBrowser() {
   const handleUpload = useCallback(
     async (files: FileWithRelativePath[]) => {
       const maxFileSize = me.data?.max_file_size;
-      const items: UploadProgressItem[] = files.map((f) => ({ name: f.file.name, status: "pending" }));
+      const items: UploadProgressItem[] = files.map((f) => ({
+        name: f.file.name,
+        status: "pending",
+      }));
 
       // Single AbortController for the whole batch. Cancel button triggers
       // abort() which both stops the in-flight XHR (via signal) AND sets
@@ -356,7 +380,9 @@ export function FileBrowser() {
         updated[i] = { ...updated[i], status: "uploading", progress: 0 };
         renderToast();
         try {
-          const key = pathFromUrl ? `${pathFromUrl}/${item.relativePath}` : item.relativePath;
+          const key = pathFromUrl
+            ? `${pathFromUrl}/${item.relativePath}`
+            : item.relativePath;
           await uploadMutation.mutateAsync({
             bucket,
             role: roleId,
@@ -376,8 +402,7 @@ export function FileBrowser() {
         } catch (e) {
           // Abort isn't a real failure — it's a user action. Distinguish so
           // the summary doesn't shout "ERROR" at the user who clicked cancel.
-          const isAbort =
-            e instanceof DOMException && e.name === "AbortError";
+          const isAbort = e instanceof DOMException && e.name === "AbortError";
           // Use getErrorMessage so the backend's `detail` field is surfaced
           // (e.g. "File size exceeds maximum allowed size of 400MB") instead
           // of the generic `xhr.statusText` ("Internal Server Error" /
@@ -401,11 +426,17 @@ export function FileBrowser() {
       const allDone = updated.every((u) => u.status === "done");
       const hasErrors = updated.some((u) => u.status === "error");
       const wasCancelled = updated.some((u) => u.status === "cancelled");
-      const autoCloseMs = allDone ? TOAST_DURATIONS.success : TOAST_DURATIONS.error;
+      const autoCloseMs = allDone
+        ? TOAST_DURATIONS.success
+        : TOAST_DURATIONS.error;
       notifications.update({
         id: notifId,
         message: <UploadSummary items={updated} autoCloseMs={autoCloseMs} />,
-        color: allDone ? "green" : wasCancelled && !hasErrors ? "gray" : "yellow",
+        color: allDone
+          ? "green"
+          : wasCancelled && !hasErrors
+            ? "gray"
+            : "yellow",
         autoClose: autoCloseMs,
         withCloseButton: true,
         // Override Mantine's baked-in body clipping. Without these, the
@@ -466,10 +497,12 @@ export function FileBrowser() {
     if (fileList && fileList.length > 0) {
       // Plain-file input has no folder semantics — wrap each File as a
       // top-level FileWithRelativePath (relativePath = file.name).
-      const items: FileWithRelativePath[] = Array.from(fileList).map((file) => ({
-        file,
-        relativePath: file.name,
-      }));
+      const items: FileWithRelativePath[] = Array.from(fileList).map(
+        (file) => ({
+          file,
+          relativePath: file.name,
+        }),
+      );
       handleUpload(items);
     }
     e.target.value = "";

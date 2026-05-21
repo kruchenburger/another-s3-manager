@@ -26,6 +26,25 @@ describe("BulkDeleteProgress", () => {
 
   it("clamps to 100% when completed === total", () => {
     renderProgress({ completed: 10, total: 10, currentName: null });
-    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+    expect(screen.getByRole("progressbar")).toHaveAttribute(
+      "aria-valuenow",
+      "100",
+    );
+  });
+
+  it("renders 0% when total is 0 (empty batch edge case)", () => {
+    renderProgress({ completed: 0, total: 0, currentName: null });
+    expect(screen.getByRole("progressbar")).toHaveAttribute(
+      "aria-valuenow",
+      "0",
+    );
+  });
+
+  it("clamps to 100% when completed somehow exceeds total (defensive)", () => {
+    renderProgress({ completed: 12, total: 10, currentName: null });
+    expect(screen.getByRole("progressbar")).toHaveAttribute(
+      "aria-valuenow",
+      "100",
+    );
   });
 });
