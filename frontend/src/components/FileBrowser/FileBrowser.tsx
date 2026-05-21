@@ -27,6 +27,7 @@ import { FileBrowserHeader } from "./FileBrowserHeader";
 import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
 import { FileBrowserEmptyState } from "./FileBrowserEmptyState";
+import { BulkDeleteProgress } from "@/components/FileBrowser/BulkDeleteProgress";
 import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
 
 export function FileBrowser() {
@@ -196,8 +197,45 @@ export function FileBrowser() {
   const confirmDelete = async () => {
     const names = pendingDelete.current;
     setConfirmOpen(false);
+    if (names.length === 0) return;
+
+    const showProgress = names.length > 1;
+    const notifId = "bulk-delete-progress";
     let success = 0;
-    for (const name of names) {
+    let failed = 0;
+
+    const renderProgress = (completed: number, currentName: string | null) => {
+      if (!showProgress) return;
+      notifications.update({
+        id: notifId,
+        message: (
+          <BulkDeleteProgress
+            completed={completed}
+            total={names.length}
+            currentName={currentName}
+          />
+        ),
+        autoClose: false,
+        withCloseButton: false,
+        loading: completed < names.length,
+      });
+    };
+
+    if (showProgress) {
+      notifications.show({
+        id: notifId,
+        message: (
+          <BulkDeleteProgress completed={0} total={names.length} currentName={names[0]} />
+        ),
+        autoClose: false,
+        withCloseButton: false,
+        loading: true,
+      });
+    }
+
+    for (let i = 0; i < names.length; i++) {
+      const name = names[i];
+      renderProgress(i, name);
       const fileEntry = data?.files.find((f) => f.name === name);
       const fullPath = fileEntry?.is_directory
         ? joinPath(pathFromUrl, name) + "/"
@@ -211,6 +249,7 @@ export function FileBrowser() {
         });
         success++;
       } catch (e) {
+        failed++;
         showToast({
           color: "red",
           message: `Failed to delete ${name}: ${e instanceof Error ? e.message : "unknown error"}`,
@@ -218,10 +257,14 @@ export function FileBrowser() {
         });
       }
     }
+
+    if (showProgress) {
+      notifications.hide(notifId);
+    }
     if (success > 0) {
       showToast({
         color: "green",
-        message: `Deleted ${success} item${success === 1 ? "" : "s"}`,
+        message: `Deleted ${success} item${success === 1 ? "" : "s"}${failed > 0 ? ` (${failed} failed)` : ""}`,
         autoClose: TOAST_DURATIONS.success,
       });
     }
