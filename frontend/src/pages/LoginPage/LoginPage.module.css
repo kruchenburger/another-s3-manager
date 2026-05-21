@@ -5,7 +5,10 @@
   align-items: center;
   justify-content: center;
   padding: var(--mantine-spacing-md);
-  background: light-dark(var(--mantine-color-slate-0), var(--mantine-color-slate-9));
+  background: light-dark(
+    var(--mantine-color-slate-0),
+    var(--mantine-color-slate-9)
+  );
 }
 
 .card {

@@ -38,20 +38,34 @@ describe("LoginPage parity additions", () => {
     useMeMock.mockReset();
     useLoginMock.mockReset();
     useMeMock.mockReturnValue({ data: undefined });
-    useLoginMock.mockReturnValue({ mutate: vi.fn(), isPending: false, isError: false });
+    useLoginMock.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+      isError: false,
+    });
   });
 
   it("renders the tagline under the title", () => {
     useAppInfoMock.mockReturnValue({
-      data: { app_name: "Another S3 Manager", app_description: "x", app_version: "1.0.0" },
+      data: {
+        app_name: "Another S3 Manager",
+        app_description: "x",
+        app_version: "1.0.0",
+      },
     });
     renderLogin();
-    expect(screen.getByText(/lightweight s3 file manager/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/lightweight s3 file manager/i),
+    ).toBeInTheDocument();
   });
 
   it("renders v<version> + GitHub link in the footer band", () => {
     useAppInfoMock.mockReturnValue({
-      data: { app_name: "Another S3 Manager", app_description: "x", app_version: "1.0.0" },
+      data: {
+        app_name: "Another S3 Manager",
+        app_description: "x",
+        app_version: "1.0.0",
+      },
     });
     renderLogin();
     expect(screen.getByText(/^v1\.0\.0$/)).toBeInTheDocument();
@@ -63,7 +77,11 @@ describe("LoginPage parity additions", () => {
 
   it("does NOT render the footer band when app_version is 'dev'", () => {
     useAppInfoMock.mockReturnValue({
-      data: { app_name: "Another S3 Manager", app_description: "x", app_version: "dev" },
+      data: {
+        app_name: "Another S3 Manager",
+        app_description: "x",
+        app_version: "dev",
+      },
     });
     renderLogin();
     expect(screen.queryByText(/source on github/i)).not.toBeInTheDocument();

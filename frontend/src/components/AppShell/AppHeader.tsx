@@ -23,7 +23,12 @@ export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
   return (
     <Group h="100%" px="md" justify="space-between">
       <Group gap="sm">
-        <Burger opened={navOpened} onClick={onNavToggle} hiddenFrom="sm" size="sm" />
+        <Burger
+          opened={navOpened}
+          onClick={onNavToggle}
+          hiddenFrom="sm"
+          size="sm"
+        />
         <Link
           to="/"
           style={{

@@ -1,9 +1,21 @@
-import { Alert, Button, Group, Paper, Stack, Tabs, Text, Title } from "@mantine/core";
+import {
+  Alert,
+  Button,
+  Group,
+  Paper,
+  Stack,
+  Tabs,
+  Text,
+  Title,
+} from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { notifications } from "@mantine/notifications";
 import { Download } from "lucide-react";
 import { useEffect } from "react";
-import { useAdminConfig, useSaveConfig } from "@/features/admin/hooks/useAdminConfig";
+import {
+  useAdminConfig,
+  useSaveConfig,
+} from "@/features/admin/hooks/useAdminConfig";
 import { exportConfig } from "@/features/admin/api/adminApi";
 import { toWritableConfig } from "@/features/admin/api/configShape";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
@@ -82,7 +94,8 @@ export function SettingsPage() {
       items_per_page: (value) => {
         if (value < 10) return "Minimum is 10";
         // Backend caps at 1000 (S3 list_objects_v2 protocol limit).
-        if (value > 1000) return "Maximum is 1000 — S3 lists at most 1000 keys per request";
+        if (value > 1000)
+          return "Maximum is 1000 — S3 lists at most 1000 keys per request";
         return null;
       },
     },
@@ -232,8 +245,8 @@ export function SettingsPage() {
 
       {readOnly && (
         <Alert color="yellow">
-          These settings are mounted read-only (e.g. Kubernetes ConfigMap). Edits
-          are disabled — modify the source ConfigMap to change them.
+          These settings are mounted read-only (e.g. Kubernetes ConfigMap).
+          Edits are disabled — modify the source ConfigMap to change them.
         </Alert>
       )}
 

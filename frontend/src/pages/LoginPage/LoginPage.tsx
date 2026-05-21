@@ -1,5 +1,16 @@
 import { useEffect } from "react";
-import { Alert, Anchor, Button, Card, Group, PasswordInput, Stack, Text, TextInput, Title } from "@mantine/core";
+import {
+  Alert,
+  Anchor,
+  Button,
+  Card,
+  Group,
+  PasswordInput,
+  Stack,
+  Text,
+  TextInput,
+  Title,
+} from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { AlertCircle } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -70,8 +81,17 @@ export function LoginPage() {
                 {getErrorMessage(login.error)}
               </Alert>
             )}
-            <TextInput label="Username" autoComplete="username" autoFocus {...form.getInputProps("username")} />
-            <PasswordInput label="Password" autoComplete="current-password" {...form.getInputProps("password")} />
+            <TextInput
+              label="Username"
+              autoComplete="username"
+              autoFocus
+              {...form.getInputProps("username")}
+            />
+            <PasswordInput
+              label="Password"
+              autoComplete="current-password"
+              {...form.getInputProps("password")}
+            />
             <Button type="submit" fullWidth loading={login.isPending}>
               Login
             </Button>

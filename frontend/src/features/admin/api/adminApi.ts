@@ -36,10 +36,9 @@ export async function listBans(): Promise<Ban[]> {
 }
 
 export async function unbanUser(username: string): Promise<void> {
-  await apiRequest<void>(
-    `/api/admin/bans/${encodeURIComponent(username)}`,
-    { method: "DELETE" },
-  );
+  await apiRequest<void>(`/api/admin/bans/${encodeURIComponent(username)}`, {
+    method: "DELETE",
+  });
 }
 
 /**
@@ -77,17 +76,16 @@ export async function updateUser(
   if (payload.allowed_roles !== undefined) {
     body.append("allowed_roles", payload.allowed_roles.join(","));
   }
-  await apiRequest<void>(
-    `/api/admin/users/${encodeURIComponent(username)}`,
-    { method: "PUT", body },
-  );
+  await apiRequest<void>(`/api/admin/users/${encodeURIComponent(username)}`, {
+    method: "PUT",
+    body,
+  });
 }
 
 export async function deleteUser(username: string): Promise<void> {
-  await apiRequest<void>(
-    `/api/admin/users/${encodeURIComponent(username)}`,
-    { method: "DELETE" },
-  );
+  await apiRequest<void>(`/api/admin/users/${encodeURIComponent(username)}`, {
+    method: "DELETE",
+  });
 }
 
 export async function resetUserPassword(
