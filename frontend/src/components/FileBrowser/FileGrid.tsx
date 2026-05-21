@@ -5,7 +5,7 @@ import { FileCard } from "./FileCard";
 interface FileGridProps {
   files: FileEntry[];
   selected: Set<string>;
-  onToggleSelect: (name: string) => void;
+  onToggleSelect: (name: string, shiftKey: boolean) => void;
   onNavigate: (name: string) => void;
   onDownload: (name: string) => void;
   onCopyUrl: (name: string) => void;

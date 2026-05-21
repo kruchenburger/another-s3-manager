@@ -9,7 +9,8 @@ import { FileActions } from "./FileActions";
 import classes from "./FileBrowser.module.css";
 import type { FileEntry } from "@/types/api";
 
-const PREVIEWABLE_RE = /\.(png|jpe?g|gif|webp|svg|mp4|webm|mov|pdf|txt|json|yaml|yml|log|md)$/i;
+const PREVIEWABLE_RE =
+  /\.(png|jpe?g|gif|webp|svg|mp4|webm|mov|pdf|txt|json|yaml|yml|log|md)$/i;
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg)$/i;
 const VIDEO_RE = /\.(mp4|webm|mov)$/i;
 
@@ -25,7 +26,8 @@ interface FileCardProps {
   file: FileEntry;
   index: number;
   selected: boolean;
-  onToggleSelect: (name: string) => void;
+  /** `shiftKey` lets the parent implement range-select on Shift+click. */
+  onToggleSelect: (name: string, shiftKey: boolean) => void;
   onNavigate: (folderName: string) => void;
   onDownload: (name: string) => void;
   onCopyUrl: (name: string) => void;
@@ -63,13 +65,19 @@ export function FileCard({
   return (
     <Card
       className={classes.row}
-      style={{ "--row-index": index, position: "relative", cursor: file.is_directory ? "pointer" : "default" } as React.CSSProperties}
+      style={
+        {
+          "--row-index": index,
+          position: "relative",
+          cursor: file.is_directory ? "pointer" : "default",
+        } as React.CSSProperties
+      }
       onClick={() => file.is_directory && onNavigate(file.name)}
     >
       <Group justify="space-between" wrap="nowrap" mb="sm">
         <Checkbox
           checked={selected}
-          onChange={() => onToggleSelect(file.name)}
+          onChange={(e) => onToggleSelect(file.name, e.nativeEvent.shiftKey)}
           onClick={(e) => e.stopPropagation()}
           aria-label={`Select ${file.name}`}
         />
@@ -120,7 +128,10 @@ export function FileCard({
             className={classes.thumbnail}
           />
         ) : (
-          <FileIcon size={64} style={{ color: "var(--mantine-color-slate-5)" }} />
+          <FileIcon
+            size={64}
+            style={{ color: "var(--mantine-color-slate-5)" }}
+          />
         )}
       </Group>
       <Text size="sm" ta="center" lineClamp={2} title={file.name}>

@@ -5,7 +5,7 @@ import { FileRow } from "./FileRow";
 interface FileTableProps {
   files: FileEntry[];
   selected: Set<string>;
-  onToggleSelect: (name: string) => void;
+  onToggleSelect: (name: string, shiftKey: boolean) => void;
   onToggleSelectAll: () => void;
   onNavigate: (name: string) => void;
   onDownload: (name: string) => void;
@@ -25,7 +25,8 @@ export function FileTable({
   onPreview,
   onDelete,
 }: FileTableProps) {
-  const allSelected = files.length > 0 && files.every((f) => selected.has(f.name));
+  const allSelected =
+    files.length > 0 && files.every((f) => selected.has(f.name));
   const someSelected = files.some((f) => selected.has(f.name)) && !allSelected;
 
   return (

@@ -11,7 +11,8 @@ interface FileRowProps {
   file: FileEntry;
   index: number;
   selected: boolean;
-  onToggleSelect: (name: string) => void;
+  /** `shiftKey` lets the parent implement range-select on Shift+click. */
+  onToggleSelect: (name: string, shiftKey: boolean) => void;
   onNavigate: (folderName: string) => void;
   onDownload: (name: string) => void;
   onCopyUrl: (name: string) => void;
@@ -19,7 +20,8 @@ interface FileRowProps {
   onDelete: (name: string) => void;
 }
 
-const PREVIEWABLE_RE = /\.(png|jpe?g|gif|webp|svg|mp4|webm|mov|pdf|txt|json|yaml|yml|log|md)$/i;
+const PREVIEWABLE_RE =
+  /\.(png|jpe?g|gif|webp|svg|mp4|webm|mov|pdf|txt|json|yaml|yml|log|md)$/i;
 
 export function FileRow({
   file,
@@ -45,7 +47,7 @@ export function FileRow({
       <Table.Td>
         <Checkbox
           checked={selected}
-          onChange={() => onToggleSelect(file.name)}
+          onChange={(e) => onToggleSelect(file.name, e.nativeEvent.shiftKey)}
           aria-label={`Select ${file.name}`}
           onClick={(e) => e.stopPropagation()}
         />
@@ -55,20 +57,40 @@ export function FileRow({
         onClick={() => file.is_directory && onNavigate(file.name)}
       >
         {file.is_directory ? (
-          <Folder size={16} style={{ verticalAlign: "middle", marginRight: 8, color: "var(--mantine-color-amber-6)" }} />
+          <Folder
+            size={16}
+            style={{
+              verticalAlign: "middle",
+              marginRight: 8,
+              color: "var(--mantine-color-amber-6)",
+            }}
+          />
         ) : (
-          <FileIcon size={16} style={{ verticalAlign: "middle", marginRight: 8, color: "var(--mantine-color-slate-5)" }} />
+          <FileIcon
+            size={16}
+            style={{
+              verticalAlign: "middle",
+              marginRight: 8,
+              color: "var(--mantine-color-slate-5)",
+            }}
+          />
         )}
-        <Text span size="sm">{file.name}</Text>
+        <Text span size="sm">
+          {file.name}
+        </Text>
       </Table.Td>
       <Table.Td>
         {!file.is_directory && (
-          <Text size="xs" c="dimmed">{formatBytes(file.size)}</Text>
+          <Text size="xs" c="dimmed">
+            {formatBytes(file.size)}
+          </Text>
         )}
       </Table.Td>
       <Table.Td>
         {file.last_modified && (
-          <Text size="xs" c="dimmed">{formatDate(file.last_modified)}</Text>
+          <Text size="xs" c="dimmed">
+            {formatDate(file.last_modified)}
+          </Text>
         )}
       </Table.Td>
       <Table.Td className={classes.actions}>
