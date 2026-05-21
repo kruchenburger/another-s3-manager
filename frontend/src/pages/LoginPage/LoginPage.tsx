@@ -35,6 +35,7 @@ export function LoginPage() {
 
   const appName = appInfo?.app_name ?? "Another S3 Manager";
   const appVersion = appInfo?.app_version;
+  const appDescription = appInfo?.app_description;
   // Hide the footer when the server hasn't reported a version yet or when
   // running locally (`dev`) — version chrome on a dev build is just noise.
   const showFooter = !!appVersion && appVersion !== "dev";
@@ -70,9 +71,11 @@ export function LoginPage() {
         <div className={classes.brand}>
           <BurgerLogo size={96} mode="idle" />
           <Title order={3}>{appName}</Title>
-          <Text size="sm" c="dimmed" className={classes.tagline}>
-            Lightweight S3 file manager
-          </Text>
+          {appDescription && (
+            <Text size="sm" c="dimmed" className={classes.tagline}>
+              {appDescription}
+            </Text>
+          )}
         </div>
         <form onSubmit={handleSubmit}>
           <Stack gap="md">

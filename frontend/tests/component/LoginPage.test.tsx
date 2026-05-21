@@ -45,18 +45,32 @@ describe("LoginPage parity additions", () => {
     });
   });
 
-  it("renders the tagline under the title", () => {
+  it("renders the tagline from app_description under the title", () => {
     useAppInfoMock.mockReturnValue({
       data: {
         app_name: "Another S3 Manager",
-        app_description: "x",
+        app_description: "Lightweight S3 file management interface",
         app_version: "1.0.0",
       },
     });
     renderLogin();
     expect(
-      screen.getByText(/lightweight s3 file manager/i),
+      screen.getByText(/lightweight s3 file management interface/i),
     ).toBeInTheDocument();
+  });
+
+  it("does NOT render the tagline when app_description is missing", () => {
+    useAppInfoMock.mockReturnValue({
+      data: {
+        app_name: "Another S3 Manager",
+        app_version: "1.0.0",
+      },
+    });
+    renderLogin();
+    // No tagline element should appear when the backend doesn't supply one.
+    expect(
+      screen.queryByText(/lightweight s3 file management interface/i),
+    ).not.toBeInTheDocument();
   });
 
   it("renders v<version> + GitHub link in the footer band", () => {
