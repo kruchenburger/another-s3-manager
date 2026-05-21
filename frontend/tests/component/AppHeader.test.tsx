@@ -3,6 +3,7 @@ import { MantineProvider } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AppHeader } from "@/components/AppShell/AppHeader";
+import { GITHUB_URL } from "@/constants/links";
 
 const useMeMock = vi.fn();
 vi.mock("@/features/auth/hooks/useMe", () => ({
@@ -73,5 +74,23 @@ describe("AppHeader admin shortcut", () => {
     expect(
       screen.getByRole("button", { name: /open admin console/i }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("AppHeader GitHub link", () => {
+  beforeEach(() => {
+    useMeMock.mockReset();
+    useMeMock.mockReturnValue({
+      data: { app_name: "Another S3 Manager", is_admin: false },
+    });
+  });
+
+  it("renders an external link to the project repository", () => {
+    renderHeader();
+    const link = screen.getByRole("link", { name: /view source on github/i });
+    expect(link).toBeInTheDocument();
+    expect(link.getAttribute("href")).toBe(GITHUB_URL);
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
   });
 });

@@ -1,11 +1,12 @@
 import { ActionIcon, Burger, Group, Title, Tooltip } from "@mantine/core";
 import { Link, useNavigate } from "react-router-dom";
-import { Shield } from "lucide-react";
+import { Github, Shield } from "lucide-react";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { BurgerLogo } from "@/components/BurgerLogo/BurgerLogo";
 import { ThemeToggle } from "@/components/AppShell/ThemeToggle";
 import { UserMenu } from "@/components/AppShell/UserMenu";
 import { DefaultRolePicker } from "@/components/AppShell/DefaultRolePicker";
+import { GITHUB_URL } from "@/constants/links";
 
 interface AppHeaderProps {
   navOpened: boolean;
@@ -50,6 +51,19 @@ export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
             </ActionIcon>
           </Tooltip>
         )}
+        <Tooltip label="View source on GitHub">
+          <ActionIcon
+            component="a"
+            href={GITHUB_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            variant="default"
+            size="lg"
+            aria-label="View source on GitHub"
+          >
+            <Github size={18} />
+          </ActionIcon>
+        </Tooltip>
         <DefaultRolePicker />
         <ThemeToggle />
         <UserMenu />
