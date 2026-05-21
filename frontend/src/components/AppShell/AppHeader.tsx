@@ -1,4 +1,4 @@
-import { ActionIcon, Burger, Group, Title, Tooltip } from "@mantine/core";
+import { ActionIcon, Burger, Group, Text, Title, Tooltip } from "@mantine/core";
 import { Link, useNavigate } from "react-router-dom";
 import { Github, Shield } from "lucide-react";
 import { useMe } from "@/features/auth/hooks/useMe";
@@ -17,6 +17,8 @@ export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
   const { data: me } = useMe();
   const navigate = useNavigate();
   const appName = me?.app_name ?? "Another S3 Manager";
+  const versionLabel =
+    me?.app_version && me.app_version !== "dev" ? `v${me.app_version}` : null;
 
   return (
     <Group h="100%" px="md" justify="space-between">
@@ -36,6 +38,11 @@ export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
         >
           <BurgerLogo size={32} mode="static" />
           <Title order={4}>{appName}</Title>
+          {versionLabel && (
+            <Text size="xs" c="dimmed" component="span">
+              {versionLabel}
+            </Text>
+          )}
         </Link>
       </Group>
       <Group gap="sm">

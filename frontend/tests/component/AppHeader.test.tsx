@@ -94,3 +94,33 @@ describe("AppHeader GitHub link", () => {
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
   });
 });
+
+describe("AppHeader version chip", () => {
+  beforeEach(() => {
+    useMeMock.mockReset();
+  });
+
+  it("renders v<version> next to the brand title when app_version is set", () => {
+    useMeMock.mockReturnValue({
+      data: {
+        app_name: "Another S3 Manager",
+        is_admin: false,
+        app_version: "1.0.0",
+      },
+    });
+    renderHeader();
+    expect(screen.getByText(/^v1\.0\.0$/)).toBeInTheDocument();
+  });
+
+  it("does NOT render the chip when app_version is 'dev'", () => {
+    useMeMock.mockReturnValue({
+      data: {
+        app_name: "Another S3 Manager",
+        is_admin: false,
+        app_version: "dev",
+      },
+    });
+    renderHeader();
+    expect(screen.queryByText(/^vdev$/)).not.toBeInTheDocument();
+  });
+});
