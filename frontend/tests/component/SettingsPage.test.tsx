@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
-import { Notifications } from "@mantine/notifications";
+import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { SettingsPage } from "@/pages/admin/SettingsPage";
@@ -9,8 +9,13 @@ import { SettingsPage } from "@/pages/admin/SettingsPage";
 vi.mock("@/features/admin/api/adminApi", () => ({
   getConfig: vi.fn(),
   saveConfig: vi.fn(),
+  exportConfig: vi.fn(),
 }));
-import { getConfig, saveConfig } from "@/features/admin/api/adminApi";
+import {
+  getConfig,
+  saveConfig,
+  exportConfig,
+} from "@/features/admin/api/adminApi";
 
 const baseConfig = {
   roles: [
@@ -36,7 +41,9 @@ const baseConfig = {
 };
 
 function renderPage() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={qc}>
       <MantineProvider>
@@ -83,14 +90,23 @@ describe("SettingsPage", () => {
     );
     expect(screen.getByLabelText("Items per page")).toHaveValue("200");
     // Mantine Switch components have role="switch"; addressed by accessible name.
-    expect(screen.getByRole("switch", { name: /disable deletion/i })).not.toBeChecked();
-    expect(screen.getByRole("switch", { name: /enable lazy loading/i })).toBeChecked();
+    expect(
+      screen.getByRole("switch", { name: /disable deletion/i }),
+    ).not.toBeChecked();
+    expect(
+      screen.getByRole("switch", { name: /enable lazy loading/i }),
+    ).toBeChecked();
     // 100 MB = 100 * 1024 * 1024 bytes — should display as 100 in the MB input
-    expect(screen.getByLabelText("Max upload file size (MB)")).toHaveValue("100");
+    expect(screen.getByLabelText("Max upload file size (MB)")).toHaveValue(
+      "100",
+    );
   });
 
   it("shows the read-only banner and hides the Save button when config is read-only", async () => {
-    vi.mocked(getConfig).mockResolvedValue({ ...baseConfig, is_read_only: true });
+    vi.mocked(getConfig).mockResolvedValue({
+      ...baseConfig,
+      is_read_only: true,
+    });
     renderPage();
     await waitFor(() =>
       expect(screen.getByText(/mounted read-only/i)).toBeInTheDocument(),
@@ -104,13 +120,20 @@ describe("SettingsPage", () => {
   });
 
   it("disables form inputs in read-only mode", async () => {
-    vi.mocked(getConfig).mockResolvedValue({ ...baseConfig, is_read_only: true });
+    vi.mocked(getConfig).mockResolvedValue({
+      ...baseConfig,
+      is_read_only: true,
+    });
     renderPage();
     await waitFor(() =>
       expect(screen.getByLabelText("Items per page")).toBeDisabled(),
     );
-    expect(screen.getByRole("switch", { name: /disable deletion/i })).toBeDisabled();
-    expect(screen.getByRole("switch", { name: /enable lazy loading/i })).toBeDisabled();
+    expect(
+      screen.getByRole("switch", { name: /disable deletion/i }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("switch", { name: /enable lazy loading/i }),
+    ).toBeDisabled();
     expect(screen.getByLabelText("Max upload file size (MB)")).toBeDisabled();
   });
 
@@ -131,14 +154,17 @@ describe("SettingsPage", () => {
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
     expect(submitted.items_per_page).toBe(300);
-    expect(submitted.max_file_size).toBe(100 * 1024 * 1024);   // preserved from original
+    expect(submitted.max_file_size).toBe(100 * 1024 * 1024); // preserved from original
     expect(submitted.disable_deletion).toBe(false);
   });
 
   it("preserves original byte precision when max_file_size_mb is not edited", async () => {
     // 5 GB decimal — not MiB-aligned, would round-trip to 4998524928 if we naively multiply by MB
     const oddByteCount = 5_000_000_000;
-    vi.mocked(getConfig).mockResolvedValue({ ...baseConfig, max_file_size: oddByteCount });
+    vi.mocked(getConfig).mockResolvedValue({
+      ...baseConfig,
+      max_file_size: oddByteCount,
+    });
     vi.mocked(saveConfig).mockResolvedValue(undefined);
     renderPage();
 
@@ -154,7 +180,7 @@ describe("SettingsPage", () => {
 
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
-    expect(submitted.max_file_size).toBe(oddByteCount);  // exact byte count preserved
+    expect(submitted.max_file_size).toBe(oddByteCount); // exact byte count preserved
   });
 
   it("renders error EmptyState when getConfig fails", async () => {
@@ -181,7 +207,8 @@ describe("SettingsPage", () => {
     });
     clickSaveSettings();
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
-    const submitted = vi.mocked(saveConfig).mock.calls[0]![0] as unknown as Record<string, unknown>;
+    const submitted = vi.mocked(saveConfig).mock
+      .calls[0]![0] as unknown as Record<string, unknown>;
     expect("data_dir" in submitted).toBe(false);
     expect("current_role" in submitted).toBe(false);
     expect("is_read_only" in submitted).toBe(false);
@@ -193,10 +220,16 @@ describe("SettingsPage", () => {
     await waitFor(() =>
       expect(screen.getByLabelText(/minimum length/i)).toBeInTheDocument(),
     );
-    expect(screen.getByLabelText(/minimum uppercase letters/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/minimum lowercase letters/i)).toBeInTheDocument();
+    expect(
+      screen.getByLabelText(/minimum uppercase letters/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText(/minimum lowercase letters/i),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText(/minimum digits/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/minimum special characters/i)).toBeInTheDocument();
+    expect(
+      screen.getByLabelText(/minimum special characters/i),
+    ).toBeInTheDocument();
   });
 
   it("includes the policy fields when saving", async () => {
@@ -314,7 +347,9 @@ describe("SettingsPage", () => {
 
     // Mutation is in-flight: Save must be disabled (loading + disabled).
     // A double-click here in the old behavior would fire a second POST.
-    const saveBtn = screen.getAllByRole("button", { name: /save settings/i })[0]!;
+    const saveBtn = screen.getAllByRole("button", {
+      name: /save settings/i,
+    })[0]!;
     expect(saveBtn).toBeDisabled();
     fireEvent.click(saveBtn);
     fireEvent.click(saveBtn);
@@ -348,7 +383,16 @@ describe("SettingsPage", () => {
     // the dirty guard, clobbering the user's "750" back to "200".
     vi.mocked(getConfig).mockResolvedValueOnce({ ...baseConfig });
     rerender(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: {
+              queries: { retry: false },
+              mutations: { retry: false },
+            },
+          })
+        }
+      >
         <MantineProvider>
           <Notifications />
           <MemoryRouter>
@@ -380,7 +424,9 @@ describe("SettingsPage", () => {
 
     // Save is blocked while the form has validation errors — even though
     // the field is dirty, the backend would reject this value with a 400.
-    const saveBtn = screen.getAllByRole("button", { name: /save settings/i })[0]!;
+    const saveBtn = screen.getAllByRole("button", {
+      name: /save settings/i,
+    })[0]!;
     expect(saveBtn).toBeDisabled();
     // Confirm no POST fires
     fireEvent.click(saveBtn);
@@ -427,5 +473,59 @@ describe("SettingsPage", () => {
     // The value the user typed last must still be visible — not snapped
     // back to anything else.
     expect(screen.getByLabelText("Items per page")).toHaveValue("400");
+  });
+});
+
+describe("SettingsPage Download config button", () => {
+  beforeEach(() => {
+    // Mantine's notifications store is a global singleton — prior tests in
+    // this file leak "Settings saved" toasts into the DOM, which then make
+    // it impossible to assert "no other notifications exist" or to find a
+    // specific message by text without ambiguity. clean() resets the store
+    // so each test starts from an empty notification list.
+    notifications.clean();
+    vi.mocked(exportConfig).mockReset();
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+  });
+
+  it("renders the Download config (JSON) button", async () => {
+    renderPage();
+    const btn = await screen.findByRole("button", { name: /download config/i });
+    expect(btn).toBeInTheDocument();
+  });
+
+  it("calls exportConfig and triggers a download when clicked", async () => {
+    const createObjectURL = vi.fn(() => "blob:test");
+    const revokeObjectURL = vi.fn();
+    global.URL.createObjectURL = createObjectURL;
+    global.URL.revokeObjectURL = revokeObjectURL;
+
+    const blob = new Blob(['{"roles":[]}'], { type: "application/json" });
+    vi.mocked(exportConfig).mockResolvedValue(blob);
+
+    renderPage();
+    const btn = await screen.findByRole("button", { name: /download config/i });
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      expect(exportConfig).toHaveBeenCalled();
+      expect(createObjectURL).toHaveBeenCalledWith(blob);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:test");
+    });
+  });
+
+  it("shows an error notification when exportConfig fails", async () => {
+    vi.mocked(exportConfig).mockRejectedValue(new Error("Forbidden"));
+
+    renderPage();
+    const btn = await screen.findByRole("button", { name: /download config/i });
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/failed to download config/i),
+      ).toBeInTheDocument();
+    });
   });
 });

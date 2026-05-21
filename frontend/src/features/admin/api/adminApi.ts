@@ -1,4 +1,5 @@
 import { apiRequest } from "@/hooks/useApiClient";
+import { ApiError } from "@/utils/apiError";
 import type {
   AdminUsersResponse,
   AppConfig,
@@ -35,10 +36,9 @@ export async function listBans(): Promise<Ban[]> {
 }
 
 export async function unbanUser(username: string): Promise<void> {
-  await apiRequest<void>(
-    `/api/admin/bans/${encodeURIComponent(username)}`,
-    { method: "DELETE" },
-  );
+  await apiRequest<void>(`/api/admin/bans/${encodeURIComponent(username)}`, {
+    method: "DELETE",
+  });
 }
 
 /**
@@ -76,17 +76,16 @@ export async function updateUser(
   if (payload.allowed_roles !== undefined) {
     body.append("allowed_roles", payload.allowed_roles.join(","));
   }
-  await apiRequest<void>(
-    `/api/admin/users/${encodeURIComponent(username)}`,
-    { method: "PUT", body },
-  );
+  await apiRequest<void>(`/api/admin/users/${encodeURIComponent(username)}`, {
+    method: "PUT",
+    body,
+  });
 }
 
 export async function deleteUser(username: string): Promise<void> {
-  await apiRequest<void>(
-    `/api/admin/users/${encodeURIComponent(username)}`,
-    { method: "DELETE" },
-  );
+  await apiRequest<void>(`/api/admin/users/${encodeURIComponent(username)}`, {
+    method: "DELETE",
+  });
 }
 
 export async function resetUserPassword(
@@ -121,4 +120,29 @@ export async function saveConfig(config: AppConfig): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   });
+}
+
+/**
+ * Fetch the raw config export as a Blob for browser download.
+ *
+ * apiRequest() unconditionally parses JSON; for "save the response to disk"
+ * we need the raw bytes so the saved file is the exact server JSON, not a
+ * re-stringified version. Hence the direct fetch here.
+ *
+ * Backed by GET /api/config/export (admin-gated in main.py).
+ */
+export async function exportConfig(): Promise<Blob> {
+  const response = await fetch("/api/config/export", {
+    method: "GET",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      response.statusText || `HTTP ${response.status}`,
+      null,
+    );
+  }
+  return response.blob();
 }

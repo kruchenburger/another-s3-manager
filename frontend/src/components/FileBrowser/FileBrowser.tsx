@@ -5,7 +5,10 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useFiles } from "@/features/files/hooks/useFiles";
 import { useDelete } from "@/features/files/hooks/useDelete";
 import { useUpload } from "@/features/files/hooks/useUpload";
-import { buildDownloadUrl, getPresignedDownloadUrl } from "@/features/files/api/filesApi";
+import {
+  buildDownloadUrl,
+  getPresignedDownloadUrl,
+} from "@/features/files/api/filesApi";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { joinPath, decodePath } from "@/utils/pathUtils";
@@ -16,17 +19,24 @@ import { showToast, TOAST_DURATIONS } from "@/utils/toast";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
-import { UploadProgress, type UploadProgressItem } from "@/components/Upload/UploadProgress";
+import {
+  UploadProgress,
+  type UploadProgressItem,
+} from "@/components/Upload/UploadProgress";
 import { UploadSummary } from "@/components/Upload/UploadSummary";
 import {
   FolderUploadHintModal,
   hasDismissedFolderUploadHint,
 } from "@/components/Upload/FolderUploadHintModal";
-import { type FileWithRelativePath, filesFromFolderInput } from "@/utils/folderUpload";
+import {
+  type FileWithRelativePath,
+  filesFromFolderInput,
+} from "@/utils/folderUpload";
 import { FileBrowserHeader } from "./FileBrowserHeader";
 import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
 import { FileBrowserEmptyState } from "./FileBrowserEmptyState";
+import { BulkDeleteProgress } from "@/components/FileBrowser/BulkDeleteProgress";
 import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
 
 export function FileBrowser() {
@@ -46,7 +56,10 @@ export function FileBrowser() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [uploadHint, setUploadHint] = useState<{ open: boolean; mode: "files" | "folder" }>({
+  const [uploadHint, setUploadHint] = useState<{
+    open: boolean;
+    mode: "files" | "folder";
+  }>({
     open: false,
     mode: "files",
   });
@@ -66,7 +79,9 @@ export function FileBrowser() {
     setSearchQuery("");
     const next = joinPath(pathFromUrl, folderName);
     const encoded = next.split("/").map(encodeURIComponent).join("/");
-    navigate(`/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(bucket)}/p/${encoded}`);
+    navigate(
+      `/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(bucket)}/p/${encoded}`,
+    );
   };
 
   const handleDownload = async (name: string): Promise<void> => {
@@ -196,8 +211,72 @@ export function FileBrowser() {
   const confirmDelete = async () => {
     const names = pendingDelete.current;
     setConfirmOpen(false);
+    if (names.length === 0) return;
+
+    const showProgress = names.length > 1;
+    // Use the auto-generated id returned by notifications.show() instead
+    // of a hardcoded string. Sequential `await` in the loop below means
+    // we never run two delete batches concurrently *today*, but using
+    // the returned id avoids a latent collision if anyone parallelises
+    // this later (and matches the upload-progress pattern in this file).
+    let notifId: string | null = null;
     let success = 0;
-    for (const name of names) {
+    let failed = 0;
+
+    // Notification styles override Mantine's baked-in body clipping:
+    // without these, the description's `overflow: hidden` +
+    // `text-overflow: ellipsis` truncates long S3 keys mid-progress.
+    // Same override used by the upload-summary notification below.
+    const progressStyles = {
+      root: { alignItems: "stretch" as const },
+      body: { overflow: "visible" as const },
+      description: {
+        overflow: "visible" as const,
+        textOverflow: "clip" as const,
+      },
+    };
+
+    // renderProgress() is called at the START of each iteration, so
+    // `started` represents the in-flight item index (0-based). The
+    // component renders the 1-based position so the headline reads
+    // "Deleting 1 of N: <name>" while item 0 is being awaited.
+    const renderProgress = (started: number, currentName: string | null) => {
+      if (!showProgress || notifId === null) return;
+      notifications.update({
+        id: notifId,
+        message: (
+          <BulkDeleteProgress
+            started={started}
+            total={names.length}
+            currentName={currentName}
+          />
+        ),
+        autoClose: false,
+        withCloseButton: false,
+        loading: true,
+        styles: progressStyles,
+      });
+    };
+
+    if (showProgress) {
+      notifId = notifications.show({
+        message: (
+          <BulkDeleteProgress
+            started={0}
+            total={names.length}
+            currentName={names[0]}
+          />
+        ),
+        autoClose: false,
+        withCloseButton: false,
+        loading: true,
+        styles: progressStyles,
+      });
+    }
+
+    for (let i = 0; i < names.length; i++) {
+      const name = names[i];
+      renderProgress(i, name);
       const fileEntry = data?.files.find((f) => f.name === name);
       const fullPath = fileEntry?.is_directory
         ? joinPath(pathFromUrl, name) + "/"
@@ -211,6 +290,7 @@ export function FileBrowser() {
         });
         success++;
       } catch (e) {
+        failed++;
         showToast({
           color: "red",
           message: `Failed to delete ${name}: ${e instanceof Error ? e.message : "unknown error"}`,
@@ -218,10 +298,14 @@ export function FileBrowser() {
         });
       }
     }
+
+    if (showProgress && notifId !== null) {
+      notifications.hide(notifId);
+    }
     if (success > 0) {
       showToast({
         color: "green",
-        message: `Deleted ${success} item${success === 1 ? "" : "s"}`,
+        message: `Deleted ${success} item${success === 1 ? "" : "s"}${failed > 0 ? ` (${failed} failed)` : ""}`,
         autoClose: TOAST_DURATIONS.success,
       });
     }
@@ -248,7 +332,10 @@ export function FileBrowser() {
   const handleUpload = useCallback(
     async (files: FileWithRelativePath[]) => {
       const maxFileSize = me.data?.max_file_size;
-      const items: UploadProgressItem[] = files.map((f) => ({ name: f.file.name, status: "pending" }));
+      const items: UploadProgressItem[] = files.map((f) => ({
+        name: f.file.name,
+        status: "pending",
+      }));
 
       // Single AbortController for the whole batch. Cancel button triggers
       // abort() which both stops the in-flight XHR (via signal) AND sets
@@ -313,7 +400,9 @@ export function FileBrowser() {
         updated[i] = { ...updated[i], status: "uploading", progress: 0 };
         renderToast();
         try {
-          const key = pathFromUrl ? `${pathFromUrl}/${item.relativePath}` : item.relativePath;
+          const key = pathFromUrl
+            ? `${pathFromUrl}/${item.relativePath}`
+            : item.relativePath;
           await uploadMutation.mutateAsync({
             bucket,
             role: roleId,
@@ -333,8 +422,7 @@ export function FileBrowser() {
         } catch (e) {
           // Abort isn't a real failure — it's a user action. Distinguish so
           // the summary doesn't shout "ERROR" at the user who clicked cancel.
-          const isAbort =
-            e instanceof DOMException && e.name === "AbortError";
+          const isAbort = e instanceof DOMException && e.name === "AbortError";
           // Use getErrorMessage so the backend's `detail` field is surfaced
           // (e.g. "File size exceeds maximum allowed size of 400MB") instead
           // of the generic `xhr.statusText` ("Internal Server Error" /
@@ -358,11 +446,17 @@ export function FileBrowser() {
       const allDone = updated.every((u) => u.status === "done");
       const hasErrors = updated.some((u) => u.status === "error");
       const wasCancelled = updated.some((u) => u.status === "cancelled");
-      const autoCloseMs = allDone ? TOAST_DURATIONS.success : TOAST_DURATIONS.error;
+      const autoCloseMs = allDone
+        ? TOAST_DURATIONS.success
+        : TOAST_DURATIONS.error;
       notifications.update({
         id: notifId,
         message: <UploadSummary items={updated} autoCloseMs={autoCloseMs} />,
-        color: allDone ? "green" : wasCancelled && !hasErrors ? "gray" : "yellow",
+        color: allDone
+          ? "green"
+          : wasCancelled && !hasErrors
+            ? "gray"
+            : "yellow",
         autoClose: autoCloseMs,
         withCloseButton: true,
         // Override Mantine's baked-in body clipping. Without these, the
@@ -423,10 +517,12 @@ export function FileBrowser() {
     if (fileList && fileList.length > 0) {
       // Plain-file input has no folder semantics — wrap each File as a
       // top-level FileWithRelativePath (relativePath = file.name).
-      const items: FileWithRelativePath[] = Array.from(fileList).map((file) => ({
-        file,
-        relativePath: file.name,
-      }));
+      const items: FileWithRelativePath[] = Array.from(fileList).map(
+        (file) => ({
+          file,
+          relativePath: file.name,
+        }),
+      );
       handleUpload(items);
     }
     e.target.value = "";

@@ -1,10 +1,14 @@
 .shell {
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: var(--mantine-spacing-md);
-  background: light-dark(var(--mantine-color-slate-0), var(--mantine-color-slate-9));
+  background: light-dark(
+    var(--mantine-color-slate-0),
+    var(--mantine-color-slate-9)
+  );
 }
 
 .card {
@@ -14,8 +18,14 @@
 
 .brand {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: var(--mantine-spacing-sm);
+  gap: var(--mantine-spacing-xs);
   margin-bottom: var(--mantine-spacing-lg);
+  text-align: center;
+}
+
+.footer {
+  width: 100%;
+  max-width: 400px;
 }
