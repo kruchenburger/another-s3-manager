@@ -43,37 +43,30 @@ describe("LoginPage parity additions", () => {
       isPending: false,
       isError: false,
     });
+    useAppInfoMock.mockReturnValue({ data: undefined });
   });
 
-  it("renders the tagline from app_description under the title", () => {
+  it("renders the GitHub link in the footer band", () => {
+    renderLogin();
+    const link = screen.getByRole("link", { name: /source on github/i });
+    expect(link).toHaveAttribute("href", GITHUB_URL);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("does NOT render the tagline (removed — app name is self-explanatory)", () => {
     useAppInfoMock.mockReturnValue({
       data: {
         app_name: "Another S3 Manager",
-        app_description: "Lightweight S3 file management interface",
+        app_description: "Some description",
         app_version: "1.0.0",
       },
     });
     renderLogin();
-    expect(
-      screen.getByText(/lightweight s3 file management interface/i),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/some description/i)).not.toBeInTheDocument();
   });
 
-  it("does NOT render the tagline when app_description is missing", () => {
-    useAppInfoMock.mockReturnValue({
-      data: {
-        app_name: "Another S3 Manager",
-        app_version: "1.0.0",
-      },
-    });
-    renderLogin();
-    // No tagline element should appear when the backend doesn't supply one.
-    expect(
-      screen.queryByText(/lightweight s3 file management interface/i),
-    ).not.toBeInTheDocument();
-  });
-
-  it("renders v<version> + GitHub link in the footer band", () => {
+  it("does NOT render the version chip on login (kept post-auth only)", () => {
     useAppInfoMock.mockReturnValue({
       data: {
         app_name: "Another S3 Manager",
@@ -82,14 +75,10 @@ describe("LoginPage parity additions", () => {
       },
     });
     renderLogin();
-    expect(screen.getByText(/^v1\.0\.0$/)).toBeInTheDocument();
-    const link = screen.getByRole("link", { name: /source on github/i });
-    expect(link).toHaveAttribute("href", GITHUB_URL);
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.queryByText(/^v1\.0\.0$/)).not.toBeInTheDocument();
   });
 
-  it("does NOT render the footer band when app_version is 'dev'", () => {
+  it("renders the GitHub link regardless of app_version (including dev)", () => {
     useAppInfoMock.mockReturnValue({
       data: {
         app_name: "Another S3 Manager",
@@ -98,17 +87,12 @@ describe("LoginPage parity additions", () => {
       },
     });
     renderLogin();
-    expect(screen.queryByText(/source on github/i)).not.toBeInTheDocument();
-  });
-
-  it("does NOT render the footer band when appInfo is loading (no data)", () => {
-    useAppInfoMock.mockReturnValue({ data: undefined });
-    renderLogin();
-    expect(screen.queryByText(/source on github/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /source on github/i }),
+    ).toBeInTheDocument();
   });
 
   it("uses fallback app name when appInfo is not yet loaded", () => {
-    useAppInfoMock.mockReturnValue({ data: undefined });
     renderLogin();
     expect(screen.getByText(/another s3 manager/i)).toBeInTheDocument();
   });

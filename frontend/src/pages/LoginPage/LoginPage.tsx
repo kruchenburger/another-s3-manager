@@ -7,7 +7,6 @@ import {
   Group,
   PasswordInput,
   Stack,
-  Text,
   TextInput,
   Title,
 } from "@mantine/core";
@@ -34,11 +33,6 @@ export function LoginPage() {
   const login = useLogin();
 
   const appName = appInfo?.app_name ?? "Another S3 Manager";
-  const appVersion = appInfo?.app_version;
-  const appDescription = appInfo?.app_description;
-  // Hide the footer when the server hasn't reported a version yet or when
-  // running locally (`dev`) — version chrome on a dev build is just noise.
-  const showFooter = !!appVersion && appVersion !== "dev";
 
   const form = useForm({
     initialValues: { username: "", password: "" },
@@ -71,11 +65,6 @@ export function LoginPage() {
         <div className={classes.brand}>
           <BurgerLogo size={96} mode="idle" />
           <Title order={3}>{appName}</Title>
-          {appDescription && (
-            <Text size="sm" c="dimmed" className={classes.tagline}>
-              {appDescription}
-            </Text>
-          )}
         </div>
         <form onSubmit={handleSubmit}>
           <Stack gap="md">
@@ -101,25 +90,17 @@ export function LoginPage() {
           </Stack>
         </form>
       </Card>
-      {showFooter && (
-        <Group justify="center" gap="xs" mt="md" className={classes.footer}>
-          <Text size="xs" c="dimmed">
-            v{appVersion}
-          </Text>
-          <Text size="xs" c="dimmed">
-            ·
-          </Text>
-          <Anchor
-            href={GITHUB_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            size="xs"
-            c="dimmed"
-          >
-            Source on GitHub
-          </Anchor>
-        </Group>
-      )}
+      <Group justify="center" gap="xs" mt="md" className={classes.footer}>
+        <Anchor
+          href={GITHUB_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          size="xs"
+          c="dimmed"
+        >
+          Source on GitHub
+        </Anchor>
+      </Group>
     </div>
   );
 }

@@ -25,10 +25,6 @@
   text-align: center;
 }
 
-.tagline {
-  /* Inherited dimmed text style is enough; class kept as a hook for future tweaks. */
-}
-
 .footer {
   width: 100%;
   max-width: 400px;
