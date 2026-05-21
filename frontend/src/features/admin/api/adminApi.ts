@@ -1,4 +1,5 @@
 import { apiRequest } from "@/hooks/useApiClient";
+import { ApiError } from "@/utils/apiError";
 import type {
   AdminUsersResponse,
   AppConfig,
@@ -121,4 +122,29 @@ export async function saveConfig(config: AppConfig): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   });
+}
+
+/**
+ * Fetch the raw config export as a Blob for browser download.
+ *
+ * apiRequest() unconditionally parses JSON; for "save the response to disk"
+ * we need the raw bytes so the saved file is the exact server JSON, not a
+ * re-stringified version. Hence the direct fetch here.
+ *
+ * Backed by GET /api/config/export (admin-gated in main.py).
+ */
+export async function exportConfig(): Promise<Blob> {
+  const response = await fetch("/api/config/export", {
+    method: "GET",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      response.statusText || `HTTP ${response.status}`,
+      null,
+    );
+  }
+  return response.blob();
 }

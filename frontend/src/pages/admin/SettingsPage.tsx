@@ -1,7 +1,10 @@
 import { Alert, Button, Group, Paper, Stack, Tabs, Text, Title } from "@mantine/core";
 import { useForm } from "@mantine/form";
+import { notifications } from "@mantine/notifications";
+import { Download } from "lucide-react";
 import { useEffect } from "react";
 import { useAdminConfig, useSaveConfig } from "@/features/admin/hooks/useAdminConfig";
+import { exportConfig } from "@/features/admin/api/adminApi";
 import { toWritableConfig } from "@/features/admin/api/configShape";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { runWithToasts } from "@/utils/mutationToast";
@@ -141,6 +144,29 @@ export function SettingsPage() {
   // error close to the offending input.
   const hasValidationErrors = Object.keys(form.errors).length > 0;
 
+  // Download current config as JSON via the existing GET /api/config/export
+  // endpoint. Kept outside the form (the button lives next to the page title,
+  // not inside the <form> element) so the click does NOT trigger form submit.
+  // Enabled regardless of readOnly mode — read-only blocks edits, not exports.
+  const handleDownloadConfig = async () => {
+    try {
+      const blob = await exportConfig();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "config.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      notifications.show({
+        color: "red",
+        message: `Failed to download config: ${getErrorMessage(err)}`,
+      });
+    }
+  };
+
   const onSubmit = form.onSubmit((values) => {
     const next: AppConfig = {
       ...toWritableConfig(config),
@@ -193,7 +219,16 @@ export function SettingsPage() {
 
   return (
     <Stack gap="md" pb={readOnly ? 0 : 80}>
-      <Title order={2}>Settings</Title>
+      <Group justify="space-between" align="center">
+        <Title order={2}>Settings</Title>
+        <Button
+          variant="default"
+          leftSection={<Download size={14} />}
+          onClick={handleDownloadConfig}
+        >
+          Download config (JSON)
+        </Button>
+      </Group>
 
       {readOnly && (
         <Alert color="yellow">

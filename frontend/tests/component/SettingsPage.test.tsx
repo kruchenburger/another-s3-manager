@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
-import { Notifications } from "@mantine/notifications";
+import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { SettingsPage } from "@/pages/admin/SettingsPage";
@@ -9,8 +9,9 @@ import { SettingsPage } from "@/pages/admin/SettingsPage";
 vi.mock("@/features/admin/api/adminApi", () => ({
   getConfig: vi.fn(),
   saveConfig: vi.fn(),
+  exportConfig: vi.fn(),
 }));
-import { getConfig, saveConfig } from "@/features/admin/api/adminApi";
+import { getConfig, saveConfig, exportConfig } from "@/features/admin/api/adminApi";
 
 const baseConfig = {
   roles: [
@@ -427,5 +428,57 @@ describe("SettingsPage", () => {
     // The value the user typed last must still be visible — not snapped
     // back to anything else.
     expect(screen.getByLabelText("Items per page")).toHaveValue("400");
+  });
+});
+
+describe("SettingsPage Download config button", () => {
+  beforeEach(() => {
+    // Mantine's notifications store is a global singleton — prior tests in
+    // this file leak "Settings saved" toasts into the DOM, which then make
+    // it impossible to assert "no other notifications exist" or to find a
+    // specific message by text without ambiguity. clean() resets the store
+    // so each test starts from an empty notification list.
+    notifications.clean();
+    vi.mocked(exportConfig).mockReset();
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+  });
+
+  it("renders the Download config (JSON) button", async () => {
+    renderPage();
+    const btn = await screen.findByRole("button", { name: /download config/i });
+    expect(btn).toBeInTheDocument();
+  });
+
+  it("calls exportConfig and triggers a download when clicked", async () => {
+    const createObjectURL = vi.fn(() => "blob:test");
+    const revokeObjectURL = vi.fn();
+    global.URL.createObjectURL = createObjectURL;
+    global.URL.revokeObjectURL = revokeObjectURL;
+
+    const blob = new Blob(['{"roles":[]}'], { type: "application/json" });
+    vi.mocked(exportConfig).mockResolvedValue(blob);
+
+    renderPage();
+    const btn = await screen.findByRole("button", { name: /download config/i });
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      expect(exportConfig).toHaveBeenCalled();
+      expect(createObjectURL).toHaveBeenCalledWith(blob);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:test");
+    });
+  });
+
+  it("shows an error notification when exportConfig fails", async () => {
+    vi.mocked(exportConfig).mockRejectedValue(new Error("Forbidden"));
+
+    renderPage();
+    const btn = await screen.findByRole("button", { name: /download config/i });
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/failed to download config/i)).toBeInTheDocument();
+    });
   });
 });
