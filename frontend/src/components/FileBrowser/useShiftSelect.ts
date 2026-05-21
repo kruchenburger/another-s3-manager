@@ -30,10 +30,11 @@ export function useShiftSelect() {
         const targetIdx = orderedNames.indexOf(name);
 
         if (shiftKey && anchor && anchorIdx !== -1 && targetIdx !== -1) {
-          // Range op: the action applied to every item in the range is the
-          // opposite of the anchor's CURRENT membership — same intent the
-          // user expressed on the anchor click. (Anchor selected → range
-          // selects; anchor deselected → range deselects.)
+          // Range op: every item in the range is forced to MATCH the
+          // anchor's current membership — i.e. the state the user just
+          // set on the anchor with their previous plain click. Anchor
+          // selected → range selects; anchor deselected → range
+          // deselects.
           const [from, to] =
             anchorIdx <= targetIdx
               ? [anchorIdx, targetIdx]

@@ -47,7 +47,16 @@ export function FileRow({
       <Table.Td>
         <Checkbox
           checked={selected}
-          onChange={(e) => onToggleSelect(file.name, e.nativeEvent.shiftKey)}
+          onChange={(e) => {
+            // React.ChangeEvent.nativeEvent is typed as the generic DOM
+            // `Event` (no shiftKey). At runtime, a checkbox onChange fires
+            // from either a mouse click (MouseEvent) or keyboard activation
+            // (KeyboardEvent) — both have shiftKey. Narrow the type so
+            // tsc -b is happy and degrade safely to `false` if nativeEvent
+            // is somehow neither (programmatic toggle, etc.).
+            const native = e.nativeEvent as MouseEvent | KeyboardEvent;
+            onToggleSelect(file.name, native.shiftKey ?? false);
+          }}
           aria-label={`Select ${file.name}`}
           onClick={(e) => e.stopPropagation()}
         />

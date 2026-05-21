@@ -77,7 +77,12 @@ export function FileCard({
       <Group justify="space-between" wrap="nowrap" mb="sm">
         <Checkbox
           checked={selected}
-          onChange={(e) => onToggleSelect(file.name, e.nativeEvent.shiftKey)}
+          onChange={(e) => {
+            // See FileRow.tsx for the same cast — React.ChangeEvent's
+            // nativeEvent type doesn't expose shiftKey.
+            const native = e.nativeEvent as MouseEvent | KeyboardEvent;
+            onToggleSelect(file.name, native.shiftKey ?? false);
+          }}
           onClick={(e) => e.stopPropagation()}
           aria-label={`Select ${file.name}`}
         />
