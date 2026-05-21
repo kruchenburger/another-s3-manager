@@ -214,36 +214,55 @@ export function FileBrowser() {
     if (names.length === 0) return;
 
     const showProgress = names.length > 1;
-    const notifId = "bulk-delete-progress";
+    // Use the auto-generated id returned by notifications.show() instead
+    // of a hardcoded string. Sequential `await` in the loop below means
+    // we never run two delete batches concurrently *today*, but using
+    // the returned id avoids a latent collision if anyone parallelises
+    // this later (and matches the upload-progress pattern in this file).
+    let notifId: string | null = null;
     let success = 0;
     let failed = 0;
 
-    // Note: renderProgress() is called at the START of each iteration,
-    // so "Deleting N of M: X" means X is IN-FLIGHT (not yet completed).
-    // This is by design — the UI tracks initiated, not completed items.
-    const renderProgress = (completed: number, currentName: string | null) => {
-      if (!showProgress) return;
+    // Notification styles override Mantine's baked-in body clipping:
+    // without these, the description's `overflow: hidden` +
+    // `text-overflow: ellipsis` truncates long S3 keys mid-progress.
+    // Same override used by the upload-summary notification below.
+    const progressStyles = {
+      root: { alignItems: "stretch" as const },
+      body: { overflow: "visible" as const },
+      description: {
+        overflow: "visible" as const,
+        textOverflow: "clip" as const,
+      },
+    };
+
+    // renderProgress() is called at the START of each iteration, so
+    // `started` represents the in-flight item index (0-based). The
+    // component renders the 1-based position so the headline reads
+    // "Deleting 1 of N: <name>" while item 0 is being awaited.
+    const renderProgress = (started: number, currentName: string | null) => {
+      if (!showProgress || notifId === null) return;
       notifications.update({
         id: notifId,
         message: (
           <BulkDeleteProgress
-            completed={completed}
+            started={started}
             total={names.length}
             currentName={currentName}
           />
         ),
         autoClose: false,
         withCloseButton: false,
-        loading: completed < names.length,
+        loading: true,
+        styles: progressStyles,
       });
     };
 
     if (showProgress) {
-      notifications.show({
-        id: notifId,
+      notifId = notifications.show({
         message: (
           <BulkDeleteProgress
-            completed={0}
+            started={0}
             total={names.length}
             currentName={names[0]}
           />
@@ -251,6 +270,7 @@ export function FileBrowser() {
         autoClose: false,
         withCloseButton: false,
         loading: true,
+        styles: progressStyles,
       });
     }
 
@@ -279,7 +299,7 @@ export function FileBrowser() {
       }
     }
 
-    if (showProgress) {
+    if (showProgress && notifId !== null) {
       notifications.hide(notifId);
     }
     if (success > 0) {

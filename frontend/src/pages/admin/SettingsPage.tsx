@@ -171,7 +171,11 @@ export function SettingsPage() {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      // Defer revoke past the synchronous click tick — Safari/iOS can
+      // otherwise cancel the in-progress download. Modern Chrome/Firefox
+      // tolerate the immediate revoke, but the setTimeout(0) trick is the
+      // standard defensive pattern.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (err) {
       notifications.show({
         color: "red",
@@ -235,6 +239,7 @@ export function SettingsPage() {
       <Group justify="space-between" align="center">
         <Title order={2}>Settings</Title>
         <Button
+          type="button"
           variant="default"
           leftSection={<Download size={14} />}
           onClick={handleDownloadConfig}
