@@ -1,6 +1,7 @@
 .shell {
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: var(--mantine-spacing-md);
@@ -14,8 +15,18 @@
 
 .brand {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: var(--mantine-spacing-sm);
+  gap: var(--mantine-spacing-xs);
   margin-bottom: var(--mantine-spacing-lg);
+  text-align: center;
+}
+
+.tagline {
+  /* Inherited dimmed text style is enough; class kept as a hook for future tweaks. */
+}
+
+.footer {
+  width: 100%;
+  max-width: 400px;
 }

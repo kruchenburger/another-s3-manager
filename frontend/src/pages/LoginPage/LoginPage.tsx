@@ -1,11 +1,13 @@
 import { useEffect } from "react";
-import { Alert, Button, Card, PasswordInput, Stack, TextInput, Title } from "@mantine/core";
+import { Alert, Anchor, Button, Card, Group, PasswordInput, Stack, Text, TextInput, Title } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { AlertCircle } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useLogin } from "@/features/auth/hooks/useLogin";
 import { useMe } from "@/features/auth/hooks/useMe";
+import { useAppInfo } from "@/hooks/useAppInfo";
 import { BurgerLogo } from "@/components/BurgerLogo/BurgerLogo";
+import { GITHUB_URL } from "@/constants/links";
 import { getErrorMessage } from "@/utils/apiError";
 import classes from "./LoginPage.module.css";
 
@@ -17,7 +19,14 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { data: me } = useMe();
+  const { data: appInfo } = useAppInfo();
   const login = useLogin();
+
+  const appName = appInfo?.app_name ?? "Another S3 Manager";
+  const appVersion = appInfo?.app_version;
+  // Hide the footer when the server hasn't reported a version yet or when
+  // running locally (`dev`) — version chrome on a dev build is just noise.
+  const showFooter = !!appVersion && appVersion !== "dev";
 
   const form = useForm({
     initialValues: { username: "", password: "" },
@@ -49,7 +58,10 @@ export function LoginPage() {
       <Card className={classes.card} padding="xl">
         <div className={classes.brand}>
           <BurgerLogo size={96} mode="idle" />
-          <Title order={3}>Another S3 Manager</Title>
+          <Title order={3}>{appName}</Title>
+          <Text size="sm" c="dimmed" className={classes.tagline}>
+            Lightweight S3 file manager
+          </Text>
         </div>
         <form onSubmit={handleSubmit}>
           <Stack gap="md">
@@ -66,6 +78,25 @@ export function LoginPage() {
           </Stack>
         </form>
       </Card>
+      {showFooter && (
+        <Group justify="center" gap="xs" mt="md" className={classes.footer}>
+          <Text size="xs" c="dimmed">
+            v{appVersion}
+          </Text>
+          <Text size="xs" c="dimmed">
+            ·
+          </Text>
+          <Anchor
+            href={GITHUB_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            size="xs"
+            c="dimmed"
+          >
+            Source on GitHub
+          </Anchor>
+        </Group>
+      )}
     </div>
   );
 }
