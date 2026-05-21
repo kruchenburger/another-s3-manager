@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, useCallback } from "react";
+import { useShiftSelect } from "./useShiftSelect";
 import { Center, Loader, Stack } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { useNavigate, useParams } from "react-router-dom";
@@ -53,7 +54,12 @@ export function FileBrowser() {
   const me = useMe();
   const disableDeletion = me.data?.disable_deletion ?? false;
 
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const {
+    selected,
+    handleToggle: handleToggleSelect,
+    toggleAll: handleToggleAll,
+    clear: clearSelection,
+  } = useShiftSelect();
   const [searchQuery, setSearchQuery] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [uploadHint, setUploadHint] = useState<{
@@ -75,7 +81,7 @@ export function FileBrowser() {
   }, [data?.files, searchQuery]);
 
   const navigateToFolder = (folderName: string) => {
-    setSelected(new Set());
+    clearSelection();
     setSearchQuery("");
     const next = joinPath(pathFromUrl, folderName);
     const encoded = next.split("/").map(encodeURIComponent).join("/");
@@ -309,24 +315,20 @@ export function FileBrowser() {
         autoClose: TOAST_DURATIONS.success,
       });
     }
-    setSelected(new Set());
+    clearSelection();
   };
 
-  const toggleSelect = (name: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
+  // Visible-order names — shift-select range is computed against this list
+  // (after sort + filter) so the highlighted range matches what the user sees.
+  const orderedNames = useMemo(
+    () => filteredFiles.map((f) => f.name),
+    [filteredFiles],
+  );
+  const toggleSelect = (name: string, shiftKey: boolean) => {
+    handleToggleSelect(name, shiftKey, orderedNames);
   };
-
   const toggleSelectAll = () => {
-    if (filteredFiles.every((f) => selected.has(f.name))) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(filteredFiles.map((f) => f.name)));
-    }
+    handleToggleAll(orderedNames);
   };
 
   const handleUpload = useCallback(
