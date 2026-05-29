@@ -3,24 +3,27 @@
 See spec: spec dated 2026-05-29 (pagination-v2 design).
 """
 
+from another_s3_manager.s3_client import list_objects_paginated_for_role
+
 
 def _seed(moto_s3, bucket: str, *, files: list[str], directories: list[str]) -> None:
-    """Pre-populate a bucket with empty-body files plus directory markers."""
+    """Pre-populate a bucket with empty-body files plus empty directory markers.
+
+    Directory markers use a key that ends with `/` and zero body. This is the
+    canonical S3 directory-marker shape — `list_objects_paginated_for_role`
+    explicitly skips it (matches the existing `list_objects_for_role` filter),
+    so sub-path tests (path="dir1") never see a stray `.keep` leak through.
+    """
     moto_s3.create_bucket(Bucket=bucket)
     for f in files:
         moto_s3.put_object(Bucket=bucket, Key=f, Body=b"")
     for d in directories:
-        # CommonPrefix detection in S3 requires at least one object UNDER the
-        # prefix. We seed a hidden sentinel so list_objects_v2 surfaces the
-        # directory in CommonPrefixes.
-        moto_s3.put_object(Bucket=bucket, Key=f"{d}/.keep", Body=b"")
+        moto_s3.put_object(Bucket=bucket, Key=f"{d}/", Body=b"")
 
 
 def test_paginated_first_page_returns_directories_and_first_files(moto_s3):
     """First call (no continuation_token) returns CommonPrefixes as
     `directories` plus the first `max_keys` files."""
-    from another_s3_manager.s3_client import list_objects_paginated_for_role
-
     _seed(
         moto_s3,
         "paginated-alpha",

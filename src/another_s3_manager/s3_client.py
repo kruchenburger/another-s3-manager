@@ -1030,6 +1030,11 @@ def list_objects_paginated_for_role(
     overflow is silently dropped (acceptable: hidden directories are also
     hidden from `list_objects_for_role`, the legacy helper).
 
+    Race window: a directory created between the discovery call and the
+    file-page call within the same first-page request will not appear in
+    this response; it surfaces on the next first-page reload. Cost: N+1 S3
+    calls for an N-page listing — the +1 is the directory-discovery call.
+
     Returns:
         {
             "directories": [{name, is_directory, size}, ...],   # only on first page
