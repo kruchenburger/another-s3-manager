@@ -13,6 +13,14 @@ interface UploadVariables {
   onProgress?: (percent: number) => void;
   /** AbortSignal — when triggered, the in-flight upload is cancelled. */
   signal?: AbortSignal;
+  /**
+   * Skip query invalidation on success. Bulk-upload callers set this to true
+   * and run ONE invalidation at the end of the batch — otherwise uploading N
+   * files into the currently-open folder triggers N listFiles refetches and
+   * the file table flickers (loader → table → loader → table…) while files
+   * stream in. Mirrors the same pattern used by useDelete for bulk-delete.
+   */
+  skipInvalidation?: boolean;
 }
 
 export function useUpload() {
@@ -20,7 +28,8 @@ export function useUpload() {
   return useMutation<void, Error, UploadVariables>({
     mutationFn: ({ bucket, role, key, file, onProgress, signal }) =>
       uploadFile(bucket, role, key, file, { onProgress, signal }),
-    onSuccess: (_, { bucket, role, currentPath }) => {
+    onSuccess: (_, { bucket, role, currentPath, skipInvalidation }) => {
+      if (skipInvalidation) return;
       qc.invalidateQueries({ queryKey: filesQueryKey(bucket, role, currentPath) });
     },
   });

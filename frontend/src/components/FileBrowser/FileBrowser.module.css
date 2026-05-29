@@ -49,3 +49,35 @@
   object-fit: contain;
   border-radius: 4px;
 }
+
+/* Phase 6b: hover vs selected differentiation. Spec §6.6.
+   Hover stays neutral (Mantine's default-hover token, no colour shift).
+   Selected uses the project primary accent + left rail (like the sidebar
+   active-state) so a selected row reads as structural state distinct from
+   a passing cursor. Implemented via `:has(input:checked)` so no JSX
+   change to FileRow/FileCard is needed (checkboxes already react to the
+   `selected` prop). */
+.row:hover {
+  background: var(--mantine-color-default-hover);
+}
+
+/* Selected: tint background + a left rail drawn via inset box-shadow.
+   `position: relative` + `::before` on a `<tr>` breaks CSS table layout —
+   the row's cells collapse / overflow because tr can't host absolute-positioned
+   children. `box-shadow: inset 3px 0` paints the rail without touching layout. */
+.row:has(input[type="checkbox"]:checked) {
+  background: color-mix(
+    in srgb,
+    var(--mantine-primary-color-filled) 14%,
+    transparent
+  );
+  box-shadow: inset 3px 0 0 var(--mantine-primary-color-filled);
+}
+
+.row:has(input[type="checkbox"]:checked):hover {
+  background: color-mix(
+    in srgb,
+    var(--mantine-primary-color-filled) 20%,
+    transparent
+  );
+}
