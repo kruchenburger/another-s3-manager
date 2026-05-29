@@ -8,7 +8,24 @@ import { ApiError } from "@/utils/apiError";
 
 const useFilesMock = vi.fn();
 vi.mock("@/features/files/hooks/useFiles", () => ({
+  // 3-arg key — used by useDelete/useUpload/FileBrowser invalidateQueries.
+  filesQueryKey: (b: string, r: string, p: string) =>
+    ["files", "list", r, b, p] as const,
+  // 4-arg key — used by useFiles itself (real implementation).
+  filesQueryKeyFull: (b: string, r: string, p: string, s: number) =>
+    ["files", "list", r, b, p, s] as const,
   useFiles: (...args: unknown[]) => useFilesMock(...args),
+}));
+vi.mock("@/hooks/useConfig", () => ({
+  useConfig: () => ({
+    data: {
+      items_per_page: 200,
+      enable_lazy_loading: true,
+      max_file_size: 100 * 1024 * 1024,
+      disable_deletion: false,
+      roles: [],
+    },
+  }),
 }));
 vi.mock("@/features/files/hooks/useDelete", () => ({
   useDelete: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -48,7 +65,10 @@ describe("FileBrowser error rendering", () => {
   it("renders QueryErrorState when useFiles returns an error", () => {
     useFilesMock.mockReturnValue({
       data: undefined,
-      isLoading: false,
+      isFetching: false,
+      isFetchingNextPage: false,
+      hasNextPage: false,
+      fetchNextPage: vi.fn(),
       error: new ApiError(400, "Bad Request", {
         detail: { code: "InvalidRegion", message: "Region is invalid for R2" },
       }),
@@ -63,8 +83,20 @@ describe("FileBrowser error rendering", () => {
   it("does NOT render the file table when stale data coexists with a fresh error", () => {
     // Stale-data race: cache returns data while a concurrent refetch fails.
     useFilesMock.mockReturnValue({
-      data: { files: [{ name: "ghost.txt", is_directory: false, size: 1 }], path: "", total_count: 1 },
-      isLoading: false,
+      data: {
+        pages: [
+          {
+            directories: [],
+            files: [{ name: "ghost.txt", is_directory: false, size: 1 }],
+            next_token: null,
+            has_more: false,
+          },
+        ],
+      },
+      isFetching: false,
+      isFetchingNextPage: false,
+      hasNextPage: false,
+      fetchNextPage: vi.fn(),
       error: new ApiError(403, "Forbidden", { detail: "Access denied" }),
     });
     renderBrowser();

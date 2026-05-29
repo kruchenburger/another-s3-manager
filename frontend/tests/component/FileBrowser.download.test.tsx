@@ -11,10 +11,39 @@ vi.mock("@/features/files/api/filesApi", () => ({
   getPresignedDownloadUrl: vi.fn(),
 }));
 vi.mock("@/features/files/hooks/useFiles", () => ({
+  // 3-arg key — used by useDelete/useUpload/FileBrowser invalidateQueries.
+  filesQueryKey: (b: string, r: string, p: string) =>
+    ["files", "list", r, b, p] as const,
+  // 4-arg key — used by useFiles itself (real implementation).
+  filesQueryKeyFull: (b: string, r: string, p: string, s: number) =>
+    ["files", "list", r, b, p, s] as const,
   useFiles: () => ({
-    data: { files: [{ name: "report.pdf", is_directory: false, size: 1234 }], path: "", total_count: 1 },
-    isLoading: false,
+    data: {
+      pages: [
+        {
+          directories: [],
+          files: [{ name: "report.pdf", is_directory: false, size: 1234 }],
+          next_token: null,
+          has_more: false,
+        },
+      ],
+    },
+    isFetching: false,
+    isFetchingNextPage: false,
+    hasNextPage: false,
+    fetchNextPage: vi.fn(),
     error: null,
+  }),
+}));
+vi.mock("@/hooks/useConfig", () => ({
+  useConfig: () => ({
+    data: {
+      items_per_page: 200,
+      enable_lazy_loading: true,
+      max_file_size: 100 * 1024 * 1024,
+      disable_deletion: false,
+      roles: [],
+    },
   }),
 }));
 vi.mock("@/features/files/hooks/useDelete", () => ({
