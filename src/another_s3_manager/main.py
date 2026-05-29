@@ -79,6 +79,7 @@ from another_s3_manager.s3_client import (
     iter_object_for_role,
     list_buckets_for_role,
     list_objects_for_role,
+    list_objects_paginated_for_role,
     put_object_for_role,
 )
 from another_s3_manager.s3_client import (
@@ -1689,24 +1690,60 @@ async def list_files(
     bucket_name: str,
     path: str = Query("", description="Path prefix to list files from"),
     role: Optional[str] = Query(None, description="Role name to use"),
+    max_keys: Optional[int] = Query(
+        None,
+        ge=1,
+        le=1000,
+        description=(
+            "Page size (1..1000). When set, switches the response shape to the "
+            "paginated envelope {directories, files, next_token, has_more}."
+        ),
+    ),
+    continuation_token: Optional[str] = Query(
+        None,
+        max_length=1024,
+        description=("Opaque S3 continuation token from a previous response's next_token. Requires max_keys."),
+    ),
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """List files and directories - delegates to s3_client.list_objects_for_role."""
+    """List files and directories.
+
+    Two modes (response shape selected by `max_keys` presence):
+      * Legacy (no `max_keys`): zip every S3 page into one flat envelope
+        `{files, path, total_count}`. Used by the vanilla UI at `/` and any
+        external HTTP caller that pre-dates the pagination work.
+      * Paginated (`max_keys` set): one S3 call per HTTP request (plus one
+        directory-discovery call on the first page). Directories return only
+        on the first page (when no `continuation_token`); files paginate via
+        S3's `NextContinuationToken`. Used by /v2.
+    """
     try:
-        # Validate and sanitize inputs
         try:
             bucket_name = sanitize_bucket_name(bucket_name)
             path = sanitize_path(path)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        # Helper handles role validation, bucket access check, pagination, and
-        # the CommonPrefixes/Contents flattening. Returns a sorted list of
-        # {name, is_directory, size, [last_modified]} dicts. Route wraps in the
-        # legacy response envelope {files, path, total_count} that the React
-        # frontend depends on.
-        files = list_objects_for_role(role, bucket_name, path, current_user)
-        return {"files": files, "path": path, "total_count": len(files)}
+        if continuation_token is not None and max_keys is None:
+            raise HTTPException(
+                status_code=400,
+                detail="continuation_token requires max_keys to be set as well",
+            )
+
+        if max_keys is None:
+            files = list_objects_for_role(role, bucket_name, path, current_user)
+            return {"files": files, "path": path, "total_count": len(files)}
+
+        page = list_objects_paginated_for_role(
+            role,
+            bucket_name,
+            path,
+            current_user,
+            max_keys,
+            continuation_token,
+        )
+        return page
+
     except HTTPException:
         raise
     except PermissionError as e:
@@ -1714,7 +1751,6 @@ async def list_files(
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
-        # Handle errors from s3_client (e.g., assume_role failures, missing credentials)
         error_msg = str(e)
         logger.error(f"Configuration error when listing files: {error_msg}", exc_info=True)
         raise HTTPException(status_code=400, detail=error_msg)

@@ -140,3 +140,78 @@ def test_paginated_files_sorted_case_insensitive(moto_s3):
     )
     names = [f["name"] for f in result["files"]]
     assert names == ["alpha.txt", "Beta.txt", "Charlie.txt"]
+
+
+def test_route_legacy_mode_unchanged(app_client, moto_s3):
+    """Without max_keys the route returns the legacy envelope."""
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    _seed(moto_s3, "legacy-bucket", files=["a.txt", "b.txt"], directories=[])
+
+    response = app_client.get(
+        "/api/buckets/legacy-bucket/files",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # Legacy shape: {files, path, total_count}; no directories/next_token/has_more keys.
+    assert "directories" not in body
+    assert "next_token" not in body
+    assert "has_more" not in body
+    assert body["path"] == ""
+    assert body["total_count"] == 2
+    assert {f["name"] for f in body["files"]} == {"a.txt", "b.txt"}
+
+
+def test_route_paginated_mode_returns_new_envelope(app_client, moto_s3):
+    """With max_keys the route returns {directories, files, next_token, has_more}."""
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    _seed(
+        moto_s3,
+        "paginated-route",
+        files=["a.txt", "b.txt", "c.txt"],
+        directories=["dir1"],
+    )
+
+    response = app_client.get(
+        "/api/buckets/paginated-route/files?max_keys=2",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert {d["name"] for d in body["directories"]} == {"dir1"}
+    assert len(body["files"]) == 2
+    assert body["has_more"] is True
+    assert body["next_token"] is not None
+
+
+def test_route_max_keys_out_of_range_rejected(app_client, moto_s3):
+    """max_keys=5000 → 422 (FastAPI Query le=1000 validation)."""
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="rejected")
+
+    response = app_client.get(
+        "/api/buckets/rejected/files?max_keys=5000",
+        headers=headers,
+    )
+    assert response.status_code == 422  # FastAPI validation error code
+
+
+def test_route_continuation_without_max_keys_rejected(app_client, moto_s3):
+    """continuation_token without max_keys → 400 with explanatory message."""
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="orphan-token")
+
+    response = app_client.get(
+        "/api/buckets/orphan-token/files?continuation_token=abc",
+        headers=headers,
+    )
+    assert response.status_code == 400
+    assert "max_keys" in response.json()["detail"]
