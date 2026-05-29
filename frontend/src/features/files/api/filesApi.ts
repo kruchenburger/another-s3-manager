@@ -1,17 +1,31 @@
 import { apiRequest } from "@/hooks/useApiClient";
 import { ApiError } from "@/utils/apiError";
 import { getCsrfToken } from "@/utils/csrf";
-import type { BucketList, FileListResponse } from "@/types/api";
+import type { BucketList, ListFilesPage } from "@/types/api";
 
 export async function listBuckets(role: string): Promise<BucketList> {
   const params = new URLSearchParams({ role });
   return apiRequest<BucketList>(`/api/buckets?${params}`);
 }
 
-export async function listFiles(bucket: string, role: string, path: string): Promise<FileListResponse> {
+// Paginated file listing — the route returns `{directories, files, next_token, has_more}`
+// when `max_keys` is set. The /v2 UI is the only caller; vanilla UI and MCP hit
+// the legacy code path on the backend (without max_keys) and don't go through here.
+export async function listFiles(
+  bucket: string,
+  role: string,
+  path: string,
+  opts: { maxKeys: number; continuationToken?: string },
+): Promise<ListFilesPage> {
   const params = new URLSearchParams({ role });
   if (path) params.set("path", path);
-  return apiRequest<FileListResponse>(`/api/buckets/${encodeURIComponent(bucket)}/files?${params}`);
+  params.set("max_keys", String(opts.maxKeys));
+  if (opts.continuationToken) {
+    params.set("continuation_token", opts.continuationToken);
+  }
+  return apiRequest<ListFilesPage>(
+    `/api/buckets/${encodeURIComponent(bucket)}/files?${params}`,
+  );
 }
 
 export interface UploadFileOptions {
