@@ -30,8 +30,8 @@ ALLOW_PATTERNS=(
   '^frontend/src/components/FileBrowser/FileTable\.tsx$'
   '^frontend/src/components/FileBrowser/FileGrid\.tsx$'
   # Frontend tests
-  '^frontend/tests/component/useConfig\.test\.ts$'
-  '^frontend/tests/component/useFiles\.test\.ts$'
+  '^frontend/tests/component/useConfig\.test\.tsx$'
+  '^frontend/tests/component/useFiles\.test\.tsx$'
   '^frontend/tests/component/FileBrowser\.pagination\.test\.tsx$'
   # E2E
   '^frontend/tests/e2e/fixtures/seed-pagination\.ts$'
