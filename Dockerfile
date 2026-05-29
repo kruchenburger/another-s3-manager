@@ -5,6 +5,12 @@ WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
+# Opt-in: ship the floating dev theme switcher in this production build for
+# visual smoke-testing the Phase 6b palette against amber. Default is empty
+# (switcher hidden + themeVariants tree-shaken per check-prod-bundle.sh).
+#   docker compose build --build-arg VITE_SHOW_THEME_SWITCHER=1
+ARG VITE_SHOW_THEME_SWITCHER=
+ENV VITE_SHOW_THEME_SWITCHER=${VITE_SHOW_THEME_SWITCHER}
 # Vite build outputs to /build/dist; we redirect via vite.config.ts to ../src/...
 # but inside the container we don't have ../src, so override outDir at build time.
 RUN npx vite build --outDir /build/dist --emptyOutDir

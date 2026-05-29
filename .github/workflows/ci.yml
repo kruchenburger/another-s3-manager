@@ -24,6 +24,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check Phase 6b file-scope guard
+        if: github.head_ref == 'feat/phase-6b-visual-refresh'
+        run: bash scripts/ci/check-phase-6b-scope.sh origin/release/1.0.0
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -99,6 +104,9 @@ jobs:
       - name: Build frontend bundle
         working-directory: frontend
         run: npm run build
+
+      - name: Check production bundle for dev-only theme leakage
+        run: bash scripts/ci/check-prod-bundle.sh src/another_s3_manager/static/v2
 
       - name: Seed admin config (MinIO-e2e role)
         # The Playwright specs expect a role named "MinIO-e2e" pointing at MinIO.

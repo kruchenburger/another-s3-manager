@@ -23,6 +23,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Set to 1 to ship the dev theme switcher inside this production build
+        # (used for visual smoke-testing Phase 6b palette vs amber baseline).
+        #   VITE_SHOW_THEME_SWITCHER=1 docker compose up --build
+        VITE_SHOW_THEME_SWITCHER: ${VITE_SHOW_THEME_SWITCHER:-}
     container_name: another-s3-manager-local
     ports:
       - "${APP_PORT:-8080}:8080"
