@@ -235,7 +235,7 @@ export function SettingsPage() {
   };
 
   return (
-    <Stack gap="md" pb={readOnly ? 0 : 80}>
+    <Stack gap="sm" pb={readOnly ? 0 : 80}>
       <Group justify="space-between" align="center">
         <Title order={2}>Settings</Title>
         <Button

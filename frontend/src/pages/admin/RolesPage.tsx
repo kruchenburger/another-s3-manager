@@ -1,9 +1,21 @@
-import { Badge, Button, Group, Stack, Table, Text, Title, Tooltip } from "@mantine/core";
+import {
+  Badge,
+  Button,
+  Group,
+  Stack,
+  Table,
+  Text,
+  Title,
+  Tooltip,
+} from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { AlertTriangle, Plus, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMatch, useNavigate } from "react-router-dom";
-import { useAdminConfig, useSaveConfig } from "@/features/admin/hooks/useAdminConfig";
+import {
+  useAdminConfig,
+  useSaveConfig,
+} from "@/features/admin/hooks/useAdminConfig";
 import { toWritableConfig } from "@/features/admin/api/configShape";
 import { stripIrrelevantFields } from "@/features/admin/api/roleShape";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
@@ -138,13 +150,16 @@ export function RolesPage() {
       ...toWritableConfig(config),
       roles: config.roles.filter((r) => r.name !== targetName),
     };
-    runWithToasts(save, next, `Role ${targetName} deleted`, () => setDeleteTarget(undefined));
+    runWithToasts(save, next, `Role ${targetName} deleted`, () =>
+      setDeleteTarget(undefined),
+    );
   };
 
-  // Visual: amber for credentials-bearing types (signal "needs secrets care"),
-  // slate for everything else.
+  // Visual: project primary for credentials-bearing types (signal "this role
+  // needs secrets care"), neutral grey for everything else. Was hardcoded
+  // "amber" which read as the old brand colour even after Phase 6b's flip.
   const typeColor = (t: AppRole["type"]): string =>
-    t === "credentials" || t === "s3_compatible" ? "amber" : "gray";
+    t === "credentials" || t === "s3_compatible" ? "mutedSlateBlue" : "gray";
 
   return (
     <Stack gap="md">
@@ -154,7 +169,10 @@ export function RolesPage() {
           description="Click 'Add role' to create your first role."
           cta={
             !readOnly ? (
-              <Button leftSection={<Plus size={16} />} onClick={() => navigate("/admin/roles/new")}>
+              <Button
+                leftSection={<Plus size={16} />}
+                onClick={() => navigate("/admin/roles/new")}
+              >
                 Add role
               </Button>
             ) : undefined
@@ -188,7 +206,9 @@ export function RolesPage() {
                 <Table.Tr key={r.name}>
                   <Table.Td>{r.name}</Table.Td>
                   <Table.Td>
-                    <Badge color={typeColor(r.type)} variant="light">{r.type}</Badge>
+                    <Badge color={typeColor(r.type)} variant="light">
+                      {r.type}
+                    </Badge>
                   </Table.Td>
                   <Table.Td>
                     {(r.allowed_buckets?.length ?? 0) === 0 ? (
@@ -208,7 +228,9 @@ export function RolesPage() {
                     )}
                   </Table.Td>
                   <Table.Td>
-                    <Text size="sm" lineClamp={1}>{r.description ?? ""}</Text>
+                    <Text size="sm" lineClamp={1}>
+                      {r.description ?? ""}
+                    </Text>
                   </Table.Td>
                   <Table.Td>
                     <Group gap={4}>
@@ -217,7 +239,9 @@ export function RolesPage() {
                         variant="subtle"
                         aria-label={`Edit ${r.name}`}
                         disabled={readOnly}
-                        onClick={() => navigate(`/admin/roles/${encodeURIComponent(r.name)}`)}
+                        onClick={() =>
+                          navigate(`/admin/roles/${encodeURIComponent(r.name)}`)
+                        }
                       >
                         <Pencil size={14} />
                       </Button>

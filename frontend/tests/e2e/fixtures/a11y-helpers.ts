@@ -20,6 +20,16 @@ export async function expectNoSeriousAxeViolations(
   page: Page,
   scopeDescription: string,
 ): Promise<void> {
+  // Wait until network is idle so Mantine's CSS-vars-driven theme has
+  // fully applied. Without this wait, axe occasionally captures a
+  // pre-paint state where label/title elements still read foreground
+  // = #000 on the body background (the static `data-mantine-color-scheme`
+  // attribute is present, but the `--mantine-color-text` token hasn't
+  // resolved yet via the CSS variables resolver). Caught in Phase 6b
+  // axe runs against the new theme — pre-PhaseSetup the default colours
+  // happened to pass either way.
+  await page.waitForLoadState("networkidle");
+
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"])
     .analyze();

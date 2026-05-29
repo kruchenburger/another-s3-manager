@@ -1,4 +1,11 @@
-import { ActionIcon, Group, Progress, Stack, Text, Tooltip } from "@mantine/core";
+import {
+  ActionIcon,
+  Group,
+  Progress,
+  Stack,
+  Text,
+  Tooltip,
+} from "@mantine/core";
 import { X } from "lucide-react";
 
 export interface UploadProgressItem {
@@ -92,7 +99,15 @@ export function UploadProgress({ items, onCancel }: UploadProgressProps) {
           )}
         </Group>
       </Group>
-      <Progress value={batchPercent} color={errors > 0 ? "yellow" : "amber"} />
+      {/* Default (omitted) color resolves to the active theme's primaryColor,
+          so the bar matches whatever palette is selected. Pre-6b this was
+          hardcoded `color="amber"` which broke once amber was no longer the
+          active palette — the bar lost its fill entirely. `yellow` for
+          error state still works (built-in Mantine palette). */}
+      <Progress
+        value={batchPercent}
+        color={errors > 0 ? "yellow" : undefined}
+      />
       {current && !isSingle && (
         // For multi-file batches, show the current filename below the bar so
         // the user knows which file is being uploaded. Skip for single-file

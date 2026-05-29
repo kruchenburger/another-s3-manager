@@ -24,8 +24,8 @@ vi.mock("@/components/AppShell/UserMenu", () => ({
 vi.mock("@/components/AppShell/DefaultRolePicker", () => ({
   DefaultRolePicker: () => null,
 }));
-vi.mock("@/components/BurgerLogo/BurgerLogo", () => ({
-  BurgerLogo: () => <span data-testid="burger-logo" />,
+vi.mock("@/components/CubeLogo/CubeLogo", () => ({
+  CubeLogo: () => <span data-testid="cube-logo" />,
 }));
 
 function renderHeader() {

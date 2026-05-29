@@ -21,7 +21,8 @@ export function UserMenu() {
         notifications.show({
           color: "red",
           title: "Logout failed",
-          message: "Please close the tab manually — your session may still be active on the server.",
+          message:
+            "Please close the tab manually — your session may still be active on the server.",
           autoClose: false,
         }),
     });
@@ -32,7 +33,7 @@ export function UserMenu() {
       <Menu.Target>
         <UnstyledButton aria-label="User menu">
           <Group gap="xs">
-            <Avatar color="amber" radius="xl" size="sm">
+            <Avatar color="mutedSlateBlue" radius="xl" size="sm">
               {initial}
             </Avatar>
             <Text size="sm" fw={500} visibleFrom="sm">
@@ -64,7 +65,11 @@ export function UserMenu() {
           </Menu.Item>
         )}
         <Menu.Divider />
-        <Menu.Item color="red" leftSection={<LogOut size={14} />} onClick={handleLogout}>
+        <Menu.Item
+          color="red"
+          leftSection={<LogOut size={14} />}
+          onClick={handleLogout}
+        >
           Logout
         </Menu.Item>
       </Menu.Dropdown>

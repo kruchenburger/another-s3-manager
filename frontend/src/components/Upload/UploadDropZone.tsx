@@ -15,7 +15,11 @@ interface UploadDropZoneProps {
   active?: boolean;
 }
 
-export function UploadDropZone({ currentPath, onDrop, active = true }: UploadDropZoneProps) {
+export function UploadDropZone({
+  currentPath,
+  onDrop,
+  active = true,
+}: UploadDropZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   // Counter tracks nested dragenter/dragleave events to avoid flickering
   const [, setCounter] = useState(0);
@@ -95,9 +99,7 @@ export function UploadDropZone({ currentPath, onDrop, active = true }: UploadDro
       // signature stays uniform (relativePath === file.name for loose files).
       const flat = Array.from(e.dataTransfer.files);
       if (flat.length > 0) {
-        onDrop(
-          flat.map((file) => ({ file, relativePath: file.name })),
-        );
+        onDrop(flat.map((file) => ({ file, relativePath: file.name })));
       }
     };
 
@@ -125,14 +127,20 @@ export function UploadDropZone({ currentPath, onDrop, active = true }: UploadDro
         right: 0,
         bottom: 0,
         zIndex: 1000,
-        background: "rgba(255, 193, 7, 0.15)",
+        // Theme-agnostic accent — follows the active palette so the
+        // dashed-border + tint pair stays visually consistent whether
+        // the user is on muted-slate-blue (Phase 6b) or amber baseline.
+        // amber-6 was hardcoded pre-6b and broke when amber stopped
+        // being the active palette.
+        background:
+          "color-mix(in srgb, var(--mantine-primary-color-filled) 15%, transparent)",
         backdropFilter: "blur(8px)",
-        border: "4px dashed var(--mantine-color-amber-6)",
+        border: "4px dashed var(--mantine-primary-color-filled)",
         pointerEvents: "none",
       }}
     >
       <Stack align="center" gap="xs">
-        <Upload size={64} color="var(--mantine-color-amber-6)" />
+        <Upload size={64} color="var(--mantine-primary-color-filled)" />
         <Text size="xl" fw={600}>
           Drop here to upload
         </Text>
