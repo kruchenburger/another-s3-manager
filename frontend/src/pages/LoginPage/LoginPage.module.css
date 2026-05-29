@@ -13,19 +13,24 @@
 
 .card {
   width: 100%;
-  max-width: 400px;
+  /* Mockup uses a chunkier card — 440px (up from 400) lets the brand
+     stack breathe and matches the screen-share comparison the user
+     called "richer" vs the earlier compact build. */
+  max-width: 440px;
 }
 
 .brand {
   display: flex;
   flex-direction: column;
   align-items: center;
+  /* Tight gap so the logo, title, and tagline read as one brand block
+     instead of three loosely-stacked elements. */
   gap: var(--mantine-spacing-xs);
-  margin-bottom: var(--mantine-spacing-lg);
+  margin-bottom: var(--mantine-spacing-xl);
   text-align: center;
 }
 
 .footer {
   width: 100%;
-  max-width: 400px;
+  max-width: 440px;
 }
