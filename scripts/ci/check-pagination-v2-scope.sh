@@ -15,6 +15,11 @@ ALLOW_PATTERNS=(
   '^src/another_s3_manager/main\.py$'
   # Backend tests
   '^tests/test_pagination_v2\.py$'
+  # Direct-call tests for list_files broke when new Query() params landed —
+  # they invoke the handler as a coroutine, so unspecified args defaulted to
+  # the Query sentinel object instead of None. Two-line fix per test to pass
+  # max_keys=None + continuation_token=None explicitly. No behaviour change.
+  '^tests/test_main_logic\.py$'
   # Frontend types + new config hook + paginated API client + useInfiniteQuery
   '^frontend/src/types/api\.ts$'
   '^frontend/src/hooks/useConfig\.ts$'
