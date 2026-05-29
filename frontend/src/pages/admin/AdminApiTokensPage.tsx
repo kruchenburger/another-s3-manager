@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Button, Container, Group, Select, Stack, Title } from "@mantine/core";
+import { Alert, Button, Group, Select, Stack, Title } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { AlertTriangle, Plus } from "lucide-react";
@@ -9,7 +9,7 @@ import { useDeleteAdminToken } from "@/features/tokens/hooks/useDeleteToken";
 import { useUpdateAdminToken } from "@/features/tokens/hooks/useUpdateToken";
 import { useAdminUsers } from "@/features/admin/hooks/useAdminUsers";
 import { TokensTable } from "@/components/Tokens/TokensTable";
-import { CreateTokenModal } from "@/components/Tokens/CreateTokenModal";
+import { CreateTokenDrawer } from "@/components/Tokens/CreateTokenDrawer";
 import { TokenEditDrawer } from "@/components/Tokens/TokenEditDrawer";
 import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
@@ -76,8 +76,7 @@ export function AdminApiTokensPage() {
     : undefined;
 
   return (
-    <Container size="lg" py="lg">
-      <Stack gap="md">
+    <Stack gap="md">
         {tokensError ? (
           <QueryErrorState error={tokensError} title="Couldn't load tokens" />
         ) : (
@@ -122,9 +121,7 @@ export function AdminApiTokensPage() {
             )}
           </>
         )}
-      </Stack>
-
-      <CreateTokenModal
+      <CreateTokenDrawer
         opened={createOpen}
         onClose={create.close}
         onSubmit={handleCreate}
@@ -167,6 +164,6 @@ export function AdminApiTokensPage() {
           );
         }}
       />
-    </Container>
+    </Stack>
   );
 }

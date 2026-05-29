@@ -101,6 +101,17 @@ ALLOW_PATTERNS=(
   '^frontend/src/pages/admin/RolesPage\.tsx$'
   '^frontend/src/pages/ChangePasswordPage\.tsx$'
   '^frontend/src/pages/RolePage\.tsx$'
+  # MCP token pages — Container removed so the table fills the work
+  # area like every other admin page, and the create flow swapped
+  # from Modal to right-positioned Drawer so the page-level pattern
+  # matches BansPage/RolesPage/UsersPage. UserTokensList (inside the
+  # admin UserDrawer) keeps Modal because Drawer-on-Drawer reads
+  # awkwardly. New CreateTokenFormFields + CreateTokenDrawer.
+  '^frontend/src/pages/admin/AdminApiTokensPage\.tsx$'
+  '^frontend/src/pages/ApiTokensPage\.tsx$'
+  '^frontend/src/components/Tokens/CreateTokenFormFields\.tsx$'
+  '^frontend/src/components/Tokens/CreateTokenDrawer\.tsx$'
+  '^frontend/src/components/Tokens/CreateTokenModal\.tsx$'
 )
 
 changed_files="$(git diff --name-only "$BASE"...HEAD)"
