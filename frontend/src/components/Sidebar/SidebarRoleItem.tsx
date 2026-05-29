@@ -1,5 +1,11 @@
 import { useEffect, useState, type MouseEvent } from "react";
-import { ActionIcon, NavLink, Stack, Tooltip, UnstyledButton } from "@mantine/core";
+import {
+  ActionIcon,
+  NavLink,
+  Stack,
+  Tooltip,
+  UnstyledButton,
+} from "@mantine/core";
 import { AlertCircle, ChevronRight } from "lucide-react";
 import { useMatch, useNavigate } from "react-router-dom";
 import { useBuckets } from "@/features/files/hooks/useBuckets";
@@ -29,7 +35,11 @@ export function SidebarRoleItem({ role, collapsed }: SidebarRoleItemProps) {
     if (isActiveRole) setOpen(true);
   }, [isActiveRole]);
   const navigate = useNavigate();
-  const { data: buckets, isLoading, error } = useBuckets(open ? role : undefined);
+  const {
+    data: buckets,
+    isLoading,
+    error,
+  } = useBuckets(open ? role : undefined);
 
   // 403 from /api/buckets means the role's credentials cannot list all buckets
   // (R2, scoped IAM tokens). Surface as a warning icon in the sidebar so the
@@ -88,6 +98,11 @@ export function SidebarRoleItem({ role, collapsed }: SidebarRoleItemProps) {
           </ActionIcon>
         }
         onClick={navigateToRole}
+        // Deliberately NOT setting `active={isActiveRole}` — the role row
+        // signals "you're inside me" by being opened (the chevron is
+        // rotated and the bucket children are visible). Double-highlighting
+        // role + bucket read as visual noise. accessDenied still forces
+        // active=false so the 403 warning sub-item stays the visible cue.
         active={accessDenied ? false : undefined}
         opened={open}
       />
@@ -128,7 +143,12 @@ export function SidebarRoleItem({ role, collapsed }: SidebarRoleItemProps) {
             </Tooltip>
           )}
           {buckets?.map((bucket) => (
-            <SidebarBucketItem key={bucket} roleId={role} bucket={bucket} collapsed={false} />
+            <SidebarBucketItem
+              key={bucket}
+              roleId={role}
+              bucket={bucket}
+              collapsed={false}
+            />
           ))}
           {buckets && buckets.length === 0 && (
             <NavLink label="No buckets" disabled pl="lg" />

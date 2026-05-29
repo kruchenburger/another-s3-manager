@@ -1,0 +1,111 @@
+/* frontend/src/app/global.css
+ *
+ * Cross-cutting CSS rules that Mantine theme cannot express directly.
+ * Phase 6b additions: letter-spacing on titles, focus-ring override,
+ * ::selection, scrollbar tokens, theme-transition smoothing.
+ *
+ * All rules use `:where()` where applicable to keep specificity (0,0,0),
+ * so per-component overrides win without !important. */
+
+:root {
+  --as3m-title-tracking: -0.01em;
+}
+
+/* Title letter-spacing — Mantine headings.sizes does not have a tracking slot.
+   Applied to h1/h2/h3 and Mantine's Title[data-order=N]. */
+h1,
+h2,
+h3,
+.mantine-Title-root[data-order="1"],
+.mantine-Title-root[data-order="2"],
+.mantine-Title-root[data-order="3"] {
+  letter-spacing: var(--as3m-title-tracking);
+}
+
+/* Focus ring — amber on dark used to be loud; mutedSlateBlue at shade 5
+   on dark is too quiet without help. Shade 3 outline + 25% halo. */
+:where(:focus-visible) {
+  outline: 2px solid var(--mantine-color-mutedSlateBlue-3);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px
+    color-mix(in srgb, var(--mantine-color-mutedSlateBlue-5) 25%, transparent);
+}
+
+/* System mid-tone tokens — browsers source these from --mantine-primary-color
+   or fall through to hardcoded defaults. Override so they pick up the new
+   accent. Spec §6.7. */
+::selection {
+  background: var(--mantine-color-mutedSlateBlue-3);
+  color: var(--mantine-color-black);
+}
+
+* {
+  caret-color: var(--mantine-color-mutedSlateBlue-5);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--mantine-color-slate-6);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--mantine-color-slate-5);
+}
+
+/* Chrome autofill — preserve the slate background instead of pale yellow. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--mantine-color-default-color);
+  -webkit-box-shadow: 0 0 0 30px var(--mantine-color-default) inset;
+  caret-color: var(--mantine-color-mutedSlateBlue-5);
+}
+
+/* Theme transition smoothing — parity with vanilla style.css:40, where this
+   was native. Without it, Mantine swaps data-mantine-color-scheme instantly
+   and CSS variables jump, reading as cheap. Spec §6.8.
+
+   The selector list covers every surface that paints a background or border
+   from a Mantine CSS variable — without one of these, that surface would
+   snap to its new colour while the rest of the page fades.
+
+   `:where()` keeps specificity at (0,0,0) so component-level transitions
+   (e.g., GSAP cleanups on CubeLogo) still win. */
+:where(html, body),
+:where(
+  .mantine-AppShell-root,
+  .mantine-AppShell-main,
+  .mantine-AppShell-header,
+  .mantine-AppShell-navbar,
+  .mantine-AppShell-footer,
+  .mantine-AppShell-aside
+),
+:where(.mantine-Paper-root, .mantine-Card-root, .mantine-Modal-content),
+:where(.mantine-Button-root, .mantine-ActionIcon-root),
+:where(
+  .mantine-TextInput-input,
+  .mantine-PasswordInput-input,
+  .mantine-Select-input,
+  .mantine-Textarea-input,
+  .mantine-NumberInput-input
+),
+:where(.mantine-NavLink-root, .mantine-Tabs-tab, .mantine-Tabs-list),
+:where(.mantine-Table-table, .mantine-Table-th, .mantine-Table-td),
+:where(.mantine-Menu-dropdown, .mantine-Popover-dropdown),
+:where(.mantine-Alert-root, .mantine-Notification-root),
+:where(.mantine-Drawer-content) {
+  transition:
+    background-color 240ms ease,
+    color 240ms ease,
+    border-color 240ms ease,
+    box-shadow 240ms ease;
+}
+
+/* Reduced-motion override — no transitions / animations at all. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}

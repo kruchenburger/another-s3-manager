@@ -23,6 +23,6 @@
 }
 
 .collapsedItem:focus-visible {
-  outline: 2px solid var(--mantine-color-amber-5);
+  outline: 2px solid var(--mantine-primary-color-filled);
   outline-offset: 2px;
 }

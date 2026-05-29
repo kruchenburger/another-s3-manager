@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Github, Shield } from "lucide-react";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useAppInfo } from "@/hooks/useAppInfo";
-import { BurgerLogo } from "@/components/BurgerLogo/BurgerLogo";
+import { CubeLogo } from "@/components/CubeLogo/CubeLogo";
 import { ThemeToggle } from "@/components/AppShell/ThemeToggle";
 import { UserMenu } from "@/components/AppShell/UserMenu";
 import { DefaultRolePicker } from "@/components/AppShell/DefaultRolePicker";
@@ -48,7 +48,7 @@ export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
           }}
           aria-label="Go to home"
         >
-          <BurgerLogo size={32} mode="static" />
+          <CubeLogo size={32} mode="static" />
           <Title order={4}>{appName}</Title>
         </Link>
         {/* Version chip lives OUTSIDE the home Link — it's static metadata,

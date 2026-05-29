@@ -8,7 +8,7 @@ interface RoleAvatarProps {
 export function RoleAvatar({ role, size = "sm" }: RoleAvatarProps) {
   const initial = role.charAt(0).toUpperCase();
   return (
-    <Avatar color="amber" radius="xl" size={size} aria-label={role}>
+    <Avatar color="mutedSlateBlue" radius="xl" size={size} aria-label={role}>
       {initial}
     </Avatar>
   );
