@@ -2,7 +2,7 @@ import { useMemo, useRef, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { filesQueryKey } from "@/features/files/hooks/useFiles";
 import { useShiftSelect } from "./useShiftSelect";
-import { Stack } from "@mantine/core";
+import { Stack, Text } from "@mantine/core";
 import { DelayedLoader } from "@/components/DelayedLoader/DelayedLoader";
 import { notifications } from "@mantine/notifications";
 import { useNavigate, useParams } from "react-router-dom";
@@ -16,6 +16,7 @@ import {
 } from "@/features/files/api/filesApi";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
+import { useConfig } from "@/hooks/useConfig";
 import { joinPath, decodePath } from "@/utils/pathUtils";
 import { ApiError, getErrorMessage } from "@/utils/apiError";
 import { formatBytes } from "@/utils/formatBytes";
@@ -51,7 +52,30 @@ export function FileBrowser() {
   const pathFromUrl = decodePath(params["*"] ?? "");
   const navigate = useNavigate();
 
-  const { data, isFetching, error } = useFiles(bucket, roleId, pathFromUrl);
+  const { data: config } = useConfig();
+  const pageSize = config?.items_per_page ?? 200;
+  const lazyLoadingEnabled = config?.enable_lazy_loading ?? true;
+  const {
+    data,
+    isFetching,
+    isFetchingNextPage,
+    hasNextPage,
+    fetchNextPage,
+    error,
+  } = useFiles(bucket, roleId, pathFromUrl, pageSize);
+
+  // Pages from useInfiniteQuery: page[0] has directories (first-page only) +
+  // files; subsequent pages add more files. Flatten into one ordered list:
+  // directories first (they only appear once), then every page's files in
+  // S3 order. This is the single source of truth for filteredFiles and every
+  // .find(name === ...) lookup below.
+  const items = useMemo(() => {
+    if (!data) return [];
+    const directories = data.pages[0]?.directories ?? [];
+    const files = data.pages.flatMap((p) => p.files);
+    return [...directories, ...files];
+  }, [data]);
+
   const queryClient = useQueryClient();
   const deleteMutation = useDelete();
   const uploadMutation = useUpload();
@@ -79,11 +103,10 @@ export function FileBrowser() {
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   const filteredFiles = useMemo(() => {
-    if (!data?.files) return [];
-    if (!searchQuery) return data.files;
+    if (!searchQuery) return items;
     const q = searchQuery.toLowerCase();
-    return data.files.filter((f) => f.name.toLowerCase().includes(q));
-  }, [data?.files, searchQuery]);
+    return items.filter((f) => f.name.toLowerCase().includes(q));
+  }, [items, searchQuery]);
 
   const navigateToFolder = (folderName: string) => {
     clearSelection();
@@ -204,7 +227,7 @@ export function FileBrowser() {
   } | null>(null);
 
   const handlePreview = (name: string) => {
-    const fileEntry = data?.files.find((f) => f.name === name);
+    const fileEntry = items.find((f) => f.name === name);
     if (!fileEntry || fileEntry.is_directory) return;
     const fullPath = joinPath(pathFromUrl, name);
     setPreviewState({
@@ -274,7 +297,7 @@ export function FileBrowser() {
       if (cancelRef.cancelled) break;
       const name = names[i];
       renderProgress(i, name);
-      const fileEntry = data?.files.find((f) => f.name === name);
+      const fileEntry = items.find((f) => f.name === name);
       const fullPath = fileEntry?.is_directory
         ? joinPath(pathFromUrl, name) + "/"
         : joinPath(pathFromUrl, name);
@@ -606,7 +629,7 @@ export function FileBrowser() {
         onUploadClick={handleUploadClick}
         onUploadFolderClick={handleUploadFolderClick}
         disableDeletion={disableDeletion}
-        objectCount={data?.files?.length ?? 0}
+        objectCount={items.length}
       />
       <input
         type="file"
@@ -628,6 +651,11 @@ export function FileBrowser() {
         style={{ display: "none" }}
       />
       <Stack gap="md">
+        {searchQuery && hasNextPage && (
+          <Text size="xs" c="dimmed">
+            Filtering {items.length} loaded items. Load more to search the rest.
+          </Text>
+        )}
         {filteredFiles.length === 0 ? (
           <FileBrowserEmptyState />
         ) : mode === "table" ? (
@@ -641,6 +669,10 @@ export function FileBrowser() {
             onCopyUrl={handleCopyUrl}
             onPreview={handlePreview}
             onDelete={(name) => requestDelete([name])}
+            hasNextPage={hasNextPage}
+            isFetchingNextPage={isFetchingNextPage}
+            onLoadMore={() => fetchNextPage()}
+            lazyLoadingEnabled={lazyLoadingEnabled}
           />
         ) : (
           <FileGrid
@@ -655,6 +687,10 @@ export function FileBrowser() {
             bucket={bucket}
             roleId={roleId}
             path={pathFromUrl}
+            hasNextPage={hasNextPage}
+            isFetchingNextPage={isFetchingNextPage}
+            onLoadMore={() => fetchNextPage()}
+            lazyLoadingEnabled={lazyLoadingEnabled}
           />
         )}
       </Stack>
