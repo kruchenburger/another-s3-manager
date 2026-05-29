@@ -455,12 +455,16 @@ export function FileBrowser() {
 
       // Single invalidation after the batch — useUpload.skipInvalidation was
       // true inside the loop, so the open-folder file list only refetches
-      // ONCE here instead of once per uploaded file. Without this the table
-      // flickered (loader ⇄ table) during multi-file uploads into the
-      // currently-visible folder. Same pattern as bulk-delete above.
-      queryClient.invalidateQueries({
-        queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
-      });
+      // ONCE here instead of once per uploaded file. Skip the refetch
+      // entirely if no file actually landed (every upload failed, or the
+      // user cancelled before the first one succeeded) — nothing changed
+      // server-side, so the GET would just return the same list.
+      const anyUploaded = updated.some((u) => u.status === "done");
+      if (anyUploaded) {
+        queryClient.invalidateQueries({
+          queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
+        });
+      }
 
       // Final summary toast — `UploadSummary` surfaces failed filenames + their
       // error messages so a 223/224 batch tells the user WHICH file failed.
@@ -568,14 +572,14 @@ export function FileBrowser() {
     e.target.value = "";
   };
 
-  // Show the loader whenever a fetch is in flight, even on a re-open of
-  // a cached folder. TanStack returns the stale cache immediately
-  // (isLoading=false, isFetching=true, data defined) — vanilla showed a
-  // progress indicator on every navigation regardless of cache, and the
-  // user expects the same here. DelayedLoader hides itself for fetches
-  // that complete inside 500ms so warm-cache navigation doesn't flash a
-  // spinner before the content appears.
-  if (isFetching) {
+  // Cold-load only: show the spinner when we have NO data to show.
+  // Background refetches (return to a cached folder, post-mutation
+  // invalidation) keep the previously-rendered table on screen —
+  // hiding it under a spinner makes the UI feel slower and flashes
+  // a blank pane for the duration of the refetch.
+  // DelayedLoader still debounces the spinner by 500ms so a fast
+  // first-time fetch never paints a flash before content lands.
+  if (isFetching && !data) {
     return <DelayedLoader label="Loading files…" />;
   }
 

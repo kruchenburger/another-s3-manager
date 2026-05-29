@@ -231,12 +231,22 @@ export const buildErrorTimeline: AnimationBuilder = (
    Required SVG structure inside `container`:
      <g data-layer="cube-top">
        <g class="cube-logo__cube">… apex faces …</g>
+     </g>
+     <g data-layer="cube-top-ghost">
        <polygon data-ghost-slot … opacity="0"/>   ← pulses in
+       <text   data-ghost-q     … opacity="0">?</text>
      </g>
 
-   The baseline SVG shipped with this spec already includes the ghost slot.
-   If the slot is missing the timeline still runs (apex just fades in/out
-   with no visible placeholder).
+   IMPORTANT: the ghost layer MUST be a SIBLING <g> next to cube-top,
+   NOT nested inside it. This timeline animates cube-top's `opacity`
+   to 0 during the cycle, and any descendants would inherit that
+   opacity — the dashed slot would never appear because it would be
+   hidden along with the apex it's supposed to replace.
+
+   The timeline finds the ghost elements via `container.querySelector`
+   which traverses the whole subtree, so the sibling-vs-child layout
+   does not matter at runtime. If the slot is missing entirely the
+   timeline still runs (apex just fades in/out with no placeholder).
    ───────────────────────────────────────────────────────────── */
 
 export const buildNotfoundTimeline: AnimationBuilder = (

@@ -30,9 +30,10 @@ export const mutedSlateBlue: MantineColorsTuple = [
   "#243349", // 9
 ];
 
-// Amber retained ONLY for the dev switcher's pre-Phase-6b baseline comparison.
-// Production primaryColor switches off amber in Task 9; until then, amber stays
-// the active production palette so Tasks 3-8 ride into prod risk-free.
+// Amber is kept registered as a SECONDARY palette so legacy `color="amber"`
+// call-sites (warning ThemeIcons, error-state Alerts, etc.) still resolve
+// to a real CSS variable instead of falling back to grey. It is NOT the
+// primary anymore — Phase 6b flipped primary to mutedSlateBlue.
 export const amber: MantineColorsTuple = [
   "#fff8e1", // 0
   "#ffecb3", // 1
@@ -46,8 +47,7 @@ export const amber: MantineColorsTuple = [
   "#ff6f00", // 9
 ];
 
-// Shared component defaults — applied to every theme variant so dev-switching
-// only changes colours, not spacing/typography.
+// Shared component defaults across the app.
 const sharedComponents = {
   Button: Button.extend({
     defaultProps: { size: "sm", radius: "md", autoContrast: true },
@@ -63,7 +63,6 @@ const sharedComponents = {
 };
 
 // Shared typography — tighter "tool-feel" scale from spec §3.2.
-// Applied via theme so every dev-switcher variant inherits.
 const sharedTypography = {
   fontFamily: "'DM Sans', system-ui, sans-serif",
   fontFamilyMonospace: "'JetBrains Mono', ui-monospace, monospace",
@@ -96,9 +95,9 @@ const sharedTypography = {
   focusRing: "auto" as const,
 };
 
-// Phase 6b target theme — Muted Slate-Blue. Becomes the production default
-// in Task 9 (the "color flip" commit). Until then, end users see the amber
-// theme below; ThemePreviewProvider lets developers switch in dev only.
+// Production theme — Muted Slate-Blue. This is what ships; Phase 6b's
+// dev theme switcher (which let developers A/B between palettes during
+// smoke testing) was removed once the palette was locked.
 export const mutedSlateBlueTheme = createTheme({
   ...sharedTypography,
   primaryColor: "mutedSlateBlue",
@@ -106,42 +105,18 @@ export const mutedSlateBlueTheme = createTheme({
   colors: {
     slate,
     mutedSlateBlue,
-    // Keep amber registered in the production muted theme so legacy
-    // `color="amber"` usages (Avatars, ThemeIcons, error/warn Buttons,
-    // role-type palette helper, ResetPasswordModal) still resolve to a
-    // real CSS variable instead of falling back to grey. We only changed
-    // the primary palette in Phase 6b — secondary amber tokens stay as
-    // accent options across the app.
+    // Keep amber registered as a secondary palette so legacy
+    // `color="amber"` usages (warning ThemeIcons, error Alerts, etc.)
+    // still resolve to a real CSS variable instead of falling back to
+    // grey. We only changed the PRIMARY palette in Phase 6b.
     amber,
   },
   components: sharedComponents,
 });
 
-// Production-default amber theme — kept in theme.ts (not themeVariants.ts)
-// so it ships in the prod bundle. Name deliberately avoids the string
-// "amberBaselineTheme" because check-prod-bundle.sh forbids that exact
-// identifier from leaking from the dev-only switcher's grep allowlist.
-// Task 9 swaps this out by changing ThemePreviewProvider.PRODUCTION_DEFAULT
-// from "amber" to "muted" — that's the only end-user-visible commit.
-export const productionAmberTheme = createTheme({
-  ...sharedTypography,
-  primaryColor: "amber",
-  primaryShade: { light: 6, dark: 5 }, // original amber shade from pre-Phase-6b
-  colors: {
-    slate,
-    amber,
-  },
-  components: sharedComponents,
-});
-
-// Legacy backwards-compat re-export so any consumer that imported { theme } still works.
-// Phase 6b: still points at amber until Task 9.
-export const theme = productionAmberTheme;
-
-// CSS variables resolver — unchanged from pre-Phase-6b, but now applies to all
-// variants (the dev switcher injects the same resolver regardless of variant).
-// Override rationale: --mantine-color-dimmed default fails WCAG AA on dark
-// (#828282 on #1a212e = 4.03:1, needs 4.5:1). #969696 passes at 4.69:1.
+// CSS variables resolver — override rationale: --mantine-color-dimmed
+// default fails WCAG AA on the dark surface (#828282 on #1a212e = 4.03:1,
+// needs 4.5:1). #969696 passes at 4.69:1.
 export const cssVariablesResolver: CSSVariablesResolver = () => ({
   variables: {},
   light: {},
