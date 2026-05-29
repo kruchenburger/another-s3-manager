@@ -62,6 +62,25 @@ export interface FileListResponse {
   total_count: number;
 }
 
+/**
+ * Paginated response from GET /api/buckets/.../files?max_keys=N. Distinct
+ * from the legacy `FileListResponse` envelope which is still returned when
+ * `max_keys` is absent (vanilla UI + external callers).
+ *
+ *  - `directories` is populated ONLY on the first page (when the request
+ *    had no `continuation_token`). On subsequent pages it's an empty array.
+ *  - `next_token` is the opaque S3 continuation token to pass back as the
+ *    `continuation_token` query param of the next request. `null` on the
+ *    final page.
+ *  - `has_more` mirrors S3's `IsTruncated`.
+ */
+export interface ListFilesPage {
+  directories: FileEntry[];
+  files: FileEntry[];
+  next_token: string | null;
+  has_more: boolean;
+}
+
 export interface Ban {
   username: string;
   banned_until: number; // unix epoch seconds
