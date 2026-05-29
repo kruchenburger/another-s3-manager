@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Enforce that the feat/pagination-v2 PR only touches files in the whitelist
+# from specs/2026-05-29-pagination-v2-design.md. Run on every commit in the
+# PR diff against release/1.0.0.
+
+set -euo pipefail
+
+BASE="${1:-origin/release/1.0.0}"
+
+# Whitelist patterns — anything NOT matching one of these is a scope violation.
+# Patterns are extended-regex, matched against the full diff path from repo root.
+ALLOW_PATTERNS=(
+  # Backend — paginated S3 helper + route branch
+  '^src/another_s3_manager/s3_client\.py$'
+  '^src/another_s3_manager/main\.py$'
+  # Backend tests
+  '^tests/test_pagination_v2\.py$'
+  # Frontend types + new config hook + paginated API client + useInfiniteQuery
+  '^frontend/src/types/api\.ts$'
+  '^frontend/src/hooks/useConfig\.ts$'
+  '^frontend/src/features/files/api/filesApi\.ts$'
+  '^frontend/src/features/files/hooks/useFiles\.ts$'
+  # FileBrowser shell + table/grid sentinel slots
+  '^frontend/src/components/FileBrowser/FileBrowser\.tsx$'
+  '^frontend/src/components/FileBrowser/FileTable\.tsx$'
+  '^frontend/src/components/FileBrowser/FileGrid\.tsx$'
+  # Frontend tests
+  '^frontend/tests/component/useConfig\.test\.ts$'
+  '^frontend/tests/component/useFiles\.test\.ts$'
+  '^frontend/tests/component/FileBrowser\.pagination\.test\.tsx$'
+  # E2E
+  '^frontend/tests/e2e/fixtures/seed-pagination\.ts$'
+  '^frontend/tests/e2e/file-pagination\.spec\.ts$'
+  # Frontend package manifest may receive react-intersection-observer + aws-sdk
+  '^frontend/package\.json$'
+  '^frontend/package-lock\.json$'
+  # CI infra
+  '^scripts/ci/check-pagination-v2-scope\.sh$'
+  '^\.github/workflows/ci\.yml$'
+)
+
+changed_files="$(git diff --name-only "$BASE"...HEAD)"
+if [ -z "$changed_files" ]; then
+  echo "scope-guard: no files changed against $BASE"
+  exit 0
+fi
+
+violations=()
+while IFS= read -r path; do
+  matched=0
+  for pattern in "${ALLOW_PATTERNS[@]}"; do
+    if [[ "$path" =~ $pattern ]]; then
+      matched=1
+      break
+    fi
+  done
+  if [ "$matched" -eq 0 ]; then
+    violations+=("$path")
+  fi
+done <<< "$changed_files"
+
+if [ "${#violations[@]}" -gt 0 ]; then
+  echo "scope-guard: ${#violations[@]} file(s) changed outside the pagination-v2 whitelist:"
+  printf '  - %s\n' "${violations[@]}"
+  echo
+  echo "If this is intentional, update the whitelist in $0 and explain why in the PR."
+  exit 1
+fi
+
+echo "scope-guard: all changed file(s) are within whitelist."
