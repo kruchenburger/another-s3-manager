@@ -33,6 +33,15 @@ ALLOW_PATTERNS=(
   '^frontend/tests/component/useConfig\.test\.tsx$'
   '^frontend/tests/component/useFiles\.test\.tsx$'
   '^frontend/tests/component/FileBrowser\.pagination\.test\.tsx$'
+  # Stale useFiles mocks in pre-existing FileBrowser tests — every mock returns
+  # the legacy `{files, total_count, path}` shape. After Task 8 (useInfiniteQuery)
+  # they break with `Cannot read 'pages' of undefined`. Two-line fix per file:
+  # swap the mock to `{pages: [{directories, files, next_token, has_more}]}` and
+  # add `useConfig` mock so FileBrowser's `pageSize` default works. No logic change.
+  '^frontend/tests/component/FileBrowser\.download\.test\.tsx$'
+  '^frontend/tests/component/FileBrowser\.copyUrl\.test\.tsx$'
+  '^frontend/tests/component/FileBrowser\.error\.test\.tsx$'
+  '^frontend/tests/component/FileBrowser\.upload\.test\.tsx$'
   # E2E
   '^frontend/tests/e2e/fixtures/seed-pagination\.ts$'
   '^frontend/tests/e2e/file-pagination\.spec\.ts$'
