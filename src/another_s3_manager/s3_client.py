@@ -1006,6 +1006,114 @@ def list_objects_recursive_for_role(
     return execute_with_s3_retry(validated_role, "list", fetch)
 
 
+def list_objects_paginated_for_role(
+    role: Optional[str],
+    bucket: str,
+    path: str,
+    user_dict: Dict[str, Any],
+    max_keys: int,
+    continuation_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Paginated non-recursive listing with CommonPrefixes (directories).
+
+    Directories appear ONLY on the first page (when `continuation_token` is
+    None). Subsequent pages return `directories: []` and continue iterating
+    files via S3's NextContinuationToken.
+
+    First-page implementation note: S3's MaxKeys caps Contents + CommonPrefixes
+    combined, so a small page size (e.g. 50) would silently drop directories
+    that lie past that window. To guarantee the /v2 UI sees every direct
+    sub-folder up front, the first page issues TWO list_objects_v2 calls — one
+    with MaxKeys=1000 to enumerate every CommonPrefix, then one with the
+    caller's MaxKeys to fetch the first page of files. Real-world folders
+    very rarely have >1000 direct sub-directories; if that ever happens, the
+    overflow is silently dropped (acceptable: hidden directories are also
+    hidden from `list_objects_for_role`, the legacy helper).
+
+    Returns:
+        {
+            "directories": [{name, is_directory, size}, ...],   # only on first page
+            "files":       [{name, is_directory, size, last_modified}, ...],
+            "next_token":  str | None,
+            "has_more":    bool,
+        }
+    """
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    # Defensive clamp — route already validates 1..1000 via FastAPI Query
+    # constraints, but the helper is called directly from tests too.
+    max_keys = max(1, min(max_keys, 1000))
+
+    prefix = path + "/" if path else ""
+
+    def fetch(s3_client) -> Dict[str, Any]:
+        directories: list = []
+        if continuation_token is None:
+            # First page: dedicated directory-discovery call. MaxKeys=1000 is
+            # S3's per-call ceiling; this is the most CommonPrefixes a single
+            # ListObjectsV2 can ever surface in one shot.
+            dir_resp = s3_client.list_objects_v2(
+                Bucket=bucket,
+                Prefix=prefix,
+                Delimiter="/",
+                MaxKeys=1000,
+            )
+            for prefix_obj in dir_resp.get("CommonPrefixes", []) or []:
+                dir_name = prefix_obj["Prefix"][len(prefix) :].rstrip("/")
+                if dir_name:
+                    directories.append(
+                        {
+                            "name": dir_name,
+                            "is_directory": True,
+                            "size": 0,
+                        }
+                    )
+            directories.sort(key=lambda d: d["name"].lower())
+
+        # File-page call (also the only call on subsequent pages).
+        file_kwargs: Dict[str, Any] = {
+            "Bucket": bucket,
+            "Prefix": prefix,
+            "Delimiter": "/",
+            "MaxKeys": max_keys,
+        }
+        if continuation_token:
+            file_kwargs["ContinuationToken"] = continuation_token
+
+        file_resp = s3_client.list_objects_v2(**file_kwargs)
+
+        files: list = []
+        for obj in file_resp.get("Contents", []) or []:
+            # Skip empty directory-marker objects (key ends with /).
+            if obj["Key"].endswith("/") and obj["Size"] == 0:
+                continue
+            file_name = obj["Key"][len(prefix) :]
+            if not file_name:
+                continue
+            files.append(
+                {
+                    "name": file_name,
+                    "is_directory": False,
+                    "size": obj["Size"],
+                    "last_modified": obj["LastModified"].isoformat(),
+                }
+            )
+        files.sort(key=lambda f: f["name"].lower())
+
+        is_truncated = bool(file_resp.get("IsTruncated"))
+        next_token = file_resp.get("NextContinuationToken") if is_truncated else None
+
+        return {
+            "directories": directories,
+            "files": files,
+            "next_token": next_token,
+            "has_more": is_truncated,
+        }
+
+    return execute_with_s3_retry(validated_role, "list", fetch)
+
+
 def head_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> int:
     """
     Return the ContentLength (bytes) of an object in `bucket` at `path`.
