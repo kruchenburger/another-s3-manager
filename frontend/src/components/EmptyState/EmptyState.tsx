@@ -1,20 +1,20 @@
 import type { ReactNode } from "react";
 import { Container, Stack, Text, Title } from "@mantine/core";
-import { BurgerLogo } from "@/components/BurgerLogo/BurgerLogo";
+import { CubeLogo } from "@/components/CubeLogo/CubeLogo";
 
-type EmptyStateTone = "neutral" | "warning";
+/**
+ * Visual tone for the empty state. Kept as an external prop for API stability
+ * even though CubeLogo is now rendered static regardless of tone — every
+ * EmptyState surface (403 forbidden, empty folder, missing role) prefers the
+ * static logo so the user's attention stays on the title/CTA, not the icon.
+ */
+export type EmptyStateTone = "neutral" | "warning";
 
 interface EmptyStateProps {
   title: string;
   description?: string;
   cta?: ReactNode;
   burgerSize?: number;
-  /**
-   * Visual tone for the empty state.
-   * - "neutral" (default): idle BurgerLogo, dimmed description text.
-   * - "warning": error-mode BurgerLogo for "we hit a wall" states (403, misconfig)
-   *   that still need a hopeful CTA, not a hard ErrorPage.
-   */
   tone?: EmptyStateTone;
 }
 
@@ -23,12 +23,11 @@ export function EmptyState({
   description,
   cta,
   burgerSize = 64,
-  tone = "neutral",
 }: EmptyStateProps) {
   return (
     <Container size="sm" py="xl">
       <Stack align="center" gap="md">
-        <BurgerLogo size={burgerSize} mode={tone === "warning" ? "error" : "idle"} />
+        <CubeLogo size={burgerSize} mode="static" />
         <Title order={3}>{title}</Title>
         {description && (
           <Text c="dimmed" ta="center">
