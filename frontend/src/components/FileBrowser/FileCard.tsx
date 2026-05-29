@@ -113,7 +113,10 @@ export function FileCard({
           visual centerline consistent across all card types. */}
       <Group justify="center" align="center" mb="sm" mih={120}>
         {file.is_directory ? (
-          <Folder size={64} style={{ color: "var(--mantine-color-amber-6)" }} />
+          <Folder
+            size={64}
+            style={{ color: "var(--mantine-primary-color-filled)" }}
+          />
         ) : kind === "image" && presigned.data?.url && !mediaError ? (
           <img
             src={presigned.data.url}

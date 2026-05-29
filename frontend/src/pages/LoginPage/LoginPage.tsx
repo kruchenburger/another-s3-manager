@@ -7,16 +7,17 @@ import {
   Group,
   PasswordInput,
   Stack,
+  Text,
   TextInput,
   Title,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Github } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useLogin } from "@/features/auth/hooks/useLogin";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useAppInfo } from "@/hooks/useAppInfo";
-import { BurgerLogo } from "@/components/BurgerLogo/BurgerLogo";
+import { CubeLogo } from "@/components/CubeLogo/CubeLogo";
 import { GITHUB_URL } from "@/constants/links";
 import { getErrorMessage } from "@/utils/apiError";
 import classes from "./LoginPage.module.css";
@@ -63,11 +64,11 @@ export function LoginPage() {
     <div className={classes.shell}>
       <Card className={classes.card} padding="xl">
         <div className={classes.brand}>
-          <BurgerLogo size={96} mode="idle" />
-          <Title order={3}>{appName}</Title>
+          <CubeLogo size={96} mode="static" />
+          <Title order={2}>{appName}</Title>
         </div>
         <form onSubmit={handleSubmit}>
-          <Stack gap="md">
+          <Stack gap="sm">
             {login.isError && (
               <Alert color="red" icon={<AlertCircle size={16} />}>
                 {getErrorMessage(login.error)}
@@ -84,13 +85,35 @@ export function LoginPage() {
               autoComplete="current-password"
               {...form.getInputProps("password")}
             />
-            <Button type="submit" fullWidth loading={login.isPending}>
+            {/* Subtle variant matches the mockup — the login card already
+                has plenty of weight from the brand stack at the top, so a
+                solid-blue CTA fights for attention. `subtle` reads as the
+                primary affordance without becoming the focal point.
+                Label kept as "Login" so existing e2e fixtures still
+                match the button via getByRole(name: "Login"). */}
+            <Button
+              type="submit"
+              fullWidth
+              loading={login.isPending}
+              variant="subtle"
+              mt="xs"
+            >
               Login
             </Button>
           </Stack>
         </form>
       </Card>
       <Group justify="center" gap="xs" mt="md" className={classes.footer}>
+        {appInfo?.app_version && (
+          <>
+            <Text size="xs" c="dimmed" ff="monospace">
+              v{appInfo.app_version}
+            </Text>
+            <Text size="xs" c="dimmed">
+              ·
+            </Text>
+          </>
+        )}
         <Anchor
           href={GITHUB_URL}
           target="_blank"
@@ -98,7 +121,15 @@ export function LoginPage() {
           size="xs"
           c="dimmed"
         >
-          Source on GitHub
+          <Group gap={4} wrap="nowrap" align="center">
+            {/* Inline Github mark next to the link so the footer reads as
+                a clickable affordance instead of bare grey text. Matches
+                the mockup in design/footer-mockup.png. Sized 12 to align
+                with the xs-size text x-height; aria-hidden because the
+                link label already says "GitHub". */}
+            <Github size={12} aria-hidden="true" />
+            <span>Source on GitHub</span>
+          </Group>
         </Anchor>
       </Group>
     </div>

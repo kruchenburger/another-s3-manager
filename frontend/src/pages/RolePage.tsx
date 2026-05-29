@@ -63,8 +63,10 @@ export function RolePage() {
       message.startsWith("Access denied:");
 
     if (isRoleLevel) {
-      const adminRoleHint = "Edit this user's profile and add this role to their allowed roles.";
-      const userRoleHint = "Ask your administrator to grant you access to this role.";
+      const adminRoleHint =
+        "Edit this user's profile and add this role to their allowed roles.";
+      const userRoleHint =
+        "Ask your administrator to grant you access to this role.";
       return (
         <EmptyState
           tone="warning"
@@ -77,7 +79,6 @@ export function RolePage() {
                 href="/admin"
                 leftSection={<Settings size={16} />}
                 variant="filled"
-                color="amber"
               >
                 Open admin to fix
               </Button>
@@ -87,8 +88,10 @@ export function RolePage() {
       );
     }
 
-    const adminBucketHint = "Edit this role and fill in 'Allowed Buckets' with the bucket names you want to access.";
-    const userBucketHint = "Ask your administrator to configure 'Allowed Buckets' on this role.";
+    const adminBucketHint =
+      "Edit this role and fill in 'Allowed Buckets' with the bucket names you want to access.";
+    const userBucketHint =
+      "Ask your administrator to configure 'Allowed Buckets' on this role.";
     return (
       <EmptyState
         tone="warning"
@@ -101,7 +104,6 @@ export function RolePage() {
               href="/admin"
               leftSection={<Settings size={16} />}
               variant="filled"
-              color="amber"
             >
               Open admin to fix
             </Button>
@@ -150,14 +152,19 @@ export function RolePage() {
             <Table.Tr
               key={bucket}
               onClick={() =>
-                navigate(`/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(bucket)}`)
+                navigate(
+                  `/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(bucket)}`,
+                )
               }
               style={{ cursor: "pointer" }}
               aria-label={`Open bucket ${bucket}`}
             >
               <Table.Td>
                 <Group gap="sm" wrap="nowrap">
-                  <Database size={18} color="var(--mantine-color-amber-6)" />
+                  <Database
+                    size={18}
+                    color="var(--mantine-primary-color-filled)"
+                  />
                   <Text>{bucket}</Text>
                 </Group>
               </Table.Td>

@@ -1,6 +1,9 @@
 import { useMemo, useRef, useState, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { filesQueryKey } from "@/features/files/hooks/useFiles";
 import { useShiftSelect } from "./useShiftSelect";
-import { Center, Loader, Stack } from "@mantine/core";
+import { Stack } from "@mantine/core";
+import { DelayedLoader } from "@/components/DelayedLoader/DelayedLoader";
 import { notifications } from "@mantine/notifications";
 import { useNavigate, useParams } from "react-router-dom";
 import { useFiles } from "@/features/files/hooks/useFiles";
@@ -8,6 +11,7 @@ import { useDelete } from "@/features/files/hooks/useDelete";
 import { useUpload } from "@/features/files/hooks/useUpload";
 import {
   buildDownloadUrl,
+  deleteFile,
   getPresignedDownloadUrl,
 } from "@/features/files/api/filesApi";
 import { useMe } from "@/features/auth/hooks/useMe";
@@ -47,7 +51,8 @@ export function FileBrowser() {
   const pathFromUrl = decodePath(params["*"] ?? "");
   const navigate = useNavigate();
 
-  const { data, isLoading, error } = useFiles(bucket, roleId, pathFromUrl);
+  const { data, isFetching, error } = useFiles(bucket, roleId, pathFromUrl);
+  const queryClient = useQueryClient();
   const deleteMutation = useDelete();
   const uploadMutation = useUpload();
   const { mode, setMode } = useDisplayMode(roleId, bucket);
@@ -220,32 +225,17 @@ export function FileBrowser() {
     if (names.length === 0) return;
 
     const showProgress = names.length > 1;
-    // Use the auto-generated id returned by notifications.show() instead
-    // of a hardcoded string. Sequential `await` in the loop below means
-    // we never run two delete batches concurrently *today*, but using
-    // the returned id avoids a latent collision if anyone parallelises
-    // this later (and matches the upload-progress pattern in this file).
     let notifId: string | null = null;
     let success = 0;
     let failed = 0;
-
-    // Notification styles override Mantine's baked-in body clipping:
-    // without these, the description's `overflow: hidden` +
-    // `text-overflow: ellipsis` truncates long S3 keys mid-progress.
-    // Same override used by the upload-summary notification below.
-    const progressStyles = {
-      root: { alignItems: "stretch" as const },
-      body: { overflow: "visible" as const },
-      description: {
-        overflow: "visible" as const,
-        textOverflow: "clip" as const,
-      },
+    // Cancel flag lives in a closure ref so the in-flight loop can
+    // observe a click on the Cancel button without React re-renders
+    // (the notification rerenders directly via notifications.update).
+    const cancelRef = { cancelled: false };
+    const onCancel = () => {
+      cancelRef.cancelled = true;
     };
 
-    // renderProgress() is called at the START of each iteration, so
-    // `started` represents the in-flight item index (0-based). The
-    // component renders the 1-based position so the headline reads
-    // "Deleting 1 of N: <name>" while item 0 is being awaited.
     const renderProgress = (started: number, currentName: string | null) => {
       if (!showProgress || notifId === null) return;
       notifications.update({
@@ -255,12 +245,12 @@ export function FileBrowser() {
             started={started}
             total={names.length}
             currentName={currentName}
+            onCancel={onCancel}
           />
         ),
         autoClose: false,
         withCloseButton: false,
         loading: true,
-        styles: progressStyles,
       });
     };
 
@@ -271,16 +261,17 @@ export function FileBrowser() {
             started={0}
             total={names.length}
             currentName={names[0]}
+            onCancel={onCancel}
           />
         ),
         autoClose: false,
         withCloseButton: false,
         loading: true,
-        styles: progressStyles,
       });
     }
 
     for (let i = 0; i < names.length; i++) {
+      if (cancelRef.cancelled) break;
       const name = names[i];
       renderProgress(i, name);
       const fileEntry = data?.files.find((f) => f.name === name);
@@ -288,12 +279,12 @@ export function FileBrowser() {
         ? joinPath(pathFromUrl, name) + "/"
         : joinPath(pathFromUrl, name);
       try {
-        await deleteMutation.mutateAsync({
-          bucket,
-          role: roleId,
-          path: fullPath,
-          currentPath: pathFromUrl,
-        });
+        // Call deleteFile directly instead of useDelete().mutateAsync so the
+        // batch doesn't push N copies of useMutation's "pending → success"
+        // state transitions through React — each one was triggering a full
+        // FileBrowser rerender on the open folder's table. The final
+        // invalidation below refetches the file list ONCE after the batch.
+        await deleteFile(bucket, roleId, fullPath);
         success++;
       } catch (e) {
         failed++;
@@ -308,7 +299,22 @@ export function FileBrowser() {
     if (showProgress && notifId !== null) {
       notifications.hide(notifId);
     }
-    if (success > 0) {
+    // Single invalidation after the batch. Runs for batches of one too —
+    // earlier this was guarded by `if (showProgress)` (multi-file only),
+    // which left single-file deletes with no cache refresh: the file
+    // would actually delete on the backend but the row stayed on screen
+    // until the user reloaded the page.
+    queryClient.invalidateQueries({
+      queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
+    });
+    if (cancelRef.cancelled) {
+      const remaining = names.length - success - failed;
+      showToast({
+        color: "yellow",
+        message: `Bulk delete cancelled. Deleted ${success} of ${names.length}; ${remaining} skipped.`,
+        autoClose: TOAST_DURATIONS.success,
+      });
+    } else if (success > 0) {
       showToast({
         color: "green",
         message: `Deleted ${success} item${success === 1 ? "" : "s"}${failed > 0 ? ` (${failed} failed)` : ""}`,
@@ -411,6 +417,13 @@ export function FileBrowser() {
             key,
             file: item.file,
             currentPath: pathFromUrl,
+            // Suppress per-file query invalidation; we invalidate ONCE after
+            // the batch (see below). Without this, every successful file
+            // triggered a listFiles refetch, and `isFetching` flipped the
+            // FileBrowser into the loader between files — a flicker
+            // (loader → table → loader → table…) while uploads streamed in.
+            // Same fix as bulk-delete (commit b8543a1).
+            skipInvalidation: true,
             signal: controller.signal,
             onProgress: (percent) => {
               // Throttle by skipping no-op updates — every progress event would
@@ -438,6 +451,19 @@ export function FileBrowser() {
           };
         }
         renderToast();
+      }
+
+      // Single invalidation after the batch — useUpload.skipInvalidation was
+      // true inside the loop, so the open-folder file list only refetches
+      // ONCE here instead of once per uploaded file. Skip the refetch
+      // entirely if no file actually landed (every upload failed, or the
+      // user cancelled before the first one succeeded) — nothing changed
+      // server-side, so the GET would just return the same list.
+      const anyUploaded = updated.some((u) => u.status === "done");
+      if (anyUploaded) {
+        queryClient.invalidateQueries({
+          queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
+        });
       }
 
       // Final summary toast — `UploadSummary` surfaces failed filenames + their
@@ -474,7 +500,14 @@ export function FileBrowser() {
         },
       });
     },
-    [bucket, roleId, pathFromUrl, uploadMutation, me.data?.max_file_size],
+    [
+      bucket,
+      roleId,
+      pathFromUrl,
+      uploadMutation,
+      queryClient,
+      me.data?.max_file_size,
+    ],
   );
 
   // Both upload buttons gate on the same dismissed-hint flag:
@@ -539,12 +572,15 @@ export function FileBrowser() {
     e.target.value = "";
   };
 
-  if (isLoading) {
-    return (
-      <Center py="xl">
-        <Loader />
-      </Center>
-    );
+  // Cold-load only: show the spinner when we have NO data to show.
+  // Background refetches (return to a cached folder, post-mutation
+  // invalidation) keep the previously-rendered table on screen —
+  // hiding it under a spinner makes the UI feel slower and flashes
+  // a blank pane for the duration of the refetch.
+  // DelayedLoader still debounces the spinner by 500ms so a fast
+  // first-time fetch never paints a flash before content lands.
+  if (isFetching && !data) {
+    return <DelayedLoader label="Loading files…" />;
   }
 
   // Stale-data + fresh-error race: TanStack Query may still hold cached `data`

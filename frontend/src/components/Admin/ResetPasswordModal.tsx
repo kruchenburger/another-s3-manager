@@ -76,7 +76,8 @@ export function ResetPasswordModal({
                 variant="light"
                 icon={<AlertTriangle size={16} />}
               >
-                Couldn't load password policy — the server will validate the new password on save.
+                Couldn't load password policy — the server will validate the new
+                password on save.
               </Alert>
             )}
             <Checkbox
@@ -91,7 +92,6 @@ export function ResetPasswordModal({
           <Button
             type="submit"
             loading={loading}
-            color="amber"
             disabled={!policy && !policyFailed}
           >
             Reset password

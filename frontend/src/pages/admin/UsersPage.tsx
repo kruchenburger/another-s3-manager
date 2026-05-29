@@ -1,4 +1,12 @@
-import { Badge, Button, Group, Stack, Table, Title, Tooltip } from "@mantine/core";
+import {
+  Badge,
+  Button,
+  Group,
+  Stack,
+  Table,
+  Title,
+  Tooltip,
+} from "@mantine/core";
 import { KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useMe } from "@/features/auth/hooks/useMe";
@@ -145,7 +153,7 @@ export function UsersPage() {
               <Table.Tr key={u.username}>
                 <Table.Td>{u.username}</Table.Td>
                 <Table.Td>
-                  {u.is_admin && <Badge color="amber">admin</Badge>}
+                  {u.is_admin && <Badge color="mutedSlateBlue">admin</Badge>}
                 </Table.Td>
                 <Table.Td>
                   <Group gap={4}>

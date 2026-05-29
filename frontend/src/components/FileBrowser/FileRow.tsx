@@ -71,7 +71,7 @@ export function FileRow({
             style={{
               verticalAlign: "middle",
               marginRight: 8,
-              color: "var(--mantine-color-amber-6)",
+              color: "var(--mantine-primary-color-filled)",
             }}
           />
         ) : (

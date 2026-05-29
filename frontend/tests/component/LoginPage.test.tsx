@@ -18,8 +18,8 @@ vi.mock("@/features/auth/hooks/useMe", () => ({
 vi.mock("@/features/auth/hooks/useLogin", () => ({
   useLogin: () => useLoginMock(),
 }));
-vi.mock("@/components/BurgerLogo/BurgerLogo", () => ({
-  BurgerLogo: () => <span data-testid="burger-logo" />,
+vi.mock("@/components/CubeLogo/CubeLogo", () => ({
+  CubeLogo: () => <span data-testid="cube-logo" />,
 }));
 
 function renderLogin() {
@@ -54,7 +54,12 @@ describe("LoginPage parity additions", () => {
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 
-  it("does NOT render the tagline (removed — app name is self-explanatory)", () => {
+  it("does NOT render app_description as a tagline on login", () => {
+    // The earlier round briefly added a tagline under the heading;
+    // user rejected it — app name is self-explanatory and the extra
+    // line of grey text was visual noise. app_description stays in
+    // the backend response for tooltip/about uses, but the login
+    // surface keeps the bare title.
     useAppInfoMock.mockReturnValue({
       data: {
         app_name: "Another S3 Manager",
@@ -66,7 +71,12 @@ describe("LoginPage parity additions", () => {
     expect(screen.queryByText(/some description/i)).not.toBeInTheDocument();
   });
 
-  it("does NOT render the version chip on login (kept post-auth only)", () => {
+  it("renders the version next to the GitHub link in the footer", () => {
+    // Reversal of the earlier "no version on login" rule: user wanted the
+    // footer to match the design mockup, which shows "v1.0.0 · GitHub
+    // Source" together. Version only renders when app_version is set so
+    // a dev build (where the value may be missing) keeps the footer
+    // looking clean.
     useAppInfoMock.mockReturnValue({
       data: {
         app_name: "Another S3 Manager",
@@ -75,7 +85,7 @@ describe("LoginPage parity additions", () => {
       },
     });
     renderLogin();
-    expect(screen.queryByText(/^v1\.0\.0$/)).not.toBeInTheDocument();
+    expect(screen.getByText(/^v1\.0\.0$/)).toBeInTheDocument();
   });
 
   it("renders the GitHub link regardless of app_version (including dev)", () => {

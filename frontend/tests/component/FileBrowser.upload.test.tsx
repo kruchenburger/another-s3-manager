@@ -27,6 +27,16 @@ vi.mock("@/features/files/hooks/useFiles", () => ({
     isLoading: false,
     error: null,
   }),
+  // FileBrowser invalidates the files query once at the end of a bulk
+  // upload (see skipInvalidation pattern in useUpload). The mock has to
+  // expose the same query-key helper the real module does, otherwise the
+  // post-batch invalidateQueries call throws "No filesQueryKey export".
+  filesQueryKey: (bucket: string, role: string, path: string) => [
+    "files",
+    bucket,
+    role,
+    path,
+  ],
 }));
 vi.mock("@/features/files/hooks/useDelete", () => ({
   useDelete: () => ({ mutateAsync: vi.fn(), isPending: false }),

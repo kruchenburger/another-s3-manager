@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Container, Group, Stack, Text, Title } from "@mantine/core";
+import { Button, Group, Stack, Text, Title } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { Plus } from "lucide-react";
 import { useMyTokens } from "@/features/tokens/hooks/useMyTokens";
@@ -7,7 +7,7 @@ import { useCreateMyToken } from "@/features/tokens/hooks/useCreateToken";
 import { useDeleteMyToken } from "@/features/tokens/hooks/useDeleteToken";
 import { useUpdateMyToken } from "@/features/tokens/hooks/useUpdateToken";
 import { TokensTable } from "@/components/Tokens/TokensTable";
-import { CreateTokenModal } from "@/components/Tokens/CreateTokenModal";
+import { CreateTokenDrawer } from "@/components/Tokens/CreateTokenDrawer";
 import { TokenEditDrawer } from "@/components/Tokens/TokenEditDrawer";
 import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
@@ -62,8 +62,7 @@ export function ApiTokensPage() {
   }
 
   return (
-    <Container size="lg" py="lg">
-      <Stack gap="md">
+    <Stack gap="md">
         {error ? (
           <QueryErrorState error={error} title="Couldn't load tokens" />
         ) : (
@@ -93,9 +92,7 @@ export function ApiTokensPage() {
             )}
           </>
         )}
-      </Stack>
-
-      <CreateTokenModal
+      <CreateTokenDrawer
         opened={createOpen}
         onClose={create.close}
         onSubmit={handleCreate}
@@ -135,6 +132,6 @@ export function ApiTokensPage() {
           );
         }}
       />
-    </Container>
+    </Stack>
   );
 }

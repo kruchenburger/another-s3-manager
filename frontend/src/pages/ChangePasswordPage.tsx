@@ -1,4 +1,11 @@
-import { Alert, Button, Container, PasswordInput, Stack, Title } from "@mantine/core";
+import {
+  Alert,
+  Button,
+  Container,
+  PasswordInput,
+  Stack,
+  Title,
+} from "@mantine/core";
 import { AlertTriangle, Info } from "lucide-react";
 import { useForm } from "@mantine/form";
 import { useNavigate } from "react-router-dom";
@@ -23,7 +30,9 @@ export function ChangePasswordPage() {
       current: (value) => (value.length === 0 ? "Required" : null),
       next: (value) => {
         if (!policy) return null; // server is source of truth; let it through
-        return meetsPolicy(value, policy) ? null : "Password does not meet policy";
+        return meetsPolicy(value, policy)
+          ? null
+          : "Password does not meet policy";
       },
       confirm: (value, values) =>
         value === values.next ? null : "Does not match new password",
@@ -62,7 +71,10 @@ export function ChangePasswordPage() {
               {...form.getInputProps("next")}
             />
             {policy && (
-              <PasswordRequirementsList password={form.values.next} policy={policy} />
+              <PasswordRequirementsList
+                password={form.values.next}
+                policy={policy}
+              />
             )}
             {policyFailed && (
               <Alert
@@ -70,7 +82,8 @@ export function ChangePasswordPage() {
                 variant="light"
                 icon={<AlertTriangle size={16} />}
               >
-                Couldn't load password policy — the server will validate your new password on save.
+                Couldn't load password policy — the server will validate your
+                new password on save.
               </Alert>
             )}
             <PasswordInput
@@ -80,7 +93,6 @@ export function ChangePasswordPage() {
             />
             <Button
               type="submit"
-              color="amber"
               loading={mutation.isPending}
               disabled={!policy && !policyFailed}
             >

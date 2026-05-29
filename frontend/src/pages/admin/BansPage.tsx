@@ -1,6 +1,9 @@
 import { Button, Group, Modal, Stack, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
-import { useAdminBans, useUnbanUser } from "@/features/admin/hooks/useAdminBans";
+import {
+  useAdminBans,
+  useUnbanUser,
+} from "@/features/admin/hooks/useAdminBans";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { formatDate } from "@/utils/formatDate";
 import { getErrorMessage } from "@/utils/apiError";
@@ -62,7 +65,11 @@ export function BansPage() {
               </Table.Td>
               <Table.Td>{ban.reason}</Table.Td>
               <Table.Td>
-                <Button size="xs" variant="light" onClick={() => setTarget(ban.username)}>
+                <Button
+                  size="xs"
+                  variant="light"
+                  onClick={() => setTarget(ban.username)}
+                >
                   Unban
                 </Button>
               </Table.Td>
@@ -93,7 +100,7 @@ export function BansPage() {
             >
               Cancel
             </Button>
-            <Button color="amber" onClick={handleConfirm} loading={unban.isPending}>
+            <Button onClick={handleConfirm} loading={unban.isPending}>
               Unban
             </Button>
           </Group>
