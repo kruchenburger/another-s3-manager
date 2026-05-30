@@ -42,9 +42,13 @@ ALLOW_PATTERNS=(
   '^frontend/tests/component/FileBrowser\.copyUrl\.test\.tsx$'
   '^frontend/tests/component/FileBrowser\.error\.test\.tsx$'
   '^frontend/tests/component/FileBrowser\.upload\.test\.tsx$'
-  # E2E
-  '^frontend/tests/e2e/fixtures/seed-pagination\.ts$'
+  # E2E — pagination spec + the shared mc seed script gains a pagination/ block.
+  # The plan originally proposed an @aws-sdk/client-s3 TS seed fixture, but the
+  # project seeds MinIO via `mc` (scripts/ci/seed-minio.sh, run by both CI and
+  # docker-compose.minio.yml). Extending that script is idiomatic and avoids a
+  # new aws-sdk dependency just for tests.
   '^frontend/tests/e2e/file-pagination\.spec\.ts$'
+  '^scripts/ci/seed-minio\.sh$'
   # Frontend package manifest may receive react-intersection-observer + aws-sdk
   '^frontend/package\.json$'
   '^frontend/package-lock\.json$'
