@@ -74,11 +74,21 @@ export interface FileListResponse {
  *    final page.
  *  - `has_more` mirrors S3's `IsTruncated`.
  */
-export interface ListFilesPage {
+/**
+ * Response from GET /api/buckets/.../files?client_load=1. The /v2 UI loads one
+ * of these chunks (up to max_client_load objects) into memory and paginates
+ * client-side. `truncated` is true when S3 has more objects than this chunk;
+ * `next_token` resumes from where this chunk stopped.
+ *
+ *  - `directories` is populated ONLY on the first chunk (no `continuation_token`).
+ *  - `next_token` is the opaque S3 continuation token for the next chunk, or
+ *    `null` when the folder is fully drained.
+ */
+export interface ClientLoadPage {
   directories: FileEntry[];
   files: FileEntry[];
+  truncated: boolean;
   next_token: string | null;
-  has_more: boolean;
 }
 
 export interface Ban {
@@ -146,6 +156,8 @@ export interface AppConfig {
   items_per_page: number;
   enable_lazy_loading: boolean;
   max_file_size: number;
+  // Cap on objects the /v2 UI loads into memory before showing "Load more".
+  max_client_load: number;
   disable_deletion: boolean;
   auto_inline_extensions?: string[];
   data_dir?: string;
