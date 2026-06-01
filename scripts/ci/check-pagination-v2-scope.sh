@@ -34,6 +34,10 @@ ALLOW_PATTERNS=(
   '^frontend/src/components/FileBrowser/FileBrowser\.tsx$'
   '^frontend/src/components/FileBrowser/FileTable\.tsx$'
   '^frontend/src/components/FileBrowser/FileGrid\.tsx$'
+  # Test setup — flush TanStack Query notifications synchronously so awaited
+  # loadMore()/loadAll() state settles within act() (notifyManager batches on a
+  # macrotask by default). Test-only, no production impact.
+  '^frontend/src/setupTests\.ts$'
   # Frontend tests
   '^frontend/tests/component/useConfig\.test\.tsx$'
   '^frontend/tests/component/useFiles\.test\.tsx$'
