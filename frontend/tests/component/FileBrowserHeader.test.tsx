@@ -24,6 +24,11 @@ function renderHeader(
           onBulkCopyUrl={vi.fn()}
           onUploadClick={vi.fn()}
           onUploadFolderClick={vi.fn()}
+          objectCount={0}
+          truncated={false}
+          isLoadingMore={false}
+          onLoadMore={vi.fn()}
+          onLoadAll={vi.fn()}
           {...overrides}
         />
       </MemoryRouter>
@@ -47,9 +52,35 @@ describe("FileBrowserHeader object count", () => {
     expect(screen.getByText("5 objects")).toBeInTheDocument();
   });
 
-  it("omits the label when objectCount is undefined", () => {
-    renderHeader();
-    expect(screen.queryByText(/object/i)).not.toBeInTheDocument();
+  it("renders 'N+ objects' and Load more/Load all buttons when truncated", () => {
+    renderHeader({ objectCount: 5, truncated: true });
+    expect(screen.getByText("5+ objects")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /load more/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /load all/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides Load more/Load all when not truncated", () => {
+    renderHeader({ objectCount: 5, truncated: false });
+    expect(
+      screen.queryByRole("button", { name: /load more/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /load all/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("calls onLoadMore / onLoadAll when their buttons are clicked", async () => {
+    const onLoadMore = vi.fn();
+    const onLoadAll = vi.fn();
+    renderHeader({ objectCount: 5, truncated: true, onLoadMore, onLoadAll });
+    await userEvent.click(screen.getByRole("button", { name: /load more/i }));
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: /load all/i }));
+    expect(onLoadAll).toHaveBeenCalledTimes(1);
   });
 
   it("renders SegmentedControl for view picker (Task 13 — verifying §4.4 already done)", () => {

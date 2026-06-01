@@ -23,20 +23,13 @@ const mutateAsyncMock = vi.fn();
 
 vi.mock("@/features/files/hooks/useFiles", () => ({
   useFiles: () => ({
-    data: {
-      pages: [
-        {
-          directories: [],
-          files: [],
-          next_token: null,
-          has_more: false,
-        },
-      ],
-    },
+    directories: [],
+    files: [],
+    truncated: false,
+    loadMore: vi.fn(),
+    loadAll: vi.fn(),
     isFetching: false,
     isFetchingNextPage: false,
-    hasNextPage: false,
-    fetchNextPage: vi.fn(),
     error: null,
   }),
   // FileBrowser invalidates the files query once at the end of a bulk
@@ -51,18 +44,13 @@ vi.mock("@/features/files/hooks/useFiles", () => ({
     role,
     path,
   ],
-  filesQueryKeyFull: (
-    bucket: string,
-    role: string,
-    path: string,
-    size: number,
-  ) => ["files", bucket, role, path, size],
 }));
 vi.mock("@/hooks/useConfig", () => ({
   useConfig: () => ({
     data: {
       items_per_page: 200,
       enable_lazy_loading: true,
+      max_client_load: 10000,
       max_file_size: 100 * 1024 * 1024,
       disable_deletion: false,
       roles: [],

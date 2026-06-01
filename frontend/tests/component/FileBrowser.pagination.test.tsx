@@ -1,52 +1,44 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { MantineProvider } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 import { vi, describe, it, expect, beforeEach } from "vitest";
 
-// Mock the IntersectionObserver-based hook so we can trigger inView=true on demand.
 let mockInView = false;
 vi.mock("react-intersection-observer", () => ({
   useInView: () => ({ ref: () => {}, inView: mockInView }),
 }));
 
-// Mock useFiles to control pages + hasNextPage.
-const fetchNextPageMock = vi.fn();
+const loadMoreMock = vi.fn();
+const loadAllMock = vi.fn();
+let mockTruncated = false;
+let mockFiles = [
+  { name: "a.txt", is_directory: false, size: 1, last_modified: "" },
+  { name: "b.txt", is_directory: false, size: 1, last_modified: "" },
+];
 vi.mock("@/features/files/hooks/useFiles", () => ({
-  filesQueryKey: (b: string, r: string, p: string) =>
-    ["files", "list", r, b, p] as const,
-  filesQueryKeyFull: (b: string, r: string, p: string, s: number) =>
-    ["files", "list", r, b, p, s] as const,
+  filesQueryKey: (b: string, r: string, p: string) => ["files", "list", r, b, p],
   useFiles: () => ({
-    data: {
-      pages: [
-        {
-          directories: [{ name: "logs", is_directory: true, size: 0 }],
-          files: [
-            { name: "a.txt", is_directory: false, size: 1, last_modified: "" },
-            { name: "b.txt", is_directory: false, size: 1, last_modified: "" },
-          ],
-          next_token: "tok-1",
-          has_more: true,
-        },
-      ],
-    },
+    directories: [{ name: "logs", is_directory: true, size: 0 }],
+    files: mockFiles,
+    truncated: mockTruncated,
+    loadMore: loadMoreMock,
+    loadAll: loadAllMock,
     isFetching: false,
     isFetchingNextPage: false,
-    hasNextPage: true,
-    fetchNextPage: fetchNextPageMock,
     error: null,
   }),
 }));
 
-// Mock useConfig — controls items_per_page + enable_lazy_loading.
 let mockLazy = true;
+let mockItemsPerPage = 200;
 vi.mock("@/hooks/useConfig", () => ({
   useConfig: () => ({
     data: {
-      items_per_page: 50,
+      items_per_page: mockItemsPerPage,
       enable_lazy_loading: mockLazy,
+      max_client_load: 10000,
       max_file_size: 100 * 1024 * 1024,
       disable_deletion: false,
       roles: [],
@@ -54,7 +46,6 @@ vi.mock("@/hooks/useConfig", () => ({
   }),
 }));
 
-// Adjacent mocks (mirror sibling FileBrowser tests).
 vi.mock("@/features/files/hooks/useDelete", () => ({
   useDelete: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
@@ -83,10 +74,7 @@ function renderBrowser() {
       <QueryClientProvider client={qc}>
         <MemoryRouter initialEntries={["/r/RoleA/b/my-bucket/p/"]}>
           <Routes>
-            <Route
-              path="/r/:roleId/b/:bucket/p/*"
-              element={<FileBrowser />}
-            />
+            <Route path="/r/:roleId/b/:bucket/p/*" element={<FileBrowser />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>
@@ -94,45 +82,64 @@ function renderBrowser() {
   );
 }
 
-describe("FileBrowser pagination", () => {
+describe("FileBrowser hybrid pagination", () => {
   beforeEach(() => {
-    fetchNextPageMock.mockReset();
+    loadMoreMock.mockReset();
+    loadAllMock.mockReset();
     mockInView = false;
     mockLazy = true;
+    mockTruncated = false;
+    mockItemsPerPage = 200;
+    mockFiles = [
+      { name: "a.txt", is_directory: false, size: 1, last_modified: "" },
+      { name: "b.txt", is_directory: false, size: 1, last_modified: "" },
+    ];
   });
 
-  it("renders directories from page 0 + files flat-mapped", () => {
+  it("renders directories + files from the loaded set", () => {
     renderBrowser();
     expect(screen.getByText("logs")).toBeInTheDocument();
     expect(screen.getByText("a.txt")).toBeInTheDocument();
     expect(screen.getByText("b.txt")).toBeInTheDocument();
   });
 
-  it("auto-fires fetchNextPage when sentinel scrolls into view (lazy=true)", async () => {
-    mockInView = true;
+  it("shows honest count when not truncated", () => {
     renderBrowser();
-    await waitFor(() => expect(fetchNextPageMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(/3 objects/)).toBeInTheDocument();
   });
 
-  it("renders Load more button instead of sentinel when lazy=false", async () => {
-    mockLazy = false;
+  it("shows N+ count and Load more/all when truncated", () => {
+    mockTruncated = true;
     renderBrowser();
-    const btn = await screen.findByRole("button", { name: /load more/i });
-    fireEvent.click(btn);
-    expect(fetchNextPageMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/3\+ objects/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /load more/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /load all/i })).toBeInTheDocument();
   });
 
-  it("shows filter banner when search is active and has_more is true", async () => {
+  it("Load more triggers the server continuation", () => {
+    mockTruncated = true;
     renderBrowser();
-    // Find the search input — placeholder text comes from FileBrowserHeader.
-    // Be defensive: try common labels; if neither matches, find by role=searchbox.
-    let filterInput: HTMLElement | null = null;
+    fireEvent.click(screen.getByRole("button", { name: /load more/i }));
+    expect(loadMoreMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("Load all triggers a full drain", () => {
+    mockTruncated = true;
+    renderBrowser();
+    fireEvent.click(screen.getByRole("button", { name: /load all/i }));
+    expect(loadAllMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows filter banner when searching and truncated", async () => {
+    mockTruncated = true;
+    renderBrowser();
+    let input: HTMLElement;
     try {
-      filterInput = screen.getByPlaceholderText(/filter|search/i);
+      input = screen.getByPlaceholderText(/filter|search/i);
     } catch {
-      filterInput = screen.getByRole("searchbox");
+      input = screen.getByRole("searchbox");
     }
-    fireEvent.change(filterInput, { target: { value: "a" } });
+    fireEvent.change(input, { target: { value: "a" } });
     expect(
       await screen.findByText(/load more to search the rest/i),
     ).toBeInTheDocument();
