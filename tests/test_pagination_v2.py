@@ -215,3 +215,19 @@ def test_route_continuation_without_max_keys_rejected(app_client, moto_s3):
     )
     assert response.status_code == 400
     assert "max_keys" in response.json()["detail"]
+
+
+def test_config_has_max_client_load_default(monkeypatch, tmp_path):
+    """A fresh config exposes max_client_load defaulting to 10000."""
+    import importlib
+
+    import another_s3_manager.config as config_module
+
+    cfg_path = tmp_path / "config.json"
+    monkeypatch.setenv("S3_FILE_MANAGER_CONFIG", str(cfg_path))
+    importlib.reload(config_module)
+    config_module._config_cache = {}
+    config_module._config_mtime = 0
+
+    config = config_module._get_default_config()
+    assert config["max_client_load"] == 10000
