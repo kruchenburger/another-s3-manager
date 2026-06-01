@@ -13,6 +13,11 @@ ALLOW_PATTERNS=(
   # Backend — paginated S3 helper + route branch
   '^src/another_s3_manager/s3_client\.py$'
   '^src/another_s3_manager/main\.py$'
+  # Hybrid rework — config constant + admin Settings field + header controls
+  '^src/another_s3_manager/config\.py$'
+  '^src/another_s3_manager/constants\.py$'
+  '^frontend/src/pages/admin/SettingsPage\.tsx$'
+  '^frontend/src/components/FileBrowser/FileBrowserHeader\.tsx$'
   # Backend tests
   '^tests/test_pagination_v2\.py$'
   # Direct-call tests for list_files broke when new Query() params landed —
