@@ -78,6 +78,7 @@ from another_s3_manager.s3_client import (
     delete_object_for_role,
     iter_object_for_role,
     list_buckets_for_role,
+    list_objects_client_load_for_role,
     list_objects_for_role,
     list_objects_paginated_for_role,
     put_object_for_role,
@@ -1241,6 +1242,13 @@ async def get_config(
     else:
         max_file_size = int(max_file_size)
 
+    # Get max_client_load from config file, fallback to environment variable, then default
+    max_client_load = config.get("max_client_load")
+    if max_client_load is None:
+        max_client_load = int(os.getenv("MAX_CLIENT_LOAD", "10000"))
+    else:
+        max_client_load = int(max_client_load)
+
     # Create a safe copy without secret credentials
     def sanitize_role(role: Dict[str, Any]) -> Dict[str, Any]:
         """Remove sensitive secret credentials from role (keep access_key_id as it's not secret)"""
@@ -1269,6 +1277,7 @@ async def get_config(
             "disable_deletion": disable_deletion,
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
+            "max_client_load": max_client_load,
             "auto_inline_extensions": config.get("auto_inline_extensions", []),
             "data_dir": str(get_data_dir()),  # Return current DATA_DIR value (read-only)
             "is_read_only": not is_config_writable(),
@@ -1302,6 +1311,7 @@ async def get_config(
             "disable_deletion": disable_deletion,
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
+            "max_client_load": max_client_load,
         }
 
     # Filter roles and sanitize
@@ -1318,6 +1328,7 @@ async def get_config(
         "disable_deletion": disable_deletion,
         "enable_lazy_loading": enable_lazy_loading,
         "max_file_size": max_file_size,
+        "max_client_load": max_client_load,
     }
 
 
@@ -1704,6 +1715,15 @@ async def list_files(
         max_length=1024,
         description=("Opaque S3 continuation token from a previous response's next_token. Requires max_keys."),
     ),
+    client_load: bool = Query(
+        False,
+        description=(
+            "When true, switch to client-load mode: aggregate S3 pages up to "
+            "max_client_load (or max_keys if given) and return "
+            "{directories, files, truncated, next_token} for the /v2 UI to "
+            "paginate client-side."
+        ),
+    ),
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """List files and directories.
@@ -1724,11 +1744,24 @@ async def list_files(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        if continuation_token is not None and max_keys is None:
+        if continuation_token is not None and max_keys is None and not client_load:
             raise HTTPException(
                 status_code=400,
                 detail="continuation_token requires max_keys to be set as well",
             )
+
+        if client_load:
+            cfg = load_config()
+            chunk = max_keys if max_keys is not None else int(cfg.get("max_client_load", 10000))
+            page = list_objects_client_load_for_role(
+                role,
+                bucket_name,
+                path,
+                current_user,
+                chunk,
+                continuation_token,
+            )
+            return page
 
         if max_keys is None:
             files = list_objects_for_role(role, bucket_name, path, current_user)

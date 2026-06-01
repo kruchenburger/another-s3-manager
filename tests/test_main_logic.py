@@ -571,6 +571,7 @@ async def test_list_files_success(monkeypatch, reload_main):
         role=None,
         max_keys=None,
         continuation_token=None,
+        client_load=False,
         current_user={"is_admin": True},
     )
     assert result["total_count"] == 2
@@ -700,6 +701,7 @@ async def test_list_files_s3_error(monkeypatch, reload_main):
             role=None,
             max_keys=None,
             continuation_token=None,
+            client_load=False,
             current_user={"is_admin": True},
         )
     assert exc.value.status_code == 404

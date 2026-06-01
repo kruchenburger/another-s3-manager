@@ -312,3 +312,50 @@ def test_config_has_max_client_load_default(monkeypatch, tmp_path):
 
     config = config_module._get_default_config()
     assert config["max_client_load"] == 10000
+
+
+def test_route_client_load_mode_under_limit(app_client, moto_s3):
+    """client_load=1 with small folder → {directories, files, truncated:false}."""
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    _seed(moto_s3, "cl-small", files=["a.txt", "b.txt"], directories=["d1"])
+
+    response = app_client.get(
+        "/api/buckets/cl-small/files?client_load=1",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert {d["name"] for d in body["directories"]} == {"d1"}
+    assert {f["name"] for f in body["files"]} == {"a.txt", "b.txt"}
+    assert body["truncated"] is False
+    assert body["next_token"] is None
+
+
+def test_route_client_load_mode_truncates(app_client, moto_s3):
+    """client_load with max_keys below folder size → truncated:true."""
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    _seed(moto_s3, "cl-big", files=[f"f{i:03d}.txt" for i in range(8)], directories=[])
+
+    response = app_client.get(
+        "/api/buckets/cl-big/files?client_load=1&max_keys=3",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["files"]) == 3
+    assert body["truncated"] is True
+    assert body["next_token"] is not None
+
+
+def test_route_config_exposes_max_client_load(app_client, moto_s3):
+    """/api/config includes max_client_load."""
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    response = app_client.get("/api/config", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["max_client_load"] == 10000
