@@ -18,6 +18,7 @@ export function toWritableConfig(config: AppConfig): AppConfig {
     items_per_page: config.items_per_page,
     enable_lazy_loading: config.enable_lazy_loading,
     max_file_size: config.max_file_size,
+    max_client_load: config.max_client_load,
     disable_deletion: config.disable_deletion,
     auto_inline_extensions: config.auto_inline_extensions,
     password_min_length: config.password_min_length,

@@ -17,7 +17,17 @@ ALLOW_PATTERNS=(
   '^src/another_s3_manager/config\.py$'
   '^src/another_s3_manager/constants\.py$'
   '^frontend/src/pages/admin/SettingsPage\.tsx$'
+  '^frontend/src/pages/admin/SettingsGeneralTab\.tsx$'
   '^frontend/src/components/FileBrowser/FileBrowserHeader\.tsx$'
+  # Adding the required `max_client_load` field to AppConfig forces every
+  # AppConfig producer/mock to include it: the save-payload allowlist (prod)
+  # plus the admin-config test mocks that build a full AppConfig literal.
+  '^frontend/src/features/admin/api/configShape\.ts$'
+  '^frontend/tests/component/FileBrowserHeader\.test\.tsx$'
+  '^frontend/tests/component/RoleDrawer\.test\.tsx$'
+  '^frontend/tests/component/RolesPage\.test\.tsx$'
+  '^frontend/tests/component/SettingsPage\.test\.tsx$'
+  '^frontend/tests/unit/usePasswordPolicy\.test\.tsx$'
   # Backend tests
   '^tests/test_pagination_v2\.py$'
   # Direct-call tests for list_files broke when new Query() params landed —
