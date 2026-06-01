@@ -130,6 +130,7 @@ jobs:
               }
             ],
             "items_per_page": 200,
+            "max_client_load": 50,
             "enable_lazy_loading": true,
             "max_file_size": 104857600,
             "disable_deletion": false,
