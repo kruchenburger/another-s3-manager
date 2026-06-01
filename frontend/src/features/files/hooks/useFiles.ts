@@ -1,41 +1,72 @@
+import { useCallback } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { listFiles } from "@/features/files/api/filesApi";
 
-// Prefix shape (3 args) — used by everywhere that invalidates the files cache
-// (useDelete, useUpload, FileBrowser bulk handlers). TanStack Query v5 matches
-// queries whose key STARTS WITH this prefix, so a single invalidation covers
-// every pageSize variant stored under the same path.
+// 3-arg prefix — used by useDelete/useUpload/FileBrowser invalidateQueries.
+// TanStack Query v5 matches queries whose key STARTS WITH this prefix.
 export const filesQueryKey = (bucket: string, role: string, path: string) =>
   ["files", "list", role, bucket, path] as const;
 
-// Full shape (4 args) — used inside useFiles itself. Including pageSize in
-// the key means changing the admin `items_per_page` setting busts the cache
-// cleanly: pages of the old size aren't reused for queries of the new size.
-export const filesQueryKeyFull = (
-  bucket: string,
-  role: string,
-  path: string,
-  pageSize: number,
-) => ["files", "list", role, bucket, path, pageSize] as const;
-
+/**
+ * Client-load file listing. The first fetch pulls up to max_client_load objects
+ * (the backend aggregates S3 pages); `loadMore` fetches the next chunk and
+ * `loadAll` drains the rest. The component holds the flattened `files` in memory
+ * and paginates/filters/searches client-side (vanilla parity).
+ *
+ * Built on useInfiniteQuery so chunks cache and survive re-renders, but the page
+ * param is the opaque continuation token (a chunk-of-max_client_load), NOT
+ * items_per_page — so a small folder is fully loaded in page 0 and extra chunks
+ * exist only when the user explicitly asks for them.
+ */
 export function useFiles(
   bucket: string | undefined,
   role: string | undefined,
   path: string,
-  pageSize: number,
 ) {
-  return useInfiniteQuery({
+  const query = useInfiniteQuery({
     queryKey:
       bucket && role
-        ? filesQueryKeyFull(bucket, role, path, pageSize)
+        ? filesQueryKey(bucket, role, path)
         : (["files", "list", "_disabled"] as const),
-    queryFn: ({ pageParam }) =>
-      listFiles(bucket!, role!, path, {
-        maxKeys: pageSize,
-        continuationToken: pageParam as string | undefined,
-      }),
+    queryFn: ({ pageParam }) => {
+      const token = pageParam as string | undefined;
+      return listFiles(
+        bucket!,
+        role!,
+        path,
+        token ? { continuationToken: token } : {},
+      );
+    },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.next_token ?? undefined,
     enabled: !!bucket && !!role,
   });
+
+  const pages = query.data?.pages ?? [];
+  const directories = pages[0]?.directories ?? [];
+  const files = pages.flatMap((p) => p.files);
+  const lastPage = pages[pages.length - 1];
+  const truncated = lastPage ? lastPage.truncated : false;
+
+  const loadMore = useCallback(async () => {
+    if (query.hasNextPage && !query.isFetchingNextPage) {
+      await query.fetchNextPage();
+    }
+  }, [query]);
+
+  const loadAll = useCallback(async () => {
+    let res = await query.fetchNextPage();
+    while (res.hasNextPage) {
+      res = await query.fetchNextPage();
+    }
+  }, [query]);
+
+  return {
+    ...query,
+    directories,
+    files,
+    truncated,
+    loadMore,
+    loadAll,
+  };
 }

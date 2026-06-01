@@ -1,4 +1,13 @@
 import "@testing-library/jest-dom/vitest";
+import { notifyManager } from "@tanstack/react-query";
+
+// TanStack Query batches observer notifications on a macrotask by default, so a
+// state update triggered by an awaited fetchNextPage()/refetch() lands AFTER the
+// surrounding act() flush — making hooks like useFiles.loadMore()/loadAll() look
+// like they "didn't update" in tests even though the cache is correct. Flushing
+// notifications synchronously in the test environment makes query state settle
+// within the same act() scope. Test-only: production keeps the batched scheduler.
+notifyManager.setScheduler((cb) => cb());
 
 // Node 25 ships an experimental built-in localStorage that shadows jsdom's
 // implementation. The built-in object has no getItem/setItem/clear methods.
