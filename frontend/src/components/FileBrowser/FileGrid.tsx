@@ -17,9 +17,8 @@ interface FileGridProps {
   bucket: string;
   roleId: string;
   path: string;
-  hasNextPage: boolean;
-  isFetchingNextPage: boolean;
-  onLoadMore: () => void;
+  hasMoreInMemory: boolean;
+  onRevealMore: () => void;
   lazyLoadingEnabled: boolean;
 }
 
@@ -35,27 +34,22 @@ export function FileGrid({
   bucket,
   roleId,
   path,
-  hasNextPage,
-  isFetchingNextPage,
-  onLoadMore,
+  hasMoreInMemory,
+  onRevealMore,
   lazyLoadingEnabled,
 }: FileGridProps) {
-  // Sentinel that fires onLoadMore when scrolled into view, mounted only when
-  // lazy loading is enabled. rootMargin=100px so the next page starts loading
-  // before the user actually hits the bottom — feels seamless on fast networks.
+  // Sentinel that reveals the next in-memory slice when scrolled into view,
+  // mounted only when lazy loading is enabled. rootMargin=100px so the next
+  // cards appear before the user actually hits the bottom.
   const { ref: sentinelRef, inView } = useInView({ rootMargin: "100px" });
 
+  // In-memory slice growth — instant, no network, no loader (cards already in
+  // memory). Auto-reveal on scroll when lazy loading is on, else a Show more button.
   useEffect(() => {
-    if (lazyLoadingEnabled && hasNextPage && inView && !isFetchingNextPage) {
-      onLoadMore();
+    if (lazyLoadingEnabled && hasMoreInMemory && inView) {
+      onRevealMore();
     }
-  }, [
-    lazyLoadingEnabled,
-    hasNextPage,
-    inView,
-    isFetchingNextPage,
-    onLoadMore,
-  ]);
+  }, [lazyLoadingEnabled, hasMoreInMemory, inView, onRevealMore]);
 
   return (
     <Stack gap="md">
@@ -78,7 +72,7 @@ export function FileGrid({
           />
         ))}
       </SimpleGrid>
-      {hasNextPage && (
+      {hasMoreInMemory && (
         <Center>
           {lazyLoadingEnabled ? (
             <div
@@ -87,12 +81,8 @@ export function FileGrid({
               style={{ height: 1, width: "100%" }}
             />
           ) : (
-            <Button
-              variant="subtle"
-              onClick={onLoadMore}
-              loading={isFetchingNextPage}
-            >
-              Load more
+            <Button variant="subtle" onClick={onRevealMore}>
+              Show more
             </Button>
           )}
         </Center>
