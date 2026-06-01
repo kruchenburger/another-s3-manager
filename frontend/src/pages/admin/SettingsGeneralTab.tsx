@@ -18,6 +18,15 @@ export function SettingsGeneralTab({ form, readOnly }: SettingsGeneralTabProps) 
         disabled={readOnly}
         {...form.getInputProps("items_per_page")}
       />
+      <NumberInput
+        label="Max client load"
+        description="Objects loaded into the browser before 'Load more' appears. Larger folders paginate on the server beyond this. Default 10000."
+        min={1}
+        max={200000}
+        step={1000}
+        disabled={readOnly}
+        {...form.getInputProps("max_client_load")}
+      />
       <Switch
         label="Disable deletion"
         description="When on, S3 file/folder delete operations return 403 server-side. Admin actions (deleting users, removing bans, deleting roles) are NOT affected."
