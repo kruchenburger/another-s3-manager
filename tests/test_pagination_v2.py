@@ -3,7 +3,10 @@
 See spec: spec dated 2026-05-29 (pagination-v2 design).
 """
 
-from another_s3_manager.s3_client import list_objects_paginated_for_role
+from another_s3_manager.s3_client import (
+    list_objects_client_load_for_role,
+    list_objects_paginated_for_role,
+)
 
 
 def _seed(moto_s3, bucket: str, *, files: list[str], directories: list[str]) -> None:
@@ -215,6 +218,84 @@ def test_route_continuation_without_max_keys_rejected(app_client, moto_s3):
     )
     assert response.status_code == 400
     assert "max_keys" in response.json()["detail"]
+
+
+def test_client_load_returns_all_when_under_limit(moto_s3):
+    """When the folder fits under the limit, truncated=False and all files return."""
+    _seed(
+        moto_s3,
+        "client-small",
+        files=[f"f{i:03d}.txt" for i in range(5)],
+        directories=["dir1"],
+    )
+
+    result = list_objects_client_load_for_role(
+        role=None,
+        bucket="client-small",
+        path="",
+        user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
+        max_client_load=10,
+    )
+
+    assert result["truncated"] is False
+    assert result["next_token"] is None
+    assert [d["name"] for d in result["directories"]] == ["dir1"]
+    assert len(result["files"]) == 5
+
+
+def test_client_load_truncates_at_limit(moto_s3):
+    """When the folder exceeds the limit, exactly limit files return + truncated=True."""
+    _seed(
+        moto_s3,
+        "client-big",
+        files=[f"f{i:04d}.txt" for i in range(12)],
+        directories=[],
+    )
+
+    result = list_objects_client_load_for_role(
+        role=None,
+        bucket="client-big",
+        path="",
+        user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
+        max_client_load=5,
+    )
+
+    assert result["truncated"] is True
+    assert result["next_token"] is not None
+    assert len(result["files"]) == 5
+    assert [f["name"] for f in result["files"]] == [f"f{i:04d}.txt" for i in range(5)]
+
+
+def test_client_load_continuation_appends_next_chunk(moto_s3):
+    """Passing next_token resumes and returns the following chunk."""
+    _seed(
+        moto_s3,
+        "client-cont",
+        files=[f"f{i:04d}.txt" for i in range(12)],
+        directories=[],
+    )
+
+    page1 = list_objects_client_load_for_role(
+        role=None,
+        bucket="client-cont",
+        path="",
+        user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
+        max_client_load=5,
+    )
+    page2 = list_objects_client_load_for_role(
+        role=None,
+        bucket="client-cont",
+        path="",
+        user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
+        max_client_load=5,
+        continuation_token=page1["next_token"],
+    )
+
+    assert page2["directories"] == []
+    names = [f["name"] for f in page2["files"]]
+    assert names == [f"f{i:04d}.txt" for i in range(5, 10)]
+    assert page2["truncated"] is True
+    assert page2["next_token"] is not None
 
 
 def test_config_has_max_client_load_default(monkeypatch, tmp_path):
