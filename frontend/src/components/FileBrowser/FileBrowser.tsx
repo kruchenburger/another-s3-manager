@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { filesQueryKey } from "@/features/files/hooks/useFiles";
 import { useShiftSelect } from "./useShiftSelect";
@@ -53,28 +53,26 @@ export function FileBrowser() {
   const navigate = useNavigate();
 
   const { data: config } = useConfig();
-  const pageSize = config?.items_per_page ?? 200;
+  const itemsPerPage = config?.items_per_page ?? 200;
   const lazyLoadingEnabled = config?.enable_lazy_loading ?? true;
+
   const {
-    data,
+    directories,
+    files,
+    truncated,
+    loadMore,
+    loadAll,
     isFetching,
     isFetchingNextPage,
-    hasNextPage,
-    fetchNextPage,
     error,
-  } = useFiles(bucket, roleId, pathFromUrl, pageSize);
+  } = useFiles(bucket, roleId, pathFromUrl);
 
-  // Pages from useInfiniteQuery: page[0] has directories (first-page only) +
-  // files; subsequent pages add more files. Flatten into one ordered list:
-  // directories first (they only appear once), then every page's files in
-  // S3 order. This is the single source of truth for filteredFiles and every
-  // .find(name === ...) lookup below.
-  const items = useMemo(() => {
-    if (!data) return [];
-    const directories = data.pages[0]?.directories ?? [];
-    const files = data.pages.flatMap((p) => p.files);
-    return [...directories, ...files];
-  }, [data]);
+  // All loaded items, directories first (vanilla parity). Single source of
+  // truth for filtering and every .find(name === ...) lookup below.
+  const items = useMemo(
+    () => [...directories, ...files],
+    [directories, files],
+  );
 
   const queryClient = useQueryClient();
   const deleteMutation = useDelete();
@@ -90,6 +88,13 @@ export function FileBrowser() {
     clear: clearSelection,
   } = useShiftSelect();
   const [searchQuery, setSearchQuery] = useState("");
+  // In-memory slice: how many of the loaded items the table/grid renders.
+  // Grows by itemsPerPage on lazy-scroll / "Show more" (no network). Reset
+  // whenever the folder, bucket, role, or page size changes.
+  const [visibleCount, setVisibleCount] = useState(itemsPerPage);
+  useEffect(() => {
+    setVisibleCount(itemsPerPage);
+  }, [pathFromUrl, bucket, roleId, itemsPerPage]);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [uploadHint, setUploadHint] = useState<{
     open: boolean;
@@ -102,11 +107,24 @@ export function FileBrowser() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
-  const filteredFiles = useMemo(() => {
+  const filteredItems = useMemo(() => {
     if (!searchQuery) return items;
     const q = searchQuery.toLowerCase();
     return items.filter((f) => f.name.toLowerCase().includes(q));
   }, [items, searchQuery]);
+
+  // When searching, show all matches; otherwise show the in-memory slice.
+  const visibleItems = useMemo(
+    () => (searchQuery ? filteredItems : filteredItems.slice(0, visibleCount)),
+    [searchQuery, filteredItems, visibleCount],
+  );
+
+  // More slices remain to reveal from memory (NOT a server fetch).
+  const hasMoreInMemory = !searchQuery && visibleCount < filteredItems.length;
+
+  const revealMore = useCallback(() => {
+    setVisibleCount((c) => c + itemsPerPage);
+  }, [itemsPerPage]);
 
   const navigateToFolder = (folderName: string) => {
     clearSelection();
@@ -350,8 +368,8 @@ export function FileBrowser() {
   // Visible-order names — shift-select range is computed against this list
   // (after sort + filter) so the highlighted range matches what the user sees.
   const orderedNames = useMemo(
-    () => filteredFiles.map((f) => f.name),
-    [filteredFiles],
+    () => visibleItems.map((f) => f.name),
+    [visibleItems],
   );
   const toggleSelect = (name: string, shiftKey: boolean) => {
     handleToggleSelect(name, shiftKey, orderedNames);
@@ -602,7 +620,7 @@ export function FileBrowser() {
   // a blank pane for the duration of the refetch.
   // DelayedLoader still debounces the spinner by 500ms so a fast
   // first-time fetch never paints a flash before content lands.
-  if (isFetching && !data) {
+  if (isFetching && items.length === 0) {
     return <DelayedLoader label="Loading files…" />;
   }
 
@@ -630,6 +648,10 @@ export function FileBrowser() {
         onUploadFolderClick={handleUploadFolderClick}
         disableDeletion={disableDeletion}
         objectCount={items.length}
+        truncated={truncated}
+        isLoadingMore={isFetchingNextPage}
+        onLoadMore={() => loadMore()}
+        onLoadAll={() => loadAll()}
       />
       <input
         type="file"
@@ -651,16 +673,21 @@ export function FileBrowser() {
         style={{ display: "none" }}
       />
       <Stack gap="md">
-        {searchQuery && hasNextPage && (
+        {searchQuery && truncated && (
           <Text size="xs" c="dimmed">
             Filtering {items.length} loaded items. Load more to search the rest.
           </Text>
         )}
-        {filteredFiles.length === 0 ? (
+        {truncated && selected.size > 0 && (
+          <Text size="xs" c="dimmed">
+            Selected {selected.size} of loaded items
+          </Text>
+        )}
+        {visibleItems.length === 0 ? (
           <FileBrowserEmptyState />
         ) : mode === "table" ? (
           <FileTable
-            files={filteredFiles}
+            files={visibleItems}
             selected={selected}
             onToggleSelect={toggleSelect}
             onToggleSelectAll={toggleSelectAll}
@@ -669,14 +696,13 @@ export function FileBrowser() {
             onCopyUrl={handleCopyUrl}
             onPreview={handlePreview}
             onDelete={(name) => requestDelete([name])}
-            hasNextPage={hasNextPage}
-            isFetchingNextPage={isFetchingNextPage}
-            onLoadMore={() => fetchNextPage()}
+            hasMoreInMemory={hasMoreInMemory}
+            onRevealMore={revealMore}
             lazyLoadingEnabled={lazyLoadingEnabled}
           />
         ) : (
           <FileGrid
-            files={filteredFiles}
+            files={visibleItems}
             selected={selected}
             onToggleSelect={toggleSelect}
             onNavigate={navigateToFolder}
@@ -687,9 +713,8 @@ export function FileBrowser() {
             bucket={bucket}
             roleId={roleId}
             path={pathFromUrl}
-            hasNextPage={hasNextPage}
-            isFetchingNextPage={isFetchingNextPage}
-            onLoadMore={() => fetchNextPage()}
+            hasMoreInMemory={hasMoreInMemory}
+            onRevealMore={revealMore}
             lazyLoadingEnabled={lazyLoadingEnabled}
           />
         )}
