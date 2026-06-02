@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Button, Checkbox, Table } from "@mantine/core";
+import { Button, Center, Checkbox, Loader, Table, Text } from "@mantine/core";
 import { useInView } from "react-intersection-observer";
 import type { FileEntry } from "@/types/api";
 import { FileRow } from "./FileRow";
@@ -14,8 +14,9 @@ interface FileTableProps {
   onCopyUrl: (name: string) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
-  hasMoreInMemory: boolean;
-  onRevealMore: () => void;
+  hasMore: boolean;
+  isFetchingMore: boolean;
+  onReachEnd: () => void;
   lazyLoadingEnabled: boolean;
 }
 
@@ -31,26 +32,29 @@ export function FileTable({
   onCopyUrl,
   onPreview,
   onDelete,
-  hasMoreInMemory,
-  onRevealMore,
+  hasMore,
+  isFetchingMore,
+  onReachEnd,
   lazyLoadingEnabled,
 }: FileTableProps) {
   const allSelected =
     files.length > 0 && files.every((f) => selected.has(f.name));
   const someSelected = files.some((f) => selected.has(f.name)) && !allSelected;
 
-  // Sentinel that reveals the next in-memory slice when scrolled into view,
+  // Sentinel that drives the next reveal/fetch when scrolled into view,
   // mounted only when lazy loading is enabled. rootMargin=100px so the next
   // rows appear before the user actually hits the bottom.
   const { ref: sentinelRef, inView } = useInView({ rootMargin: "100px" });
 
-  // In-memory slice growth — instant, no network, no loader (rows already in
-  // memory). Auto-reveal on scroll when lazy loading is on, else a Show more button.
+  // Continuous reveal: while the sentinel is visible and there's more to show,
+  // keep asking the parent to reveal/fetch. Depending on files.length re-runs
+  // this after each reveal grows the list — so one scroll-to-bottom cascades
+  // through the whole in-memory set instead of stalling after one step.
   useEffect(() => {
-    if (lazyLoadingEnabled && hasMoreInMemory && inView) {
-      onRevealMore();
+    if (lazyLoadingEnabled && hasMore && inView && !isFetchingMore) {
+      onReachEnd();
     }
-  }, [lazyLoadingEnabled, hasMoreInMemory, inView, onRevealMore]);
+  }, [lazyLoadingEnabled, hasMore, inView, isFetchingMore, files.length, onReachEnd]);
 
   return (
     <Table highlightOnHover striped="even" verticalSpacing="xs">
@@ -86,7 +90,7 @@ export function FileTable({
           />
         ))}
       </Table.Tbody>
-      {hasMoreInMemory && (
+      {hasMore && (
         <Table.Tfoot>
           <Table.Tr>
             <Table.Td
@@ -97,9 +101,23 @@ export function FileTable({
               }}
             >
               {lazyLoadingEnabled ? (
-                <div ref={sentinelRef} aria-hidden style={{ height: 1 }} />
+                isFetchingMore ? (
+                  <Center>
+                    <Loader size="sm" />
+                    <Text size="sm" c="dimmed" ml="xs">
+                      Loading more…
+                    </Text>
+                  </Center>
+                ) : (
+                  // 1px sentinel — when it scrolls into view the effect reveals more.
+                  <div ref={sentinelRef} aria-hidden style={{ height: 1 }} />
+                )
               ) : (
-                <Button variant="subtle" onClick={onRevealMore}>
+                <Button
+                  variant="subtle"
+                  onClick={onReachEnd}
+                  loading={isFetchingMore}
+                >
                   Show more
                 </Button>
               )}

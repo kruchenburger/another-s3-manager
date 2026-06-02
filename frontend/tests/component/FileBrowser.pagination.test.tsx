@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { MantineProvider } from "@mantine/core";
@@ -13,6 +13,7 @@ vi.mock("react-intersection-observer", () => ({
 const loadMoreMock = vi.fn();
 const loadAllMock = vi.fn();
 let mockTruncated = false;
+let mockFetchingNextPage = false;
 let mockFiles = [
   { name: "a.txt", is_directory: false, size: 1, last_modified: "" },
   { name: "b.txt", is_directory: false, size: 1, last_modified: "" },
@@ -26,7 +27,7 @@ vi.mock("@/features/files/hooks/useFiles", () => ({
     loadMore: loadMoreMock,
     loadAll: loadAllMock,
     isFetching: false,
-    isFetchingNextPage: false,
+    isFetchingNextPage: mockFetchingNextPage,
     error: null,
   }),
 }));
@@ -66,9 +67,9 @@ vi.mock("@/features/files/api/filesApi", () => ({
 
 import { FileBrowser } from "@/components/FileBrowser/FileBrowser";
 
-function renderBrowser() {
+function browserTree() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  return (
     <MantineProvider>
       <Notifications />
       <QueryClientProvider client={qc}>
@@ -78,8 +79,12 @@ function renderBrowser() {
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>
-    </MantineProvider>,
+    </MantineProvider>
   );
+}
+
+function renderBrowser() {
+  return render(browserTree());
 }
 
 describe("FileBrowser hybrid pagination", () => {
@@ -89,6 +94,7 @@ describe("FileBrowser hybrid pagination", () => {
     mockInView = false;
     mockLazy = true;
     mockTruncated = false;
+    mockFetchingNextPage = false;
     mockItemsPerPage = 200;
     mockFiles = [
       { name: "a.txt", is_directory: false, size: 1, last_modified: "" },
@@ -128,6 +134,65 @@ describe("FileBrowser hybrid pagination", () => {
     renderBrowser();
     fireEvent.click(screen.getByRole("button", { name: /load all/i }));
     expect(loadAllMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("Show more reveals the next in-memory slice (non-lazy)", async () => {
+    mockLazy = false;
+    mockItemsPerPage = 2;
+    mockTruncated = false;
+    mockFiles = Array.from({ length: 5 }, (_, i) => ({
+      name: `f${i}.txt`,
+      is_directory: false,
+      size: 1,
+      last_modified: "",
+    }));
+    renderBrowser();
+    // visibleCount starts at 2 → [logs, f0]. f1 hidden behind the slice.
+    expect(screen.queryByText("f1.txt")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /show more/i }));
+    expect(await screen.findByText("f1.txt")).toBeInTheDocument();
+  });
+
+  it("reveals more in-memory items when the sentinel scrolls into view (lazy)", async () => {
+    // 5 files + 1 dir = 6 items, page size 2 → first slice [logs, f0]. The
+    // sentinel starts out of view, then scrolls in (re-render with inView=true),
+    // which fires the reveal effect — mirroring how IntersectionObserver fires
+    // its callback AFTER mount in the real browser. The full multi-step cascade
+    // is exercised live (Playwright); here we assert the lazy effect reveals
+    // beyond the initial slice (the stall bug left exactly itemsPerPage rows).
+    mockItemsPerPage = 2;
+    mockInView = false;
+    mockTruncated = false;
+    mockFiles = Array.from({ length: 5 }, (_, i) => ({
+      name: `f${i}.txt`,
+      is_directory: false,
+      size: 1,
+      last_modified: "",
+    }));
+    const { rerender } = renderBrowser();
+    expect(screen.queryByText("f1.txt")).not.toBeInTheDocument();
+    // Sentinel scrolls into view → effect reveals the next slice.
+    mockInView = true;
+    rerender(browserTree());
+    await waitFor(() => expect(screen.getByText("f1.txt")).toBeInTheDocument());
+  });
+
+  it("auto-fetches the next server chunk once the in-memory slice is exhausted", async () => {
+    // Slice exhausted (page size >= loaded count) AND truncated → reaching the
+    // end should trigger a server continuation fetch.
+    mockItemsPerPage = 200;
+    mockInView = true;
+    mockTruncated = true;
+    renderBrowser();
+    await screen.findByText("a.txt");
+    expect(loadMoreMock).toHaveBeenCalled();
+  });
+
+  it("shows a Loading more… indicator during a server continuation fetch", () => {
+    mockTruncated = true;
+    mockFetchingNextPage = true;
+    renderBrowser();
+    expect(screen.getByText(/loading more/i)).toBeInTheDocument();
   });
 
   it("shows filter banner when searching and truncated", async () => {
