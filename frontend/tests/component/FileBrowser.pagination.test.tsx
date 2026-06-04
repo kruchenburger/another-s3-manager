@@ -13,7 +13,9 @@ vi.mock("react-intersection-observer", () => ({
 const loadMoreMock = vi.fn();
 const loadAllMock = vi.fn();
 let mockTruncated = false;
-let mockFetchingNextPage = false;
+let mockError: Error | null = null;
+let mockIsFetchNextPageError = false;
+let mockDirectories = [{ name: "logs", is_directory: true, size: 0 }];
 let mockFiles = [
   { name: "a.txt", is_directory: false, size: 1, last_modified: "" },
   { name: "b.txt", is_directory: false, size: 1, last_modified: "" },
@@ -21,14 +23,23 @@ let mockFiles = [
 vi.mock("@/features/files/hooks/useFiles", () => ({
   filesQueryKey: (b: string, r: string, p: string) => ["files", "list", r, b, p],
   useFiles: () => ({
-    directories: [{ name: "logs", is_directory: true, size: 0 }],
+    directories: mockDirectories,
     files: mockFiles,
     truncated: mockTruncated,
-    loadMore: loadMoreMock,
-    loadAll: loadAllMock,
+    // Wrap so the spy records the call but the component's `.catch()` has a real
+    // promise to chain on (the real loadMore/loadAll are async).
+    loadMore: (...args: unknown[]) => {
+      loadMoreMock(...args);
+      return Promise.resolve();
+    },
+    loadAll: (...args: unknown[]) => {
+      loadAllMock(...args);
+      return Promise.resolve();
+    },
     isFetching: false,
-    isFetchingNextPage: mockFetchingNextPage,
-    error: null,
+    isFetchingNextPage: false,
+    isFetchNextPageError: mockIsFetchNextPageError,
+    error: mockError,
   }),
 }));
 
@@ -94,8 +105,10 @@ describe("FileBrowser hybrid pagination", () => {
     mockInView = false;
     mockLazy = true;
     mockTruncated = false;
-    mockFetchingNextPage = false;
+    mockError = null;
+    mockIsFetchNextPageError = false;
     mockItemsPerPage = 200;
+    mockDirectories = [{ name: "logs", is_directory: true, size: 0 }];
     mockFiles = [
       { name: "a.txt", is_directory: false, size: 1, last_modified: "" },
       { name: "b.txt", is_directory: false, size: 1, last_modified: "" },
@@ -259,5 +272,41 @@ describe("FileBrowser hybrid pagination", () => {
     expect(
       await screen.findByText(/load more to search the rest/i),
     ).toBeInTheDocument();
+  });
+
+  it("keeps the loaded table visible on a continuation error (does not blank)", () => {
+    // A failed loadMore/loadAll populates query.error while the already-loaded
+    // pages stay cached. Per the design ("continuation error -> toast + keep the
+    // loaded items, never blank the table"), the table must remain; only an
+    // initial / refetch error may show the full-page error state.
+    mockError = new Error("network");
+    mockIsFetchNextPageError = true; // the error came from fetchNextPage
+    renderBrowser();
+    expect(screen.getByText("a.txt")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/couldn't load files/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the full-page error state when the initial load fails with no items", () => {
+    mockError = new Error("network");
+    mockDirectories = [];
+    mockFiles = [];
+    renderBrowser();
+    expect(screen.getByText(/couldn't load files/i)).toBeInTheDocument();
+  });
+
+  it("clears the selection when the search query changes (no ghost selection)", () => {
+    // While searching, the slice is disabled and every match renders, so a row
+    // can be selected that falls outside the slice once the filter clears —
+    // then it stays selected but off-screen, and "Delete (N)" would delete an
+    // invisible file. Changing the search must drop the selection.
+    renderBrowser();
+    const checkbox = screen.getByLabelText("Select a.txt");
+    fireEvent.click(checkbox);
+    expect(screen.getByLabelText("Select a.txt")).toBeChecked();
+    const input = screen.getByPlaceholderText(/filter/i);
+    fireEvent.change(input, { target: { value: "a" } }); // a.txt still matches
+    expect(screen.getByLabelText("Select a.txt")).not.toBeChecked();
   });
 });

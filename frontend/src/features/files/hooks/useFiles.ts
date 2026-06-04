@@ -48,16 +48,23 @@ export function useFiles(
   const lastPage = pages[pages.length - 1];
   const truncated = lastPage ? lastPage.truncated : false;
 
+  // fetchNextPage never rejects (throwOnError is off) — on failure it resolves
+  // with an errored result and the error lands in query.error. Re-throw it so
+  // the caller (FileBrowser) can toast the failure AND so the already-loaded
+  // pages stay on screen instead of the whole table blanking to QueryErrorState.
   const loadMore = useCallback(async () => {
-    if (query.hasNextPage && !query.isFetchingNextPage) {
-      await query.fetchNextPage();
-    }
+    if (!query.hasNextPage || query.isFetchingNextPage) return;
+    const res = await query.fetchNextPage();
+    if (res.isError) throw res.error ?? new Error("Failed to load more files");
   }, [query]);
 
   const loadAll = useCallback(async () => {
+    if (!query.hasNextPage || query.isFetchingNextPage) return;
     let res = await query.fetchNextPage();
+    if (res.isError) throw res.error ?? new Error("Failed to load files");
     while (res.hasNextPage) {
       res = await query.fetchNextPage();
+      if (res.isError) throw res.error ?? new Error("Failed to load files");
     }
   }, [query]);
 

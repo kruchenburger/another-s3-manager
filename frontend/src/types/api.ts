@@ -63,18 +63,6 @@ export interface FileListResponse {
 }
 
 /**
- * Paginated response from GET /api/buckets/.../files?max_keys=N. Distinct
- * from the legacy `FileListResponse` envelope which is still returned when
- * `max_keys` is absent (vanilla UI + external callers).
- *
- *  - `directories` is populated ONLY on the first page (when the request
- *    had no `continuation_token`). On subsequent pages it's an empty array.
- *  - `next_token` is the opaque S3 continuation token to pass back as the
- *    `continuation_token` query param of the next request. `null` on the
- *    final page.
- *  - `has_more` mirrors S3's `IsTruncated`.
- */
-/**
  * Response from GET /api/buckets/.../files?client_load=1. The /v2 UI loads one
  * of these chunks (up to max_client_load objects) into memory and paginates
  * client-side. `truncated` is true when S3 has more objects than this chunk;

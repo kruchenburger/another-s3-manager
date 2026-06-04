@@ -1428,6 +1428,28 @@ async def update_config(
                 # Use env var or default if not in config
                 config["max_file_size"] = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
 
+        # Handle max_client_load - if provided, validate and use it; otherwise preserve existing or use env var/default
+        if "max_client_load" in config:
+            # Validate max_client_load (1..200000, matching the s3_client clamp)
+            try:
+                max_client_load_val = int(config["max_client_load"])
+                if max_client_load_val < 1 or max_client_load_val > 200000:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="max_client_load must be between 1 and 200000",
+                    )
+                config["max_client_load"] = max_client_load_val
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="max_client_load must be a valid integer")
+        else:
+            # Preserve max_client_load from current config if exists, otherwise use env var or default
+            current_config = load_config(force_reload=False)
+            if "max_client_load" in current_config:
+                config["max_client_load"] = current_config["max_client_load"]
+            else:
+                # Use env var or default if not in config
+                config["max_client_load"] = int(os.getenv("MAX_CLIENT_LOAD", "10000"))
+
         # Handle auto_inline_extensions - if provided, validate and use it; otherwise preserve existing
         if "auto_inline_extensions" in config:
             # Validate auto_inline_extensions (must be a list of strings)
@@ -1728,14 +1750,18 @@ async def list_files(
 ):
     """List files and directories.
 
-    Two modes (response shape selected by `max_keys` presence):
-      * Legacy (no `max_keys`): zip every S3 page into one flat envelope
-        `{files, path, total_count}`. Used by the vanilla UI at `/` and any
-        external HTTP caller that pre-dates the pagination work.
+    Three modes (response shape selected by the query params):
+      * Legacy (no `max_keys`, no `client_load`): zip every S3 page into one
+        flat envelope `{files, path, total_count}`. Used by the vanilla UI at
+        `/` and any external HTTP caller that pre-dates the pagination work.
       * Paginated (`max_keys` set): one S3 call per HTTP request (plus one
         directory-discovery call on the first page). Directories return only
         on the first page (when no `continuation_token`); files paginate via
-        S3's `NextContinuationToken`. Used by /v2.
+        S3's `NextContinuationToken`.
+      * Client-load (`client_load=1`): aggregate S3 pages up to
+        `max_client_load` (or `max_keys` as the chunk size if given) and return
+        `{directories, files, truncated, next_token}` for the /v2 UI to hold in
+        memory and paginate client-side. Directories only on the first chunk.
     """
     try:
         try:

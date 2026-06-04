@@ -359,3 +359,32 @@ def test_route_config_exposes_max_client_load(app_client, moto_s3):
     response = app_client.get("/api/config", headers=headers)
     assert response.status_code == 200
     assert response.json()["max_client_load"] == 10000
+
+
+def test_update_config_preserves_max_client_load_when_omitted(app_client, moto_s3):
+    """POST /api/config without max_client_load keeps the saved value.
+
+    Every other config field has a preserve-on-omit block in update_config;
+    max_client_load must too, else an API client (curl / MCP / an older frontend)
+    that saves config without the field silently resets the admin-configured
+    value back to the 10000 default.
+    """
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    # Save a non-default value.
+    r1 = app_client.post(
+        "/api/config",
+        json={"roles": [], "max_client_load": 500},
+        headers=headers,
+    )
+    assert r1.status_code == 200, r1.json()
+    # Save again WITHOUT max_client_load — it must be preserved, not reset.
+    r2 = app_client.post(
+        "/api/config",
+        json={"roles": [], "items_per_page": 50},
+        headers=headers,
+    )
+    assert r2.status_code == 200, r2.json()
+    resp = app_client.get("/api/config", headers=headers)
+    assert resp.json()["max_client_load"] == 500

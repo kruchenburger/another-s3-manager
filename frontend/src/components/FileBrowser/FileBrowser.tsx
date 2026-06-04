@@ -65,6 +65,7 @@ export function FileBrowser() {
     loadAll,
     isFetching,
     isFetchingNextPage,
+    isFetchNextPageError,
     error,
   } = useFiles(bucket, roleId, pathFromUrl);
 
@@ -625,10 +626,14 @@ export function FileBrowser() {
     return <DelayedLoader label="Loading files…" />;
   }
 
-  // Stale-data + fresh-error race: TanStack Query may still hold cached `data`
-  // while a concurrent refetch failed. Show the error state regardless of any
-  // ghost data — without this guard the file table flashes the stale list.
-  if (error) {
+  // Blank to the full-page error state on an INITIAL or REFETCH failure — no
+  // usable data, or stale data that a fresh fetch just rejected (e.g. a 403 when
+  // a role is revoked; we must not keep showing forbidden rows). A CONTINUATION
+  // failure (loadMore / loadAll → fetchNextPage) is different: the already-loaded
+  // pages are valid, only the next chunk failed — per the hybrid design it must
+  // "keep the loaded items, never blank the table" and surface as a toast (see
+  // onLoadMore / onLoadAll below). `isFetchNextPageError` distinguishes the two.
+  if (error && !isFetchNextPageError) {
     return <QueryErrorState error={error} title="Couldn't load files" />;
   }
 
@@ -639,7 +644,14 @@ export function FileBrowser() {
         roleId={roleId}
         path={pathFromUrl}
         searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
+        onSearchChange={(q) => {
+          // Reset the selection on filter change. While searching, the slice is
+          // off and every match is selectable; once the filter clears, a row
+          // outside the slice would stay selected but off-screen, so bulk Delete
+          // would act on a file the user can't see.
+          setSearchQuery(q);
+          clearSelection();
+        }}
         mode={mode}
         onModeChange={setMode}
         selectedCount={selected.size}
@@ -651,8 +663,28 @@ export function FileBrowser() {
         objectCount={items.length}
         truncated={truncated}
         isLoadingMore={isFetchingNextPage}
-        onLoadMore={() => loadMore()}
-        onLoadAll={() => loadAll()}
+        onLoadMore={() => {
+          // A continuation failure keeps the loaded table (the error guard above
+          // only blanks on an empty initial load); surface it as a toast.
+          loadMore().catch((e) =>
+            showToast({
+              color: "red",
+              title: "Couldn't load more files",
+              message: getErrorMessage(e),
+              autoClose: TOAST_DURATIONS.error,
+            }),
+          );
+        }}
+        onLoadAll={() => {
+          loadAll().catch((e) =>
+            showToast({
+              color: "red",
+              title: "Couldn't load all files",
+              message: getErrorMessage(e),
+              autoClose: TOAST_DURATIONS.error,
+            }),
+          );
+        }}
       />
       <input
         type="file"
