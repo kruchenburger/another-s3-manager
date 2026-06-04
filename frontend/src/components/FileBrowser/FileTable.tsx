@@ -94,13 +94,7 @@ export function FileTable({
       {hasMoreInMemory && (
         <Table.Tfoot>
           <Table.Tr>
-            <Table.Td
-              colSpan={TABLE_COLUMN_COUNT}
-              style={{
-                textAlign: "center",
-                padding: "var(--mantine-spacing-md)",
-              }}
-            >
+            <Table.Td colSpan={TABLE_COLUMN_COUNT} ta="center" p="md">
               {lazyLoadingEnabled ? (
                 <div ref={sentinelRef} aria-hidden style={{ height: 1 }} />
               ) : (

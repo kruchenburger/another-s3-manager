@@ -83,6 +83,15 @@ describe("FileBrowserHeader object count", () => {
     expect(onLoadAll).toHaveBeenCalledTimes(1);
   });
 
+  it("disables Load more / Load all while a continuation fetch is in flight", () => {
+    // Mantine's `loading` only shows a spinner; `disabled` is what actually
+    // blocks the double-click that would fire two concurrent fetchNextPage
+    // calls and append duplicate pages.
+    renderHeader({ objectCount: 5, truncated: true, isLoadingMore: true });
+    expect(screen.getByRole("button", { name: /load more/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /load all/i })).toBeDisabled();
+  });
+
   it("renders SegmentedControl for view picker (Task 13 — verifying §4.4 already done)", () => {
     const { container } = renderHeader();
     // Mantine's SegmentedControl exposes role="radiogroup".

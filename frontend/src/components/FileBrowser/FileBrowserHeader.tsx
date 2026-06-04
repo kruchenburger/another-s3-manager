@@ -76,6 +76,11 @@ export function FileBrowserHeader({
                 variant="light"
                 onClick={onLoadMore}
                 loading={isLoadingMore}
+                // Mantine's `loading` shows a spinner but does NOT block clicks
+                // — without `disabled`, a double-click fires two concurrent
+                // fetchNextPage calls and appends duplicate pages (same
+                // double-submit guard as the Settings Save bar, PR #24/#37).
+                disabled={isLoadingMore}
               >
                 Load more
               </Button>
@@ -84,6 +89,7 @@ export function FileBrowserHeader({
                 variant="subtle"
                 onClick={onLoadAll}
                 loading={isLoadingMore}
+                disabled={isLoadingMore}
               >
                 Load all
               </Button>
