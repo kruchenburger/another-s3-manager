@@ -1312,6 +1312,7 @@ async def get_config(
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
             "max_client_load": max_client_load,
+            "auto_inline_extensions": config.get("auto_inline_extensions", []),
         }
 
     # Filter roles and sanitize
@@ -1329,6 +1330,7 @@ async def get_config(
         "enable_lazy_loading": enable_lazy_loading,
         "max_file_size": max_file_size,
         "max_client_load": max_client_load,
+        "auto_inline_extensions": config.get("auto_inline_extensions", []),
     }
 
 

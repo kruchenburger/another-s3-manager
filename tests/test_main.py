@@ -2042,3 +2042,32 @@ def test_get_user_for_download_does_not_swallow_db_errors(monkeypatch):
     # New behaviour: re-raise OperationalError (transient infra → caller sees real error).
     with pytest.raises(OperationalError):
         get_user_for_download(token=token, request=None)
+
+
+def test_get_config_exposes_auto_inline_extensions_for_non_admin(app_client):
+    """A non-admin /api/config response includes auto_inline_extensions.
+
+    /v2 FileRow/FileCard/PreviewModal read this list via useConfig to decide
+    which files are previewable. Before the fix it was only in the admin dict.
+    """
+    import another_s3_manager.config as config_module
+
+    cfg = config_module.load_config(force_reload=True)
+    cfg["auto_inline_extensions"] = ["ts", "tsx"]
+    config_module.save_config(cfg)
+
+    # Non-admin user with no allowed roles (exercises the no-allowed-roles return dict).
+    create_user("noroler", is_admin=False, allowed_roles=[])
+    login_response = app_client.post("/api/login", data={"username": "noroler", "password": "password"})
+    assert login_response.status_code == status.HTTP_200_OK
+    response_no_roles = app_client.get("/api/config")
+    assert response_no_roles.status_code == 200
+    assert response_no_roles.json()["auto_inline_extensions"] == ["ts", "tsx"]
+
+    # Non-admin user with an allowed role (exercises the regular-user return dict).
+    create_user("roler", is_admin=False, allowed_roles=["Default"])
+    login_response2 = app_client.post("/api/login", data={"username": "roler", "password": "password"})
+    assert login_response2.status_code == status.HTTP_200_OK
+    response_with_roles = app_client.get("/api/config")
+    assert response_with_roles.status_code == 200
+    assert response_with_roles.json()["auto_inline_extensions"] == ["ts", "tsx"]
