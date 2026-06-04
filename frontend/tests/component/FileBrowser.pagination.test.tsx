@@ -177,22 +177,73 @@ describe("FileBrowser hybrid pagination", () => {
     await waitFor(() => expect(screen.getByText("f1.txt")).toBeInTheDocument());
   });
 
-  it("auto-fetches the next server chunk once the in-memory slice is exhausted", async () => {
-    // Slice exhausted (page size >= loaded count) AND truncated → reaching the
-    // end should trigger a server continuation fetch.
-    mockItemsPerPage = 200;
+  it("reveals exactly one slice per sentinel hit — no cascade through the whole set", async () => {
+    // Regression for af71e9e: the reveal effect was made to depend on
+    // files.length plus an unstable handler, so a single sentinel-in-view
+    // cascaded synchronously through every remaining slice (observed live:
+    // one scroll jumped a 239-object folder from 30 rendered rows to all 239
+    // in a single frame). Per the hybrid design the in-memory slice must grow
+    // by exactly itemsPerPage per sentinel hit. The sentinel scrolls in via an
+    // inView false→true re-render, mirroring how IntersectionObserver fires
+    // its callback after mount in the real browser.
+    mockItemsPerPage = 2;
+    mockInView = false;
+    mockTruncated = false;
+    mockFiles = Array.from({ length: 5 }, (_, i) => ({
+      name: `f${i}.txt`,
+      is_directory: false,
+      size: 1,
+      last_modified: "",
+    }));
+    const { rerender } = renderBrowser();
+    // items = [logs, f0, f1, f2, f3, f4]; initial slice = 2 → [logs, f0].
+    expect(screen.queryByText("f2.txt")).not.toBeInTheDocument();
     mockInView = true;
-    mockTruncated = true;
-    renderBrowser();
-    await screen.findByText("a.txt");
-    expect(loadMoreMock).toHaveBeenCalled();
+    rerender(browserTree());
+    // One reveal grows the slice to 4 → [logs, f0, f1, f2]; f2 becomes visible.
+    await waitFor(() => expect(screen.getByText("f2.txt")).toBeInTheDocument());
+    // The cascade bug would have revealed the entire set in one go, so the
+    // last item is the discriminator — it must stay behind the slice.
+    expect(screen.queryByText("f4.txt")).not.toBeInTheDocument();
   });
 
-  it("shows a Loading more… indicator during a server continuation fetch", () => {
-    mockTruncated = true;
-    mockFetchingNextPage = true;
-    renderBrowser();
-    expect(screen.getByText(/loading more/i)).toBeInTheDocument();
+  it("plays the entry stagger only on the first screenful, not on every loaded row", () => {
+    // Regression: the per-row fadeIn delay (--row-index * 30ms) grew unbounded,
+    // so lazy-revealed rows sat invisible (opacity 0) for 1.6–3.5s waiting on
+    // their delay. The stagger must be capped to the first screenful; rows past
+    // it — the tail of a big page AND every lazy-revealed row — render instantly.
+    mockItemsPerPage = 100; // show everything, no lazy slice involved
+    mockTruncated = false;
+    mockFiles = Array.from({ length: 25 }, (_, i) => ({
+      name: `f${String(i).padStart(2, "0")}.txt`,
+      is_directory: false,
+      size: 1,
+      last_modified: "",
+    }));
+    const { container } = renderBrowser();
+    const rows = Array.from(container.querySelectorAll("table tbody tr"));
+    const animated = rows.filter((r) => r.className.includes("animateIn"));
+    // Some rows animate in (cold-load delight) but the count is capped — the
+    // tail rows render instantly.
+    expect(animated.length).toBeGreaterThan(0);
+    expect(animated.length).toBeLessThan(rows.length);
+    // The very last row (well past the first screen) must not animate.
+    expect(rows[rows.length - 1].className).not.toContain("animateIn");
+  });
+
+  it("does not auto-fetch a server chunk from the scroll sentinel (header-only continuation)", async () => {
+    // Per the hybrid design, server continuation ("Load more" / "Load all") is
+    // ALWAYS an explicit header button — the lazy-scroll sentinel only grows
+    // the in-memory slice and must never trigger a network fetch. af71e9e wired
+    // the sentinel to loadMore() once the slice was exhausted; this pins it shut.
+    mockItemsPerPage = 200; // slice already covers every loaded item
+    mockInView = false;
+    mockTruncated = true; // server has more, but only the header may pull it
+    const { rerender } = renderBrowser();
+    await screen.findByText("a.txt");
+    mockInView = true; // sentinel scrolls into view
+    rerender(browserTree());
+    expect(loadMoreMock).not.toHaveBeenCalled();
   });
 
   it("shows filter banner when searching and truncated", async () => {

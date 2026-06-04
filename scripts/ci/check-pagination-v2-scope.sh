@@ -44,6 +44,19 @@ ALLOW_PATTERNS=(
   '^frontend/src/components/FileBrowser/FileBrowser\.tsx$'
   '^frontend/src/components/FileBrowser/FileTable\.tsx$'
   '^frontend/src/components/FileBrowser/FileGrid\.tsx$'
+  # Lazy-load reveal UX iteration (surfaced during hybrid-pagination smoke):
+  # the per-row entry stagger (module.css) is capped to the first screenful via
+  # FileRow/FileCard so lazy-revealed rows render instantly instead of waiting
+  # on a runaway animation-delay.
+  '^frontend/src/components/FileBrowser/FileBrowser\.module\.css$'
+  '^frontend/src/components/FileBrowser/FileRow\.tsx$'
+  '^frontend/src/components/FileBrowser/FileCard\.tsx$'
+  # Scroll-to-top affordance for long listings + the bottom-toast positioning
+  # that keeps the toast stack clear of that button and the Settings save bar.
+  '^frontend/src/components/ScrollToTopButton/ScrollToTopButton\.tsx$'
+  '^frontend/tests/component/ScrollToTopButton\.test\.tsx$'
+  '^frontend/src/app/providers\.tsx$'
+  '^frontend/src/app/global\.css$'
   # Test setup — flush TanStack Query notifications synchronously so awaited
   # loadMore()/loadAll() state settles within act() (notifyManager batches on a
   # macrotask by default). Test-only, no production impact.

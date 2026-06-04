@@ -44,6 +44,7 @@ import { FileGrid } from "./FileGrid";
 import { FileBrowserEmptyState } from "./FileBrowserEmptyState";
 import { BulkDeleteProgress } from "@/components/FileBrowser/BulkDeleteProgress";
 import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
+import { ScrollToTopButton } from "@/components/ScrollToTopButton/ScrollToTopButton";
 
 export function FileBrowser() {
   const params = useParams<{ roleId: string; bucket: string; "*": string }>();
@@ -119,41 +120,12 @@ export function FileBrowser() {
     [searchQuery, filteredItems, visibleCount],
   );
 
-  // How much of the loaded, filtered list is rendered. Grows in-memory first;
-  // when the slice covers everything loaded AND the server has more, fetch the
-  // next chunk. One continuous mechanism (vanilla parity).
-  const hasMoreInMemory = visibleCount < filteredItems.length;
-  const canLoadMoreFromServer = !searchQuery && truncated;
-  // There's more to show if either the in-memory slice can grow or the server
-  // has more chunks. Drives whether the sentinel/footer renders at all.
-  const hasMore = hasMoreInMemory || canLoadMoreFromServer;
+  // More slices remain to reveal from memory (NOT a server fetch).
+  const hasMoreInMemory = !searchQuery && visibleCount < filteredItems.length;
 
-  // Single end-reached handler: reveal in-memory first, else pull a server chunk.
-  const handleReachEnd = useCallback(() => {
-    if (visibleCount < filteredItems.length) {
-      setVisibleCount((c) => c + itemsPerPage);
-    } else if (canLoadMoreFromServer && !isFetchingNextPage) {
-      void loadMore();
-    }
-  }, [
-    visibleCount,
-    filteredItems.length,
-    itemsPerPage,
-    canLoadMoreFromServer,
-    isFetchingNextPage,
-    loadMore,
-  ]);
-
-  // After a server continuation chunk lands, advance the slice so the newly
-  // loaded items render (they'd otherwise stay hidden behind visibleCount).
-  const wasFetchingRef = useRef(false);
-  useEffect(() => {
-    if (wasFetchingRef.current && !isFetchingNextPage) {
-      // a server fetch just finished
-      setVisibleCount((c) => c + itemsPerPage);
-    }
-    wasFetchingRef.current = isFetchingNextPage;
-  }, [isFetchingNextPage, itemsPerPage]);
+  const revealMore = useCallback(() => {
+    setVisibleCount((c) => c + itemsPerPage);
+  }, [itemsPerPage]);
 
   const navigateToFolder = (folderName: string) => {
     clearSelection();
@@ -650,7 +622,7 @@ export function FileBrowser() {
   // DelayedLoader still debounces the spinner by 500ms so a fast
   // first-time fetch never paints a flash before content lands.
   if (isFetching && items.length === 0) {
-    return <DelayedLoader label="Loading files…" delayMs={150} />;
+    return <DelayedLoader label="Loading files…" />;
   }
 
   // Stale-data + fresh-error race: TanStack Query may still hold cached `data`
@@ -725,9 +697,8 @@ export function FileBrowser() {
             onCopyUrl={handleCopyUrl}
             onPreview={handlePreview}
             onDelete={(name) => requestDelete([name])}
-            hasMore={hasMore}
-            isFetchingMore={isFetchingNextPage}
-            onReachEnd={handleReachEnd}
+            hasMoreInMemory={hasMoreInMemory}
+            onRevealMore={revealMore}
             lazyLoadingEnabled={lazyLoadingEnabled}
           />
         ) : (
@@ -743,9 +714,8 @@ export function FileBrowser() {
             bucket={bucket}
             roleId={roleId}
             path={pathFromUrl}
-            hasMore={hasMore}
-            isFetchingMore={isFetchingNextPage}
-            onReachEnd={handleReachEnd}
+            hasMoreInMemory={hasMoreInMemory}
+            onRevealMore={revealMore}
             lazyLoadingEnabled={lazyLoadingEnabled}
           />
         )}
@@ -773,6 +743,7 @@ export function FileBrowser() {
           size={previewState.size}
         />
       )}
+      <ScrollToTopButton />
     </>
   );
 }

@@ -6,6 +6,7 @@ import { useMe } from "@/features/auth/hooks/useMe";
 import { usePresignedUrl } from "@/features/files/hooks/usePresignedUrl";
 import { joinPath } from "@/utils/pathUtils";
 import { FileActions } from "./FileActions";
+import { STAGGER_ROW_LIMIT } from "./FileRow";
 import classes from "./FileBrowser.module.css";
 import type { FileEntry } from "@/types/api";
 
@@ -61,13 +62,15 @@ export function FileCard({
   const enabled = !file.is_directory && (kind === "image" || kind === "video");
   const presigned = usePresignedUrl(bucket, roleId, fullPath, enabled);
   const [mediaError, setMediaError] = useState(false);
+  // Stagger only the first screenful; later / lazy-revealed cards appear instantly.
+  const animateIn = index < STAGGER_ROW_LIMIT;
 
   return (
     <Card
-      className={classes.row}
+      className={animateIn ? `${classes.row} ${classes.animateIn}` : classes.row}
       style={
         {
-          "--row-index": index,
+          ...(animateIn ? { "--row-index": index } : {}),
           position: "relative",
           cursor: file.is_directory ? "pointer" : "default",
         } as React.CSSProperties

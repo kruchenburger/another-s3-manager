@@ -1,7 +1,15 @@
-.row {
+/* First-screen entry stagger. Applied (via JS in FileRow/FileCard) ONLY to the
+   first screenful of rows on cold load — never to lazy-revealed rows. The
+   `--row-index * 28ms` delay is why this must be capped: without the cap, a
+   lazy-revealed row at index 60 waited 1.8s at opacity 0 before fading in
+   (it looked like an empty table that "goes to the Moon" on every scroll).
+   FileRow/FileCard only set this class (and --row-index) while
+   index < STAGGER_ROW_LIMIT, so the delay can never run away and rows past the
+   first screen render instantly. */
+.animateIn {
   opacity: 0;
   animation: fadeIn 200ms ease-out forwards;
-  animation-delay: calc(var(--row-index, 0) * 30ms);
+  animation-delay: calc(var(--row-index, 0) * 28ms);
 }
 
 @keyframes fadeIn {
@@ -11,7 +19,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .row {
+  .animateIn {
     animation: none;
     opacity: 1;
   }
