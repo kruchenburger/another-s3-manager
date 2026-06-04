@@ -302,6 +302,9 @@ export function SettingsPage() {
             p="sm"
             radius={0}
             withBorder
+            // Marker for the global.css :has() rule that lifts bottom toasts
+            // above this save bar so they never overlap the Save button.
+            data-settings-save-bar
             style={{
               position: "fixed",
               left: "var(--app-shell-navbar-width, 0px)",

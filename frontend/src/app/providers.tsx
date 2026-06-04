@@ -19,6 +19,12 @@ export function AppProviders({ children }: AppProvidersProps) {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemePreviewProvider>
+        {/* Bottom toast stacks are lifted to bottom: 80px (see global.css) so
+            they clear the floating scroll-to-top button and the admin Settings
+            Save bar. The lift MUST live in CSS scoped to [data-position^="bottom"]
+            — the `style` prop is copied by Mantine onto ALL six per-position
+            root containers, so it stretched the top-* ones (top:16 + bottom:80)
+            across half the viewport, where they silently swallowed clicks. */}
         <Notifications position="bottom-right" />
         {children}
       </ThemePreviewProvider>
