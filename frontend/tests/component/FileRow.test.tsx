@@ -8,6 +8,9 @@ import type { FileEntry } from "@/types/api";
 vi.mock("@/features/auth/hooks/useMe", () => ({
   useMe: vi.fn(),
 }));
+vi.mock("@/hooks/useConfig", () => ({
+  useConfig: () => ({ data: { auto_inline_extensions: [] } }),
+}));
 
 import { useMe } from "@/features/auth/hooks/useMe";
 

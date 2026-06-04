@@ -3,6 +3,8 @@ import { File as FileIcon, Folder } from "lucide-react";
 import { formatBytes } from "@/utils/formatBytes";
 import { formatDate } from "@/utils/formatDate";
 import { useMe } from "@/features/auth/hooks/useMe";
+import { useConfig } from "@/hooks/useConfig";
+import { getPreviewType } from "@/utils/filePreview";
 import { FileActions } from "./FileActions";
 import classes from "./FileBrowser.module.css";
 import type { FileEntry } from "@/types/api";
@@ -26,9 +28,6 @@ interface FileRowProps {
   onDelete: (name: string) => void;
 }
 
-const PREVIEWABLE_RE =
-  /\.(png|jpe?g|gif|webp|svg|mp4|webm|mov|pdf|txt|json|yaml|yml|log|md)$/i;
-
 export function FileRow({
   file,
   index,
@@ -42,7 +41,10 @@ export function FileRow({
 }: FileRowProps) {
   const me = useMe();
   const disableDeletion = me.data?.disable_deletion ?? false;
-  const canPreview = !file.is_directory && PREVIEWABLE_RE.test(file.name);
+  const { data: config } = useConfig();
+  const canPreview =
+    !file.is_directory &&
+    getPreviewType(file.name, config?.auto_inline_extensions ?? []) !== null;
   // Stagger only the first screenful; later / lazy-revealed rows appear instantly.
   const animateIn = index < STAGGER_ROW_LIMIT;
 
