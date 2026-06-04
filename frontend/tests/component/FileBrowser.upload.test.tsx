@@ -23,20 +23,39 @@ const mutateAsyncMock = vi.fn();
 
 vi.mock("@/features/files/hooks/useFiles", () => ({
   useFiles: () => ({
-    data: { files: [], path: "existing/folder", total_count: 0 },
-    isLoading: false,
+    directories: [],
+    files: [],
+    truncated: false,
+    loadMore: vi.fn(),
+    loadAll: vi.fn(),
+    isFetching: false,
+    isFetchingNextPage: false,
     error: null,
   }),
   // FileBrowser invalidates the files query once at the end of a bulk
   // upload (see skipInvalidation pattern in useUpload). The mock has to
   // expose the same query-key helper the real module does, otherwise the
   // post-batch invalidateQueries call throws "No filesQueryKey export".
+  // Preserve the original shape — mocks don't trigger real invalidations,
+  // so the exact tuple ordering is irrelevant.
   filesQueryKey: (bucket: string, role: string, path: string) => [
     "files",
     bucket,
     role,
     path,
   ],
+}));
+vi.mock("@/hooks/useConfig", () => ({
+  useConfig: () => ({
+    data: {
+      items_per_page: 200,
+      enable_lazy_loading: true,
+      max_client_load: 10000,
+      max_file_size: 100 * 1024 * 1024,
+      disable_deletion: false,
+      roles: [],
+    },
+  }),
 }));
 vi.mock("@/features/files/hooks/useDelete", () => ({
   useDelete: () => ({ mutateAsync: vi.fn(), isPending: false }),

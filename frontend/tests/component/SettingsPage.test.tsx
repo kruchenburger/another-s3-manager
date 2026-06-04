@@ -26,6 +26,7 @@ const baseConfig = {
   items_per_page: 200,
   enable_lazy_loading: true,
   max_file_size: 100 * 1024 * 1024,
+  max_client_load: 10000,
   disable_deletion: false,
   auto_inline_extensions: [],
   is_read_only: false,

@@ -565,7 +565,15 @@ async def test_list_files_success(monkeypatch, reload_main):
 
     monkeypatch.setattr(main, "list_objects_for_role", _fake_helper)
 
-    result = await main.list_files("bucket", path="folder1", role=None, current_user={"is_admin": True})
+    result = await main.list_files(
+        "bucket",
+        path="folder1",
+        role=None,
+        max_keys=None,
+        continuation_token=None,
+        client_load=False,
+        current_user={"is_admin": True},
+    )
     assert result["total_count"] == 2
     assert result["path"] == "folder1"
     names = {entry["name"] for entry in result["files"]}
@@ -687,7 +695,15 @@ async def test_list_files_s3_error(monkeypatch, reload_main):
     monkeypatch.setattr(main, "list_objects_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
-        await main.list_files("bucket", path="", role=None, current_user={"is_admin": True})
+        await main.list_files(
+            "bucket",
+            path="",
+            role=None,
+            max_keys=None,
+            continuation_token=None,
+            client_load=False,
+            current_user={"is_admin": True},
+        )
     assert exc.value.status_code == 404
 
 

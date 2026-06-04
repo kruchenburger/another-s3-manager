@@ -70,6 +70,9 @@ def _migrate_config() -> bool:
     if "max_file_size" not in _config_cache:
         _config_cache["max_file_size"] = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
         config_modified = True
+    if "max_client_load" not in _config_cache:
+        _config_cache["max_client_load"] = int(os.getenv("MAX_CLIENT_LOAD", "10000"))
+        config_modified = True
     if "auto_inline_extensions" not in _config_cache:
         _config_cache["auto_inline_extensions"] = []
         config_modified = True
@@ -111,13 +114,18 @@ def _migrate_config() -> bool:
 
 def _get_default_config() -> Dict[str, Any]:
     """Get default configuration."""
-    from another_s3_manager.constants import DEFAULT_ITEMS_PER_PAGE, DEFAULT_MAX_FILE_SIZE
+    from another_s3_manager.constants import (
+        DEFAULT_ITEMS_PER_PAGE,
+        DEFAULT_MAX_CLIENT_LOAD,
+        DEFAULT_MAX_FILE_SIZE,
+    )
 
     return {
         "roles": [{"name": "Default", "type": "default", "description": "Use default AWS credentials"}],
         "items_per_page": int(os.getenv("ITEMS_PER_PAGE", str(DEFAULT_ITEMS_PER_PAGE))),
         "enable_lazy_loading": os.getenv("ENABLE_LAZY_LOADING", "true").lower() == "true",
         "max_file_size": int(os.getenv("MAX_FILE_SIZE", str(DEFAULT_MAX_FILE_SIZE))),
+        "max_client_load": int(os.getenv("MAX_CLIENT_LOAD", str(DEFAULT_MAX_CLIENT_LOAD))),
         "disable_deletion": False,
         "auto_inline_extensions": [],
         "password_min_length": 8,

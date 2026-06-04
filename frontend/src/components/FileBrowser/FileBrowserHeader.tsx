@@ -19,15 +19,16 @@ interface FileBrowserHeaderProps {
   onUploadFolderClick: () => void;
   /** When true, bulk Delete is rendered disabled with a config-aware tooltip. */
   disableDeletion?: boolean;
-  /**
-   * Optional total object count (files + folders) loaded for the current
-   * prefix. Renders a dimmed label next to the filter input. Omit to hide.
-   */
-  objectCount?: number;
-}
-
-function formatObjectCount(n: number): string {
-  return n === 1 ? "1 object" : `${n} objects`;
+  /** Total object count (files + folders) currently loaded for this prefix. */
+  objectCount: number;
+  /** S3 has more objects beyond the loaded set — show "N+" and continuation controls. */
+  truncated: boolean;
+  /** Server continuation fetch in flight (loadMore/loadAll). */
+  isLoadingMore: boolean;
+  /** Fetch the next chunk of objects from the server. */
+  onLoadMore: () => void;
+  /** Drain all remaining chunks from the server. */
+  onLoadAll: () => void;
 }
 
 export function FileBrowserHeader({
@@ -45,6 +46,10 @@ export function FileBrowserHeader({
   onUploadFolderClick,
   disableDeletion = false,
   objectCount,
+  truncated,
+  isLoadingMore,
+  onLoadMore,
+  onLoadAll,
 }: FileBrowserHeaderProps) {
   return (
     <Group justify="space-between" mb="md" wrap="wrap" gap="sm">
@@ -58,11 +63,39 @@ export function FileBrowserHeader({
           size="sm"
           style={{ minWidth: 200 }}
         />
-        {typeof objectCount === "number" && (
+        <Group gap="xs" align="center" wrap="nowrap">
           <Text size="sm" c="dimmed">
-            {formatObjectCount(objectCount)}
+            {truncated
+              ? `${objectCount}+ objects`
+              : `${objectCount} object${objectCount === 1 ? "" : "s"}`}
           </Text>
-        )}
+          {truncated && (
+            <>
+              <Button
+                size="xs"
+                variant="light"
+                onClick={onLoadMore}
+                loading={isLoadingMore}
+                // Mantine's `loading` shows a spinner but does NOT block clicks
+                // — without `disabled`, a double-click fires two concurrent
+                // fetchNextPage calls and appends duplicate pages (same
+                // double-submit guard as the Settings Save bar, PR #24/#37).
+                disabled={isLoadingMore}
+              >
+                Load more
+              </Button>
+              <Button
+                size="xs"
+                variant="subtle"
+                onClick={onLoadAll}
+                loading={isLoadingMore}
+                disabled={isLoadingMore}
+              >
+                Load all
+              </Button>
+            </>
+          )}
+        </Group>
         <SegmentedControl
           value={mode}
           onChange={(v) => onModeChange(v as DisplayMode)}

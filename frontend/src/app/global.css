@@ -109,3 +109,23 @@ input:-webkit-autofill:focus {
     animation-duration: 0ms !important;
   }
 }
+
+/* Bottom toast stacks normally sit in the corner. Lift them to clear a
+   bottom-anchored element ONLY while one is actually on screen — the floating
+   scroll-to-top button (in the DOM only while scrolled past its threshold) or
+   the admin Settings save bar (present only on that page in edit mode). The
+   `:has()` checks read their presence with zero JS state; the transition keeps
+   the shift smooth.
+
+   Scoped to the bottom-* position containers only: Mantine renders one
+   Notifications root per position, and raising the top-* ones (which keep
+   top: 16px) would stretch them across ~half the viewport, where they would
+   intercept clicks. */
+.mantine-Notifications-root[data-position^="bottom"] {
+  transition: bottom 200ms ease;
+}
+body:has([data-scroll-to-top]) .mantine-Notifications-root[data-position^="bottom"],
+body:has([data-settings-save-bar])
+  .mantine-Notifications-root[data-position^="bottom"] {
+  bottom: 80px;
+}

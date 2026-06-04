@@ -33,6 +33,7 @@ const MB = 1024 * 1024;
  *  split components. */
 export interface SettingsFormValues {
   items_per_page: number;
+  max_client_load: number;
   disable_deletion: boolean;
   enable_lazy_loading: boolean;
   max_file_size_mb: number;
@@ -70,6 +71,7 @@ export function SettingsPage() {
   const form = useForm<SettingsFormValues>({
     initialValues: {
       items_per_page: 200,
+      max_client_load: 10000,
       disable_deletion: false,
       enable_lazy_loading: true,
       max_file_size_mb: 100,
@@ -98,6 +100,11 @@ export function SettingsPage() {
           return "Maximum is 1000 — S3 lists at most 1000 keys per request";
         return null;
       },
+      max_client_load: (value) => {
+        if (value < 1) return "Minimum is 1";
+        if (value > 200000) return "Maximum is 200000";
+        return null;
+      },
     },
   });
 
@@ -113,6 +120,7 @@ export function SettingsPage() {
     if (form.isDirty()) return;
     const populated: SettingsFormValues = {
       items_per_page: config.items_per_page,
+      max_client_load: config.max_client_load,
       disable_deletion: config.disable_deletion,
       enable_lazy_loading: config.enable_lazy_loading,
       max_file_size_mb: Math.round(config.max_file_size / MB),
@@ -188,6 +196,7 @@ export function SettingsPage() {
     const next: AppConfig = {
       ...toWritableConfig(config),
       items_per_page: values.items_per_page,
+      max_client_load: values.max_client_load,
       disable_deletion: values.disable_deletion,
       enable_lazy_loading: values.enable_lazy_loading,
       // Preserve original byte precision when the user didn't touch the MB field
@@ -293,6 +302,9 @@ export function SettingsPage() {
             p="sm"
             radius={0}
             withBorder
+            // Marker for the global.css :has() rule that lifts bottom toasts
+            // above this save bar so they never overlap the Save button.
+            data-settings-save-bar
             style={{
               position: "fixed",
               left: "var(--app-shell-navbar-width, 0px)",

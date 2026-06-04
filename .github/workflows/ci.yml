@@ -29,6 +29,9 @@ jobs:
       - name: Check Phase 6b file-scope guard
         if: github.head_ref == 'feat/phase-6b-visual-refresh'
         run: bash scripts/ci/check-phase-6b-scope.sh origin/release/1.0.0
+      - name: Check pagination-v2 file-scope guard
+        if: github.head_ref == 'feat/pagination-v2'
+        run: bash scripts/ci/check-pagination-v2-scope.sh origin/release/1.0.0
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -127,6 +130,7 @@ jobs:
               }
             ],
             "items_per_page": 200,
+            "max_client_load": 50,
             "enable_lazy_loading": true,
             "max_file_size": 104857600,
             "disable_deletion": false,

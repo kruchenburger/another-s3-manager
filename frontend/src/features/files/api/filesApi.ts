@@ -1,17 +1,34 @@
 import { apiRequest } from "@/hooks/useApiClient";
 import { ApiError } from "@/utils/apiError";
 import { getCsrfToken } from "@/utils/csrf";
-import type { BucketList, FileListResponse } from "@/types/api";
+import type { BucketList, ClientLoadPage } from "@/types/api";
 
 export async function listBuckets(role: string): Promise<BucketList> {
   const params = new URLSearchParams({ role });
   return apiRequest<BucketList>(`/api/buckets?${params}`);
 }
 
-export async function listFiles(bucket: string, role: string, path: string): Promise<FileListResponse> {
+// Client-load fetch — the backend aggregates S3 pages up to max_client_load
+// (or `maxKeys` if given) and returns {directories, files, truncated,
+// next_token}. The /v2 UI holds the result in memory and paginates client-side.
+// Vanilla UI + MCP hit the legacy backend code path (no client_load) and don't
+// go through here.
+export async function listFiles(
+  bucket: string,
+  role: string,
+  path: string,
+  opts: { maxKeys?: number; continuationToken?: string } = {},
+): Promise<ClientLoadPage> {
   const params = new URLSearchParams({ role });
   if (path) params.set("path", path);
-  return apiRequest<FileListResponse>(`/api/buckets/${encodeURIComponent(bucket)}/files?${params}`);
+  params.set("client_load", "1");
+  if (opts.maxKeys != null) params.set("max_keys", String(opts.maxKeys));
+  if (opts.continuationToken) {
+    params.set("continuation_token", opts.continuationToken);
+  }
+  return apiRequest<ClientLoadPage>(
+    `/api/buckets/${encodeURIComponent(bucket)}/files?${params}`,
+  );
 }
 
 export interface UploadFileOptions {

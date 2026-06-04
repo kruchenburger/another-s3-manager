@@ -26,5 +26,19 @@ mc cp --recursive /fixtures/ "local/$BUCKET/"
 echo "special chars regression fixture" > /tmp/special-temp.txt
 mc cp /tmp/special-temp.txt "local/$BUCKET/test:colon#hash?question.txt"
 
+# Pagination fixtures: 250 small objects so the /v2 file browser crosses a
+# page boundary (items_per_page=200 in the e2e config → page 1 = 200, page 2 =
+# remaining 50). Guarded for idempotency: skip if the last object already exists.
+if ! mc stat "local/$BUCKET/pagination/file-250.txt" >/dev/null 2>&1; then
+  mkdir -p /tmp/pagination
+  i=1
+  while [ "$i" -le 250 ]; do
+    idx=$(printf "%03d" "$i")
+    echo "seed-$idx" > "/tmp/pagination/file-$idx.txt"
+    i=$((i + 1))
+  done
+  mc cp --recursive /tmp/pagination/ "local/$BUCKET/pagination/"
+fi
+
 echo "Seed complete:"
 mc ls "local/$BUCKET"

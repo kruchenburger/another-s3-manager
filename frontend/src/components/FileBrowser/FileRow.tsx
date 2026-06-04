@@ -7,6 +7,12 @@ import { FileActions } from "./FileActions";
 import classes from "./FileBrowser.module.css";
 import type { FileEntry } from "@/types/api";
 
+// Only the first screenful of rows plays the staggered fade-in entry (cold-load
+// delight). Rows past this — the tail of a large first page AND every
+// lazy-revealed row — render instantly, so scrolling never waits on a per-row
+// animation delay. Shared with FileCard (grid) so table and grid match.
+export const STAGGER_ROW_LIMIT = 16;
+
 interface FileRowProps {
   file: FileEntry;
   index: number;
@@ -37,11 +43,15 @@ export function FileRow({
   const me = useMe();
   const disableDeletion = me.data?.disable_deletion ?? false;
   const canPreview = !file.is_directory && PREVIEWABLE_RE.test(file.name);
+  // Stagger only the first screenful; later / lazy-revealed rows appear instantly.
+  const animateIn = index < STAGGER_ROW_LIMIT;
 
   return (
     <Table.Tr
-      className={classes.row}
-      style={{ "--row-index": index } as React.CSSProperties}
+      className={animateIn ? `${classes.row} ${classes.animateIn}` : classes.row}
+      style={
+        animateIn ? ({ "--row-index": index } as React.CSSProperties) : undefined
+      }
       onDoubleClick={() => file.is_directory && onNavigate(file.name)}
     >
       <Table.Td>
