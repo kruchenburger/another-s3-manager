@@ -1,4 +1,6 @@
 import { Modal } from "@mantine/core";
+import { useConfig } from "@/hooks/useConfig";
+import { getPreviewType } from "@/utils/filePreview";
 import { ImagePreview } from "./ImagePreview";
 import { VideoPreview } from "./VideoPreview";
 import { PdfPreview } from "./PdfPreview";
@@ -12,17 +14,9 @@ interface PreviewModalProps {
   size: number;
 }
 
-function detectType(filename: string): "image" | "video" | "pdf" | "text" | null {
-  const ext = filename.toLowerCase().split(".").pop() ?? "";
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "image";
-  if (["mp4", "webm", "mov"].includes(ext)) return "video";
-  if (ext === "pdf") return "pdf";
-  if (["txt", "json", "yaml", "yml", "log", "md"].includes(ext)) return "text";
-  return null;
-}
-
 export function PreviewModal({ opened, onClose, filename, url, size }: PreviewModalProps) {
-  const type = detectType(filename);
+  const { data: config } = useConfig();
+  const type = getPreviewType(filename, config?.auto_inline_extensions ?? []);
 
   return (
     <Modal opened={opened} onClose={onClose} title={filename} size="xl" centered>
