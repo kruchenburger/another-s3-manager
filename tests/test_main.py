@@ -2071,3 +2071,30 @@ def test_get_config_exposes_auto_inline_extensions_for_non_admin(app_client):
     response_with_roles = app_client.get("/api/config")
     assert response_with_roles.status_code == 200
     assert response_with_roles.json()["auto_inline_extensions"] == ["ts", "tsx"]
+
+
+def test_clearing_inline_preview_list_persists_across_reload(app_client):
+    """End-to-end: admin clears the inline-preview list to [] via POST /api/config;
+    the one-time seed marker must survive the save so a subsequent reload (a
+    restart) does NOT re-seed the defaults — the empty list sticks."""
+    import another_s3_manager.config as config_module
+
+    # Start from a seeded config (defaults present, marker set).
+    seeded = config_module.load_config(force_reload=True)
+    assert seeded.get("_auto_inline_seeded") is True
+    assert seeded["auto_inline_extensions"]  # defaults were seeded in
+
+    _, headers = login(app_client)
+    # The frontend sends the writable fields (not the internal seed marker).
+    resp = app_client.post(
+        "/api/config",
+        json={"roles": seeded.get("roles", []), "auto_inline_extensions": []},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.json()
+
+    # Reload as if the app restarted: the cleared list must stick (no re-seed),
+    # and the marker must still be present (preserved through update_config).
+    reloaded = config_module.load_config(force_reload=True)
+    assert reloaded["auto_inline_extensions"] == []
+    assert reloaded.get("_auto_inline_seeded") is True
