@@ -47,8 +47,8 @@ export function SettingsGeneralTab({ form, readOnly }: SettingsGeneralTabProps) 
         {...form.getInputProps("max_file_size_mb")}
       />
       <TagsInput
-        label="Additional preview extensions"
-        description="Extra extensions to preview inline, on top of the always-on built-in text types (txt, md, json, yaml, yml, log, csv). Add things like ts, conf, ini — adding here never hides the built-ins. Images, video and PDF always preview."
+        label="Inline preview extensions"
+        description="Files with these extensions preview inline. Pre-filled with sensible text defaults — add, remove, or clear them all to disable text preview entirely. Images, video and PDF always preview regardless."
         disabled={readOnly}
         {...form.getInputProps("auto_inline_extensions")}
       />

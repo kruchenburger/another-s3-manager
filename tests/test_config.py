@@ -51,6 +51,35 @@ def test_migrate_config_adds_missing_fields(tmp_path):
     assert "max_file_size" in data
 
 
+def test_migrate_config_seeds_auto_inline_defaults(tmp_path):
+    """A legacy config (no auto_inline field, no seed marker) gets the text
+    defaults seeded once, with the marker set so it never re-seeds."""
+    from another_s3_manager.constants import DEFAULT_AUTO_INLINE_EXTENSIONS
+
+    config = reload_config()
+    config.CONFIG_FILE = Path(os.environ["S3_FILE_MANAGER_CONFIG"])
+    config.CONFIG_FILE.write_text(json.dumps({"roles": []}))
+    config._config_cache = {}
+    config._config_mtime = 0
+
+    data = config.load_config(force_reload=True)
+    assert data["auto_inline_extensions"] == list(DEFAULT_AUTO_INLINE_EXTENSIONS)
+    assert data["_auto_inline_seeded"] is True
+
+
+def test_migrate_config_does_not_reseed_a_cleared_list(tmp_path):
+    """Once seeded, an admin's intentional clear to [] must persist — migration
+    must NOT re-seed defaults over it."""
+    config = reload_config()
+    config.CONFIG_FILE = Path(os.environ["S3_FILE_MANAGER_CONFIG"])
+    config.CONFIG_FILE.write_text(json.dumps({"roles": [], "auto_inline_extensions": [], "_auto_inline_seeded": True}))
+    config._config_cache = {}
+    config._config_mtime = 0
+
+    data = config.load_config(force_reload=True)
+    assert data["auto_inline_extensions"] == []
+
+
 def test_get_default_config_respects_env(monkeypatch):
     monkeypatch.setenv("ITEMS_PER_PAGE", "50")
     monkeypatch.setenv("MAX_FILE_SIZE", str(10 * 1024 * 1024))

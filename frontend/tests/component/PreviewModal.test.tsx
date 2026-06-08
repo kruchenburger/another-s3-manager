@@ -61,17 +61,18 @@ describe("PreviewModal — type routing via auto_inline_extensions", () => {
     expect(screen.queryByTestId("pdf-preview")).not.toBeInTheDocument();
   });
 
-  it(".md still renders text preview with a custom admin list (defaults always on)", () => {
+  it("an extension not in the list shows the unsupported fallback", () => {
+    // .md is not in ["ts"] -> not previewable (the list is the single source).
     renderModal("readme.md", ["ts"]);
-    expect(screen.getByTestId("text-preview")).toBeInTheDocument();
-  });
-
-  it("an extension in neither the defaults nor the admin list shows the unsupported fallback", () => {
-    renderModal("archive.bin", ["ts"]);
     expect(screen.queryByTestId("text-preview")).not.toBeInTheDocument();
     expect(
       screen.getByText(/This file type cannot be previewed/),
     ).toBeInTheDocument();
+  });
+
+  it(".txt renders text preview when txt is in the list", () => {
+    renderModal("notes.txt", ["txt", "md"]);
+    expect(screen.getByTestId("text-preview")).toBeInTheDocument();
   });
 
   it(".png with auto_inline_extensions=['ts'] renders image preview (media always wins)", () => {

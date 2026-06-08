@@ -1473,6 +1473,13 @@ async def update_config(
             else:
                 config["auto_inline_extensions"] = []
 
+        # Preserve the one-time auto-inline seed marker across saves — the frontend
+        # never sends it, so without this it would be dropped and _migrate_config
+        # would re-seed defaults on next startup, undoing an admin's intentional
+        # clear of the list.
+        if load_config(force_reload=False).get("_auto_inline_seeded"):
+            config["_auto_inline_seeded"] = True
+
         # Password policy fields: validate range when provided, preserve when omitted.
         for field in (
             "password_min_length",

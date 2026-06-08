@@ -92,6 +92,11 @@ DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
 DEFAULT_ITEMS_PER_PAGE = 200
 DEFAULT_MAX_CLIENT_LOAD = 10000
 
+# Text extensions seeded into config.auto_inline_extensions for new/legacy
+# configs. The /v2 preview UI treats this list as the single source of truth for
+# which files preview inline as text — it is admin-editable (add / remove / clear).
+DEFAULT_AUTO_INLINE_EXTENSIONS = ["txt", "md", "json", "yaml", "yml", "log", "csv"]
+
 # S3 settings
 S3_USE_SSL = True
 S3_VERIFY_SSL = True
