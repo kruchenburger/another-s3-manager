@@ -47,8 +47,8 @@ export function SettingsGeneralTab({ form, readOnly }: SettingsGeneralTabProps) 
         {...form.getInputProps("max_file_size_mb")}
       />
       <TagsInput
-        label="Auto-inline extensions"
-        description="Files with these extensions render inline in the preview modal. e.g. txt, md, json"
+        label="Inline preview extensions"
+        description="Files with these extensions preview inline. Pre-filled with sensible text defaults — add, remove, or clear them all to disable text preview entirely. Images, video and PDF always preview regardless."
         disabled={readOnly}
         {...form.getInputProps("auto_inline_extensions")}
       />

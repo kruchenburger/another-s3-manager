@@ -1312,6 +1312,7 @@ async def get_config(
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
             "max_client_load": max_client_load,
+            "auto_inline_extensions": config.get("auto_inline_extensions", []),
         }
 
     # Filter roles and sanitize
@@ -1329,6 +1330,7 @@ async def get_config(
         "enable_lazy_loading": enable_lazy_loading,
         "max_file_size": max_file_size,
         "max_client_load": max_client_load,
+        "auto_inline_extensions": config.get("auto_inline_extensions", []),
     }
 
 
@@ -1470,6 +1472,13 @@ async def update_config(
                 config["auto_inline_extensions"] = current_config["auto_inline_extensions"]
             else:
                 config["auto_inline_extensions"] = []
+
+        # Preserve the one-time auto-inline seed marker across saves — the frontend
+        # never sends it, so without this it would be dropped and _migrate_config
+        # would re-seed defaults on next startup, undoing an admin's intentional
+        # clear of the list.
+        if load_config(force_reload=False).get("_auto_inline_seeded"):
+            config["_auto_inline_seeded"] = True
 
         # Password policy fields: validate range when provided, preserve when omitted.
         for field in (

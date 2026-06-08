@@ -73,8 +73,19 @@ def _migrate_config() -> bool:
     if "max_client_load" not in _config_cache:
         _config_cache["max_client_load"] = int(os.getenv("MAX_CLIENT_LOAD", "10000"))
         config_modified = True
-    if "auto_inline_extensions" not in _config_cache:
-        _config_cache["auto_inline_extensions"] = []
+    # auto_inline_extensions: the /v2 preview UI treats this list as the single
+    # source of truth for which files preview inline as text. Seed it with the
+    # built-in text defaults the FIRST time a config is migrated — this covers
+    # fresh installs and legacy configs whose field was an inert []. The one-time
+    # `_auto_inline_seeded` marker (preserved across saves in update_config) means
+    # we never re-seed, so an admin who deliberately clears the list to [] keeps
+    # it empty.
+    if not _config_cache.get("_auto_inline_seeded"):
+        from another_s3_manager.constants import DEFAULT_AUTO_INLINE_EXTENSIONS
+
+        if not _config_cache.get("auto_inline_extensions"):
+            _config_cache["auto_inline_extensions"] = list(DEFAULT_AUTO_INLINE_EXTENSIONS)
+        _config_cache["_auto_inline_seeded"] = True
         config_modified = True
     # Password policy defaults — added Phase 4d. Conservative baseline:
     # require length+uppercase+lowercase+digit, leave special opt-in.
@@ -115,6 +126,7 @@ def _migrate_config() -> bool:
 def _get_default_config() -> Dict[str, Any]:
     """Get default configuration."""
     from another_s3_manager.constants import (
+        DEFAULT_AUTO_INLINE_EXTENSIONS,
         DEFAULT_ITEMS_PER_PAGE,
         DEFAULT_MAX_CLIENT_LOAD,
         DEFAULT_MAX_FILE_SIZE,
@@ -127,7 +139,9 @@ def _get_default_config() -> Dict[str, Any]:
         "max_file_size": int(os.getenv("MAX_FILE_SIZE", str(DEFAULT_MAX_FILE_SIZE))),
         "max_client_load": int(os.getenv("MAX_CLIENT_LOAD", str(DEFAULT_MAX_CLIENT_LOAD))),
         "disable_deletion": False,
-        "auto_inline_extensions": [],
+        # Seeded with the text defaults; admin-owned thereafter (see migration).
+        "auto_inline_extensions": list(DEFAULT_AUTO_INLINE_EXTENSIONS),
+        "_auto_inline_seeded": True,
         "password_min_length": 8,
         "password_min_uppercase": 1,
         "password_min_lowercase": 1,

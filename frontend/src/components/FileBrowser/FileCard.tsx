@@ -3,6 +3,8 @@ import { Card, Checkbox, Group, Text } from "@mantine/core";
 import { File as FileIcon, Folder } from "lucide-react";
 import { formatBytes } from "@/utils/formatBytes";
 import { useMe } from "@/features/auth/hooks/useMe";
+import { useConfig } from "@/hooks/useConfig";
+import { getPreviewType } from "@/utils/filePreview";
 import { usePresignedUrl } from "@/features/files/hooks/usePresignedUrl";
 import { joinPath } from "@/utils/pathUtils";
 import { FileActions } from "./FileActions";
@@ -10,8 +12,8 @@ import { STAGGER_ROW_LIMIT } from "./FileRow";
 import classes from "./FileBrowser.module.css";
 import type { FileEntry } from "@/types/api";
 
-const PREVIEWABLE_RE =
-  /\.(png|jpe?g|gif|webp|svg|mp4|webm|mov|pdf|txt|json|yaml|yml|log|md)$/i;
+// IMAGE_RE and VIDEO_RE drive the grid thumbnail (presigned <img>/<video>),
+// which is a SEPARATE concern from the eye-icon preview button.
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg)$/i;
 const VIDEO_RE = /\.(mp4|webm|mov)$/i;
 
@@ -56,7 +58,10 @@ export function FileCard({
 }: FileCardProps) {
   const me = useMe();
   const disableDeletion = me.data?.disable_deletion ?? false;
-  const canPreview = !file.is_directory && PREVIEWABLE_RE.test(file.name);
+  const { data: config } = useConfig();
+  const canPreview =
+    !file.is_directory &&
+    getPreviewType(file.name, config?.auto_inline_extensions ?? []) !== null;
   const kind = file.is_directory ? "other" : categorizePreview(file.name);
   const fullPath = joinPath(path, file.name);
   const enabled = !file.is_directory && (kind === "image" || kind === "video");
