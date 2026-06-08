@@ -61,10 +61,14 @@ describe("PreviewModal — type routing via auto_inline_extensions", () => {
     expect(screen.queryByTestId("pdf-preview")).not.toBeInTheDocument();
   });
 
-  it(".md with auto_inline_extensions=['ts'] shows unsupported fallback (not text preview)", () => {
+  it(".md still renders text preview with a custom admin list (defaults always on)", () => {
     renderModal("readme.md", ["ts"]);
+    expect(screen.getByTestId("text-preview")).toBeInTheDocument();
+  });
+
+  it("an extension in neither the defaults nor the admin list shows the unsupported fallback", () => {
+    renderModal("archive.bin", ["ts"]);
     expect(screen.queryByTestId("text-preview")).not.toBeInTheDocument();
-    // The component's actual fallback text:
     expect(
       screen.getByText(/This file type cannot be previewed/),
     ).toBeInTheDocument();

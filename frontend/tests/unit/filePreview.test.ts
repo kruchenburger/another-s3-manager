@@ -9,16 +9,22 @@ describe("getPreviewType", () => {
     expect(getPreviewType("a.pdf", [])).toBe("pdf");
   });
 
-  it("falls back to default text extensions when the admin list is empty", () => {
+  it("previews the built-in default text extensions (empty admin list)", () => {
     expect(getPreviewType("a.txt", [])).toBe("text");
     expect(getPreviewType("a.md", [])).toBe("text");
     expect(getPreviewType("a.json", [])).toBe("text");
   });
 
-  it("uses the admin list for text when it is non-empty", () => {
+  it("admin list ADDS to the defaults rather than replacing them (union)", () => {
+    // Admin custom extensions become previewable...
     expect(getPreviewType("a.ts", ["ts", "tsx"])).toBe("text");
     expect(getPreviewType("a.tsx", ["ts", "tsx"])).toBe("text");
-    expect(getPreviewType("a.md", ["ts", "tsx"])).toBe(null);
+    // ...and the built-in defaults STAY previewable even with a non-empty list
+    // (the old "replace" behaviour hid them — bad UX).
+    expect(getPreviewType("a.md", ["ts", "tsx"])).toBe("text");
+    expect(getPreviewType("a.txt", ["ts", "tsx"])).toBe("text");
+    // Still null for something in neither set.
+    expect(getPreviewType("a.bin", ["ts", "tsx"])).toBe(null);
   });
 
   it("media always wins even when the admin list is non-empty", () => {
