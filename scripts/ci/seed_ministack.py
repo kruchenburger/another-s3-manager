@@ -121,6 +121,8 @@ def roles(endpoint_for_app, key):
             "access_key_id": key["AccessKeyId"],
             "secret_access_key": key["SecretAccessKey"],
             "endpoint_url": endpoint_for_app,
+            # FORBIDDEN is listed (app-allowed) but no test browses it: with IAM
+            # unenforced there is no deny to assert, so it is unused-by-design.
             "allowed_buckets": [ALLOWED, FORBIDDEN],
         },
     ]
