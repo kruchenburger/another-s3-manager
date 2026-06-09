@@ -40,5 +40,21 @@ if ! mc stat "local/$BUCKET/pagination/file-250.txt" >/dev/null 2>&1; then
   mc cp --recursive /tmp/pagination/ "local/$BUCKET/pagination/"
 fi
 
+# Virtualization fixtures: 10000 small objects so the /v2 file browser exercises
+# list virtualization (constant DOM while scrolling) and auto-loadMore across
+# many server chunks (max_client_load=50 in the e2e config). Idempotent: skip if
+# the last object already exists. mc cp --recursive uploads the whole dir in one
+# call (fast enough for CI; the loop generates empty files locally first).
+if ! mc stat "local/$BUCKET/virtualization/vfile-10000.txt" >/dev/null 2>&1; then
+  mkdir -p /tmp/virtualization
+  i=1
+  while [ "$i" -le 10000 ]; do
+    idx=$(printf "%05d" "$i")
+    echo "v-$idx" > "/tmp/virtualization/vfile-$idx.txt"
+    i=$((i + 1))
+  done
+  mc cp --recursive /tmp/virtualization/ "local/$BUCKET/virtualization/"
+fi
+
 echo "Seed complete:"
 mc ls "local/$BUCKET"
