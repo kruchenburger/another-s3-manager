@@ -1,56 +1,58 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
+import { useRef } from "react";
 import { vi, describe, it, expect, beforeEach } from "vitest";
-
-// useWindowScroll drives both visibility (scroll.y) and the scroll-to-top
-// action. Mock it so the test controls the scroll position deterministically;
-// keep every other @mantine/hooks export real (Mantine core consumes some).
-const scrollToMock = vi.fn();
-let mockScrollY = 0;
-vi.mock("@mantine/hooks", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mantine/hooks")>();
-  return {
-    ...actual,
-    useWindowScroll: () => [{ x: 0, y: mockScrollY }, scrollToMock] as const,
-  };
-});
-
 import { ScrollToTopButton } from "@/components/ScrollToTopButton/ScrollToTopButton";
 
-function renderButton() {
-  return render(
+// A harness that owns a scrollable div and passes its ref to the button, the
+// same way FileBrowser will.
+function Harness({ scrollTop }: { scrollTop: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Reflect the desired scrollTop onto the element once mounted.
+  if (ref.current) ref.current.scrollTop = scrollTop;
+  return (
     <MantineProvider>
-      <ScrollToTopButton />
-    </MantineProvider>,
+      <div ref={ref} data-testid="scroll" style={{ height: 100, overflow: "auto" }}>
+        <div style={{ height: 2000 }} />
+      </div>
+      <ScrollToTopButton scrollRef={ref} />
+    </MantineProvider>
   );
 }
 
 describe("ScrollToTopButton", () => {
   beforeEach(() => {
-    scrollToMock.mockReset();
-    mockScrollY = 0;
+    // jsdom doesn't implement scrollTo on elements; stub it so the click handler
+    // can call it without throwing.
+    Element.prototype.scrollTo = vi.fn() as unknown as typeof Element.prototype.scrollTo;
   });
 
-  it("is hidden at the top of the page", () => {
-    mockScrollY = 0;
-    renderButton();
+  it("is hidden at the top of the container", () => {
+    render(<Harness scrollTop={0} />);
+    // Manually dispatch a scroll event so the listener reads scrollTop=0.
+    fireEvent.scroll(screen.getByTestId("scroll"));
     expect(
       screen.queryByRole("button", { name: /scroll to top/i }),
     ).not.toBeInTheDocument();
   });
 
-  it("appears after scrolling past the threshold", () => {
-    mockScrollY = 500;
-    renderButton();
+  it("appears after scrolling the container past the threshold", async () => {
+    render(<Harness scrollTop={500} />);
+    const el = screen.getByTestId("scroll");
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
     expect(
-      screen.getByRole("button", { name: /scroll to top/i }),
+      await screen.findByRole("button", { name: /scroll to top/i }),
     ).toBeInTheDocument();
   });
 
-  it("scrolls back to the top on click", () => {
-    mockScrollY = 500;
-    renderButton();
-    fireEvent.click(screen.getByRole("button", { name: /scroll to top/i }));
-    expect(scrollToMock).toHaveBeenCalledWith({ y: 0 });
+  it("scrolls the container back to the top on click", async () => {
+    render(<Harness scrollTop={500} />);
+    const el = screen.getByTestId("scroll");
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+    const btn = await screen.findByRole("button", { name: /scroll to top/i });
+    fireEvent.click(btn);
+    expect(el.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: "smooth" });
   });
 });

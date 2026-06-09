@@ -1,28 +1,37 @@
+import { useEffect, useState, type RefObject } from "react";
 import { Affix, ActionIcon, Transition } from "@mantine/core";
-import { useWindowScroll } from "@mantine/hooks";
 import { ArrowUp } from "lucide-react";
 
-// Reveal the button once the user has scrolled ~half a viewport down — far
-// enough that "back to top" is actually useful, close enough that it shows up
-// before the user is deep into a long listing.
+// Reveal the button once the user has scrolled ~half a viewport down the list.
 const SCROLL_THRESHOLD = 400;
 
+interface ScrollToTopButtonProps {
+  /** The internal scroll container to observe and jump to top. */
+  scrollRef: RefObject<HTMLDivElement | null>;
+}
+
 /**
- * Floating "scroll to top" affordance for long file listings.
- *
- * The file browser scrolls the document (window-level), so visibility and the
- * jump-to-top action both ride on `useWindowScroll`. The Affix sits in the very
- * bottom-right corner; the global toast / upload-progress zone is lifted above
- * it (see `Notifications` in app/providers.tsx) so the two never overlap. A
- * slide-up Transition keeps the entrance/exit smooth, and `prefers-reduced-
- * motion` users get an instant jump because Mantine's scrollTo respects it.
+ * Floating "scroll to top" affordance for the FileBrowser's internal scroll
+ * container. Tracks `scrollRef.current.scrollTop` (the file list scrolls inside
+ * its own bounded element, not the window) and jumps that element to the top.
+ * The `data-scroll-to-top` marker drives the global.css :has() rule that lifts
+ * bottom toasts above the button while it is on screen.
  */
-export function ScrollToTopButton() {
-  const [scroll, scrollTo] = useWindowScroll();
+export function ScrollToTopButton({ scrollRef }: ScrollToTopButtonProps) {
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => setScrolled(el.scrollTop > SCROLL_THRESHOLD);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll(); // initialise in case the list is already scrolled
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [scrollRef]);
 
   return (
     <Affix position={{ bottom: 20, right: 20 }}>
-      <Transition transition="slide-up" mounted={scroll.y > SCROLL_THRESHOLD}>
+      <Transition transition="slide-up" mounted={scrolled}>
         {(styles) => (
           <ActionIcon
             style={styles}
@@ -30,10 +39,10 @@ export function ScrollToTopButton() {
             radius="xl"
             variant="filled"
             aria-label="Scroll to top"
-            // Marker for the global.css :has() rule that lifts bottom toasts
-            // above this button only while it is on screen.
             data-scroll-to-top
-            onClick={() => scrollTo({ y: 0 })}
+            onClick={() =>
+              scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })
+            }
           >
             <ArrowUp size={20} />
           </ActionIcon>
