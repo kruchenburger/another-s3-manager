@@ -99,3 +99,26 @@
   z-index: 2;
   background: var(--mantine-color-body);
 }
+
+/* Fixed-height app-chrome layout (vanilla .file-list-container parity): the
+   toolbar stays pinned while only the list scrolls. Height fills the viewport
+   remainder below the 60px AppShell header, minus the AppShell.Main md padding
+   top+bottom. dvh keeps it correct on mobile browser chrome. */
+.container {
+  display: flex;
+  flex-direction: column;
+  height: calc(
+    100dvh - var(--app-shell-header-height, 60px) - 2 * var(--mantine-spacing-md)
+  );
+}
+
+.toolbar {
+  flex: 0 0 auto;
+}
+
+.scrollArea {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+}
