@@ -194,6 +194,112 @@ jobs:
           path: frontend/playwright-report/
           retention-days: 14
 
+  e2e-ministack:
+    name: Frontend E2E (Playwright + ministack)
+    # Separate job from `e2e` so the default pipeline stays fast and the MinIO
+    # and AWS-emulator (S3+IAM+STS) paths run in parallel. Gated identically to
+    # `e2e` (no `needs:`, no `if:`) — runs on every push to main / tag / PR-to-main.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start ministack
+        # ministack is a local AWS emulator (S3 + IAM + STS) on :4566. Pinned by
+        # digest (never :latest — supply chain risk).
+        # Bump together with the matching reference in docker-compose.ministack.yml.
+        run: |
+          docker run -d --name ministack -p 4566:4566 \
+            -e MINISTACK_ACCOUNT_ID=000000000000 \
+            ministackorg/ministack@sha256:176654570cf2fdb07b9dda08e595410c513040aa609cf9138e25555bc148c535
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:4566/health; then
+              echo "ministack ready"
+              break
+            fi
+            sleep 1
+          done
+          # Fail loudly if ministack never came up — otherwise the seed step
+          # gives a confusing error against a dead server.
+          curl -fs http://localhost:4566/health \
+            || { echo "::error::ministack did not become healthy in 30s"; docker logs ministack; exit 1; }
+
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen --all-extras
+
+      - name: Seed ministack + write config
+        # seed_ministack.py provisions buckets/IAM/role and writes a full
+        # config.json with the ministack-assume / ministack-creds roles the
+        # Playwright spec expects. JWT_SECRET_KEY is required by the import chain.
+        run: |
+          mkdir -p data
+          JWT_SECRET_KEY=ci uv run python scripts/ci/seed_ministack.py --config-out data/config.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps + Playwright
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Build frontend bundle
+        working-directory: frontend
+        run: npm run build
+
+      - name: Start backend
+        # ministack env redirects the app's STS/S3 clients — no backend code change.
+        # nohup + redirect + disown so the process survives this step's bash exit
+        # and is reachable from the next step (a bare `&` would die on SIGHUP).
+        env:
+          JWT_SECRET_KEY: ci-test-secret
+          ADMIN_PASSWORD: TestPass1
+          DATA_DIR: ./data
+          S3_FILE_MANAGER_CONFIG: ./data/config.json
+          COOKIE_SECURE: "false"
+          UVICORN_HOST: "127.0.0.1"
+          AWS_ENDPOINT_URL: http://localhost:4566
+          AWS_ENDPOINT_URL_STS: http://localhost:4566
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        run: |
+          nohup uv run python -m another_s3_manager.main > /tmp/backend.log 2>&1 &
+          disown
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:8080/health; then
+              echo "Backend ready"
+              break
+            fi
+            sleep 1
+          done
+          # Fail loudly if backend never became healthy. Dump log on failure.
+          curl -fs http://localhost:8080/health \
+            || { echo "::error::Backend did not become healthy in 30s"; cat /tmp/backend.log; exit 1; }
+
+      - name: Run ministack Playwright spec
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          E2E_ADMIN_USERNAME: admin
+          E2E_ADMIN_PASSWORD: TestPass1
+        run: |
+          # Re-confirm backend is alive (catches the case where it died between steps).
+          curl -fs http://localhost:8080/health \
+            || { echo "::error::Backend died between steps"; cat /tmp/backend.log; exit 1; }
+          npx playwright test ministack.spec.ts
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-ministack
+          path: frontend/playwright-report/
+          retention-days: 14
+
   build:
     needs: [test-backend]
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
@@ -228,7 +334,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   notify:
-    needs: [test-backend, test-frontend, e2e, build]
+    needs: [test-backend, test-frontend, e2e, e2e-ministack, build]
     if: always()
     runs-on: ubuntu-latest
     steps:
