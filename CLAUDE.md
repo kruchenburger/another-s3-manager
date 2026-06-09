@@ -155,6 +155,8 @@ CI runs the same setup via `.github/workflows/ci.yml` `e2e` job — MinIO
 booted with `docker run` (so we control the `server /data` CMD that GHA
 `services:` can't override), seeded by the same `scripts/ci/seed-minio.sh`.
 
+See [`docs/testing-backends.md`](docs/testing-backends.md) for the MinIO vs ministack (AWS-native assume_role / credentials) test backends.
+
 Local dev requires both servers: backend on `8080` (FastAPI) + Vite on `5173`.
 Vite proxies `/api` → backend, so the React app talks to the real backend during
 dev. For production-like testing, run `npm run build` then visit
