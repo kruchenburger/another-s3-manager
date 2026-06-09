@@ -58,6 +58,18 @@
   border-radius: 4px;
 }
 
+/* Zebra stripe applied per-row by absolute index (FileRow sets `.stripe` on odd
+   indices) instead of Mantine's nth-child `striped` prop, which flickers under
+   virtualization. Same colour Mantine's default striped table uses, so the look
+   is unchanged. Lower specificity than `.row:hover` / selected below, so those
+   states still win. */
+.stripe {
+  background: light-dark(
+    var(--mantine-color-gray-0),
+    var(--mantine-color-dark-6)
+  );
+}
+
 /* Phase 6b: hover vs selected differentiation. Spec §6.6.
    Hover stays neutral (Mantine's default-hover token, no colour shift).
    Selected uses the project primary accent + left rail (like the sidebar
@@ -88,4 +100,37 @@
     var(--mantine-primary-color-filled) 20%,
     transparent
   );
+}
+
+/* Sticky table header inside the FileBrowser scroll area. Background prevents
+   rows showing through as they scroll under it; z-index keeps it above the
+   virtualized rows. */
+.stickyHead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--mantine-color-body);
+}
+
+/* Fixed-height app-chrome layout (vanilla .file-list-container parity): the
+   toolbar stays pinned while only the list scrolls. Height fills the viewport
+   remainder below the 60px AppShell header, minus the AppShell.Main md padding
+   top+bottom. dvh keeps it correct on mobile browser chrome. */
+.container {
+  display: flex;
+  flex-direction: column;
+  height: calc(
+    100dvh - var(--app-shell-header-height, 60px) - 2 * var(--mantine-spacing-md)
+  );
+}
+
+.toolbar {
+  flex: 0 0 auto;
+}
+
+.scrollArea {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
 }

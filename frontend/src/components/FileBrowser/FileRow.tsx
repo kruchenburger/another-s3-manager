@@ -47,10 +47,22 @@ export function FileRow({
     getPreviewType(file.name, config?.auto_inline_extensions ?? []) !== null;
   // Stagger only the first screenful; later / lazy-revealed rows appear instantly.
   const animateIn = index < STAGGER_ROW_LIMIT;
+  // Zebra striping by ABSOLUTE row index (not Mantine's nth-child `striped`):
+  // virtualization renders a shifting window with a spacer row, so nth-child
+  // parity is unstable. Odd indices get the stripe — matches the look of the
+  // former `striped="even"` (nth-of-type even == 0-indexed odd rows).
+  const striped = index % 2 === 1;
+  const rowClassName = [
+    classes.row,
+    animateIn && classes.animateIn,
+    striped && classes.stripe,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <Table.Tr
-      className={animateIn ? `${classes.row} ${classes.animateIn}` : classes.row}
+      className={rowClassName}
       style={
         animateIn ? ({ "--row-index": index } as React.CSSProperties) : undefined
       }

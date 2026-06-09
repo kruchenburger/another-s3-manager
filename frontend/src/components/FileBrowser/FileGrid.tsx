@@ -1,8 +1,10 @@
-import { useEffect } from "react";
-import { Button, Center, SimpleGrid, Stack } from "@mantine/core";
-import { useInView } from "react-intersection-observer";
+import { type RefObject } from "react";
+import { Box } from "@mantine/core";
+import { useElementSize } from "@mantine/hooks";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { FileEntry } from "@/types/api";
 import { FileCard } from "./FileCard";
+import { useNearEndAutoLoad } from "./useNearEndAutoLoad";
 
 interface FileGridProps {
   files: FileEntry[];
@@ -13,13 +15,27 @@ interface FileGridProps {
   onCopyUrl: (name: string) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
-  // Forwarded to FileCard so each card can fetch its own presigned thumbnail URL.
   bucket: string;
   roleId: string;
   path: string;
-  hasMoreInMemory: boolean;
-  onRevealMore: () => void;
-  lazyLoadingEnabled: boolean;
+  scrollRef: RefObject<HTMLDivElement | null>;
+  autoLoadEnabled: boolean;
+  onLoadMore: () => void;
+}
+
+// Fixed card-row height (px): 120px thumbnail box + checkbox/actions row +
+// single-line label + size line + Card padding + inter-row gap. Matches the
+// Card built in FileCard.tsx (mih=120 media area, lineClamp=1 label).
+const ROW_HEIGHT = 200;
+const GAP = 16; // Mantine "md"
+
+// Column count by container width — mirrors the old SimpleGrid breakpoints
+// cols={{ base: 2, sm: 3, md: 4, lg: 6 }} using Mantine's px breakpoints.
+function columnsForWidth(width: number): number {
+  if (width >= 1200) return 6; // lg
+  if (width >= 992) return 4; // md
+  if (width >= 768) return 3; // sm
+  return 2; // base
 }
 
 export function FileGrid({
@@ -34,64 +50,64 @@ export function FileGrid({
   bucket,
   roleId,
   path,
-  hasMoreInMemory,
-  onRevealMore,
-  lazyLoadingEnabled,
+  scrollRef,
+  autoLoadEnabled,
+  onLoadMore,
 }: FileGridProps) {
-  // Sentinel that reveals the next in-memory slice when scrolled into view,
-  // mounted only when lazy loading is enabled. The generous bottom rootMargin
-  // preloads the next slice ~a screenful before the user reaches the end, so
-  // lazy reveal feels like a seamless infinite scroll instead of visibly
-  // stalling at the bottom. This is the IntersectionObserver equivalent of the
-  // vanilla UI, which triggers loadMore at 80% scrolled.
-  const { ref: sentinelRef, inView } = useInView({
-    rootMargin: "0px 0px 800px 0px",
+  const { ref: sizeRef, width } = useElementSize();
+  const columns = columnsForWidth(width || 1200);
+  const rowCount = Math.ceil(files.length / columns);
+
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_HEIGHT + GAP,
+    overscan: 4,
   });
 
-  // In-memory slice growth — instant, no network, no loader (cards already in
-  // memory). Auto-reveal on scroll when lazy loading is on, else a Show more button.
-  useEffect(() => {
-    if (lazyLoadingEnabled && hasMoreInMemory && inView) {
-      onRevealMore();
-    }
-  }, [lazyLoadingEnabled, hasMoreInMemory, inView, onRevealMore]);
+  useNearEndAutoLoad(virtualizer, rowCount, autoLoadEnabled, onLoadMore);
 
   return (
-    <Stack gap="md">
-      <SimpleGrid cols={{ base: 2, sm: 3, md: 4, lg: 6 }} spacing="md">
-        {files.map((file, i) => (
-          <FileCard
-            key={file.name}
-            file={file}
-            index={i}
-            selected={selected.has(file.name)}
-            onToggleSelect={onToggleSelect}
-            onNavigate={onNavigate}
-            onDownload={onDownload}
-            onCopyUrl={onCopyUrl}
-            onPreview={onPreview}
-            onDelete={onDelete}
-            bucket={bucket}
-            roleId={roleId}
-            path={path}
-          />
-        ))}
-      </SimpleGrid>
-      {hasMoreInMemory && (
-        <Center>
-          {lazyLoadingEnabled ? (
-            <div
-              ref={sentinelRef}
-              aria-hidden
-              style={{ height: 1, width: "100%" }}
-            />
-          ) : (
-            <Button variant="subtle" onClick={onRevealMore}>
-              Show more
-            </Button>
-          )}
-        </Center>
-      )}
-    </Stack>
+    <Box ref={sizeRef}>
+      <Box style={{ position: "relative", height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map((vrow) => {
+          const start = vrow.index * columns;
+          const rowItems = files.slice(start, start + columns);
+          return (
+            <Box
+              key={vrow.key}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${vrow.start}px)`,
+                display: "grid",
+                gridTemplateColumns: `repeat(${columns}, 1fr)`,
+                gap: GAP,
+              }}
+            >
+              {rowItems.map((file, k) => (
+                <FileCard
+                  key={file.name}
+                  file={file}
+                  index={start + k}
+                  selected={selected.has(file.name)}
+                  onToggleSelect={onToggleSelect}
+                  onNavigate={onNavigate}
+                  onDownload={onDownload}
+                  onCopyUrl={onCopyUrl}
+                  onPreview={onPreview}
+                  onDelete={onDelete}
+                  bucket={bucket}
+                  roleId={roleId}
+                  path={path}
+                />
+              ))}
+            </Box>
+          );
+        })}
+      </Box>
+    </Box>
   );
 }

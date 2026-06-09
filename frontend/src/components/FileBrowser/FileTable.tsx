@@ -1,8 +1,10 @@
-import { useEffect } from "react";
-import { Button, Checkbox, Table } from "@mantine/core";
-import { useInView } from "react-intersection-observer";
+import { type RefObject } from "react";
+import { Checkbox, Table } from "@mantine/core";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { FileEntry } from "@/types/api";
 import { FileRow } from "./FileRow";
+import { useNearEndAutoLoad } from "./useNearEndAutoLoad";
+import classes from "./FileBrowser.module.css";
 
 interface FileTableProps {
   files: FileEntry[];
@@ -14,11 +16,18 @@ interface FileTableProps {
   onCopyUrl: (name: string) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
-  hasMoreInMemory: boolean;
-  onRevealMore: () => void;
-  lazyLoadingEnabled: boolean;
+  /** The FileBrowser internal scroll container the virtualizer measures. */
+  scrollRef: RefObject<HTMLDivElement | null>;
+  /** lazy && truncated && !isFetchingNextPage && !searching (computed by parent). */
+  autoLoadEnabled: boolean;
+  /** Fetch the next server chunk. */
+  onLoadMore: () => void;
 }
 
+// Fixed row height (px). Matches Table verticalSpacing="xs" single-line rows.
+const ROW_HEIGHT = 44;
+
+// Number of columns in the table (checkbox, name, size, modified, actions).
 const TABLE_COLUMN_COUNT = 5;
 
 export function FileTable({
@@ -31,35 +40,38 @@ export function FileTable({
   onCopyUrl,
   onPreview,
   onDelete,
-  hasMoreInMemory,
-  onRevealMore,
-  lazyLoadingEnabled,
+  scrollRef,
+  autoLoadEnabled,
+  onLoadMore,
 }: FileTableProps) {
   const allSelected =
     files.length > 0 && files.every((f) => selected.has(f.name));
   const someSelected = files.some((f) => selected.has(f.name)) && !allSelected;
 
-  // Sentinel that reveals the next in-memory slice when scrolled into view,
-  // mounted only when lazy loading is enabled. The generous bottom rootMargin
-  // preloads the next slice ~a screenful before the user reaches the end, so
-  // lazy reveal feels like a seamless infinite scroll instead of visibly
-  // stalling at the bottom. This is the IntersectionObserver equivalent of the
-  // vanilla UI, which triggers loadMore at 80% scrolled.
-  const { ref: sentinelRef, inView } = useInView({
-    rootMargin: "0px 0px 800px 0px",
+  const virtualizer = useVirtualizer({
+    count: files.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 8,
   });
 
-  // In-memory slice growth — instant, no network, no loader (rows already in
-  // memory). Auto-reveal on scroll when lazy loading is on, else a Show more button.
-  useEffect(() => {
-    if (lazyLoadingEnabled && hasMoreInMemory && inView) {
-      onRevealMore();
-    }
-  }, [lazyLoadingEnabled, hasMoreInMemory, inView, onRevealMore]);
+  useNearEndAutoLoad(virtualizer, files.length, autoLoadEnabled, onLoadMore);
+
+  const virtualRows = virtualizer.getVirtualItems();
+  const totalSize = virtualizer.getTotalSize();
+  const paddingTop = virtualRows.length ? virtualRows[0].start : 0;
+  const paddingBottom = virtualRows.length
+    ? totalSize - virtualRows[virtualRows.length - 1].end
+    : 0;
 
   return (
-    <Table highlightOnHover striped="even" verticalSpacing="xs">
-      <Table.Thead>
+    // No Mantine `striped` prop: it stripes by DOM `:nth-child`, which is wrong
+    // under virtualization — the variable-height top spacer <tr> plus the
+    // shifting render window flip every row's nth-child parity as you scroll (and
+    // all at once when a chunk appends), so the zebra bands visibly flicker.
+    // FileRow stripes itself by absolute row index instead (stable per row).
+    <Table verticalSpacing="xs">
+      <Table.Thead className={classes.stickyHead}>
         <Table.Tr>
           <Table.Th style={{ width: 40 }}>
             <Checkbox
@@ -76,36 +88,34 @@ export function FileTable({
         </Table.Tr>
       </Table.Thead>
       <Table.Tbody>
-        {files.map((file, i) => (
-          <FileRow
-            key={file.name}
-            file={file}
-            index={i}
-            selected={selected.has(file.name)}
-            onToggleSelect={onToggleSelect}
-            onNavigate={onNavigate}
-            onDownload={onDownload}
-            onCopyUrl={onCopyUrl}
-            onPreview={onPreview}
-            onDelete={onDelete}
-          />
-        ))}
-      </Table.Tbody>
-      {hasMoreInMemory && (
-        <Table.Tfoot>
-          <Table.Tr>
-            <Table.Td colSpan={TABLE_COLUMN_COUNT} ta="center" p="md">
-              {lazyLoadingEnabled ? (
-                <div ref={sentinelRef} aria-hidden style={{ height: 1 }} />
-              ) : (
-                <Button variant="subtle" onClick={onRevealMore}>
-                  Show more
-                </Button>
-              )}
-            </Table.Td>
+        {paddingTop > 0 && (
+          <Table.Tr data-spacer aria-hidden>
+            <Table.Td colSpan={TABLE_COLUMN_COUNT} style={{ height: paddingTop, padding: 0, border: 0 }} />
           </Table.Tr>
-        </Table.Tfoot>
-      )}
+        )}
+        {virtualRows.map((vrow) => {
+          const file = files[vrow.index];
+          return (
+            <FileRow
+              key={file.name}
+              file={file}
+              index={vrow.index}
+              selected={selected.has(file.name)}
+              onToggleSelect={onToggleSelect}
+              onNavigate={onNavigate}
+              onDownload={onDownload}
+              onCopyUrl={onCopyUrl}
+              onPreview={onPreview}
+              onDelete={onDelete}
+            />
+          );
+        })}
+        {paddingBottom > 0 && (
+          <Table.Tr data-spacer aria-hidden>
+            <Table.Td colSpan={TABLE_COLUMN_COUNT} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+          </Table.Tr>
+        )}
+      </Table.Tbody>
     </Table>
   );
 }

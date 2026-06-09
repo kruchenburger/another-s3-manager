@@ -5,6 +5,23 @@ import { Notifications } from "@mantine/notifications";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+// Render every item — windowing itself is covered by Playwright E2E.
+const ROW = 40;
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        key: index,
+        start: index * ROW,
+        size: ROW,
+        end: (index + 1) * ROW,
+      })),
+    getTotalSize: () => count * ROW,
+    measureElement: () => {},
+  }),
+}));
+
 vi.mock("@/features/files/api/filesApi", () => ({
   buildDownloadUrl: (b: string, r: string, p: string) =>
     `/api/buckets/${b}/download?role=${r}&path=${encodeURIComponent(p)}`,

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useMemo, useRef, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { filesQueryKey } from "@/features/files/hooks/useFiles";
 import { useShiftSelect } from "./useShiftSelect";
-import { Stack, Text } from "@mantine/core";
+import { Text } from "@mantine/core";
+import { useDebouncedValue } from "@mantine/hooks";
 import { DelayedLoader } from "@/components/DelayedLoader/DelayedLoader";
 import { notifications } from "@mantine/notifications";
 import { useNavigate, useParams } from "react-router-dom";
@@ -45,6 +46,7 @@ import { FileBrowserEmptyState } from "./FileBrowserEmptyState";
 import { BulkDeleteProgress } from "@/components/FileBrowser/BulkDeleteProgress";
 import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
 import { ScrollToTopButton } from "@/components/ScrollToTopButton/ScrollToTopButton";
+import classes from "./FileBrowser.module.css";
 
 export function FileBrowser() {
   const params = useParams<{ roleId: string; bucket: string; "*": string }>();
@@ -54,7 +56,6 @@ export function FileBrowser() {
   const navigate = useNavigate();
 
   const { data: config } = useConfig();
-  const itemsPerPage = config?.items_per_page ?? 200;
   const lazyLoadingEnabled = config?.enable_lazy_loading ?? true;
 
   const {
@@ -90,13 +91,6 @@ export function FileBrowser() {
     clear: clearSelection,
   } = useShiftSelect();
   const [searchQuery, setSearchQuery] = useState("");
-  // In-memory slice: how many of the loaded items the table/grid renders.
-  // Grows by itemsPerPage on lazy-scroll / "Show more" (no network). Reset
-  // whenever the folder, bucket, role, or page size changes.
-  const [visibleCount, setVisibleCount] = useState(itemsPerPage);
-  useEffect(() => {
-    setVisibleCount(itemsPerPage);
-  }, [pathFromUrl, bucket, roleId, itemsPerPage]);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [uploadHint, setUploadHint] = useState<{
     open: boolean;
@@ -108,25 +102,15 @@ export function FileBrowser() {
   const pendingDelete = useRef<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const [debouncedQuery] = useDebouncedValue(searchQuery, 200);
 
   const filteredItems = useMemo(() => {
-    if (!searchQuery) return items;
-    const q = searchQuery.toLowerCase();
+    if (!debouncedQuery) return items;
+    const q = debouncedQuery.toLowerCase();
     return items.filter((f) => f.name.toLowerCase().includes(q));
-  }, [items, searchQuery]);
-
-  // When searching, show all matches; otherwise show the in-memory slice.
-  const visibleItems = useMemo(
-    () => (searchQuery ? filteredItems : filteredItems.slice(0, visibleCount)),
-    [searchQuery, filteredItems, visibleCount],
-  );
-
-  // More slices remain to reveal from memory (NOT a server fetch).
-  const hasMoreInMemory = !searchQuery && visibleCount < filteredItems.length;
-
-  const revealMore = useCallback(() => {
-    setVisibleCount((c) => c + itemsPerPage);
-  }, [itemsPerPage]);
+  }, [items, debouncedQuery]);
 
   const navigateToFolder = (folderName: string) => {
     clearSelection();
@@ -370,8 +354,8 @@ export function FileBrowser() {
   // Visible-order names — shift-select range is computed against this list
   // (after sort + filter) so the highlighted range matches what the user sees.
   const orderedNames = useMemo(
-    () => visibleItems.map((f) => f.name),
-    [visibleItems],
+    () => filteredItems.map((f) => f.name),
+    [filteredItems],
   );
   const toggleSelect = (name: string, shiftKey: boolean) => {
     handleToggleSelect(name, shiftKey, orderedNames);
@@ -379,6 +363,23 @@ export function FileBrowser() {
   const toggleSelectAll = () => {
     handleToggleAll(orderedNames);
   };
+
+  const handleLoadMore = useCallback(() => {
+    loadMore().catch((e) =>
+      showToast({
+        color: "red",
+        title: "Couldn't load more files",
+        message: getErrorMessage(e),
+        autoClose: TOAST_DURATIONS.error,
+      }),
+    );
+  }, [loadMore]);
+
+  // Auto-load the next server chunk during lazy infinite scroll — but never while
+  // a client-side search is active (the "Load more to search the rest" banner is
+  // the explicit affordance there), and never while a fetch is already in flight.
+  const autoLoadEnabled =
+    lazyLoadingEnabled && truncated && !isFetchingNextPage && !debouncedQuery;
 
   const handleUpload = useCallback(
     async (files: FileWithRelativePath[]) => {
@@ -615,143 +616,130 @@ export function FileBrowser() {
     e.target.value = "";
   };
 
-  // Cold-load only: show the spinner when we have NO data to show.
-  // Background refetches (return to a cached folder, post-mutation
-  // invalidation) keep the previously-rendered table on screen —
-  // hiding it under a spinner makes the UI feel slower and flashes
-  // a blank pane for the duration of the refetch.
-  // DelayedLoader still debounces the spinner by 500ms so a fast
-  // first-time fetch never paints a flash before content lands.
-  if (isFetching && items.length === 0) {
-    return <DelayedLoader label="Loading files…" />;
-  }
-
-  // Blank to the full-page error state on an INITIAL or REFETCH failure — no
-  // usable data, or stale data that a fresh fetch just rejected (e.g. a 403 when
-  // a role is revoked; we must not keep showing forbidden rows). A CONTINUATION
-  // failure (loadMore / loadAll → fetchNextPage) is different: the already-loaded
-  // pages are valid, only the next chunk failed — per the hybrid design it must
-  // "keep the loaded items, never blank the table" and surface as a toast (see
-  // onLoadMore / onLoadAll below). `isFetchNextPageError` distinguishes the two.
-  if (error && !isFetchNextPageError) {
-    return <QueryErrorState error={error} title="Couldn't load files" />;
-  }
-
   return (
     <>
-      <FileBrowserHeader
-        bucket={bucket}
-        roleId={roleId}
-        path={pathFromUrl}
-        searchQuery={searchQuery}
-        onSearchChange={(q) => {
-          // Reset the selection on filter change. While searching, the slice is
-          // off and every match is selectable; once the filter clears, a row
-          // outside the slice would stay selected but off-screen, so bulk Delete
-          // would act on a file the user can't see.
-          setSearchQuery(q);
-          clearSelection();
-        }}
-        mode={mode}
-        onModeChange={setMode}
-        selectedCount={selected.size}
-        onBulkDelete={() => requestDelete(Array.from(selected))}
-        onBulkCopyUrl={handleBulkCopyUrl}
-        onUploadClick={handleUploadClick}
-        onUploadFolderClick={handleUploadFolderClick}
-        disableDeletion={disableDeletion}
-        objectCount={items.length}
-        truncated={truncated}
-        isLoadingMore={isFetchingNextPage}
-        onLoadMore={() => {
-          // A continuation failure keeps the loaded table (the error guard above
-          // only blanks on an empty initial load); surface it as a toast.
-          loadMore().catch((e) =>
-            showToast({
-              color: "red",
-              title: "Couldn't load more files",
-              message: getErrorMessage(e),
-              autoClose: TOAST_DURATIONS.error,
-            }),
-          );
-        }}
-        onLoadAll={() => {
-          loadAll().catch((e) =>
-            showToast({
-              color: "red",
-              title: "Couldn't load all files",
-              message: getErrorMessage(e),
-              autoClose: TOAST_DURATIONS.error,
-            }),
-          );
-        }}
-      />
-      <input
-        type="file"
-        ref={fileInputRef}
-        onChange={handleFileInput}
-        multiple
-        style={{ display: "none" }}
-      />
-      <input
-        type="file"
-        ref={folderInputRef}
-        onChange={handleFolderInput}
-        multiple
-        // `webkitdirectory` is a non-standard attribute that React doesn't type;
-        // pass it via spread to bypass the type check. All major browsers honor it
-        // (Chrome, Firefox, Safari, Edge); the fallback is the drag-drop path which
-        // works on browsers that don't support webkitdirectory inputs.
-        {...({ webkitdirectory: "" } as Record<string, string>)}
-        style={{ display: "none" }}
-      />
-      <Stack gap="md">
-        {searchQuery && truncated && (
-          <Text size="xs" c="dimmed">
-            Filtering {items.length} loaded items. Load more to search the rest.
-          </Text>
-        )}
-        {truncated && selected.size > 0 && (
-          <Text size="xs" c="dimmed">
-            Selected {selected.size} of loaded items
-          </Text>
-        )}
-        {visibleItems.length === 0 ? (
-          <FileBrowserEmptyState />
-        ) : mode === "table" ? (
-          <FileTable
-            files={visibleItems}
-            selected={selected}
-            onToggleSelect={toggleSelect}
-            onToggleSelectAll={toggleSelectAll}
-            onNavigate={navigateToFolder}
-            onDownload={handleDownload}
-            onCopyUrl={handleCopyUrl}
-            onPreview={handlePreview}
-            onDelete={(name) => requestDelete([name])}
-            hasMoreInMemory={hasMoreInMemory}
-            onRevealMore={revealMore}
-            lazyLoadingEnabled={lazyLoadingEnabled}
-          />
-        ) : (
-          <FileGrid
-            files={visibleItems}
-            selected={selected}
-            onToggleSelect={toggleSelect}
-            onNavigate={navigateToFolder}
-            onDownload={handleDownload}
-            onCopyUrl={handleCopyUrl}
-            onPreview={handlePreview}
-            onDelete={(name) => requestDelete([name])}
+      <div className={classes.container}>
+        <div className={classes.toolbar}>
+          <FileBrowserHeader
             bucket={bucket}
             roleId={roleId}
             path={pathFromUrl}
-            hasMoreInMemory={hasMoreInMemory}
-            onRevealMore={revealMore}
-            lazyLoadingEnabled={lazyLoadingEnabled}
+            searchQuery={searchQuery}
+            onSearchChange={(q) => {
+              setSearchQuery(q);
+              clearSelection();
+            }}
+            mode={mode}
+            onModeChange={setMode}
+            selectedCount={selected.size}
+            onBulkDelete={() => requestDelete(Array.from(selected))}
+            onBulkCopyUrl={handleBulkCopyUrl}
+            onUploadClick={handleUploadClick}
+            onUploadFolderClick={handleUploadFolderClick}
+            disableDeletion={disableDeletion}
+            objectCount={items.length}
+            truncated={truncated}
+            isLoadingMore={isFetchingNextPage}
+            onLoadMore={handleLoadMore}
+            onLoadAll={() =>
+              loadAll().catch((e) =>
+                showToast({
+                  color: "red",
+                  title: "Couldn't load all files",
+                  message: getErrorMessage(e),
+                  autoClose: TOAST_DURATIONS.error,
+                }),
+              )
+            }
           />
-        )}
-      </Stack>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileInput}
+            multiple
+            style={{ display: "none" }}
+          />
+          <input
+            type="file"
+            ref={folderInputRef}
+            onChange={handleFolderInput}
+            multiple
+            {...({ webkitdirectory: "" } as Record<string, string>)}
+            style={{ display: "none" }}
+          />
+          {debouncedQuery && truncated && (
+            <Text size="xs" c="dimmed">
+              Filtering {items.length} loaded items. Load more to search the rest.
+            </Text>
+          )}
+          {truncated && selected.size > 0 && (
+            <Text size="xs" c="dimmed">
+              Selected {selected.size} of loaded items
+            </Text>
+          )}
+        </div>
+
+        {/* Loader / error / empty / list ALL render inside the scroll
+            container so the scroll element stays mounted and measured across
+            folder navigations. Early-returning a full-page loader/error BEFORE
+            this container (the previous approach) unmounted the scroll element;
+            when data then arrived, the freshly-mounted virtualizer measured a
+            0-height element in its first frame and rendered nothing — the
+            "folder looks empty until you leave and come back" glitch. Keeping
+            the container mounted means the virtualizer always reads an
+            already-laid-out, correctly-sized scroll element.
+
+            Cold-load: spinner only when we have NO data (DelayedLoader still
+            debounces 500ms so a fast fetch never flashes). Background refetches
+            keep the table on screen. A non-continuation error blanks to the
+            error state; a continuation (loadMore/loadAll) failure keeps the
+            loaded table (handled by the `!isFetchNextPageError` guard) and
+            surfaces as a toast. */}
+        <div className={classes.scrollArea} ref={scrollRef}>
+          {isFetching && items.length === 0 ? (
+            <DelayedLoader label="Loading files…" />
+          ) : error && !isFetchNextPageError ? (
+            <QueryErrorState error={error} title="Couldn't load files" />
+          ) : filteredItems.length === 0 ? (
+            <FileBrowserEmptyState />
+          ) : mode === "table" ? (
+            <FileTable
+              files={filteredItems}
+              selected={selected}
+              onToggleSelect={toggleSelect}
+              onToggleSelectAll={toggleSelectAll}
+              onNavigate={navigateToFolder}
+              onDownload={handleDownload}
+              onCopyUrl={handleCopyUrl}
+              onPreview={handlePreview}
+              onDelete={(name) => requestDelete([name])}
+              scrollRef={scrollRef}
+              autoLoadEnabled={autoLoadEnabled}
+              onLoadMore={handleLoadMore}
+            />
+          ) : (
+            <FileGrid
+              files={filteredItems}
+              selected={selected}
+              onToggleSelect={toggleSelect}
+              onNavigate={navigateToFolder}
+              onDownload={handleDownload}
+              onCopyUrl={handleCopyUrl}
+              onPreview={handlePreview}
+              onDelete={(name) => requestDelete([name])}
+              bucket={bucket}
+              roleId={roleId}
+              path={pathFromUrl}
+              scrollRef={scrollRef}
+              autoLoadEnabled={autoLoadEnabled}
+              onLoadMore={handleLoadMore}
+            />
+          )}
+        </div>
+
+        <ScrollToTopButton scrollRef={scrollRef} />
+      </div>
+
       <UploadDropZone currentPath={pathFromUrl} onDrop={handleUpload} active />
       <FolderUploadHintModal
         opened={uploadHint.open}
@@ -775,7 +763,6 @@ export function FileBrowser() {
           size={previewState.size}
         />
       )}
-      <ScrollToTopButton />
     </>
   );
 }
