@@ -150,7 +150,7 @@ export function FileCard({
           />
         )}
       </Group>
-      <Text size="sm" ta="center" lineClamp={2} title={file.name}>
+      <Text size="sm" ta="center" lineClamp={1} title={file.name}>
         {file.name}
       </Text>
       {!file.is_directory && (
