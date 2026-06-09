@@ -65,7 +65,12 @@ export function FileTable({
     : 0;
 
   return (
-    <Table striped="even" verticalSpacing="xs">
+    // No Mantine `striped` prop: it stripes by DOM `:nth-child`, which is wrong
+    // under virtualization — the variable-height top spacer <tr> plus the
+    // shifting render window flip every row's nth-child parity as you scroll (and
+    // all at once when a chunk appends), so the zebra bands visibly flicker.
+    // FileRow stripes itself by absolute row index instead (stable per row).
+    <Table verticalSpacing="xs">
       <Table.Thead className={classes.stickyHead}>
         <Table.Tr>
           <Table.Th style={{ width: 40 }}>

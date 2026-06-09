@@ -58,6 +58,18 @@
   border-radius: 4px;
 }
 
+/* Zebra stripe applied per-row by absolute index (FileRow sets `.stripe` on odd
+   indices) instead of Mantine's nth-child `striped` prop, which flickers under
+   virtualization. Same colour Mantine's default striped table uses, so the look
+   is unchanged. Lower specificity than `.row:hover` / selected below, so those
+   states still win. */
+.stripe {
+  background: light-dark(
+    var(--mantine-color-gray-0),
+    var(--mantine-color-dark-6)
+  );
+}
+
 /* Phase 6b: hover vs selected differentiation. Spec §6.6.
    Hover stays neutral (Mantine's default-hover token, no colour shift).
    Selected uses the project primary accent + left rail (like the sidebar

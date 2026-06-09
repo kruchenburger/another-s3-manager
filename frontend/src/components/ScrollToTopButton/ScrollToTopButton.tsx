@@ -30,7 +30,12 @@ export function ScrollToTopButton({ scrollRef }: ScrollToTopButtonProps) {
   }, [scrollRef]);
 
   return (
-    <Affix position={{ bottom: 20, right: 20 }}>
+    // right: 36 (not 20) clears the file-list's internal scrollbar. The list now
+    // scrolls inside its own container whose scrollbar sits inset by the
+    // AppShell.Main right padding (~16px) plus the scrollbar width (~15px); a
+    // viewport-fixed button at right:20 landed on top of it. 36px restores the
+    // same small gap the old window-scroll layout had.
+    <Affix position={{ bottom: 20, right: 36 }}>
       <Transition transition="slide-up" mounted={scrolled}>
         {(styles) => (
           <ActionIcon
