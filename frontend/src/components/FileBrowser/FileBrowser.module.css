@@ -89,3 +89,13 @@
     transparent
   );
 }
+
+/* Sticky table header inside the FileBrowser scroll area. Background prevents
+   rows showing through as they scroll under it; z-index keeps it above the
+   virtualized rows. */
+.stickyHead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--mantine-color-body);
+}
