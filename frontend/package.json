@@ -19,6 +19,7 @@
     "@mantine/hooks": "^8.0.0",
     "@mantine/notifications": "^8.0.0",
     "@tanstack/react-query": "^5.60.0",
+    "@tanstack/react-virtual": "^3.14.2",
     "gsap": "^3.12.5",
     "lucide-react": "^0.469.0",
     "react": "^19.0.0",
