@@ -9,10 +9,24 @@
  * "Search on server" affordance appears.
  */
 import { test, expect } from "@playwright/test";
-import { loginAsAdmin as login } from "./fixtures/auth-helpers";
+import type { Page } from "@playwright/test";
+import { ADMIN_USER, ADMIN_PASSWORD } from "./fixtures/auth-helpers";
 
 const ROLE = process.env.E2E_MINIO_ROLE ?? "MinIO-e2e";
 const BUCKET = process.env.E2E_MINIO_BUCKET ?? "e2e-test";
+
+// Inline login (not the shared loginAsAdmin): that helper asserts the post-login
+// URL is exactly /v2/, but an admin with role access auto-redirects to the
+// default role/bucket, so the URL is never /v2/. Assert success via the
+// "User menu" button instead — the same robust signal the helper uses
+// internally. Mirrors the approach in ministack.spec.ts.
+async function login(page: Page): Promise<void> {
+  await page.goto("/v2/login");
+  await page.getByLabel("Username").fill(ADMIN_USER);
+  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
+  await page.getByRole("button", { name: "Login" }).click();
+  await expect(page.getByLabel("User menu")).toBeVisible({ timeout: 15_000 });
+}
 
 test.describe("Server-side prefix search via MinIO", () => {
   test("truncated folder shows affordance, server search loads target, exit restores folder", async ({

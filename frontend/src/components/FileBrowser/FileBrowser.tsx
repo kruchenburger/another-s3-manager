@@ -154,6 +154,11 @@ export function FileBrowser() {
 
   const exitServerSearch = () => {
     setServerSearchTerm(null);
+    // Also clear the filter box: leaving the committed term in it would, back in
+    // folder mode, hide every loaded item that doesn't contain that term (the
+    // term was chosen precisely because it ISN'T in the loaded chunk) — landing
+    // the user on a confusingly empty folder. Clearing returns the full folder.
+    setSearchQuery("");
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   };
 
