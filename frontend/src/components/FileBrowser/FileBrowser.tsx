@@ -8,7 +8,10 @@ import { DelayedLoader } from "@/components/DelayedLoader/DelayedLoader";
 import { notifications } from "@mantine/notifications";
 import { useNavigate, useParams } from "react-router-dom";
 import { useFiles } from "@/features/files/hooks/useFiles";
-import { useFileSearch } from "@/features/files/hooks/useFileSearch";
+import {
+  useFileSearch,
+  fileSearchFolderKey,
+} from "@/features/files/hooks/useFileSearch";
 import { useDelete } from "@/features/files/hooks/useDelete";
 import { useUpload } from "@/features/files/hooks/useUpload";
 import {
@@ -375,7 +378,7 @@ export function FileBrowser() {
       queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
     });
     queryClient.invalidateQueries({
-      queryKey: ["files", "search", roleId, bucket, pathFromUrl],
+      queryKey: fileSearchFolderKey(bucket, roleId, pathFromUrl),
     });
     if (cancelRef.cancelled) {
       const remaining = names.length - success - failed;
@@ -418,9 +421,10 @@ export function FileBrowser() {
     );
   }, [loadMore]);
 
-  // Auto-load the next server chunk during lazy infinite scroll — but never while
-  // a client-side search is active (the "Load more to search the rest" banner is
-  // the explicit affordance there), and never while a fetch is already in flight.
+  // Auto-load the next chunk during lazy infinite scroll. In folder mode it's
+  // paused while a client-side filter is active (the "Search '<term>' on server"
+  // affordance is the explicit path there); in server-search mode it stays on so
+  // the prefix results paginate. Never while a fetch is already in flight.
   const autoLoadEnabled =
     lazyLoadingEnabled &&
     truncated &&
@@ -555,7 +559,7 @@ export function FileBrowser() {
           queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
         });
         queryClient.invalidateQueries({
-          queryKey: ["files", "search", roleId, bucket, pathFromUrl],
+          queryKey: fileSearchFolderKey(bucket, roleId, pathFromUrl),
         });
       }
 

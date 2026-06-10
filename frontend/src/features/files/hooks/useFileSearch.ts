@@ -7,12 +7,25 @@ import { useClientLoadDerived } from "@/features/files/hooks/clientLoadInfinite"
 // mutations invalidate only the ["files","list",...] folder key, so a component
 // showing server-search results must also invalidate this ["files","search",...]
 // key after a mutation (handled where FileBrowser wires useFileSearch).
+
+// Folder-level prefix (no term): matches every server-search query for this
+// role/bucket/path. Used by FileBrowser's post-mutation invalidation so a
+// delete/upload refreshes whatever server-search is currently shown.
+export const fileSearchFolderKey = (
+  bucket: string,
+  role: string,
+  path: string,
+) => ["files", "search", role, bucket, path] as const;
+
+// Full key (adds the committed search term). fileSearchFolderKey is a prefix of
+// this, so invalidating the folder key hits all term variants (TanStack v5
+// prefix-matches).
 export const fileSearchQueryKey = (
   bucket: string,
   role: string,
   path: string,
   term: string,
-) => ["files", "search", role, bucket, path, term] as const;
+) => [...fileSearchFolderKey(bucket, role, path), term] as const;
 
 /**
  * Server-side prefix search. Runs only when `term` is non-empty. Same chunked
