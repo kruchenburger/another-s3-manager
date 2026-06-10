@@ -258,4 +258,42 @@ describe("FileBrowser hybrid pagination", () => {
     );
     expect(screen.getByText("apple.txt")).toBeInTheDocument();
   });
+
+  // Bottom-of-list "Load more" footer — only when lazy loading is OFF (with lazy
+  // on, the near-end sentinel auto-loads, so a manual bottom button is redundant).
+  it("does not render the bottom Load more footer when lazy loading is ON", () => {
+    mockLazy = true;
+    mockTruncated = true;
+    renderBrowser();
+    // Only the header Load more exists; the footer is suppressed under lazy auto-load.
+    expect(screen.getAllByRole("button", { name: /load more/i })).toHaveLength(1);
+  });
+
+  it("renders a bottom Load more footer when lazy loading is OFF and truncated", () => {
+    mockLazy = false;
+    mockTruncated = true;
+    renderBrowser();
+    // Header + footer, both labelled "Load more".
+    expect(screen.getAllByRole("button", { name: /load more/i })).toHaveLength(2);
+  });
+
+  it("hides the bottom footer when lazy is OFF but nothing more to load", () => {
+    mockLazy = false;
+    mockTruncated = false;
+    renderBrowser();
+    expect(
+      screen.queryByRole("button", { name: /load more/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("the bottom Load more footer triggers the server continuation", () => {
+    mockLazy = false;
+    mockTruncated = true;
+    renderBrowser();
+    loadMoreMock.mockReset();
+    const buttons = screen.getAllByRole("button", { name: /load more/i });
+    // The footer renders after the header in the DOM, so it's the last match.
+    fireEvent.click(buttons[buttons.length - 1]);
+    expect(loadMoreMock).toHaveBeenCalledTimes(1);
+  });
 });
