@@ -169,6 +169,8 @@ JWT_SECRET_KEY=dev-secret uv run python -m another_s3_manager.main
 WCAG 2.1 AA baseline (axe-core via Playwright) and how to run the a11y spec
 locally.
 
+See [`docs/testing-backends.md`](docs/testing-backends.md) for the MinIO vs ministack (AWS-native assume_role / credentials) test backends.
+
 ## IAM Policy
 
 Minimum permissions needed:
