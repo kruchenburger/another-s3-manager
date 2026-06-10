@@ -17,7 +17,7 @@ export async function listFiles(
   bucket: string,
   role: string,
   path: string,
-  opts: { maxKeys?: number; continuationToken?: string } = {},
+  opts: { maxKeys?: number; continuationToken?: string; search?: string } = {},
 ): Promise<ClientLoadPage> {
   const params = new URLSearchParams({ role });
   if (path) params.set("path", path);
@@ -26,6 +26,7 @@ export async function listFiles(
   if (opts.continuationToken) {
     params.set("continuation_token", opts.continuationToken);
   }
+  if (opts.search) params.set("search", opts.search);
   return apiRequest<ClientLoadPage>(
     `/api/buckets/${encodeURIComponent(bucket)}/files?${params}`,
   );
