@@ -45,6 +45,28 @@ def sanitize_path(path: str) -> str:
     return path
 
 
+def sanitize_search_prefix(term: str) -> str:
+    """Sanitize a server-side search prefix (a LITERAL S3 key-name prefix).
+
+    Unlike sanitize_path this is not a filesystem path: `..` and `/` are legal
+    literal bytes in an S3 key, so they pass through unchanged. We only strip
+    surrounding whitespace and reject ASCII control chars (never valid in S3
+    keys — their presence signals injection). Length is capped by the route's
+    Query(max_length=...) before this is called.
+
+    Returns "" for empty/whitespace-only input (callers treat that as "no
+    search").
+    """
+    if not term:
+        return ""
+    term = term.strip()
+    if not term:
+        return ""
+    if re.search(r"[\x00-\x1f\x7f]", term):
+        raise ValueError("Invalid search: control characters not allowed")
+    return term
+
+
 def sanitize_bucket_name(bucket_name: str) -> str:
     """
     Sanitize S3 bucket name.

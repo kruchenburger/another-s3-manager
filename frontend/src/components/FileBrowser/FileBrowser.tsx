@@ -2,12 +2,16 @@ import { useMemo, useRef, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { filesQueryKey } from "@/features/files/hooks/useFiles";
 import { useShiftSelect } from "./useShiftSelect";
-import { Text } from "@mantine/core";
+import { Anchor, Badge, CloseButton, Group, Text } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
 import { DelayedLoader } from "@/components/DelayedLoader/DelayedLoader";
 import { notifications } from "@mantine/notifications";
 import { useNavigate, useParams } from "react-router-dom";
 import { useFiles } from "@/features/files/hooks/useFiles";
+import {
+  useFileSearch,
+  fileSearchFolderKey,
+} from "@/features/files/hooks/useFileSearch";
 import { useDelete } from "@/features/files/hooks/useDelete";
 import { useUpload } from "@/features/files/hooks/useUpload";
 import {
@@ -58,6 +62,14 @@ export function FileBrowser() {
   const { data: config } = useConfig();
   const lazyLoadingEnabled = config?.enable_lazy_loading ?? true;
 
+  const [serverSearchTerm, setServerSearchTerm] = useState<string | null>(null);
+  const serverSearchActive = serverSearchTerm !== null;
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const folder = useFiles(bucket, roleId, pathFromUrl);
+  const search = useFileSearch(bucket, roleId, pathFromUrl, serverSearchTerm ?? "");
+  const active = serverSearchActive ? search : folder;
+
   const {
     directories,
     files,
@@ -68,7 +80,19 @@ export function FileBrowser() {
     isFetchingNextPage,
     isFetchNextPageError,
     error,
-  } = useFiles(bucket, roleId, pathFromUrl);
+  } = active;
+
+  // Reset server-search when role/bucket/path changes. FileBrowser stays mounted
+  // across folder navigation, so serverSearchTerm would otherwise leak into the
+  // new folder. Render-time reset (React's documented "adjust state on prop
+  // change" pattern) — not an effect.
+  const contextKey = `${roleId}/${bucket}/${pathFromUrl}`;
+  const [prevContextKey, setPrevContextKey] = useState(contextKey);
+  if (contextKey !== prevContextKey) {
+    setPrevContextKey(contextKey);
+    setServerSearchTerm(null);
+    setSearchQuery("");
+  }
 
   // All loaded items, directories first (vanilla parity). Single source of
   // truth for filtering and every .find(name === ...) lookup below.
@@ -90,7 +114,6 @@ export function FileBrowser() {
     toggleAll: handleToggleAll,
     clear: clearSelection,
   } = useShiftSelect();
-  const [searchQuery, setSearchQuery] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [uploadHint, setUploadHint] = useState<{
     open: boolean;
@@ -107,19 +130,39 @@ export function FileBrowser() {
   const [debouncedQuery] = useDebouncedValue(searchQuery, 200);
 
   const filteredItems = useMemo(() => {
+    if (serverSearchActive) return items;
     if (!debouncedQuery) return items;
     const q = debouncedQuery.toLowerCase();
     return items.filter((f) => f.name.toLowerCase().includes(q));
-  }, [items, debouncedQuery]);
+  }, [items, debouncedQuery, serverSearchActive]);
 
   const navigateToFolder = (folderName: string) => {
     clearSelection();
     setSearchQuery("");
+    setServerSearchTerm(null);
     const next = joinPath(pathFromUrl, folderName);
     const encoded = next.split("/").map(encodeURIComponent).join("/");
     navigate(
       `/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(bucket)}/p/${encoded}`,
     );
+  };
+
+  const enterServerSearch = (term: string) => {
+    const trimmed = term.trim();
+    if (!trimmed) return;
+    setServerSearchTerm(trimmed);
+    clearSelection();
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  };
+
+  const exitServerSearch = () => {
+    setServerSearchTerm(null);
+    // Also clear the filter box: leaving the committed term in it would, back in
+    // folder mode, hide every loaded item that doesn't contain that term (the
+    // term was chosen precisely because it ISN'T in the loaded chunk) — landing
+    // the user on a confusingly empty folder. Clearing returns the full folder.
+    setSearchQuery("");
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
   };
 
   const handleDownload = async (name: string): Promise<void> => {
@@ -334,6 +377,9 @@ export function FileBrowser() {
     queryClient.invalidateQueries({
       queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
     });
+    queryClient.invalidateQueries({
+      queryKey: fileSearchFolderKey(bucket, roleId, pathFromUrl),
+    });
     if (cancelRef.cancelled) {
       const remaining = names.length - success - failed;
       showToast({
@@ -375,11 +421,15 @@ export function FileBrowser() {
     );
   }, [loadMore]);
 
-  // Auto-load the next server chunk during lazy infinite scroll — but never while
-  // a client-side search is active (the "Load more to search the rest" banner is
-  // the explicit affordance there), and never while a fetch is already in flight.
+  // Auto-load the next chunk during lazy infinite scroll. In folder mode it's
+  // paused while a client-side filter is active (the "Search '<term>' on server"
+  // affordance is the explicit path there); in server-search mode it stays on so
+  // the prefix results paginate. Never while a fetch is already in flight.
   const autoLoadEnabled =
-    lazyLoadingEnabled && truncated && !isFetchingNextPage && !debouncedQuery;
+    lazyLoadingEnabled &&
+    truncated &&
+    !isFetchingNextPage &&
+    (serverSearchActive || !debouncedQuery);
 
   const handleUpload = useCallback(
     async (files: FileWithRelativePath[]) => {
@@ -508,6 +558,9 @@ export function FileBrowser() {
         queryClient.invalidateQueries({
           queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
         });
+        queryClient.invalidateQueries({
+          queryKey: fileSearchFolderKey(bucket, roleId, pathFromUrl),
+        });
       }
 
       // Final summary toast — `UploadSummary` surfaces failed filenames + their
@@ -628,6 +681,7 @@ export function FileBrowser() {
             onSearchChange={(q) => {
               setSearchQuery(q);
               clearSelection();
+              if (serverSearchActive && q.trim() === "") exitServerSearch();
             }}
             mode={mode}
             onModeChange={setMode}
@@ -667,10 +721,39 @@ export function FileBrowser() {
             {...({ webkitdirectory: "" } as Record<string, string>)}
             style={{ display: "none" }}
           />
-          {debouncedQuery && truncated && (
-            <Text size="xs" c="dimmed">
-              Filtering {items.length} loaded items. Load more to search the rest.
-            </Text>
+          {!serverSearchActive && debouncedQuery && truncated && (
+            <Group gap="xs" align="center">
+              <Text size="xs" c="dimmed">
+                Filtering {items.length} loaded items.
+              </Text>
+              <Anchor
+                size="xs"
+                component="button"
+                type="button"
+                onClick={() => enterServerSearch(debouncedQuery)}
+              >
+                Search "{debouncedQuery.trim()}" on server (starts-with)
+              </Anchor>
+            </Group>
+          )}
+          {serverSearchActive && (
+            <Group gap="xs" align="center">
+              <Text size="xs" c="dimmed">
+                Server search (starts-with, case-sensitive):
+              </Text>
+              <Badge
+                variant="light"
+                rightSection={
+                  <CloseButton
+                    size="xs"
+                    aria-label="Exit server search"
+                    onClick={exitServerSearch}
+                  />
+                }
+              >
+                {serverSearchTerm}
+              </Badge>
+            </Group>
           )}
           {truncated && selected.size > 0 && (
             <Text size="xs" c="dimmed">
@@ -701,7 +784,13 @@ export function FileBrowser() {
           ) : error && !isFetchNextPageError ? (
             <QueryErrorState error={error} title="Couldn't load files" />
           ) : filteredItems.length === 0 ? (
-            <FileBrowserEmptyState />
+            <FileBrowserEmptyState
+              message={
+                serverSearchActive
+                  ? `No items start with "${serverSearchTerm}" here.`
+                  : undefined
+              }
+            />
           ) : mode === "table" ? (
             <FileTable
               files={filteredItems}

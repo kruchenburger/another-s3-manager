@@ -1,8 +1,22 @@
 import { test, expect } from "@playwright/test";
-import { loginAsAdmin as login } from "./fixtures/auth-helpers";
+import type { Page } from "@playwright/test";
+import { ADMIN_USER, ADMIN_PASSWORD } from "./fixtures/auth-helpers";
 
 const ROLE = process.env.E2E_MINIO_ROLE ?? "MinIO-e2e";
 const BUCKET = process.env.E2E_MINIO_BUCKET ?? "e2e-test";
+
+// Inline login (not the shared loginAsAdmin): that helper asserts the post-login
+// URL is exactly /v2/, but an admin with role access auto-redirects to the
+// default role/bucket (the e2e config has the MinIO-e2e role), so that URL never
+// holds. Assert success via the "User menu" button instead. Mirrors
+// ministack.spec.ts and file-prefix-search.spec.ts.
+async function login(page: Page): Promise<void> {
+  await page.goto("/v2/login");
+  await page.getByLabel("Username").fill(ADMIN_USER);
+  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
+  await page.getByRole("button", { name: "Login" }).click();
+  await expect(page.getByLabel("User menu")).toBeVisible({ timeout: 15_000 });
+}
 
 test.describe("Hybrid pagination via MinIO", () => {
   test("truncated folder shows N+ count and Load all loads the rest", async ({
@@ -37,6 +51,11 @@ test.describe("Hybrid pagination via MinIO", () => {
     // client-side slice auto-grows on scroll; scroll the in-memory list to the
     // bottom so file-250 renders.
     await expect(async () => {
+      // Hover the table first so the wheel event lands on the internal scroll
+      // container (PR #44). page.mouse.wheel dispatches at the current cursor
+      // position, which defaults to the top-left corner — over the sidebar, not
+      // the file list — so without this the scroll goes nowhere.
+      await page.locator("table").hover();
       await page.mouse.wheel(0, 100_000);
       await expect(
         page.locator("tr").filter({ hasText: "file-250.txt" }),

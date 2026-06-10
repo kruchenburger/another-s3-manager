@@ -98,6 +98,7 @@ from another_s3_manager.utils import (
     format_content_disposition,
     sanitize_bucket_name,
     sanitize_path,
+    sanitize_search_prefix,
     validate_password,
 )
 
@@ -1755,6 +1756,15 @@ async def list_files(
             "paginate client-side."
         ),
     ),
+    search: Optional[str] = Query(
+        None,
+        max_length=1024,
+        description=(
+            "Server-side name-prefix search (client_load mode only). Lists the "
+            "current folder's immediate children whose name starts with this "
+            "value. Case-sensitive. Requires client_load=1."
+        ),
+    ),
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """List files and directories.
@@ -1776,6 +1786,7 @@ async def list_files(
         try:
             bucket_name = sanitize_bucket_name(bucket_name)
             path = sanitize_path(path)
+            search_prefix = sanitize_search_prefix(search) if isinstance(search, str) and search else ""
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -1783,6 +1794,12 @@ async def list_files(
             raise HTTPException(
                 status_code=400,
                 detail="continuation_token requires max_keys to be set as well",
+            )
+
+        if search_prefix and not client_load:
+            raise HTTPException(
+                status_code=400,
+                detail="search requires client_load=1",
             )
 
         if client_load:
@@ -1795,6 +1812,7 @@ async def list_files(
                 current_user,
                 chunk,
                 continuation_token,
+                name_prefix=search_prefix,
             )
             return page
 

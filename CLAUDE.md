@@ -224,6 +224,7 @@ The React SPA consumes existing backend endpoints plus a small set added for SPA
 - `GET /api/me` — extended to include `allowed_roles: string[]` and `disable_deletion: bool` (env `DISABLE_DELETION` OR `config.disable_deletion`, env wins; surfaces the flag so the React UI can disable Delete controls before the user clicks)
 - `GET /api/buckets?role=...` — list buckets (already existed)
 - `GET /api/buckets/{b}/files?path=...&role=...` — list files (already existed)
+- `GET /api/buckets/{b}/files?...&client_load=1&search=<prefix>` — server-side name-prefix search: lists the current folder's immediate children (folders + files) whose name starts with `<prefix>`, case-sensitive, via S3 `ListObjectsV2(Prefix=…)`. client_load mode only (else 400). Powers the /v2 "Search on server" affordance shown when a folder is truncated.
 - `POST /api/buckets/{b}/upload` — single-file multipart upload (already existed)
 - `DELETE /api/buckets/{b}/files?path=...&role=...` — file or folder delete (already existed)
 - `GET /api/buckets/{b}/download?path=...&role=...` — streamed download (already existed; cookie-auth proxy used by Download button)
