@@ -1126,6 +1126,7 @@ def list_objects_client_load_for_role(
     user_dict: Dict[str, Any],
     max_client_load: int,
     continuation_token: Optional[str] = None,
+    name_prefix: str = "",
 ) -> Dict[str, Any]:
     """Aggregate S3 pages up to `max_client_load` objects for the /v2 client.
 
@@ -1143,6 +1144,11 @@ def list_objects_client_load_for_role(
     returned NextContinuationToken points exactly past the last emitted object,
     making continuation resumable at the correct offset.
 
+    `name_prefix` (default "") narrows results to children of the folder whose
+    NAME starts with it: S3 filters on `<base><name_prefix>` while child names
+    are still stripped relative to `<base>`, so they stay folder-relative
+    (e.g. a folder `4f2a1c/` matched by name_prefix="4f2a" displays as "4f2a1c").
+
     Returns:
         {
             "directories": [...],   # only on first chunk
@@ -1158,7 +1164,10 @@ def list_objects_client_load_for_role(
     # case to drain in a handful of chunks, low enough to refuse absurd values.
     max_client_load = max(1, min(max_client_load, 200_000))
 
-    prefix = path + "/" if path else ""
+    # `base` is the folder prefix used to strip child names; `s3_prefix` is what
+    # S3 filters on. name_prefix="" → s3_prefix == base (normal folder listing).
+    base = path + "/" if path else ""
+    s3_prefix = base + name_prefix
 
     def fetch(s3_client) -> Dict[str, Any]:
         directories: list = []
@@ -1166,12 +1175,12 @@ def list_objects_client_load_for_role(
             # First chunk: dedicated directory-discovery call (not budget-limited).
             dir_resp = s3_client.list_objects_v2(
                 Bucket=bucket,
-                Prefix=prefix,
+                Prefix=s3_prefix,
                 Delimiter="/",
                 MaxKeys=1000,
             )
             for prefix_obj in dir_resp.get("CommonPrefixes", []) or []:
-                dir_name = prefix_obj["Prefix"][len(prefix) :].rstrip("/")
+                dir_name = prefix_obj["Prefix"][len(base) :].rstrip("/")
                 if dir_name:
                     directories.append(
                         {
@@ -1194,7 +1203,7 @@ def list_objects_client_load_for_role(
             remaining = max_client_load - len(files)
             kwargs: Dict[str, Any] = {
                 "Bucket": bucket,
-                "Prefix": prefix,
+                "Prefix": s3_prefix,
                 "Delimiter": "/",
                 "MaxKeys": min(1000, remaining),
             }
@@ -1207,7 +1216,7 @@ def list_objects_client_load_for_role(
                 # Skip empty directory-marker objects (key ends with /).
                 if obj["Key"].endswith("/") and obj["Size"] == 0:
                     continue
-                file_name = obj["Key"][len(prefix) :]
+                file_name = obj["Key"][len(base) :]
                 if not file_name:
                     continue
                 files.append(
