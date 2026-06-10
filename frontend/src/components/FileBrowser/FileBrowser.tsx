@@ -47,6 +47,7 @@ import { FileBrowserHeader } from "./FileBrowserHeader";
 import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
 import { FileBrowserEmptyState } from "./FileBrowserEmptyState";
+import { FileBrowserLoadMoreFooter } from "./FileBrowserLoadMoreFooter";
 import { BulkDeleteProgress } from "@/components/FileBrowser/BulkDeleteProgress";
 import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
 import { ScrollToTopButton } from "@/components/ScrollToTopButton/ScrollToTopButton";
@@ -431,6 +432,14 @@ export function FileBrowser() {
     !isFetchingNextPage &&
     (serverSearchActive || !debouncedQuery);
 
+  // Bottom-of-list "Load more" button, shown only when lazy-loading is OFF and
+  // more objects remain. With lazy on, the near-end sentinel auto-loads on
+  // scroll (except while a client-side filter is active), so a manual bottom button would never get a chance to be useful;
+  // with lazy off, the header buttons were the only affordance — forcing a
+  // scroll back to the top to fetch the next chunk. (The list is non-empty in
+  // the table/grid branches — the empty case short-circuits above.)
+  const showLoadMoreFooter = !lazyLoadingEnabled && truncated;
+
   const handleUpload = useCallback(
     async (files: FileWithRelativePath[]) => {
       const maxFileSize = me.data?.max_file_size;
@@ -792,37 +801,53 @@ export function FileBrowser() {
               }
             />
           ) : mode === "table" ? (
-            <FileTable
-              files={filteredItems}
-              selected={selected}
-              onToggleSelect={toggleSelect}
-              onToggleSelectAll={toggleSelectAll}
-              onNavigate={navigateToFolder}
-              onDownload={handleDownload}
-              onCopyUrl={handleCopyUrl}
-              onPreview={handlePreview}
-              onDelete={(name) => requestDelete([name])}
-              scrollRef={scrollRef}
-              autoLoadEnabled={autoLoadEnabled}
-              onLoadMore={handleLoadMore}
-            />
+            <>
+              <FileTable
+                files={filteredItems}
+                selected={selected}
+                onToggleSelect={toggleSelect}
+                onToggleSelectAll={toggleSelectAll}
+                onNavigate={navigateToFolder}
+                onDownload={handleDownload}
+                onCopyUrl={handleCopyUrl}
+                onPreview={handlePreview}
+                onDelete={(name) => requestDelete([name])}
+                scrollRef={scrollRef}
+                autoLoadEnabled={autoLoadEnabled}
+                onLoadMore={handleLoadMore}
+              />
+              {showLoadMoreFooter && (
+                <FileBrowserLoadMoreFooter
+                  loading={isFetchingNextPage}
+                  onLoadMore={handleLoadMore}
+                />
+              )}
+            </>
           ) : (
-            <FileGrid
-              files={filteredItems}
-              selected={selected}
-              onToggleSelect={toggleSelect}
-              onNavigate={navigateToFolder}
-              onDownload={handleDownload}
-              onCopyUrl={handleCopyUrl}
-              onPreview={handlePreview}
-              onDelete={(name) => requestDelete([name])}
-              bucket={bucket}
-              roleId={roleId}
-              path={pathFromUrl}
-              scrollRef={scrollRef}
-              autoLoadEnabled={autoLoadEnabled}
-              onLoadMore={handleLoadMore}
-            />
+            <>
+              <FileGrid
+                files={filteredItems}
+                selected={selected}
+                onToggleSelect={toggleSelect}
+                onNavigate={navigateToFolder}
+                onDownload={handleDownload}
+                onCopyUrl={handleCopyUrl}
+                onPreview={handlePreview}
+                onDelete={(name) => requestDelete([name])}
+                bucket={bucket}
+                roleId={roleId}
+                path={pathFromUrl}
+                scrollRef={scrollRef}
+                autoLoadEnabled={autoLoadEnabled}
+                onLoadMore={handleLoadMore}
+              />
+              {showLoadMoreFooter && (
+                <FileBrowserLoadMoreFooter
+                  loading={isFetchingNextPage}
+                  onLoadMore={handleLoadMore}
+                />
+              )}
+            </>
           )}
         </div>
 

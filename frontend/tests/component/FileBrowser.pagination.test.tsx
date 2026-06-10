@@ -28,6 +28,7 @@ const loadAllMock = vi.fn();
 let mockTruncated = false;
 let mockError: Error | null = null;
 let mockIsFetchNextPageError = false;
+let mockIsFetchingNextPage = false;
 let mockDirectories = [{ name: "logs", is_directory: true, size: 0 }];
 let mockFiles = [
   { name: "a.txt", is_directory: false, size: 1, last_modified: "" },
@@ -50,7 +51,7 @@ vi.mock("@/features/files/hooks/useFiles", () => ({
       return Promise.resolve();
     },
     isFetching: false,
-    isFetchingNextPage: false,
+    isFetchingNextPage: mockIsFetchingNextPage,
     isFetchNextPageError: mockIsFetchNextPageError,
     error: mockError,
   }),
@@ -118,6 +119,7 @@ describe("FileBrowser hybrid pagination", () => {
     mockTruncated = false;
     mockError = null;
     mockIsFetchNextPageError = false;
+    mockIsFetchingNextPage = false;
     mockDirectories = [{ name: "logs", is_directory: true, size: 0 }];
     mockFiles = [
       { name: "a.txt", is_directory: false, size: 1, last_modified: "" },
@@ -257,5 +259,54 @@ describe("FileBrowser hybrid pagination", () => {
       expect(screen.queryByText("banana.txt")).not.toBeInTheDocument(),
     );
     expect(screen.getByText("apple.txt")).toBeInTheDocument();
+  });
+
+  // Bottom-of-list "Load more" footer — only when lazy loading is OFF (with lazy
+  // on, the near-end sentinel auto-loads, so a manual bottom button is redundant).
+  it("does not render the bottom Load more footer when lazy loading is ON", () => {
+    mockLazy = true;
+    mockTruncated = true;
+    renderBrowser();
+    // Only the header Load more exists; the footer is suppressed under lazy auto-load.
+    expect(screen.getAllByRole("button", { name: /load more/i })).toHaveLength(1);
+  });
+
+  it("renders a bottom Load more footer when lazy loading is OFF and truncated", () => {
+    mockLazy = false;
+    mockTruncated = true;
+    renderBrowser();
+    // Header + footer, both labelled "Load more".
+    expect(screen.getAllByRole("button", { name: /load more/i })).toHaveLength(2);
+  });
+
+  it("hides the bottom footer when lazy is OFF but nothing more to load", () => {
+    mockLazy = false;
+    mockTruncated = false;
+    renderBrowser();
+    expect(
+      screen.queryByRole("button", { name: /load more/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("the bottom Load more footer triggers the server continuation", () => {
+    mockLazy = false;
+    mockTruncated = true;
+    renderBrowser();
+    loadMoreMock.mockReset();
+    const buttons = screen.getAllByRole("button", { name: /load more/i });
+    // The footer renders after the header in the DOM, so it's the last match.
+    fireEvent.click(buttons[buttons.length - 1]);
+    expect(loadMoreMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the bottom Load more footer while a continuation fetch is in flight", () => {
+    mockLazy = false;
+    mockTruncated = true;
+    mockIsFetchingNextPage = true;
+    renderBrowser();
+    const buttons = screen.getAllByRole("button", { name: /load more/i });
+    // Footer is the last "Load more"; it must be disabled to block double-submit
+    // (Mantine `loading` shows a spinner but does not block clicks).
+    expect(buttons[buttons.length - 1]).toBeDisabled();
   });
 });
