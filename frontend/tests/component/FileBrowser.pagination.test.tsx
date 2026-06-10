@@ -198,8 +198,10 @@ describe("FileBrowser hybrid pagination", () => {
       input = screen.getByRole("searchbox");
     }
     fireEvent.change(input, { target: { value: "a" } });
+    // The banner now shows a "Filtering N loaded items." text and a server-search
+    // affordance anchor. Assert on the affordance (the most stable signal).
     expect(
-      await screen.findByText(/load more to search the rest/i),
+      await screen.findByText(/search "a" on server \(starts-with\)/i),
     ).toBeInTheDocument();
   });
 
