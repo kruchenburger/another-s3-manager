@@ -1,7 +1,10 @@
 """Backend tests for server-side prefix search (the `name_prefix` extension of
 the /v2 client-load listing). See the 2026-06-10 prefix-search design (out-of-repo)."""
 
+import pytest
+
 from another_s3_manager.s3_client import list_objects_client_load_for_role
+from another_s3_manager.utils import sanitize_search_prefix
 
 ADMIN = {"username": "admin", "is_admin": True, "allowed_roles": []}
 
@@ -151,3 +154,101 @@ def test_name_prefix_no_match_returns_empty(moto_s3):
     assert result["files"] == []
     assert result["truncated"] is False
     assert result["next_token"] is None
+
+
+def test_sanitize_search_prefix_trims_and_passes_literals():
+    assert sanitize_search_prefix("  4f2a  ") == "4f2a"
+    # `..` and `/` are legal literal S3 key bytes — they pass through.
+    assert sanitize_search_prefix("a/b") == "a/b"
+    assert sanitize_search_prefix("..x") == "..x"
+
+
+def test_sanitize_search_prefix_empty_is_empty():
+    assert sanitize_search_prefix("") == ""
+    assert sanitize_search_prefix("   ") == ""
+
+
+def test_sanitize_search_prefix_rejects_control_chars():
+    with pytest.raises(ValueError):
+        sanitize_search_prefix("a\x00b")
+    with pytest.raises(ValueError):
+        sanitize_search_prefix("a\x1fb")
+
+
+def test_route_search_filters_current_level(app_client, moto_s3):
+    """client_load=1&search=<prefix> returns only matching current-level items."""
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="ps-route")
+    for d in ["4f2a1c", "4f2a9b", "99zz"]:
+        moto_s3.put_object(Bucket="ps-route", Key=f"{d}/", Body=b"")
+    moto_s3.put_object(Bucket="ps-route", Key="4f2a-note.txt", Body=b"")
+    moto_s3.put_object(Bucket="ps-route", Key="other.txt", Body=b"")
+
+    response = app_client.get(
+        "/api/buckets/ps-route/files?client_load=1&search=4f2a",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert {d["name"] for d in body["directories"]} == {"4f2a1c", "4f2a9b"}
+    assert {f["name"] for f in body["files"]} == {"4f2a-note.txt"}
+
+
+def test_route_search_without_client_load_is_400(app_client, moto_s3):
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="ps-guard")
+
+    response = app_client.get(
+        "/api/buckets/ps-guard/files?search=abc",
+        headers=headers,
+    )
+    assert response.status_code == 400
+    assert "client_load" in response.json()["detail"]
+
+
+def test_route_blank_search_is_noop(app_client, moto_s3):
+    """A whitespace-only search is treated as absent (full folder listing)."""
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="ps-blank")
+    moto_s3.put_object(Bucket="ps-blank", Key="a.txt", Body=b"")
+    moto_s3.put_object(Bucket="ps-blank", Key="b.txt", Body=b"")
+
+    response = app_client.get(
+        "/api/buckets/ps-blank/files?client_load=1&search=%20%20",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert {f["name"] for f in response.json()["files"]} == {"a.txt", "b.txt"}
+
+
+def test_route_overlong_search_is_422(app_client, moto_s3):
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="ps-long")
+
+    response = app_client.get(
+        f"/api/buckets/ps-long/files?client_load=1&search={'x' * 1025}",
+        headers=headers,
+    )
+    assert response.status_code == 422  # FastAPI Query max_length
+
+
+def test_route_control_char_search_is_400(app_client, moto_s3):
+    """A control char in search trips the route's ValueError → 400 path."""
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="ps-ctrl")
+
+    response = app_client.get(
+        "/api/buckets/ps-ctrl/files?client_load=1&search=a%00b",
+        headers=headers,
+    )
+    assert response.status_code == 400
