@@ -2,7 +2,7 @@ import { Button, Center } from "@mantine/core";
 import { ChevronDown } from "lucide-react";
 
 interface FileBrowserLoadMoreFooterProps {
-  /** Server continuation fetch in flight — shows a spinner and blocks re-clicks. */
+  /** Server continuation fetch in flight — drives the spinner and the `disabled` re-click guard below. */
   loading: boolean;
   onLoadMore: () => void;
 }

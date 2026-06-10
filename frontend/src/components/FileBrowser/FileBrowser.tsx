@@ -434,7 +434,7 @@ export function FileBrowser() {
 
   // Bottom-of-list "Load more" button, shown only when lazy-loading is OFF and
   // more objects remain. With lazy on, the near-end sentinel auto-loads on
-  // scroll, so a manual bottom button would never get a chance to be useful;
+  // scroll (except while a client-side filter is active), so a manual bottom button would never get a chance to be useful;
   // with lazy off, the header buttons were the only affordance — forcing a
   // scroll back to the top to fetch the next chunk. (The list is non-empty in
   // the table/grid branches — the empty case short-circuits above.)
