@@ -107,6 +107,7 @@ describe("FileBrowser Copy URL", () => {
     vi.mocked(getPresignedDownloadUrl).mockResolvedValueOnce({
       url: "https://signed.example/photo.jpg?X-Amz-Signature=abc",
       expires_at: "2026-05-05T12:00:00+00:00",
+      expires_in: 3600,
     });
     renderBrowser();
     fireEvent.click(screen.getByLabelText("Copy URL"));

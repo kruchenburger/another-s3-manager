@@ -26,6 +26,9 @@ export function toWritableConfig(config: AppConfig): AppConfig {
     password_min_lowercase: config.password_min_lowercase,
     password_min_digits: config.password_min_digits,
     password_min_special: config.password_min_special,
+    // Presigned URL TTL settings.
+    presigned_url_default_ttl: config.presigned_url_default_ttl,
+    presigned_url_max_ttl: config.presigned_url_max_ttl,
     // MCP server settings.
     // NOTE: mcp_global_max_read_bytes is in BYTES, not MB. SettingsPage edits
     // an MB-converted shadow field (mcp_global_max_read_bytes_mb) and converts
