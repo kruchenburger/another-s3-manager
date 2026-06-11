@@ -66,7 +66,7 @@ export function TtlPopover({
             value={selected}
             onChange={(v) => v && setSelected(v)}
             allowDeselect={false}
-            comboboxProps={{ withinPortal: false }}
+            comboboxProps={{ withinPortal: true }}
             size="sm"
           />
           <Group justify="flex-end">
