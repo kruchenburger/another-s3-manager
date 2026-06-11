@@ -1848,9 +1848,7 @@ def test_presigned_endpoint_custom_expires_in_echoed(app_client, mocker):
         "another_s3_manager.main.s3_generate_presigned_url_for_role",
         return_value="https://my-bucket.s3.amazonaws.com/f?X-Amz-Signature=abc",
     )
-    mocker.patch(
-        "another_s3_manager.main.role_uses_temporary_credentials", return_value=False
-    )
+    mocker.patch("another_s3_manager.main.role_uses_temporary_credentials", return_value=False)
     resp = app_client.get(
         "/api/buckets/my-bucket/presigned",
         params={"role": "r", "path": "f.txt", "expires_in": 21600},
@@ -1869,12 +1867,8 @@ def test_presigned_endpoint_default_when_expires_in_omitted(app_client, mocker):
         "another_s3_manager.main.s3_generate_presigned_url_for_role",
         return_value="https://my-bucket.s3.amazonaws.com/f?X-Amz-Signature=abc",
     )
-    mocker.patch(
-        "another_s3_manager.main.role_uses_temporary_credentials", return_value=False
-    )
-    resp = app_client.get(
-        "/api/buckets/my-bucket/presigned", params={"role": "r", "path": "f.txt"}
-    )
+    mocker.patch("another_s3_manager.main.role_uses_temporary_credentials", return_value=False)
+    resp = app_client.get("/api/buckets/my-bucket/presigned", params={"role": "r", "path": "f.txt"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["expires_in"] == 3600
 
@@ -1911,9 +1905,7 @@ def test_presigned_endpoint_warns_for_sts_role_over_threshold(app_client, mocker
         "another_s3_manager.main.s3_generate_presigned_url_for_role",
         return_value="https://my-bucket.s3.amazonaws.com/f?X-Amz-Signature=abc",
     )
-    mocker.patch(
-        "another_s3_manager.main.role_uses_temporary_credentials", return_value=True
-    )
+    mocker.patch("another_s3_manager.main.role_uses_temporary_credentials", return_value=True)
     resp = app_client.get(
         "/api/buckets/my-bucket/presigned",
         params={"role": "sts", "path": "f.txt", "expires_in": 86400},
@@ -1931,9 +1923,7 @@ def test_presigned_endpoint_no_warning_for_sts_role_at_default(app_client, mocke
         "another_s3_manager.main.s3_generate_presigned_url_for_role",
         return_value="https://my-bucket.s3.amazonaws.com/f?X-Amz-Signature=abc",
     )
-    mocker.patch(
-        "another_s3_manager.main.role_uses_temporary_credentials", return_value=True
-    )
+    mocker.patch("another_s3_manager.main.role_uses_temporary_credentials", return_value=True)
     resp = app_client.get(
         "/api/buckets/my-bucket/presigned",
         params={"role": "sts", "path": "f.txt", "expires_in": 3600},

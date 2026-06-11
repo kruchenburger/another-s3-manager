@@ -82,10 +82,10 @@ from another_s3_manager.s3_client import (
     list_objects_for_role,
     list_objects_paginated_for_role,
     put_object_for_role,
+    role_uses_temporary_credentials,
 )
 from another_s3_manager.s3_client import (
     generate_presigned_url_for_role as s3_generate_presigned_url_for_role,
-    role_uses_temporary_credentials,
 )
 from another_s3_manager.users import (
     get_users_for_admin,
@@ -1474,9 +1474,7 @@ async def update_config(
                 try:
                     val = int(config[field_name])
                 except (ValueError, TypeError):
-                    raise HTTPException(
-                        status_code=400, detail=f"{field_name} must be a valid integer"
-                    )
+                    raise HTTPException(status_code=400, detail=f"{field_name} must be a valid integer")
                 if val < PRESIGNED_URL_MIN_TTL or val > PRESIGNED_URL_HARD_CEILING:
                     raise HTTPException(
                         status_code=400,
@@ -1497,11 +1495,7 @@ async def update_config(
         # Cross-field invariant: default cannot exceed max (when both are known).
         _eff_default = config.get("presigned_url_default_ttl")
         _eff_max = config.get("presigned_url_max_ttl")
-        if (
-            _eff_default is not None
-            and _eff_max is not None
-            and int(_eff_default) > int(_eff_max)
-        ):
+        if _eff_default is not None and _eff_max is not None and int(_eff_default) > int(_eff_max):
             raise HTTPException(
                 status_code=400,
                 detail="presigned_url_default_ttl cannot exceed presigned_url_max_ttl",
@@ -2250,10 +2244,7 @@ async def get_presigned_url(
                 status_code=400,
                 detail={
                     "code": "INVALID_EXPIRES_IN",
-                    "message": (
-                        f"expires_in must be between {PRESIGNED_URL_MIN_TTL} "
-                        f"and {max_ttl} seconds"
-                    ),
+                    "message": (f"expires_in must be between {PRESIGNED_URL_MIN_TTL} and {max_ttl} seconds"),
                 },
             )
         granted_ttl = expires_in
@@ -2297,12 +2288,9 @@ async def get_presigned_url(
         "expires_at": expires_at,
         "expires_in": granted_ttl,
     }
-    if granted_ttl > PRESIGNED_STS_WARNING_THRESHOLD and role_uses_temporary_credentials(
-        validated_role
-    ):
+    if granted_ttl > PRESIGNED_STS_WARNING_THRESHOLD and role_uses_temporary_credentials(validated_role):
         response["warning"] = (
-            "This role uses temporary credentials — the link may stop working "
-            "earlier, when the role's session expires."
+            "This role uses temporary credentials — the link may stop working earlier, when the role's session expires."
         )
     return response
 

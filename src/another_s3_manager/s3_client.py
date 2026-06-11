@@ -853,9 +853,7 @@ def role_uses_temporary_credentials(role_name: str) -> bool:
     False (no false alarm).
     """
     config = load_config(force_reload=False)
-    role_config = next(
-        (r for r in config.get("roles", []) if r.get("name") == role_name), None
-    )
+    role_config = next((r for r in config.get("roles", []) if r.get("name") == role_name), None)
     if role_config is None:
         return False
     return role_config.get("type") in _TEMPORARY_CREDENTIAL_ROLE_TYPES
