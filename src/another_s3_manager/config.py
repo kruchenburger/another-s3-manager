@@ -8,9 +8,9 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-logger = logging.getLogger(__name__)
-
 from another_s3_manager.constants import CONFIG_FILE
+
+logger = logging.getLogger(__name__)
 
 # Global cache for configuration
 _config_cache: Dict[str, Any] = {}
@@ -120,6 +120,12 @@ def _migrate_config() -> bool:
     if "mcp_global_max_read_bytes" not in _config_cache:
         _config_cache["mcp_global_max_read_bytes"] = 10_485_760
         config_modified = True
+    if "presigned_url_default_ttl" not in _config_cache:
+        _config_cache["presigned_url_default_ttl"] = int(os.getenv("PRESIGNED_URL_DEFAULT_TTL", "3600"))
+        config_modified = True
+    if "presigned_url_max_ttl" not in _config_cache:
+        _config_cache["presigned_url_max_ttl"] = int(os.getenv("PRESIGNED_URL_MAX_TTL", "604800"))
+        config_modified = True
     # Note: data_dir is not migrated automatically - it should be set explicitly if needed
     # Note: default_role is optional and not migrated automatically - it should be set explicitly if needed
 
@@ -133,6 +139,8 @@ def _get_default_config() -> Dict[str, Any]:
         DEFAULT_ITEMS_PER_PAGE,
         DEFAULT_MAX_CLIENT_LOAD,
         DEFAULT_MAX_FILE_SIZE,
+        DEFAULT_PRESIGNED_URL_DEFAULT_TTL,
+        DEFAULT_PRESIGNED_URL_MAX_TTL,
     )
 
     return {
@@ -154,6 +162,10 @@ def _get_default_config() -> Dict[str, Any]:
         "mcp_disable_writes": False,
         "mcp_text_extensions": [],
         "mcp_global_max_read_bytes": 10_485_760,
+        "presigned_url_default_ttl": int(
+            os.getenv("PRESIGNED_URL_DEFAULT_TTL", str(DEFAULT_PRESIGNED_URL_DEFAULT_TTL))
+        ),
+        "presigned_url_max_ttl": int(os.getenv("PRESIGNED_URL_MAX_TTL", str(DEFAULT_PRESIGNED_URL_MAX_TTL))),
     }
 
 
