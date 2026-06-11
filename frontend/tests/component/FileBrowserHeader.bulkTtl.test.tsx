@@ -51,7 +51,8 @@ describe("FileBrowserHeader bulk Copy URLs TTL", () => {
     // Wait for the TtlPopover dropdown to appear.
     const heading = await screen.findByText(/share link validity/i);
     expect(heading).toBeInTheDocument();
-    // Find the Copy button by text — getByRole may not pierce the Popover portal ARIA tree.
+    // Find the Copy button by text — getByRole does not resolve the portaled button
+    // in this jsdom/Mantine setup (the button has no aria-label, only inner text).
     const copyBtn = Array.from(document.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "Copy",
     );
