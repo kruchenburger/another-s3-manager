@@ -58,7 +58,7 @@ from another_s3_manager.auth import (
     verify_csrf_token,
     verify_password,
 )
-from another_s3_manager.config import load_config, save_config
+from another_s3_manager.config import load_config, resolve_presigned_ttls, save_config
 from another_s3_manager.constants import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     APP_DESCRIPTION,
@@ -85,6 +85,7 @@ from another_s3_manager.s3_client import (
 )
 from another_s3_manager.s3_client import (
     generate_presigned_url_for_role as s3_generate_presigned_url_for_role,
+    role_uses_temporary_credentials,
 )
 from another_s3_manager.users import (
     get_users_for_admin,
@@ -2151,27 +2152,58 @@ async def get_presigned_url(
     path: str = Query(..., description="Object key to sign"),
     role: str = Query(..., description="Role name to use (required)"),
     op: str = Query("get", description="Presign operation; only 'get' is supported"),
+    expires_in: Optional[int] = Query(
+        None,
+        description="Requested URL lifetime in seconds. Defaults to the configured "
+        "default; must be between 60 and the configured maximum.",
+    ),
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """Return a short-lived presigned URL for sharing or browser-side display.
+    """Return a presigned URL for sharing or browser-side display.
 
-    The signed URL embeds the role's credentials and is valid for 1 hour.
-    Use this for Copy URL flows and for `<img>/<video>` srcs that can't
-    carry the auth cookie reliably. The helper auto-applies a UTF-8 charset
-    override for known text extensions so Cyrillic / CJK / emoji content
-    renders correctly when the link is opened in a new tab.
+    The signed URL embeds the role's credentials. Lifetime is the configured
+    default unless `expires_in` is given (clamped between 60s and the configured
+    maximum, else 400). The response echoes the granted `expires_in` and, for
+    STS-backed roles (assume_role / profile) asked for more than 1h, a `warning`
+    that the link may expire when the role's session ends.
 
-    `role` is required (the underlying `s3_client._for_role` helper signature
-    is `role: str`, not Optional). The frontend always passes it explicitly.
-    Direct API callers that omit it get 422 from FastAPI's query validation.
+    `role` is required. The frontend always passes it explicitly. Direct API
+    callers that omit it get 422 from FastAPI's query validation.
     """
     from datetime import datetime, timedelta, timezone
+
+    from another_s3_manager.constants import (
+        PRESIGNED_STS_WARNING_THRESHOLD,
+        PRESIGNED_URL_MIN_TTL,
+    )
 
     if op != "get":
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported op: {op!r} (only 'get' is supported)",
         )
+
+    # Resolve configured TTL bounds (config → env → default, clamped to ceiling).
+    # Validate expires_in before bucket/path sanitization so callers get a clean
+    # INVALID_EXPIRES_IN error even when bucket name shorthand is used in tests.
+    config = load_config(force_reload=False)
+    default_ttl, max_ttl = resolve_presigned_ttls(config)
+
+    if expires_in is None:
+        granted_ttl = default_ttl
+    else:
+        if expires_in < PRESIGNED_URL_MIN_TTL or expires_in > max_ttl:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "INVALID_EXPIRES_IN",
+                    "message": (
+                        f"expires_in must be between {PRESIGNED_URL_MIN_TTL} "
+                        f"and {max_ttl} seconds"
+                    ),
+                },
+            )
+        granted_ttl = expires_in
 
     try:
         bucket_name = sanitize_bucket_name(bucket_name)
@@ -2183,22 +2215,19 @@ async def get_presigned_url(
     # canonical role string the helper expects.
     validated_role = validate_role_access(role, current_user) or role
 
-    expires_in = 3600
     try:
         url = s3_generate_presigned_url_for_role(
             validated_role,
             bucket_name,
             path,
             current_user,
-            expires_in=expires_in,
+            expires_in=granted_ttl,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except (ClientError, BotoCoreError) as e:
-        # STS assume_role failure / credential refresh failure / invalid bucket
-        # config — produce a clean error rather than a bare 500 with botocore repr.
         raise HTTPException(status_code=500, detail=format_boto_error(e))
     except S3OperationError as e:
         raise _s3_error_to_http(e) from e
@@ -2209,8 +2238,20 @@ async def get_presigned_url(
             detail={"code": "INTERNAL", "message": "Presigned URL generation failed — see server logs"},
         ) from e
 
-    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
-    return {"url": url, "expires_at": expires_at}
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=granted_ttl)).isoformat()
+    response: Dict[str, Any] = {
+        "url": url,
+        "expires_at": expires_at,
+        "expires_in": granted_ttl,
+    }
+    if granted_ttl > PRESIGNED_STS_WARNING_THRESHOLD and role_uses_temporary_credentials(
+        validated_role
+    ):
+        response["warning"] = (
+            "This role uses temporary credentials — the link may stop working "
+            "earlier, when the role's session expires."
+        )
+    return response
 
 
 @app.delete("/api/buckets/{bucket_name}/files")

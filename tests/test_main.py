@@ -1840,6 +1840,108 @@ def test_presigned_endpoint_boto_error_returns_500(app_client, mocker):
     assert isinstance(body["detail"], str)
 
 
+def test_presigned_endpoint_custom_expires_in_echoed(app_client, mocker):
+    """A valid expires_in is granted and echoed; expires_at matches it."""
+    login(app_client)
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="r")
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        return_value="https://my-bucket.s3.amazonaws.com/f?X-Amz-Signature=abc",
+    )
+    mocker.patch(
+        "another_s3_manager.main.role_uses_temporary_credentials", return_value=False
+    )
+    resp = app_client.get(
+        "/api/buckets/my-bucket/presigned",
+        params={"role": "r", "path": "f.txt", "expires_in": 21600},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["expires_in"] == 21600
+    assert "warning" not in body
+
+
+def test_presigned_endpoint_default_when_expires_in_omitted(app_client, mocker):
+    """No expires_in → server default (3600) is granted and echoed."""
+    login(app_client)
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="r")
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        return_value="https://my-bucket.s3.amazonaws.com/f?X-Amz-Signature=abc",
+    )
+    mocker.patch(
+        "another_s3_manager.main.role_uses_temporary_credentials", return_value=False
+    )
+    resp = app_client.get(
+        "/api/buckets/my-bucket/presigned", params={"role": "r", "path": "f.txt"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["expires_in"] == 3600
+
+
+def test_presigned_endpoint_rejects_below_minimum(app_client, mocker):
+    """expires_in < 60 → 400 with structured detail."""
+    login(app_client)
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="r")
+    resp = app_client.get(
+        "/api/buckets/b/presigned",
+        params={"role": "r", "path": "f.txt", "expires_in": 30},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "INVALID_EXPIRES_IN"
+
+
+def test_presigned_endpoint_rejects_above_max(app_client, mocker):
+    """expires_in > configured max → 400 with structured detail."""
+    login(app_client)
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="r")
+    resp = app_client.get(
+        "/api/buckets/b/presigned",
+        params={"role": "r", "path": "f.txt", "expires_in": 999_999_999},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "INVALID_EXPIRES_IN"
+
+
+def test_presigned_endpoint_warns_for_sts_role_over_threshold(app_client, mocker):
+    """STS role + TTL > 1h → response carries a warning string."""
+    login(app_client)
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="sts")
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        return_value="https://my-bucket.s3.amazonaws.com/f?X-Amz-Signature=abc",
+    )
+    mocker.patch(
+        "another_s3_manager.main.role_uses_temporary_credentials", return_value=True
+    )
+    resp = app_client.get(
+        "/api/buckets/my-bucket/presigned",
+        params={"role": "sts", "path": "f.txt", "expires_in": 86400},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "warning" in resp.json()
+    assert "temporary credentials" in resp.json()["warning"]
+
+
+def test_presigned_endpoint_no_warning_for_sts_role_at_default(app_client, mocker):
+    """STS role but TTL <= 1h → no warning (link fits inside a fresh session)."""
+    login(app_client)
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="sts")
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        return_value="https://my-bucket.s3.amazonaws.com/f?X-Amz-Signature=abc",
+    )
+    mocker.patch(
+        "another_s3_manager.main.role_uses_temporary_credentials", return_value=True
+    )
+    resp = app_client.get(
+        "/api/buckets/my-bucket/presigned",
+        params={"role": "sts", "path": "f.txt", "expires_in": 3600},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "warning" not in resp.json()
+
+
 def test_to_http_exception_uses_typed_status_and_dict_detail():
     """_s3_error_to_http maps each typed S3 error to its http_status + structured detail."""
     from fastapi import HTTPException
