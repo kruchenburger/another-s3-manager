@@ -120,6 +120,7 @@ describe("FileBrowser Copy URL", () => {
       "my-bucket",
       "RoleA",
       "photo.jpg",
+      undefined,
     );
   });
 });

@@ -26,6 +26,7 @@ import { joinPath, decodePath } from "@/utils/pathUtils";
 import { ApiError, getErrorMessage } from "@/utils/apiError";
 import { formatBytes } from "@/utils/formatBytes";
 import { formatTimeOfDay } from "@/utils/formatDate";
+import { formatDuration } from "@/utils/formatDuration";
 import { showToast, TOAST_DURATIONS } from "@/utils/toast";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
@@ -62,6 +63,8 @@ export function FileBrowser() {
 
   const { data: config } = useConfig();
   const lazyLoadingEnabled = config?.enable_lazy_loading ?? true;
+  const presignedDefaultTtl = config?.presigned_url_default_ttl ?? 3600;
+  const presignedMaxTtl = config?.presigned_url_max_ttl ?? 604800;
 
   const [serverSearchTerm, setServerSearchTerm] = useState<string | null>(null);
   const serverSearchActive = serverSearchTerm !== null;
@@ -213,19 +216,21 @@ export function FileBrowser() {
     }
   };
 
-  const handleCopyUrl = async (name: string) => {
+  const handleCopyUrl = async (name: string, ttlSeconds?: number) => {
     const fullPath = joinPath(pathFromUrl, name);
     try {
-      const { url, expires_at } = await getPresignedDownloadUrl(
+      const { url, expires_at, expires_in, warning } = await getPresignedDownloadUrl(
         bucket,
         roleId,
         fullPath,
+        ttlSeconds,
       );
       await navigator.clipboard.writeText(url);
+      const base = `${name} — anyone with this link can download it until ${formatTimeOfDay(expires_at)} (expires in ${formatDuration(expires_in)}). No login needed.`;
       showToast({
-        color: "green",
+        color: warning ? "yellow" : "green",
         title: "Presigned URL copied",
-        message: `${name} — anyone with this link can download it until ${formatTimeOfDay(expires_at)} (expires in 1 hour). No login needed.`,
+        message: warning ? `${base}\n${warning}` : base,
         autoClose: TOAST_DURATIONS.infoLong,
       });
     } catch (e) {
@@ -238,24 +243,25 @@ export function FileBrowser() {
     }
   };
 
-  const handleBulkCopyUrl = async () => {
+  const handleBulkCopyUrl = async (ttlSeconds?: number) => {
     const names = Array.from(selected);
     try {
       const responses = await Promise.all(
         names.map((name) =>
-          getPresignedDownloadUrl(bucket, roleId, joinPath(pathFromUrl, name)),
+          getPresignedDownloadUrl(bucket, roleId, joinPath(pathFromUrl, name), ttlSeconds),
         ),
       );
       const urls = responses.map((r) => r.url).join("\n");
       await navigator.clipboard.writeText(urls);
-      // All URLs in a bulk copy share the same backend timestamp (same request batch).
-      const expiry = responses[0]?.expires_at;
+      const first = responses[0];
+      const warning = responses.find((r) => r.warning)?.warning;
+      const base = first
+        ? `Anyone with these links can download until ${formatTimeOfDay(first.expires_at)} (expires in ${formatDuration(first.expires_in)}). No login needed.`
+        : "Links copied.";
       showToast({
-        color: "green",
+        color: warning ? "yellow" : "green",
         title: `${responses.length} presigned URLs copied`,
-        message: expiry
-          ? `Anyone with these links can download until ${formatTimeOfDay(expiry)} (expires in 1 hour). No login needed.`
-          : "Anyone with these links can download for 1 hour. No login needed.",
+        message: warning ? `${base}\n${warning}` : base,
         autoClose: TOAST_DURATIONS.infoLong,
       });
     } catch (e) {
@@ -700,6 +706,8 @@ export function FileBrowser() {
             onUploadClick={handleUploadClick}
             onUploadFolderClick={handleUploadFolderClick}
             disableDeletion={disableDeletion}
+            defaultTtl={presignedDefaultTtl}
+            maxTtl={presignedMaxTtl}
             objectCount={items.length}
             truncated={truncated}
             isLoadingMore={isFetchingNextPage}
@@ -810,6 +818,9 @@ export function FileBrowser() {
                 onNavigate={navigateToFolder}
                 onDownload={handleDownload}
                 onCopyUrl={handleCopyUrl}
+                onCopyUrlWithTtl={handleCopyUrl}
+                defaultTtl={presignedDefaultTtl}
+                maxTtl={presignedMaxTtl}
                 onPreview={handlePreview}
                 onDelete={(name) => requestDelete([name])}
                 scrollRef={scrollRef}
@@ -832,6 +843,9 @@ export function FileBrowser() {
                 onNavigate={navigateToFolder}
                 onDownload={handleDownload}
                 onCopyUrl={handleCopyUrl}
+                onCopyUrlWithTtl={handleCopyUrl}
+                defaultTtl={presignedDefaultTtl}
+                maxTtl={presignedMaxTtl}
                 onPreview={handlePreview}
                 onDelete={(name) => requestDelete([name])}
                 bucket={bucket}
