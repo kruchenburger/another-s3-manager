@@ -50,12 +50,23 @@ def test_garbage_values_fall_back_to_defaults(monkeypatch):
     assert max_ttl == 604800
 
 
-def test_default_config_includes_ttl_fields():
+def test_default_config_includes_ttl_fields(monkeypatch):
     from another_s3_manager.config import _get_default_config
 
+    monkeypatch.delenv("PRESIGNED_URL_DEFAULT_TTL", raising=False)
+    monkeypatch.delenv("PRESIGNED_URL_MAX_TTL", raising=False)
     cfg = _get_default_config()
     assert cfg["presigned_url_default_ttl"] == 3600
     assert cfg["presigned_url_max_ttl"] == 604800
+
+
+def test_config_value_beats_env(monkeypatch):
+    # When both config and env are set, the config value wins.
+    monkeypatch.setenv("PRESIGNED_URL_DEFAULT_TTL", "1800")
+    monkeypatch.setenv("PRESIGNED_URL_MAX_TTL", "172800")
+    default_ttl, max_ttl = resolve_presigned_ttls({"presigned_url_default_ttl": 900, "presigned_url_max_ttl": 86400})
+    assert default_ttl == 900
+    assert max_ttl == 86400
 
 
 def test_migrate_config_adds_ttl_fields(monkeypatch):

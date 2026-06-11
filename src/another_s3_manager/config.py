@@ -120,12 +120,19 @@ def _migrate_config() -> bool:
     if "mcp_global_max_read_bytes" not in _config_cache:
         _config_cache["mcp_global_max_read_bytes"] = 10_485_760
         config_modified = True
-    if "presigned_url_default_ttl" not in _config_cache:
-        _config_cache["presigned_url_default_ttl"] = int(os.getenv("PRESIGNED_URL_DEFAULT_TTL", "3600"))
-        config_modified = True
-    if "presigned_url_max_ttl" not in _config_cache:
-        _config_cache["presigned_url_max_ttl"] = int(os.getenv("PRESIGNED_URL_MAX_TTL", "604800"))
-        config_modified = True
+    if "presigned_url_default_ttl" not in _config_cache or "presigned_url_max_ttl" not in _config_cache:
+        from another_s3_manager.constants import DEFAULT_PRESIGNED_URL_DEFAULT_TTL, DEFAULT_PRESIGNED_URL_MAX_TTL
+
+        if "presigned_url_default_ttl" not in _config_cache:
+            _config_cache["presigned_url_default_ttl"] = int(
+                os.getenv("PRESIGNED_URL_DEFAULT_TTL", str(DEFAULT_PRESIGNED_URL_DEFAULT_TTL))
+            )
+            config_modified = True
+        if "presigned_url_max_ttl" not in _config_cache:
+            _config_cache["presigned_url_max_ttl"] = int(
+                os.getenv("PRESIGNED_URL_MAX_TTL", str(DEFAULT_PRESIGNED_URL_MAX_TTL))
+            )
+            config_modified = True
     # Note: data_dir is not migrated automatically - it should be set explicitly if needed
     # Note: default_role is optional and not migrated automatically - it should be set explicitly if needed
 
