@@ -1,5 +1,6 @@
-import { NumberInput, Stack, Switch, TagsInput } from "@mantine/core";
+import { NumberInput, Select, Stack, Switch, TagsInput, Text } from "@mantine/core";
 import type { UseFormReturnType } from "@mantine/form";
+import { ttlSelectDataUpTo, withConfiguredValue } from "@/utils/ttlPresets";
 import type { SettingsFormValues } from "./SettingsPage";
 
 interface SettingsGeneralTabProps {
@@ -51,6 +52,36 @@ export function SettingsGeneralTab({ form, readOnly }: SettingsGeneralTabProps) 
         description="Files with these extensions preview inline. Pre-filled with sensible text defaults — add, remove, or clear them all to disable text preview entirely. Images, video and PDF always preview regardless."
         disabled={readOnly}
         {...form.getInputProps("auto_inline_extensions")}
+      />
+      <Text fw={600} size="sm" mt="sm">
+        Presigned URLs
+      </Text>
+      <Select
+        label="Default link validity"
+        description="Lifetime applied when a user copies a link without choosing one."
+        data={withConfiguredValue(
+          ttlSelectDataUpTo(form.values.presigned_url_max_ttl),
+          form.values.presigned_url_default_ttl,
+        )}
+        value={String(form.values.presigned_url_default_ttl)}
+        onChange={(v) => v && form.setFieldValue("presigned_url_default_ttl", Number(v))}
+        error={form.errors.presigned_url_default_ttl}
+        allowDeselect={false}
+        disabled={readOnly}
+      />
+      <Select
+        label="Maximum link validity"
+        description="Upper bound for per-link overrides. Ceiling is 7 days (AWS SigV4). Roles using temporary credentials (assume_role / profile) may expire sooner regardless."
+        data={withConfiguredValue(ttlSelectDataUpTo(604800), form.values.presigned_url_max_ttl)}
+        value={String(form.values.presigned_url_max_ttl)}
+        onChange={(v) => {
+          if (!v) return;
+          form.setFieldValue("presigned_url_max_ttl", Number(v));
+          form.validateField("presigned_url_default_ttl");
+        }}
+        error={form.errors.presigned_url_max_ttl}
+        allowDeselect={false}
+        disabled={readOnly}
       />
     </Stack>
   );

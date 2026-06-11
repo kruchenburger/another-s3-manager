@@ -38,6 +38,8 @@ export interface SettingsFormValues {
   enable_lazy_loading: boolean;
   max_file_size_mb: number;
   auto_inline_extensions: string[];
+  presigned_url_default_ttl: number;
+  presigned_url_max_ttl: number;
   password_min_length: number;
   password_min_uppercase: number;
   password_min_lowercase: number;
@@ -76,6 +78,8 @@ export function SettingsPage() {
       enable_lazy_loading: true,
       max_file_size_mb: 100,
       auto_inline_extensions: [],
+      presigned_url_default_ttl: 3600,
+      presigned_url_max_ttl: 604800,
       password_min_length: 8,
       password_min_uppercase: 1,
       password_min_lowercase: 1,
@@ -105,6 +109,17 @@ export function SettingsPage() {
         if (value > 200000) return "Maximum is 200000";
         return null;
       },
+      presigned_url_max_ttl: (value) => {
+        if (value < 60) return "Minimum is 60 seconds";
+        if (value > 604800) return "Maximum is 7 days";
+        return null;
+      },
+      presigned_url_default_ttl: (value, values) => {
+        if (value < 60) return "Minimum is 60 seconds";
+        if (value > values.presigned_url_max_ttl)
+          return "Default cannot exceed the maximum";
+        return null;
+      },
     },
   });
 
@@ -125,6 +140,8 @@ export function SettingsPage() {
       enable_lazy_loading: config.enable_lazy_loading,
       max_file_size_mb: Math.round(config.max_file_size / MB),
       auto_inline_extensions: config.auto_inline_extensions ?? [],
+      presigned_url_default_ttl: config.presigned_url_default_ttl,
+      presigned_url_max_ttl: config.presigned_url_max_ttl,
       password_min_length: config.password_min_length,
       password_min_uppercase: config.password_min_uppercase,
       password_min_lowercase: config.password_min_lowercase,
@@ -205,6 +222,8 @@ export function SettingsPage() {
         ? values.max_file_size_mb * MB
         : config.max_file_size,
       auto_inline_extensions: values.auto_inline_extensions,
+      presigned_url_default_ttl: values.presigned_url_default_ttl,
+      presigned_url_max_ttl: values.presigned_url_max_ttl,
       password_min_length: values.password_min_length,
       password_min_uppercase: values.password_min_uppercase,
       password_min_lowercase: values.password_min_lowercase,
