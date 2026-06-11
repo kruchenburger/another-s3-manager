@@ -39,3 +39,29 @@ describe("getPresignedDownloadUrl", () => {
     expect(url).toMatch(/^\/api\/buckets\/bucket(%20|\+)name\/presigned\?/);
   });
 });
+
+describe("getPresignedDownloadUrl expires_in param", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("omits expires_in when not provided", async () => {
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      url: "u",
+      expires_at: "t",
+      expires_in: 3600,
+    });
+    await getPresignedDownloadUrl("b", "r", "f.txt");
+    const calledUrl = vi.mocked(apiRequest).mock.calls[0][0] as string;
+    expect(calledUrl).not.toContain("expires_in");
+  });
+
+  it("appends expires_in when provided", async () => {
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      url: "u",
+      expires_at: "t",
+      expires_in: 21600,
+    });
+    await getPresignedDownloadUrl("b", "r", "f.txt", 21600);
+    const calledUrl = vi.mocked(apiRequest).mock.calls[0][0] as string;
+    expect(calledUrl).toContain("expires_in=21600");
+  });
+});
