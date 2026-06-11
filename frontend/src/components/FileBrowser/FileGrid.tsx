@@ -13,11 +13,16 @@ interface FileGridProps {
   onNavigate: (name: string) => void;
   onDownload: (name: string) => void;
   onCopyUrl: (name: string) => void;
+  onCopyUrlWithTtl?: (name: string, ttlSeconds: number) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
   bucket: string;
   roleId: string;
   path: string;
+  /** Server default presigned TTL (seconds) — forwarded to FileCard → FileActions. */
+  defaultTtl?: number;
+  /** Configured max presigned TTL (seconds) — forwarded to FileCard → FileActions. */
+  maxTtl?: number;
   scrollRef: RefObject<HTMLDivElement | null>;
   autoLoadEnabled: boolean;
   onLoadMore: () => void;
@@ -45,11 +50,14 @@ export function FileGrid({
   onNavigate,
   onDownload,
   onCopyUrl,
+  onCopyUrlWithTtl,
   onPreview,
   onDelete,
   bucket,
   roleId,
   path,
+  defaultTtl,
+  maxTtl,
   scrollRef,
   autoLoadEnabled,
   onLoadMore,
@@ -97,11 +105,14 @@ export function FileGrid({
                   onNavigate={onNavigate}
                   onDownload={onDownload}
                   onCopyUrl={onCopyUrl}
+                  onCopyUrlWithTtl={onCopyUrlWithTtl}
                   onPreview={onPreview}
                   onDelete={onDelete}
                   bucket={bucket}
                   roleId={roleId}
                   path={path}
+                  defaultTtl={defaultTtl}
+                  maxTtl={maxTtl}
                 />
               ))}
             </Box>

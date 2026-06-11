@@ -24,8 +24,13 @@ interface FileRowProps {
   onNavigate: (folderName: string) => void;
   onDownload: (name: string) => void;
   onCopyUrl: (name: string) => void;
+  onCopyUrlWithTtl?: (name: string, ttlSeconds: number) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
+  /** Server default presigned TTL (seconds) — forwarded to FileActions. */
+  defaultTtl?: number;
+  /** Configured max presigned TTL (seconds) — forwarded to FileActions. */
+  maxTtl?: number;
 }
 
 export function FileRow({
@@ -36,8 +41,11 @@ export function FileRow({
   onNavigate,
   onDownload,
   onCopyUrl,
+  onCopyUrlWithTtl,
   onPreview,
   onDelete,
+  defaultTtl,
+  maxTtl,
 }: FileRowProps) {
   const me = useMe();
   const disableDeletion = me.data?.disable_deletion ?? false;
@@ -133,9 +141,14 @@ export function FileRow({
           filename={file.name}
           onDownload={() => onDownload(file.name)}
           onCopyUrl={() => onCopyUrl(file.name)}
+          onCopyUrlWithTtl={
+            onCopyUrlWithTtl ? (ttl) => onCopyUrlWithTtl(file.name, ttl) : undefined
+          }
           onPreview={() => onPreview(file.name)}
           onDelete={() => onDelete(file.name)}
           disabled={disableDeletion}
+          defaultTtl={defaultTtl}
+          maxTtl={maxTtl}
         />
       </Table.Td>
     </Table.Tr>

@@ -34,12 +34,17 @@ interface FileCardProps {
   onNavigate: (folderName: string) => void;
   onDownload: (name: string) => void;
   onCopyUrl: (name: string) => void;
+  onCopyUrlWithTtl?: (name: string, ttlSeconds: number) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
   bucket: string;
   roleId: string;
   /** Current folder prefix (without trailing slash). */
   path: string;
+  /** Server default presigned TTL (seconds) — forwarded to FileActions. */
+  defaultTtl?: number;
+  /** Configured max presigned TTL (seconds) — forwarded to FileActions. */
+  maxTtl?: number;
 }
 
 export function FileCard({
@@ -50,11 +55,14 @@ export function FileCard({
   onNavigate,
   onDownload,
   onCopyUrl,
+  onCopyUrlWithTtl,
   onPreview,
   onDelete,
   bucket,
   roleId,
   path,
+  defaultTtl,
+  maxTtl,
 }: FileCardProps) {
   const me = useMe();
   const disableDeletion = me.data?.disable_deletion ?? false;
@@ -101,9 +109,14 @@ export function FileCard({
             filename={file.name}
             onDownload={() => onDownload(file.name)}
             onCopyUrl={() => onCopyUrl(file.name)}
+            onCopyUrlWithTtl={
+              onCopyUrlWithTtl ? (ttl) => onCopyUrlWithTtl(file.name, ttl) : undefined
+            }
             onPreview={() => onPreview(file.name)}
             onDelete={() => onDelete(file.name)}
             disabled={disableDeletion}
+            defaultTtl={defaultTtl}
+            maxTtl={maxTtl}
           />
         </div>
       </Group>
