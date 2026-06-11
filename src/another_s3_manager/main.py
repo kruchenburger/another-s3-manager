@@ -1251,6 +1251,9 @@ async def get_config(
     else:
         max_client_load = int(max_client_load)
 
+    # Resolve presigned URL TTL bounds (config → env → hardcoded defaults).
+    presigned_url_default_ttl, presigned_url_max_ttl = resolve_presigned_ttls(config)
+
     # Create a safe copy without secret credentials
     def sanitize_role(role: Dict[str, Any]) -> Dict[str, Any]:
         """Remove sensitive secret credentials from role (keep access_key_id as it's not secret)"""
@@ -1280,6 +1283,8 @@ async def get_config(
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
             "max_client_load": max_client_load,
+            "presigned_url_default_ttl": presigned_url_default_ttl,
+            "presigned_url_max_ttl": presigned_url_max_ttl,
             "auto_inline_extensions": config.get("auto_inline_extensions", []),
             "data_dir": str(get_data_dir()),  # Return current DATA_DIR value (read-only)
             "is_read_only": not is_config_writable(),
@@ -1314,6 +1319,8 @@ async def get_config(
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
             "max_client_load": max_client_load,
+            "presigned_url_default_ttl": presigned_url_default_ttl,
+            "presigned_url_max_ttl": presigned_url_max_ttl,
             "auto_inline_extensions": config.get("auto_inline_extensions", []),
         }
 
@@ -1332,6 +1339,8 @@ async def get_config(
         "enable_lazy_loading": enable_lazy_loading,
         "max_file_size": max_file_size,
         "max_client_load": max_client_load,
+        "presigned_url_default_ttl": presigned_url_default_ttl,
+        "presigned_url_max_ttl": presigned_url_max_ttl,
         "auto_inline_extensions": config.get("auto_inline_extensions", []),
     }
 

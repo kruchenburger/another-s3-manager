@@ -1942,6 +1942,18 @@ def test_presigned_endpoint_no_warning_for_sts_role_at_default(app_client, mocke
     assert "warning" not in resp.json()
 
 
+def test_get_config_returns_presigned_ttl_fields(app_client):
+    """GET /api/config exposes default + max presigned TTL for the frontend."""
+    login(app_client)
+    resp = app_client.get("/api/config")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "presigned_url_default_ttl" in body
+    assert "presigned_url_max_ttl" in body
+    assert body["presigned_url_default_ttl"] == 3600
+    assert body["presigned_url_max_ttl"] == 604800
+
+
 def test_to_http_exception_uses_typed_status_and_dict_detail():
     """_s3_error_to_http maps each typed S3 error to its http_status + structured detail."""
     from fastapi import HTTPException
