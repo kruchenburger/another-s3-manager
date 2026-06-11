@@ -44,4 +44,18 @@ describe("FileActions TTL override", () => {
     expect(onCopyUrl).not.toHaveBeenCalled();
     expect(await screen.findByText(/share link validity/i)).toBeInTheDocument();
   });
+
+  it("right-click opens the popover instead of copying", async () => {
+    const { onCopyUrl } = renderActions();
+    const icon = screen.getByLabelText("Copy URL");
+    fireEvent.contextMenu(icon);
+    expect(onCopyUrl).not.toHaveBeenCalled();
+    expect(await screen.findByText(/share link validity/i)).toBeInTheDocument();
+  });
+
+  it("without onCopyUrlWithTtl, plain click still copies and no TTL hint shows", async () => {
+    const { onCopyUrl } = renderActions({ onCopyUrlWithTtl: undefined });
+    await userEvent.click(screen.getByLabelText("Copy URL"));
+    expect(onCopyUrl).toHaveBeenCalledTimes(1);
+  });
 });

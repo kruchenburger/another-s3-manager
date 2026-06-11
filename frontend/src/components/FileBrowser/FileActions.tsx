@@ -65,13 +65,11 @@ export function FileActions({
   // components try to clone the same child and attach their own refs.
   // On the no-override branch the same tooltip-wrapped ActionIcon is rendered
   // directly, keeping visuals identical between the two paths.
+  const shareLabel = canOverrideTtl
+    ? "Copy shareable link · shift- or right-click to choose how long it stays valid"
+    : "Copy shareable link (no login required)";
   const shareIcon = (
-    <Tooltip
-      label="Copy shareable link · shift- or right-click to choose how long it stays valid"
-      withArrow
-      multiline
-      w={260}
-    >
+    <Tooltip label={shareLabel} withArrow multiline w={260}>
       <ActionIcon
         variant="subtle"
         onClick={handleShareClick}
