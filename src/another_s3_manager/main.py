@@ -65,6 +65,9 @@ from another_s3_manager.constants import (
     APP_NAME,
     APP_VERSION,
     COOKIE_SECURE,
+    PRESIGNED_STS_WARNING_THRESHOLD,
+    PRESIGNED_URL_HARD_CEILING,
+    PRESIGNED_URL_MIN_TTL,
     STATIC_DIR,
 )
 from another_s3_manager.errors import S3OperationError
@@ -1464,10 +1467,7 @@ async def update_config(
                 config["max_client_load"] = int(os.getenv("MAX_CLIENT_LOAD", "10000"))
 
         # Handle presigned URL TTLs — validate when provided, preserve when omitted.
-        from another_s3_manager.constants import (
-            PRESIGNED_URL_HARD_CEILING,
-            PRESIGNED_URL_MIN_TTL,
-        )
+        _current_for_ttl = load_config(force_reload=False)
 
         def _validate_ttl_field(field_name: str) -> None:
             if field_name in config:
@@ -1485,7 +1485,7 @@ async def update_config(
                     )
                 config[field_name] = val
             else:
-                preserved = load_config(force_reload=False).get(field_name)
+                preserved = _current_for_ttl.get(field_name)
                 if preserved is not None:
                     config[field_name] = preserved
 
@@ -2218,11 +2218,6 @@ async def get_presigned_url(
     callers that omit it get 422 from FastAPI's query validation.
     """
     from datetime import datetime, timedelta, timezone
-
-    from another_s3_manager.constants import (
-        PRESIGNED_STS_WARNING_THRESHOLD,
-        PRESIGNED_URL_MIN_TTL,
-    )
 
     if op != "get":
         raise HTTPException(

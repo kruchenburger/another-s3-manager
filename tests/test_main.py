@@ -1985,6 +1985,43 @@ def test_update_config_rejects_below_minimum_ttl(app_client):
     assert save.status_code == 400
 
 
+def test_presigned_endpoint_accepts_expires_in_exactly_max(app_client, mocker):
+    """expires_in exactly equal to the configured max is accepted (inclusive bound)."""
+    login(app_client)
+    mocker.patch("another_s3_manager.main.validate_role_access", return_value="r")
+    mocker.patch(
+        "another_s3_manager.main.s3_generate_presigned_url_for_role",
+        return_value="https://b.s3.amazonaws.com/f?X-Amz-Signature=abc",
+    )
+    mocker.patch("another_s3_manager.main.role_uses_temporary_credentials", return_value=False)
+    resp = app_client.get(
+        "/api/buckets/my-bucket/presigned",
+        params={"role": "r", "path": "f.txt", "expires_in": 604800},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["expires_in"] == 604800
+
+
+def test_update_config_preserves_omitted_ttl_field(app_client):
+    """Saving only max_ttl preserves the existing default_ttl (preserve-on-omit)."""
+    _, headers = login(app_client)
+    cfg = app_client.get("/api/config").json()
+    # First set a known default so we can prove it survives a later partial save.
+    cfg["presigned_url_default_ttl"] = 900
+    cfg["presigned_url_max_ttl"] = 86400
+    first = app_client.post("/api/config", json=cfg, headers=headers)
+    assert first.status_code == 200, first.text
+    # Now save a config payload that omits presigned_url_default_ttl entirely.
+    cfg2 = app_client.get("/api/config").json()
+    del cfg2["presigned_url_default_ttl"]
+    cfg2["presigned_url_max_ttl"] = 172800
+    second = app_client.post("/api/config", json=cfg2, headers=headers)
+    assert second.status_code == 200, second.text
+    after = app_client.get("/api/config").json()
+    assert after["presigned_url_default_ttl"] == 900  # preserved
+    assert after["presigned_url_max_ttl"] == 172800  # updated
+
+
 def test_to_http_exception_uses_typed_status_and_dict_detail():
     """_s3_error_to_http maps each typed S3 error to its http_status + structured detail."""
     from fastapi import HTTPException
