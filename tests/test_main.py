@@ -1954,6 +1954,47 @@ def test_get_config_returns_presigned_ttl_fields(app_client):
     assert body["presigned_url_max_ttl"] == 604800
 
 
+def test_update_config_persists_presigned_ttls(app_client):
+    """Admin can save valid default + max presigned TTL."""
+    _, headers = login(app_client)
+    cfg = app_client.get("/api/config").json()
+    cfg["presigned_url_default_ttl"] = 900
+    cfg["presigned_url_max_ttl"] = 86400
+    save = app_client.post("/api/config", json=cfg, headers=headers)
+    assert save.status_code == 200, save.text
+    after = app_client.get("/api/config").json()
+    assert after["presigned_url_default_ttl"] == 900
+    assert after["presigned_url_max_ttl"] == 86400
+
+
+def test_update_config_rejects_default_over_max(app_client):
+    """default > max → 400."""
+    _, headers = login(app_client)
+    cfg = app_client.get("/api/config").json()
+    cfg["presigned_url_default_ttl"] = 86400
+    cfg["presigned_url_max_ttl"] = 3600
+    save = app_client.post("/api/config", json=cfg, headers=headers)
+    assert save.status_code == 400
+
+
+def test_update_config_rejects_max_over_ceiling(app_client):
+    """max above the 7-day ceiling → 400."""
+    _, headers = login(app_client)
+    cfg = app_client.get("/api/config").json()
+    cfg["presigned_url_max_ttl"] = 999_999_999
+    save = app_client.post("/api/config", json=cfg, headers=headers)
+    assert save.status_code == 400
+
+
+def test_update_config_rejects_below_minimum_ttl(app_client):
+    """default below the 60s floor → 400."""
+    _, headers = login(app_client)
+    cfg = app_client.get("/api/config").json()
+    cfg["presigned_url_default_ttl"] = 10
+    save = app_client.post("/api/config", json=cfg, headers=headers)
+    assert save.status_code == 400
+
+
 def test_to_http_exception_uses_typed_status_and_dict_detail():
     """_s3_error_to_http maps each typed S3 error to its http_status + structured detail."""
     from fastapi import HTTPException

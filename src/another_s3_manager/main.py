@@ -1463,6 +1463,50 @@ async def update_config(
                 # Use env var or default if not in config
                 config["max_client_load"] = int(os.getenv("MAX_CLIENT_LOAD", "10000"))
 
+        # Handle presigned URL TTLs — validate when provided, preserve when omitted.
+        from another_s3_manager.constants import (
+            PRESIGNED_URL_HARD_CEILING,
+            PRESIGNED_URL_MIN_TTL,
+        )
+
+        def _validate_ttl_field(field_name: str) -> None:
+            if field_name in config:
+                try:
+                    val = int(config[field_name])
+                except (ValueError, TypeError):
+                    raise HTTPException(
+                        status_code=400, detail=f"{field_name} must be a valid integer"
+                    )
+                if val < PRESIGNED_URL_MIN_TTL or val > PRESIGNED_URL_HARD_CEILING:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"{field_name} must be between {PRESIGNED_URL_MIN_TTL} "
+                            f"and {PRESIGNED_URL_HARD_CEILING} seconds"
+                        ),
+                    )
+                config[field_name] = val
+            else:
+                preserved = load_config(force_reload=False).get(field_name)
+                if preserved is not None:
+                    config[field_name] = preserved
+
+        _validate_ttl_field("presigned_url_default_ttl")
+        _validate_ttl_field("presigned_url_max_ttl")
+
+        # Cross-field invariant: default cannot exceed max (when both are known).
+        _eff_default = config.get("presigned_url_default_ttl")
+        _eff_max = config.get("presigned_url_max_ttl")
+        if (
+            _eff_default is not None
+            and _eff_max is not None
+            and int(_eff_default) > int(_eff_max)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="presigned_url_default_ttl cannot exceed presigned_url_max_ttl",
+            )
+
         # Handle auto_inline_extensions - if provided, validate and use it; otherwise preserve existing
         if "auto_inline_extensions" in config:
             # Validate auto_inline_extensions (must be a list of strings)
