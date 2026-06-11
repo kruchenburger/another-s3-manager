@@ -14,6 +14,7 @@ from botocore.credentials import RefreshableCredentials
 from botocore.exceptions import ClientError, CredentialRetrievalError, MetadataRetrievalError
 from botocore.session import Session as BotocoreSession
 
+from another_s3_manager.config import load_config
 from another_s3_manager.constants import S3_USE_SSL, S3_VERIFY_SSL
 
 # Cache for S3 clients per role
@@ -837,6 +838,27 @@ def _validate_bucket_access(role: str, bucket: str, user_dict: Dict[str, Any]) -
     allowed_buckets = role_config.get("allowed_buckets")
     if allowed_buckets and bucket not in allowed_buckets:
         raise PermissionError(f"bucket '{bucket}' not in allowed_buckets for role '{role}'")
+
+
+# Role types that sign with temporary (STS) credentials — a presigned URL
+# cannot outlive the credentials that signed it, so long TTLs may expire early.
+_TEMPORARY_CREDENTIAL_ROLE_TYPES = frozenset({"assume_role", "profile"})
+
+
+def role_uses_temporary_credentials(role_name: str) -> bool:
+    """Return True if `role_name` signs with temporary STS credentials.
+
+    Used to decide whether a long-lived presigned URL needs a warning that it
+    may stop working when the role's session expires. Unknown roles return
+    False (no false alarm).
+    """
+    config = load_config(force_reload=False)
+    role_config = next(
+        (r for r in config.get("roles", []) if r.get("name") == role_name), None
+    )
+    if role_config is None:
+        return False
+    return role_config.get("type") in _TEMPORARY_CREDENTIAL_ROLE_TYPES
 
 
 def list_buckets_for_role(role: str, user_dict: Dict[str, Any]) -> list:
