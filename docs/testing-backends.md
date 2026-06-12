@@ -43,9 +43,8 @@ CI runs the same in the opt-in `e2e-ministack` job.
 - STS credential **expiry/refresh** is covered by a deterministic backend test
   (`tests/test_s3_client.py`), not E2E (minimum real STS session is 15 min).
 - **R2 / DigitalOcean Spaces / Wasabi** — S3-compatible services with no faithful
-  local emulator; their quirks (region, addressing, charset, 403 copy) need a
-  real-endpoint smoke check. Deferred (see backlog).
-- **Azure Blob** — not S3-compatible; out of scope.
+  local emulator; covered by the real-AWS smoke checklist below.
+- **Azure Blob** — not S3-compatible; out of scope (no emulator, no checklist).
 
 ### Real-AWS smoke checklist (what no local emulator covers faithfully)
 
@@ -53,4 +52,3 @@ CI runs the same in the opt-in `e2e-ministack` job.
   op returns the typed 403 in the UI (the boundary no local emulator enforces).
 - **R2 / DigitalOcean Spaces / Wasabi** — region handling, addressing style,
   presigned charset, friendly-403 copy, against a real endpoint.
-- **Azure Blob** — not S3-compatible; out of scope.
