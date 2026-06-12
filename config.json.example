@@ -42,6 +42,8 @@
   "enable_lazy_loading": true,
   "max_file_size": 104857600,
   "disable_deletion": false,
+  "presigned_url_default_ttl": 3600,
+  "presigned_url_max_ttl": 604800,
   "data_dir": "/app/data"
 }
 
