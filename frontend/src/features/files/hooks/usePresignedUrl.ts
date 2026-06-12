@@ -4,24 +4,25 @@ import {
   type PresignedUrlResponse,
 } from "@/features/files/api/filesApi";
 
-// Never cache a URL as "fresh" for less than this — guards against thrashing
-// when a URL is already near its expiry.
-const MIN_STALE_MS = 30_000;
 // Fraction of the remaining lifetime we treat the cached URL as fresh. Leaves
-// a margin so we never hand out a URL that expires mid-render.
+// a 20% margin so we never hand out a URL that expires mid-render.
 const STALE_FRACTION = 0.8;
 
 /**
  * Compute the staleTime (ms) for a presigned URL from its `expires_at`.
- * ~80% of the remaining lifetime, floored at 30s. Invalid/missing/expired
- * inputs return the floor.
+ * ~80% of the remaining lifetime. An already-expired (or missing/invalid)
+ * URL returns 0 so the cached entry is immediately stale and gets refetched
+ * on the next mount instead of being served broken. There is deliberately NO
+ * lower floor: a floor would mark a near-/just-expired URL as "fresh" and let
+ * a remount serve it from cache past its expiry.
  */
 export function presignedStaleTime(expiresAt: string | undefined): number {
-  if (!expiresAt) return MIN_STALE_MS;
+  if (!expiresAt) return 0;
   const expiryMs = Date.parse(expiresAt);
-  if (Number.isNaN(expiryMs)) return MIN_STALE_MS;
+  if (Number.isNaN(expiryMs)) return 0;
   const remaining = expiryMs - Date.now();
-  return Math.max(MIN_STALE_MS, Math.floor(remaining * STALE_FRACTION));
+  if (remaining <= 0) return 0;
+  return Math.floor(remaining * STALE_FRACTION);
 }
 
 /**
@@ -49,10 +50,13 @@ export function usePresignedUrl(
       presignedStaleTime(
         (query.state.data as PresignedUrlResponse | undefined)?.expires_at,
       ),
-    // gcTime stays a generous static ceiling (must be a number, not a fn).
+    // gcTime is a generous static ceiling so a long-lived URL stays cached for
+    // its whole life (must be a number, not a fn). It does NOT cause expired
+    // URLs to be served: an expired entry has staleTime 0, so the default
+    // refetchOnMount refetches it on remount. A still-fresh entry is not stale,
+    // so remounting it does not trigger a refetch (no wasted SigV4 signing).
     gcTime: 7 * 24 * 60 * 60 * 1000,
     refetchOnWindowFocus: false,
-    refetchOnMount: false,
     retry: false,
   });
 }

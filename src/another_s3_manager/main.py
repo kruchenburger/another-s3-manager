@@ -2209,8 +2209,9 @@ async def get_presigned_url(
     """Return a presigned URL for sharing or browser-side display.
 
     The signed URL embeds the role's credentials. Lifetime is the configured
-    default unless `expires_in` is given (clamped between 60s and the configured
-    maximum, else 400). The response echoes the granted `expires_in` and, for
+    default unless `expires_in` is given, which must be between 60s and the
+    configured maximum (out-of-range values are rejected with 400, not clamped).
+    The response echoes the granted `expires_in` and, for
     STS-backed roles (assume_role / profile) asked for more than 1h, a `warning`
     that the link may expire when the role's session ends.
 

@@ -11,7 +11,7 @@ export interface FileActionsProps {
   onDownload?: () => void;
   /** One-click copy with the default TTL. */
   onCopyUrl?: () => void;
-  /** Copy with an explicit TTL chosen in the popover (shift/right-click path). */
+  /** Copy with an explicit TTL chosen in the popover (right-click path). */
   onCopyUrlWithTtl?: (ttlSeconds: number) => void;
   onPreview?: () => void;
   onDelete: () => void;

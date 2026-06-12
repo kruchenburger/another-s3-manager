@@ -19,7 +19,7 @@ export interface TtlPopoverProps {
 
 /**
  * "Valid for" popover for choosing a presigned-URL lifetime before copying.
- * Reused by single-file (Share2 icon, shift/right-click) and bulk (split-button
+ * Reused by single-file (Share2 icon, right-click) and bulk (split-button
  * chevron) Copy URL flows. The selection resets to `defaultTtl` each time the
  * popover (re)opens so it never carries a stale choice between files.
  */
