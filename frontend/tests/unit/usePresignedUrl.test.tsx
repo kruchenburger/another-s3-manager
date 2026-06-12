@@ -26,6 +26,7 @@ describe("usePresignedUrl", () => {
     vi.mocked(getPresignedDownloadUrl).mockResolvedValueOnce({
       url: "https://signed/x",
       expires_at: "2026-05-05T12:00:00+00:00",
+      expires_in: 3600,
     });
     const { result } = renderHook(
       () => usePresignedUrl("b", "r", "img.png", true),
@@ -51,10 +52,12 @@ describe("usePresignedUrl", () => {
       .mockResolvedValueOnce({
         url: "https://a",
         expires_at: "2026-05-05T12:00:00+00:00",
+        expires_in: 3600,
       })
       .mockResolvedValueOnce({
         url: "https://b",
         expires_at: "2026-05-05T12:00:00+00:00",
+        expires_in: 3600,
       });
     const wrapper = makeWrapper();
     const { result: r1 } = renderHook(

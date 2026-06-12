@@ -55,6 +55,8 @@ vi.mock("@/hooks/useConfig", () => ({
       max_file_size: 100 * 1024 * 1024,
       disable_deletion: false,
       roles: [],
+      presigned_url_default_ttl: 3600,
+      presigned_url_max_ttl: 604800,
     },
   }),
 }));
@@ -107,6 +109,7 @@ describe("FileBrowser Copy URL", () => {
     vi.mocked(getPresignedDownloadUrl).mockResolvedValueOnce({
       url: "https://signed.example/photo.jpg?X-Amz-Signature=abc",
       expires_at: "2026-05-05T12:00:00+00:00",
+      expires_in: 3600,
     });
     renderBrowser();
     fireEvent.click(screen.getByLabelText("Copy URL"));
@@ -119,6 +122,22 @@ describe("FileBrowser Copy URL", () => {
       "my-bucket",
       "RoleA",
       "photo.jpg",
+      undefined,
     );
+  });
+
+  it("shows a yellow warning toast when the response carries a warning", async () => {
+    vi.mocked(getPresignedDownloadUrl).mockResolvedValueOnce({
+      url: "https://signed.example/photo.jpg?X-Amz-Signature=xyz",
+      expires_at: "2026-06-11T18:42:00Z",
+      expires_in: 86400,
+      warning:
+        "This role uses temporary credentials — the link may stop working earlier, when the role's session expires.",
+    });
+    renderBrowser();
+    fireEvent.click(screen.getByLabelText("Copy URL"));
+    expect(
+      await screen.findByText(/temporary credentials/i),
+    ).toBeInTheDocument();
   });
 });

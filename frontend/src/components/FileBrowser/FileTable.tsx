@@ -14,8 +14,13 @@ interface FileTableProps {
   onNavigate: (name: string) => void;
   onDownload: (name: string) => void;
   onCopyUrl: (name: string) => void;
+  onCopyUrlWithTtl?: (name: string, ttlSeconds: number) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
+  /** Server default presigned TTL (seconds) — forwarded to FileRow → FileActions. */
+  defaultTtl?: number;
+  /** Configured max presigned TTL (seconds) — forwarded to FileRow → FileActions. */
+  maxTtl?: number;
   /** The FileBrowser internal scroll container the virtualizer measures. */
   scrollRef: RefObject<HTMLDivElement | null>;
   /** lazy && truncated && !isFetchingNextPage && !searching (computed by parent). */
@@ -38,8 +43,11 @@ export function FileTable({
   onNavigate,
   onDownload,
   onCopyUrl,
+  onCopyUrlWithTtl,
   onPreview,
   onDelete,
+  defaultTtl,
+  maxTtl,
   scrollRef,
   autoLoadEnabled,
   onLoadMore,
@@ -105,8 +113,11 @@ export function FileTable({
               onNavigate={onNavigate}
               onDownload={onDownload}
               onCopyUrl={onCopyUrl}
+              onCopyUrlWithTtl={onCopyUrlWithTtl}
               onPreview={onPreview}
               onDelete={onDelete}
+              defaultTtl={defaultTtl}
+              maxTtl={maxTtl}
             />
           );
         })}

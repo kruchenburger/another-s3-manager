@@ -3,11 +3,14 @@ Configuration management module
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from another_s3_manager.constants import CONFIG_FILE
+
+logger = logging.getLogger(__name__)
 
 # Global cache for configuration
 _config_cache: Dict[str, Any] = {}
@@ -117,6 +120,19 @@ def _migrate_config() -> bool:
     if "mcp_global_max_read_bytes" not in _config_cache:
         _config_cache["mcp_global_max_read_bytes"] = 10_485_760
         config_modified = True
+    if "presigned_url_default_ttl" not in _config_cache or "presigned_url_max_ttl" not in _config_cache:
+        from another_s3_manager.constants import DEFAULT_PRESIGNED_URL_DEFAULT_TTL, DEFAULT_PRESIGNED_URL_MAX_TTL
+
+        if "presigned_url_default_ttl" not in _config_cache:
+            _config_cache["presigned_url_default_ttl"] = int(
+                os.getenv("PRESIGNED_URL_DEFAULT_TTL", str(DEFAULT_PRESIGNED_URL_DEFAULT_TTL))
+            )
+            config_modified = True
+        if "presigned_url_max_ttl" not in _config_cache:
+            _config_cache["presigned_url_max_ttl"] = int(
+                os.getenv("PRESIGNED_URL_MAX_TTL", str(DEFAULT_PRESIGNED_URL_MAX_TTL))
+            )
+            config_modified = True
     # Note: data_dir is not migrated automatically - it should be set explicitly if needed
     # Note: default_role is optional and not migrated automatically - it should be set explicitly if needed
 
@@ -130,6 +146,8 @@ def _get_default_config() -> Dict[str, Any]:
         DEFAULT_ITEMS_PER_PAGE,
         DEFAULT_MAX_CLIENT_LOAD,
         DEFAULT_MAX_FILE_SIZE,
+        DEFAULT_PRESIGNED_URL_DEFAULT_TTL,
+        DEFAULT_PRESIGNED_URL_MAX_TTL,
     )
 
     return {
@@ -151,7 +169,65 @@ def _get_default_config() -> Dict[str, Any]:
         "mcp_disable_writes": False,
         "mcp_text_extensions": [],
         "mcp_global_max_read_bytes": 10_485_760,
+        "presigned_url_default_ttl": int(
+            os.getenv("PRESIGNED_URL_DEFAULT_TTL", str(DEFAULT_PRESIGNED_URL_DEFAULT_TTL))
+        ),
+        "presigned_url_max_ttl": int(os.getenv("PRESIGNED_URL_MAX_TTL", str(DEFAULT_PRESIGNED_URL_MAX_TTL))),
     }
+
+
+def resolve_presigned_ttls(config: Dict[str, Any]) -> tuple[int, int]:
+    """Resolve (default_ttl, max_ttl) for presigned URLs in seconds.
+
+    Resolution order per field: config value → env var → hardcoded default.
+    `max_ttl` is clamped to the 7-day SigV4 ceiling. If a hand-edited config
+    has default > max, the effective default is min(default, max) (logged).
+    Garbage values fall back to the hardcoded defaults.
+    """
+    from another_s3_manager.constants import (
+        DEFAULT_PRESIGNED_URL_DEFAULT_TTL,
+        DEFAULT_PRESIGNED_URL_MAX_TTL,
+        PRESIGNED_URL_HARD_CEILING,
+    )
+
+    def _coerce(value: Any, env_name: str, fallback: int) -> int:
+        if value is None:
+            value = os.getenv(env_name)
+        if value is None:
+            return fallback
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            logger.warning("Invalid %s value %r — using default %d", env_name, value, fallback)
+            return fallback
+
+    max_ttl = _coerce(
+        config.get("presigned_url_max_ttl"),
+        "PRESIGNED_URL_MAX_TTL",
+        DEFAULT_PRESIGNED_URL_MAX_TTL,
+    )
+    if max_ttl > PRESIGNED_URL_HARD_CEILING:
+        logger.warning(
+            "presigned_url_max_ttl %d exceeds the 7-day ceiling — clamping to %d",
+            max_ttl,
+            PRESIGNED_URL_HARD_CEILING,
+        )
+        max_ttl = PRESIGNED_URL_HARD_CEILING
+
+    default_ttl = _coerce(
+        config.get("presigned_url_default_ttl"),
+        "PRESIGNED_URL_DEFAULT_TTL",
+        DEFAULT_PRESIGNED_URL_DEFAULT_TTL,
+    )
+    if default_ttl > max_ttl:
+        logger.warning(
+            "presigned_url_default_ttl %d exceeds max %d — using max as the effective default",
+            default_ttl,
+            max_ttl,
+        )
+        default_ttl = max_ttl
+
+    return default_ttl, max_ttl
 
 
 def is_config_writable() -> bool:

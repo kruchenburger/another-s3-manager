@@ -146,6 +146,10 @@ export interface AppConfig {
   max_file_size: number;
   // Cap on objects the /v2 UI loads into memory before showing "Load more".
   max_client_load: number;
+  // Presigned URL lifetime settings (seconds). default_ttl is granted when no
+  // explicit expires_in is requested; max_ttl bounds per-link overrides.
+  presigned_url_default_ttl: number;
+  presigned_url_max_ttl: number;
   disable_deletion: boolean;
   auto_inline_extensions?: string[];
   data_dir?: string;

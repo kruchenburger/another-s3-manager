@@ -1,6 +1,8 @@
 import { Button, Center, Group, SegmentedControl, Text, TextInput, Tooltip } from "@mantine/core";
-import { FolderUp, LayoutGrid, List as ListIcon, Search, Share2, Trash2, Upload } from "lucide-react";
+import { ChevronDown, FolderUp, LayoutGrid, List as ListIcon, Search, Share2, Trash2, Upload } from "lucide-react";
+import { useState } from "react";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
+import { TtlPopover } from "@/components/TtlPopover/TtlPopover";
 import type { DisplayMode } from "@/hooks/useDisplayMode";
 
 interface FileBrowserHeaderProps {
@@ -13,7 +15,9 @@ interface FileBrowserHeaderProps {
   onModeChange: (m: DisplayMode) => void;
   selectedCount: number;
   onBulkDelete: () => void;
-  onBulkCopyUrl: () => void;
+  /** Copy URLs for the selection. Optional TTL (seconds) from the popover;
+   *  the one-click main button passes none (server default). */
+  onBulkCopyUrl: (ttlSeconds?: number) => void;
   onUploadClick: () => void;
   /** Open the folder picker (webkitdirectory input). */
   onUploadFolderClick: () => void;
@@ -29,6 +33,10 @@ interface FileBrowserHeaderProps {
   onLoadMore: () => void;
   /** Drain all remaining chunks from the server. */
   onLoadAll: () => void;
+  /** Server default presigned TTL (seconds). */
+  defaultTtl?: number;
+  /** Configured max presigned TTL (seconds). */
+  maxTtl?: number;
 }
 
 export function FileBrowserHeader({
@@ -50,7 +58,11 @@ export function FileBrowserHeader({
   isLoadingMore,
   onLoadMore,
   onLoadAll,
+  defaultTtl = 3600,
+  maxTtl = 604800,
 }: FileBrowserHeaderProps) {
+  const [bulkTtlOpen, setBulkTtlOpen] = useState(false);
+
   return (
     <Group justify="space-between" mb="md" wrap="wrap" gap="sm">
       <FileBreadcrumbs bucket={bucket} roleId={roleId} path={path} />
@@ -121,21 +133,41 @@ export function FileBrowserHeader({
         />
         {selectedCount > 0 && (
           <>
-            <Tooltip
-              label="Copy shareable links (expire in 1h, no login required)"
-              withArrow
-              multiline
-              w={240}
-            >
-              <Button
-                variant="light"
-                leftSection={<Share2 size={14} />}
-                onClick={onBulkCopyUrl}
-                size="sm"
+            <Button.Group>
+              <Tooltip
+                label="Copy shareable links (expire after the configured default; no login required)"
+                withArrow
+                multiline
+                w={260}
               >
-                Copy URLs ({selectedCount})
-              </Button>
-            </Tooltip>
+                <Button
+                  variant="light"
+                  leftSection={<Share2 size={14} />}
+                  onClick={() => onBulkCopyUrl()}
+                  size="sm"
+                >
+                  Copy URLs ({selectedCount})
+                </Button>
+              </Tooltip>
+              <TtlPopover
+                opened={bulkTtlOpen}
+                onClose={() => setBulkTtlOpen(false)}
+                defaultTtl={defaultTtl}
+                maxTtl={maxTtl}
+                onConfirm={(ttl) => onBulkCopyUrl(ttl)}
+                target={
+                  <Button
+                    variant="light"
+                    size="sm"
+                    px={6}
+                    onClick={() => setBulkTtlOpen((o) => !o)}
+                    aria-label="Choose link validity"
+                  >
+                    <ChevronDown size={14} />
+                  </Button>
+                }
+              />
+            </Button.Group>
             <Tooltip
               label="Deletion is disabled in the server config."
               withArrow

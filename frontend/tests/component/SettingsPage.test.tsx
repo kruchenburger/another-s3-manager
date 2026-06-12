@@ -27,6 +27,8 @@ const baseConfig = {
   enable_lazy_loading: true,
   max_file_size: 100 * 1024 * 1024,
   max_client_load: 10000,
+  presigned_url_default_ttl: 3600,
+  presigned_url_max_ttl: 604800,
   disable_deletion: false,
   auto_inline_extensions: [],
   is_read_only: false,

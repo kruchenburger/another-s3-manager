@@ -1328,3 +1328,25 @@ def test_generate_presigned_url_for_role_no_override_for_html_or_svg(mocker):
             f"renderable file {risky_path!r} must NOT get a content-type override "
             "— would enable phishing on the S3 origin"
         )
+
+
+def test_role_uses_temporary_credentials(mocker):
+    from another_s3_manager import s3_client
+
+    mocker.patch.object(
+        s3_client,
+        "load_config",
+        return_value={
+            "roles": [
+                {"name": "sts-role", "type": "assume_role", "role_arn": "arn:..."},
+                {"name": "profile-role", "type": "profile", "profile_name": "p"},
+                {"name": "key-role", "type": "credentials", "access_key_id": "AKIA..."},
+                {"name": "compat-role", "type": "s3_compatible"},
+            ]
+        },
+    )
+    assert s3_client.role_uses_temporary_credentials("sts-role") is True
+    assert s3_client.role_uses_temporary_credentials("profile-role") is True
+    assert s3_client.role_uses_temporary_credentials("key-role") is False
+    assert s3_client.role_uses_temporary_credentials("compat-role") is False
+    assert s3_client.role_uses_temporary_credentials("nope") is False

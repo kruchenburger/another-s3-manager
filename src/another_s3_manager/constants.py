@@ -92,6 +92,19 @@ DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
 DEFAULT_ITEMS_PER_PAGE = 200
 DEFAULT_MAX_CLIENT_LOAD = 10000
 
+# Presigned URL TTL settings (seconds).
+# SigV4 allows up to 7 days when signing with long-lived IAM access keys.
+# STS-backed roles (assume_role / profile) are signed with temporary
+# credentials and can expire sooner regardless of the requested TTL — the
+# presigned endpoint surfaces a warning for those, it does not hard-clamp.
+DEFAULT_PRESIGNED_URL_DEFAULT_TTL = 3600  # 1 hour
+DEFAULT_PRESIGNED_URL_MAX_TTL = 604800  # 7 days
+PRESIGNED_URL_HARD_CEILING = 604800  # 7 days — absolute SigV4 ceiling
+PRESIGNED_URL_MIN_TTL = 60  # reject links shorter than 1 minute
+# When a request asks for more than this on an STS-backed role, attach a
+# warning that the link may die when the role's session expires.
+PRESIGNED_STS_WARNING_THRESHOLD = 3600  # 1 hour
+
 # Text extensions seeded into config.auto_inline_extensions for new/legacy
 # configs. The /v2 preview UI treats this list as the single source of truth for
 # which files preview inline as text — it is admin-editable (add / remove / clear).

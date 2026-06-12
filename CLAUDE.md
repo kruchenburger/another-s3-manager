@@ -183,24 +183,26 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 
 ## Environment Variables
 
-| Variable                          | Required | Default                                 | Description                                                                                  |
-| --------------------------------- | -------- | --------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `JWT_SECRET_KEY`                  | Yes      | —                                       | JWT signing secret                                                                           |
-| `PORT`                            | No       | `8080`                                  | Server port                                                                                  |
-| `UVICORN_HOST`                    | No       | `0.0.0.0`                               | Server bind address                                                                          |
-| `LOG_LEVEL`                       | No       | `info`                                  | Logging level                                                                                |
-| `ADMIN_PASSWORD`                  | No       | `change_me_pls`                         | Admin user password                                                                          |
-| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | No       | `180`                                   | JWT expiration (minutes)                                                                     |
-| `ITEMS_PER_PAGE`                  | No       | `200`                                   | Items per page in file listing                                                               |
-| `DISABLE_DELETION`                | No       | `false`                                 | Disable file deletion                                                                        |
-| `MAX_FILE_SIZE`                   | No       | `104857600`                             | Max upload file size (bytes, 100MB)                                                          |
-| `ENABLE_LAZY_LOADING`             | No       | `true`                                  | Enable lazy loading for file lists                                                           |
-| `AWS_REGION`                      | No       | from env                                | Default AWS region                                                                           |
-| `S3_FILE_MANAGER_CONFIG`          | No       | `./data/config.json`                    | Path to config file (under DATA_DIR by convention)                                           |
-| `DATA_DIR`                        | No       | `./data` (native), `/app/data` (Docker) | Data dir (SQLite DB + runtime data)                                                          |
-| `COOKIE_SECURE`                   | No       | `true`                                  | `Secure` flag on auth cookie. MUST be `false` on local HTTP, else browser drops the cookie   |
-| `LOG_FORMAT`                      | No       | `text`                                  | Log output format: `text` or `json` (structured, for log aggregators)                        |
-| `METRICS_PASSWORD`                | No       | —                                       | Optional basic-auth password for `/metrics` (username `metrics`). If unset, endpoint is open |
+| Variable                          | Required | Default                                 | Description                                                                                        |
+| --------------------------------- | -------- | --------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `JWT_SECRET_KEY`                  | Yes      | —                                       | JWT signing secret                                                                                 |
+| `PORT`                            | No       | `8080`                                  | Server port                                                                                        |
+| `UVICORN_HOST`                    | No       | `0.0.0.0`                               | Server bind address                                                                                |
+| `LOG_LEVEL`                       | No       | `info`                                  | Logging level                                                                                      |
+| `ADMIN_PASSWORD`                  | No       | `change_me_pls`                         | Admin user password                                                                                |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | No       | `180`                                   | JWT expiration (minutes)                                                                           |
+| `ITEMS_PER_PAGE`                  | No       | `200`                                   | Items per page in file listing                                                                     |
+| `DISABLE_DELETION`                | No       | `false`                                 | Disable file deletion                                                                              |
+| `MAX_FILE_SIZE`                   | No       | `104857600`                             | Max upload file size (bytes, 100MB)                                                                |
+| `PRESIGNED_URL_DEFAULT_TTL`       | No       | `3600`                                  | Default presigned-URL lifetime (seconds). Overridable per link up to the max.                      |
+| `PRESIGNED_URL_MAX_TTL`           | No       | `604800`                                | Max presigned-URL lifetime (seconds; 7-day SigV4 ceiling). Requests above this are rejected (400). |
+| `ENABLE_LAZY_LOADING`             | No       | `true`                                  | Enable lazy loading for file lists                                                                 |
+| `AWS_REGION`                      | No       | from env                                | Default AWS region                                                                                 |
+| `S3_FILE_MANAGER_CONFIG`          | No       | `./data/config.json`                    | Path to config file (under DATA_DIR by convention)                                                 |
+| `DATA_DIR`                        | No       | `./data` (native), `/app/data` (Docker) | Data dir (SQLite DB + runtime data)                                                                |
+| `COOKIE_SECURE`                   | No       | `true`                                  | `Secure` flag on auth cookie. MUST be `false` on local HTTP, else browser drops the cookie         |
+| `LOG_FORMAT`                      | No       | `text`                                  | Log output format: `text` or `json` (structured, for log aggregators)                              |
+| `METRICS_PASSWORD`                | No       | —                                       | Optional basic-auth password for `/metrics` (username `metrics`). If unset, endpoint is open       |
 
 ## Features
 
@@ -228,7 +230,7 @@ The React SPA consumes existing backend endpoints plus a small set added for SPA
 - `POST /api/buckets/{b}/upload` — single-file multipart upload (already existed)
 - `DELETE /api/buckets/{b}/files?path=...&role=...` — file or folder delete (already existed)
 - `GET /api/buckets/{b}/download?path=...&role=...` — streamed download (already existed; cookie-auth proxy used by Download button)
-- `GET /api/buckets/{b}/presigned?path=...&role=...&op=get` — short-lived (1h) boto3 presigned URL for the object; returns `{url, expires_at}`. Used by Copy URL flow (shareable links) and grid-view image/video thumbnails (`<img>`/`<video>` srcs). Auto-applies a `; charset=utf-8` Content-Type override for known text extensions (`.md`/`.csv`/`.txt`/`.json`/`.yaml`/etc.) so Cyrillic / CJK / emoji content renders correctly when the link opens in a new tab
+- `GET /api/buckets/{b}/presigned?path=...&role=...&op=get[&expires_in=<seconds>]` — boto3 presigned GET URL. Lifetime defaults to `presigned_url_default_ttl` (config/env, default 1h); `expires_in` overrides it within `[60, presigned_url_max_ttl]` (else 400 `INVALID_EXPIRES_IN`). Returns `{url, expires_at, expires_in, warning?}` — `expires_in` echoes the granted TTL; `warning` is present for STS-backed roles (assume_role/profile) when the link outlives ~1h (it may expire when the role's session ends). Auto-applies a `; charset=utf-8` Content-Type override for known text extensions. Used by Copy URL (single + bulk, with a per-link "Valid for" override) and grid thumbnails.
 - `GET /api/admin/users` — list users with available roles (returns `{users, available_roles}`)
 - `POST /api/admin/users` — create user (multipart Form)
 - `PUT /api/admin/users/{u}` — update user (multipart Form, blocks self-demote)

@@ -159,22 +159,28 @@ export interface PresignedUrlResponse {
   url: string;
   /** ISO8601 UTC timestamp when the URL stops working. */
   expires_at: string;
+  /** TTL the server actually granted, in seconds. */
+  expires_in: number;
+  /** Present for STS-backed roles when the link may expire before expires_at. */
+  warning?: string;
 }
 
 /**
- * Fetch a short-lived (1h) presigned GET URL for a single object.
+ * Fetch a presigned GET URL for a single object.
  *
- * Use this for shareable links and for <img>/<video> tags that can't carry
- * the auth cookie reliably (third-party CDNs, copy-to-clipboard flows). For
- * the regular Download button (browser-triggered <a href>), keep using
- * {@link buildDownloadUrl}.
+ * `expiresIn` (seconds) requests a specific lifetime; omit it to take the
+ * server-configured default. The server bounds it to [60, configured max] and
+ * returns 400 outside that range. Use this for shareable links and for
+ * <img>/<video> tags that can't carry the auth cookie reliably.
  */
 export async function getPresignedDownloadUrl(
   bucket: string,
   role: string,
   path: string,
+  expiresIn?: number,
 ): Promise<PresignedUrlResponse> {
   const params = new URLSearchParams({ role, path });
+  if (expiresIn != null) params.set("expires_in", String(expiresIn));
   return apiRequest<PresignedUrlResponse>(
     `/api/buckets/${encodeURIComponent(bucket)}/presigned?${params}`,
   );
