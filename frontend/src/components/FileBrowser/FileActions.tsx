@@ -43,13 +43,10 @@ export function FileActions({
 
   const canOverrideTtl = Boolean(onCopyUrlWithTtl);
 
-  const handleShareClick = (e: React.MouseEvent) => {
-    // Shift+click opens the validity popover; plain click is one-click copy.
-    if (canOverrideTtl && e.shiftKey) {
-      e.preventDefault();
-      setTtlOpen((o) => !o);
-      return;
-    }
+  // Plain left-click always copies with the default TTL (one-click). The
+  // per-link validity popover is opened with a right-click (context menu) —
+  // a deliberate, discoverable affordance that keeps the common path one click.
+  const handleShareClick = () => {
     onCopyUrl?.();
   };
 
@@ -66,10 +63,10 @@ export function FileActions({
   // On the no-override branch the same tooltip-wrapped ActionIcon is rendered
   // directly, keeping visuals identical between the two paths.
   const shareLabel = canOverrideTtl
-    ? "Copy shareable link · shift- or right-click to choose how long it stays valid"
-    : "Copy shareable link (no login required)";
+    ? "Copy link · right-click to set validity"
+    : "Copy shareable link";
   const shareIcon = (
-    <Tooltip label={shareLabel} withArrow multiline w={260}>
+    <Tooltip label={shareLabel} withArrow>
       <ActionIcon
         variant="subtle"
         onClick={handleShareClick}

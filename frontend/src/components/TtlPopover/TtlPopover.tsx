@@ -66,7 +66,12 @@ export function TtlPopover({
             value={selected}
             onChange={(v) => v && setSelected(v)}
             allowDeselect={false}
-            comboboxProps={{ withinPortal: true }}
+            // MUST stay false: a portaled dropdown renders OUTSIDE this Popover,
+            // so clicking an option counts as an outside-click and closes the
+            // Popover before the user can hit Copy. Rendering the option list
+            // inside the Popover keeps the click "inside". The short option list
+            // does not get clipped (Popover.Dropdown has no overflow:hidden).
+            comboboxProps={{ withinPortal: false }}
             size="sm"
           />
           <Group justify="flex-end">
