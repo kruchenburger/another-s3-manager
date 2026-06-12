@@ -435,6 +435,90 @@ def test_create_s3_client_s3_compatible_empty_after_trim():
         )
 
 
+def test_assume_role_retries_once_on_expired_credentials(mocker):
+    """First assume_role raises an expired-credential error → cache cleared, retry succeeds."""
+    from botocore.exceptions import CredentialRetrievalError
+
+    from another_s3_manager import s3_client
+
+    creds = {
+        "AccessKeyId": "AKIATEST",
+        "SecretAccessKey": "secret",
+        "SessionToken": "token",
+        "Expiration": "2999-01-01T00:00:00Z",
+    }
+    sts = mocker.Mock()
+    sts.assume_role.side_effect = [
+        CredentialRetrievalError(provider="x", error_msg="token expired"),
+        {"Credentials": creds},
+    ]
+    mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    fake_client = mocker.Mock()
+    mocker.patch.object(s3_client.BotocoreSession, "create_client", return_value=fake_client)
+    clear = mocker.patch.object(s3_client, "_clear_boto3_cached_credentials")
+
+    role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
+    client = s3_client._create_s3_client_from_role(role)
+
+    assert client is fake_client
+    assert sts.assume_role.call_count == 2
+    clear.assert_called_once()
+
+
+def test_assume_role_raises_typed_when_both_attempts_expired(mocker):
+    """Both attempts hit expired creds → typed CredentialsExpiredError (→ 401 at HTTP boundary)."""
+    from botocore.exceptions import CredentialRetrievalError
+
+    from another_s3_manager import s3_client
+    from another_s3_manager.errors import CredentialsExpiredError
+
+    sts = mocker.Mock()
+    sts.assume_role.side_effect = CredentialRetrievalError(provider="x", error_msg="token expired")
+    mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    mocker.patch.object(s3_client, "_clear_boto3_cached_credentials")
+
+    role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
+    with pytest.raises(CredentialsExpiredError):
+        s3_client._create_s3_client_from_role(role)
+    assert sts.assume_role.call_count == 2
+
+
+def test_assume_role_refreshes_via_refreshable_credentials(mocker):
+    """The RefreshableCredentials callback re-assumes the role to mint fresh creds on expiry."""
+    from another_s3_manager import s3_client
+
+    first = {
+        "AccessKeyId": "AKIA1",
+        "SecretAccessKey": "s1",
+        "SessionToken": "t1",
+        "Expiration": "2000-01-01T00:00:00Z",  # already past → next access forces a refresh
+    }
+    second = {
+        "AccessKeyId": "AKIA2",
+        "SecretAccessKey": "s2",
+        "SessionToken": "t2",
+        "Expiration": "2999-01-01T00:00:00Z",
+    }
+    sts = mocker.Mock()
+    sts.assume_role.side_effect = [{"Credentials": first}, {"Credentials": second}]
+    mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+
+    captured = {}
+
+    def capture(self, *a, **k):
+        captured["session"] = self
+        return mocker.Mock()
+
+    mocker.patch.object(s3_client.BotocoreSession, "create_client", capture)
+
+    role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
+    s3_client._create_s3_client_from_role(role)
+
+    frozen = captured["session"]._credentials.get_frozen_credentials()
+    assert frozen.access_key == "AKIA2"  # refreshed via a second assume_role
+    assert sts.assume_role.call_count == 2
+
+
 def test_create_s3_client_s3_compatible_path_style_backward_compat(mocker):
     module = reload_s3_client()
     mock_client = mocker.MagicMock()
