@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Idempotent ministack seed for E2E. Provisions S3 buckets, an IAM user with a
-bucket-scoped policy, and an assumable role; prints the two app role configs and
+bucket-scoped policy, and an assumable role; prints the four app role configs and
 optionally writes a full config.json (--config-out). Run against a running
 ministack (default http://localhost:4566)."""
 
 import argparse
+import configparser
 import json
+import os
 import sys
 
 import boto3
@@ -15,6 +17,7 @@ from botocore.exceptions import ClientError
 ALLOWED = "ministack-allowed"
 FORBIDDEN = "ministack-forbidden"
 USER = "restricted"
+PROFILE = "ministack-profile"
 ROLE = "ministack-s3-role"
 ACCOUNT = "000000000000"  # pinned via MINISTACK_ACCOUNT_ID in the compose/CI env
 
@@ -125,7 +128,36 @@ def roles(endpoint_for_app, key):
             # unenforced there is no deny to assert, so it is unused-by-design.
             "allowed_buckets": [ALLOWED, FORBIDDEN],
         },
+        {
+            "name": "ministack-profile",
+            "type": "profile",
+            "profile_name": PROFILE,
+            "endpoint_url": endpoint_for_app,
+            "allowed_buckets": [ALLOWED],
+        },
+        {
+            "name": "ministack-default",
+            "type": "default",
+            "endpoint_url": endpoint_for_app,
+            "allowed_buckets": [ALLOWED],
+        },
     ]
+
+
+def write_aws_credentials_file(path, key):
+    """Write the restricted user's key as a named profile for the profile role.
+
+    The backend's `profile` role type does boto3.Session(profile_name=...), which
+    reads AWS_SHARED_CREDENTIALS_FILE. CI points that env at this file.
+    """
+    cp = configparser.ConfigParser()
+    cp[PROFILE] = {
+        "aws_access_key_id": key["AccessKeyId"],
+        "aws_secret_access_key": key["SecretAccessKey"],
+    }
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        cp.write(f)
 
 
 def write_config(path, role_list):
@@ -154,10 +186,19 @@ def main():
     ap.add_argument(
         "--config-out", default=None, help="write a full config.json here (CI). Omit to only print the roles."
     )
+    ap.add_argument(
+        "--aws-credentials-out",
+        default=None,
+        help="write the profile's AWS shared-credentials file here (CI sets AWS_SHARED_CREDENTIALS_FILE to it).",
+    )
     args = ap.parse_args()
 
     key = seed(args.endpoint)
     role_list = roles(args.app_endpoint or args.endpoint, key)
+
+    if args.aws_credentials_out:
+        write_aws_credentials_file(args.aws_credentials_out, key)
+        print(f"# wrote {args.aws_credentials_out} (profile [{PROFILE}])")
 
     print("# ministack roles (paste into data/config.json 'roles' for local dev):")
     print(json.dumps(role_list, indent=2))
