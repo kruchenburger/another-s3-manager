@@ -57,7 +57,21 @@ const sharedComponents = {
   PasswordInput: { defaultProps: { size: "sm", radius: "md" } },
   Select: { defaultProps: { size: "sm", radius: "md" } },
   Card: { defaultProps: { radius: "lg", padding: "md", withBorder: true } }, // padding lg → md (density B)
-  Modal: { defaultProps: { radius: "lg", centered: true } },
+  Modal: {
+    defaultProps: {
+      radius: "lg",
+      centered: true,
+      closeButtonProps: { "aria-label": "Close" },
+    },
+  },
+  Drawer: {
+    defaultProps: { closeButtonProps: { "aria-label": "Close" } },
+  },
+  // Mantine 9 dropped the built-in "Close" aria-label on the CloseButton that
+  // Modal/Drawer/Popover render internally, so every dismiss ✕ was a critical
+  // axe `button-name` violation. Restore it at the source — covers standalone
+  // CloseButton usages too, not just the Modal/Drawer cases above.
+  CloseButton: { defaultProps: { "aria-label": "Close" } },
   Notification: { defaultProps: { radius: "md" } },
   Table: { defaultProps: { verticalSpacing: "xs", horizontalSpacing: "sm" } }, // density B
 };

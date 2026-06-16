@@ -8,7 +8,7 @@ test("login and logout flow", async ({ page }) => {
 
   // Fill and submit login form
   await page.getByLabel("Username").fill(ADMIN_USER);
-  await page.getByLabel("Password").fill(ADMIN_PASS);
+  await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASS);
   await page.getByRole("button", { name: "Login" }).click();
 
   // Land on home, see Welcome (URL may be /v2 or /v2/ depending on router)
@@ -25,7 +25,7 @@ test("login and logout flow", async ({ page }) => {
 test("invalid credentials show error", async ({ page }) => {
   await page.goto("/v2/login");
   await page.getByLabel("Username").fill(ADMIN_USER);
-  await page.getByLabel("Password").fill("wrong-password");
+  await page.getByLabel("Password", { exact: true }).fill("wrong-password");
   await page.getByRole("button", { name: "Login" }).click();
 
   // Stay on login, see alert

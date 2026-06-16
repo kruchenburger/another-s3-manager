@@ -13,7 +13,7 @@ const BUCKET = process.env.E2E_MINIO_BUCKET ?? "e2e-test";
 async function login(page: Page): Promise<void> {
   await page.goto("/v2/login");
   await page.getByLabel("Username").fill(ADMIN_USER);
-  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
+  await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASSWORD);
   await page.getByRole("button", { name: "Login" }).click();
   await expect(page.getByLabel("User menu")).toBeVisible({ timeout: 15_000 });
 }

@@ -30,7 +30,10 @@ export const ADMIN_PASSWORD =
 export async function loginAsAdmin(page: Page): Promise<void> {
   await page.goto("/v2/login");
   await page.getByLabel("Username").fill(ADMIN_USER);
-  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
+  // exact: true — Mantine 9 PasswordInput renders a "Toggle password visibility"
+  // button whose aria-label also contains "password", so a substring getByLabel
+  // match resolves to 2 elements. Anchor to the input's exact "Password" label.
+  await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASSWORD);
   await page.getByRole("button", { name: "Login" }).click();
   await expect(page).toHaveURL(/\/v2\/?$/);
   // AppShell rendered → login actually succeeded. Without this, every
