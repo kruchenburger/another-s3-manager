@@ -11,8 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Upgraded the React SPA from Mantine 8 to Mantine 9 (and React 19.0 → 19.2,
   required by Mantine 9). No user-facing feature changes. Component default
-  border-radius and light-variant colors now follow Mantine 9 defaults. The
-  theme-switch transition is unchanged (smoothing it is tracked separately).
+  border-radius and light-variant colors now follow Mantine 9 defaults.
+- The dark/light theme switch now cross-fades the whole page smoothly (via the
+  View Transitions API) instead of snapping. Falls back to an instant switch on
+  browsers without View Transition support or when reduced motion is preferred.
 
 ### Fixed
 
