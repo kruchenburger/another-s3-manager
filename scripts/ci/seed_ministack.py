@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Idempotent ministack seed for E2E. Provisions S3 buckets, an IAM user with a
-bucket-scoped policy, and an assumable role; prints the two app role configs and
+bucket-scoped policy, and an assumable role; prints the four app role configs and
 optionally writes a full config.json (--config-out). Run against a running
 ministack (default http://localhost:4566)."""
 

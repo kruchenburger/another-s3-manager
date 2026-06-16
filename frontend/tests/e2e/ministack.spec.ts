@@ -19,9 +19,10 @@ import { ADMIN_USER, ADMIN_PASSWORD } from "./fixtures/auth-helpers";
  *      `AWS_SHARED_CREDENTIALS_FILE`. CI writes a credentials file pointing at
  *      ministack and names it `ministack-profile`, proving the profile-lookup
  *      path reaches the emulator end-to-end.
- *   4. `default` — a role that uses the default credential chain (env credentials
- *      + `AWS_ENDPOINT_URL`). Proves the app's fallback path works when no
- *      explicit credential source is configured on the role.
+ *   4. `default` — a role that uses the default credential chain (env
+ *      credentials); the S3 endpoint comes from the role's `endpoint_url`.
+ *      Proves the app's fallback path works when no explicit credential source
+ *      is configured on the role.
  *
  * IAM ENFORCEMENT IS INTENTIONALLY NOT TESTED. A verification spike proved this
  * ministack image accepts IAM policies but does NOT enforce them on S3 — a

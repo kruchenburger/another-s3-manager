@@ -21,7 +21,7 @@ S3 clients use each role's `endpoint_url` from config.
 docker compose -f docker-compose.yml -f docker-compose.ministack.yml up -d ministack
 JWT_SECRET_KEY=x uv run python scripts/ci/seed_ministack.py \
   --config-out data/config.json \
-  --aws-credentials-out data/aws-credentials   # writes config + credentials file for profile/default roles
+  --aws-credentials-out data/aws-credentials   # writes config + the profile role's AWS credentials file
 # start the backend with:
 #   AWS_ENDPOINT_URL_STS=http://localhost:4566 AWS_REGION=us-east-1 \
 #   AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
