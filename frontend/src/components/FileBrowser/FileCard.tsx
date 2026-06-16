@@ -99,6 +99,13 @@ export function FileCard({
             const native = e.nativeEvent as MouseEvent | KeyboardEvent;
             onToggleSelect(file.name, native.shiftKey ?? false);
           }}
+          // Shift+click extends the browser's native text selection across the
+          // cards being range-selected, which looks broken. Suppress only the
+          // shift case so plain (no-shift) selection of filenames still works
+          // for copy.
+          onMouseDown={(e) => {
+            if (e.shiftKey) e.preventDefault();
+          }}
           onClick={(e) => e.stopPropagation()}
           aria-label={`Select ${file.name}`}
         />

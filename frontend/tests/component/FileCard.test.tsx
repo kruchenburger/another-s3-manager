@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
 vi.mock("@/features/auth/hooks/useMe", () => ({
@@ -111,5 +111,35 @@ describe("FileCard video thumbnails", () => {
       size: 1024,
     });
     expect(container.querySelector("video")).toBeNull();
+  });
+});
+
+describe("FileCard shift-select text-selection guard", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // Shift+click range-select must not start the browser's native text
+  // selection across cards. fireEvent returns false when preventDefault ran.
+  it("prevents default on shift+mousedown of the checkbox", () => {
+    vi.mocked(usePresignedUrl).mockReturnValue({
+      data: undefined,
+      isSuccess: false,
+    } as never);
+    renderCard({ name: "doc.pdf", is_directory: false, size: 1024 });
+    const notCancelled = fireEvent.mouseDown(screen.getByLabelText("Select doc.pdf"), {
+      shiftKey: true,
+    });
+    expect(notCancelled).toBe(false);
+  });
+
+  it("leaves plain mousedown un-prevented (filenames stay selectable)", () => {
+    vi.mocked(usePresignedUrl).mockReturnValue({
+      data: undefined,
+      isSuccess: false,
+    } as never);
+    renderCard({ name: "doc.pdf", is_directory: false, size: 1024 });
+    const notCancelled = fireEvent.mouseDown(screen.getByLabelText("Select doc.pdf"), {
+      shiftKey: false,
+    });
+    expect(notCancelled).toBe(true);
   });
 });

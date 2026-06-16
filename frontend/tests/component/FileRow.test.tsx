@@ -143,4 +143,24 @@ describe("FileRow", () => {
     renderRow({ name: "x.txt", is_directory: false, size: 100 });
     expect(screen.getByLabelText("Delete")).toBeDisabled();
   });
+
+  // Shift+click range-select must not start the browser's native text
+  // selection (it would highlight filenames across the range). The checkbox
+  // suppresses only the shift case via onMouseDown preventDefault.
+  // fireEvent returns false when a handler cancelled the event.
+  it("prevents default on shift+mousedown of the checkbox (no text selection)", () => {
+    renderRow({ name: "x.txt", is_directory: false, size: 100 });
+    const notCancelled = fireEvent.mouseDown(screen.getByLabelText("Select x.txt"), {
+      shiftKey: true,
+    });
+    expect(notCancelled).toBe(false);
+  });
+
+  it("leaves plain (no-shift) mousedown un-prevented so filenames stay selectable", () => {
+    renderRow({ name: "x.txt", is_directory: false, size: 100 });
+    const notCancelled = fireEvent.mouseDown(screen.getByLabelText("Select x.txt"), {
+      shiftKey: false,
+    });
+    expect(notCancelled).toBe(true);
+  });
 });
