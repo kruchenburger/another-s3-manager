@@ -142,4 +142,16 @@ describe("FileCard shift-select text-selection guard", () => {
     });
     expect(notCancelled).toBe(true);
   });
+
+  // The mousedown preventDefault must NOT break selection: shift+click still has
+  // to fire onToggleSelect with shiftKey=true so range-select works.
+  it("still fires onToggleSelect(name, true) on shift+click", () => {
+    vi.mocked(usePresignedUrl).mockReturnValue({
+      data: undefined,
+      isSuccess: false,
+    } as never);
+    renderCard({ name: "doc.pdf", is_directory: false, size: 1024 });
+    fireEvent.click(screen.getByLabelText("Select doc.pdf"), { shiftKey: true });
+    expect(baseProps.onToggleSelect).toHaveBeenCalledWith("doc.pdf", true);
+  });
 });
