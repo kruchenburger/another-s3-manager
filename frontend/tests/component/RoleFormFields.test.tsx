@@ -67,7 +67,7 @@ describe("RoleFormFields", () => {
       expect(screen.getByLabelText(/^secret access key/i)).toBeInTheDocument();
       // Autocomplete renders the input + dropdown options under the same label;
       // narrow to the input only.
-      expect(screen.getByRole("textbox", { name: /^region/i })).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: /^region/i })).toBeInTheDocument();
       expect(screen.getByText(/allowed buckets/i)).toBeInTheDocument();
       // RoleTypeSummary surfaces the picked type at the top of Step 2 so the
       // user doesn't have to remember it.
@@ -90,7 +90,7 @@ describe("RoleFormFields", () => {
       expect(screen.getAllByLabelText(/^addressing style/i).length).toBeGreaterThan(0);
       expect(screen.getByLabelText(/^access key id/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/^secret access key/i)).toBeInTheDocument();
-      expect(screen.getByRole("textbox", { name: /^region/i })).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: /^region/i })).toBeInTheDocument();
       expect(screen.getByText(/allowed buckets/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/^description$/i)).toBeInTheDocument();
     });

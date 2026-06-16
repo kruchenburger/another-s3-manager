@@ -51,6 +51,17 @@ function evaluate(password: string, policy: PasswordPolicy): Requirement[] {
   return reqs;
 }
 
+// Scheme-aware status colors. A fixed shade can't pass WCAG AA contrast in both
+// themes against their very different backgrounds (white vs. the dark body), so
+// `light-dark()` picks a darker shade on light surfaces and a lighter one on
+// dark. (Mantine 9's dark body tipped the previous flat `red.7` to 4.03:1 — just
+// under the 4.5:1 minimum — on the empty-field state.) Mirrors the project's
+// existing `light-dark()` use in the login shell.
+const MET_COLOR =
+  "light-dark(var(--mantine-color-green-9), var(--mantine-color-green-5))";
+const UNMET_COLOR =
+  "light-dark(var(--mantine-color-red-8), var(--mantine-color-red-5))";
+
 export function PasswordRequirementsList({
   password,
   policy,
@@ -65,11 +76,11 @@ export function PasswordRequirementsList({
       {reqs.map((r) => (
         <Group key={r.label} gap="xs" wrap="nowrap">
           {r.met ? (
-            <Check size={14} color="var(--mantine-color-green-7)" />
+            <Check size={14} color={MET_COLOR} />
           ) : (
-            <X size={14} color="var(--mantine-color-red-7)" />
+            <X size={14} color={UNMET_COLOR} />
           )}
-          <Text size="xs" c={r.met ? "green.7" : "red.7"}>
+          <Text size="xs" c={r.met ? MET_COLOR : UNMET_COLOR}>
             {r.label}
           </Text>
         </Group>

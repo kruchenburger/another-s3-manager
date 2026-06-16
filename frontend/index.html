@@ -4,6 +4,40 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Another S3 Manager</title>
+    <!-- Set the Mantine color scheme BEFORE first paint (mirrors Mantine's
+         ColorSchemeScript, which targets SSR frameworks and so isn't usable in
+         this static Vite index.html). Without it there is a flash where the
+         data-mantine-color-scheme attribute is unset until MantineProvider
+         mounts: Mantine text falls back to its light default (near-black) while
+         the login shell's `light-dark()` background follows the OS
+         prefers-color-scheme — black-on-dark when the OS prefers dark, which
+         axe-core flags as a serious color-contrast violation. Default is dark
+         (brand "dark mode first"); honours a stored toggle choice. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("mantine-color-scheme-value");
+          var scheme =
+            stored === "light" || stored === "dark" || stored === "auto"
+              ? stored
+              : "dark";
+          if (scheme === "auto") {
+            scheme = window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+          }
+          document.documentElement.setAttribute(
+            "data-mantine-color-scheme",
+            scheme,
+          );
+        } catch (e) {
+          document.documentElement.setAttribute(
+            "data-mantine-color-scheme",
+            "dark",
+          );
+        }
+      })();
+    </script>
     <!-- Relative href so Vite prefixes with `base: '/v2/'` from vite.config.ts.
          The favicon is copied from public/favicon.ico into the build output
          at static/v2/favicon.ico, which the SPA catch-all in main.py serves. -->

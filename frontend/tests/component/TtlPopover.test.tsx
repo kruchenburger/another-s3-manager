@@ -30,8 +30,8 @@ function renderPopover(over: Partial<React.ComponentProps<typeof TtlPopover>> = 
 describe("TtlPopover", () => {
   it("renders the Valid for select and a Copy button when opened", () => {
     renderPopover();
-    // Mantine v8 Select renders as role="textbox" with the label as its accessible name.
-    expect(screen.getByRole("textbox", { name: /valid for/i })).toBeInTheDocument();
+    // Mantine 9 Select renders as role="combobox" with the label as its accessible name.
+    expect(screen.getByRole("combobox", { name: /valid for/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /copy/i })).toBeInTheDocument();
   });
 

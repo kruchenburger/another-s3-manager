@@ -100,7 +100,7 @@ export function TokenPlaintextModal({ opened, onClose, plaintext, noteForAdmin }
         >
           Show MCP config snippet
         </Button>
-        <Collapse in={snippetOpen}>
+        <Collapse expanded={snippetOpen}>
           <Box pos="relative">
             <Code block>{mcpSnippet}</Code>
             <ActionIcon

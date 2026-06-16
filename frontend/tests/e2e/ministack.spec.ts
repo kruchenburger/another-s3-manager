@@ -54,7 +54,7 @@ const ALLOWED = process.env.E2E_MINISTACK_ALLOWED_BUCKET ?? "ministack-allowed";
 async function login(page: Page): Promise<void> {
   await page.goto("/v2/login");
   await page.getByLabel("Username").fill(ADMIN_USER);
-  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
+  await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASSWORD);
   await page.getByRole("button", { name: "Login" }).click();
   // AppShell rendered → auth cookie set + router moved past /v2/login. We don't
   // assert a specific URL: with admin-accessible roles, HomePage redirects to

@@ -106,7 +106,7 @@ Two changes in `frontend/src/app/theme.ts` shifted the baseline from
    picks a high-contrast text colour for filled variants instead of the
    hard-coded white default. Important for our amber primary in dark mode
    (`#ffc107`) where white text produced 1.63:1. autoContrast only affects
-   `variant="filled"` (per Mantine 8 docs), so outline / subtle / transparent
+   `variant="filled"` (per Mantine 9 docs), so outline / subtle / transparent
    variants are unaffected and keep their explicit colours.
 
 2. `cssVariablesResolver` overrides `--mantine-color-dimmed` from `#828282`
@@ -120,3 +120,30 @@ Two changes in `frontend/src/app/theme.ts` shifted the baseline from
 Future contrast fixes should follow the same pattern: prefer overriding the
 relevant Mantine CSS variable via `cssVariablesResolver` over per-component
 style overrides, so the change applies everywhere uniformly.
+
+## Mantine 9 upgrade — a11y fixes
+
+The Mantine 8 → 9 upgrade surfaced (and required fixing) four accessibility
+regressions, all caught by this axe baseline:
+
+1. **Pre-paint color-scheme flash.** Mantine sets `data-mantine-color-scheme`
+   on `<html>` only once `MantineProvider` mounts. Until then, Mantine text
+   uses its light default (near-black) while the login shell's `light-dark()`
+   background follows the OS `prefers-color-scheme` — black-on-dark when the OS
+   prefers dark, a serious `color-contrast` violation. Fixed with a small
+   blocking script in `frontend/index.html` that sets the attribute from
+   `localStorage` (default `dark`) before first paint — the SPA equivalent of
+   Mantine's SSR-only `ColorSchemeScript`.
+2. **Dismiss buttons lost their label.** Mantine 9 dropped the built-in
+   `aria-label="Close"` on the `CloseButton` that `Modal`/`Drawer`/`Popover`
+   render internally, making every ✕ a critical `button-name` violation.
+   Restored via `Modal`/`Drawer`/`CloseButton` `defaultProps` in `theme.ts`.
+3. **Password-requirements contrast.** The empty-field checklist renders all
+   rules in red; Mantine 9's dark body tipped flat `red.7` to 4.03:1 (under
+   AA). `PasswordRequirementsList` now uses scheme-aware `light-dark()` shades
+   (darker on light surfaces, lighter on dark) for both the red/unmet and
+   green/met states.
+4. **`getByLabel("Password")` collision (test-only).** Mantine 9's
+   "Toggle password visibility" button carries a descriptive `aria-label`
+   containing "password", so a substring label match resolves to two elements.
+   The e2e login helpers now use `{ exact: true }`.

@@ -65,6 +65,27 @@ if (
   Element.prototype.scrollIntoView = function () {};
 }
 
+// jsdom doesn't implement the FontFaceSet API (`document.fonts`), but Mantine 9's
+// autosize Textarea attaches a `document.fonts` "loadingdone" listener on mount to
+// recompute its height once web fonts load (new in v9 — v8 had no such listener).
+// Without this shim any component rendering an autosize Textarea (e.g. the role
+// description field in RoleDrawer) crashes with
+// "Cannot read properties of undefined (reading 'addEventListener')".
+if (typeof document !== "undefined" && !("fonts" in document)) {
+  Object.defineProperty(document, "fonts", {
+    writable: true,
+    configurable: true,
+    value: {
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      ready: Promise.resolve(),
+      status: "loaded",
+      check: () => true,
+      load: () => Promise.resolve([]),
+    },
+  });
+}
+
 // jsdom doesn't implement matchMedia, but Mantine + our CubeLogo (and many
 // component-test-friendly libs) call it during render. Stub a no-op shim that
 // always reports "doesn't match" so reduced-motion paths pick the animated branch.

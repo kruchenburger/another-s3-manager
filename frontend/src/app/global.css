@@ -60,9 +60,15 @@ input:-webkit-autofill:focus {
   caret-color: var(--mantine-color-mutedSlateBlue-5);
 }
 
-/* Theme transition smoothing — parity with vanilla style.css:40, where this
-   was native. Without it, Mantine swaps data-mantine-color-scheme instantly
-   and CSS variables jump, reading as cheap. Spec §6.8.
+/* Per-element colour transition smoothing — parity with vanilla style.css:40.
+
+   NOTE: the dark/light *theme switch* is driven by the View Transition at the
+   bottom of this file (ThemeToggle wraps the toggle in startViewTransition),
+   NOT by this block — Mantine forces `transition: none` during the swap and
+   overrides the colour transition on AppShell/Title, so these per-element
+   rules cannot carry the whole-page fade on their own. This block still smooths
+   other colour changes (and is a no-op fallback where View Transitions are
+   unsupported). Keep it; don't assume the View Transition makes it dead. Spec §6.8.
 
    The selector list covers every surface that paints a background or border
    from a Mantine CSS variable — without one of these, that surface would
@@ -128,4 +134,29 @@ body:has([data-scroll-to-top]) .mantine-Notifications-root[data-position^="botto
 body:has([data-settings-save-bar])
   .mantine-Notifications-root[data-position^="bottom"] {
   bottom: 80px;
+}
+
+/* Theme switch cross-fade. ThemeToggle wraps the color-scheme change in a View
+   Transition (where supported), so the whole page dissolves from the old theme
+   to the new one instead of snapping. This is the primary theme-transition
+   mechanism — the per-element `:where()` color transitions above can't carry it
+   on their own because Mantine forces `transition: none` during the swap and
+   overrides the colour transition on AppShell/Title. These rules just give the
+   default root cross-fade a calm, brand-consistent 240ms.
+
+   The dissolve is a snapshot overlay, so it animates uniformly regardless of
+   which elements declare CSS transitions. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 240ms;
+  animation-timing-function: ease;
+}
+
+/* Honour reduced-motion even if a View Transition is somehow started (the JS
+   already skips it; this is the CSS belt-and-suspenders). */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
 }
