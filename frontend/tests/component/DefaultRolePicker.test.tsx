@@ -39,8 +39,8 @@ describe("DefaultRolePicker", () => {
       data: { allowed_roles: ["RoleA", "RoleB", "RoleC"], default_role: "RoleB" },
     });
     renderPicker();
-    // Mantine Select renders the current value in the textbox.
-    const trigger = screen.getByRole("textbox");
+    // Mantine 9 Select renders the input with role="combobox" (ARIA-correct).
+    const trigger = screen.getByRole("combobox");
     expect(trigger).toHaveValue("RoleB");
   });
 
@@ -49,7 +49,7 @@ describe("DefaultRolePicker", () => {
       data: { allowed_roles: ["RoleA", "RoleB"], default_role: "RoleA" },
     });
     renderPicker();
-    const trigger = screen.getByRole("textbox");
+    const trigger = screen.getByRole("combobox");
     fireEvent.click(trigger);
     await waitFor(() => expect(screen.getByText("RoleB")).toBeInTheDocument());
     fireEvent.click(screen.getByText("RoleB"));
@@ -64,7 +64,7 @@ describe("DefaultRolePicker", () => {
     });
     renderPicker();
     // No Select textbox should be rendered when there are no roles to pick.
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
   });
 
   it("renders nothing when allowed_roles has only one entry (picker would be degenerate)", () => {
@@ -73,6 +73,6 @@ describe("DefaultRolePicker", () => {
     });
     renderPicker();
     // No Select textbox should be rendered when there's only one role.
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
   });
 });

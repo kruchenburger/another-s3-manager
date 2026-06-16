@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -66,68 +65,45 @@ describe("Settings — Presigned URLs", () => {
   it("renders default + maximum validity selects", async () => {
     renderPage();
     // Wait for config to load (form populates).
-    // Mantine v8 Select renders its input as role="textbox" in jsdom.
+    // Mantine 9 Select renders its input as role="combobox" (ARIA-correct).
     await waitFor(() =>
       expect(
-        screen.getByRole("textbox", { name: /default link validity/i }),
+        screen.getByRole("combobox", { name: /default link validity/i }),
       ).toBeInTheDocument(),
     );
     expect(
-      screen.getByRole("textbox", { name: /maximum link validity/i }),
+      screen.getByRole("combobox", { name: /maximum link validity/i }),
     ).toBeInTheDocument();
   });
 
   it("blocks Save when default exceeds maximum", async () => {
-    const user = userEvent.setup();
     renderPage();
 
     // Wait for config to load
     await waitFor(() =>
       expect(
-        screen.getByRole("textbox", { name: /default link validity/i }),
+        screen.getByRole("combobox", { name: /default link validity/i }),
       ).toBeInTheDocument(),
     );
 
-    // Mantine v8 Select renders all options in the DOM (inside a hidden Popover)
-    // even before the dropdown is opened — use { hidden: true } to find them
-    // without requiring the dropdown to open in jsdom (see TtlPopover.test.tsx).
-    //
-    // Both selects have the same option labels ("7 days", "1 hour" etc.), so we
-    // scope to each select's specific listbox. Mantine renders each Select with
-    // a listbox whose aria-labelledby points to the label element. We look up the
-    // label element by text, get its id, then find the listbox with that labelledby.
+    // Mantine 9 Combobox renders options only while the dropdown is open (v8 kept
+    // them pre-rendered in a hidden Popover). Both selects share option labels
+    // ("7 days", "1 hour", …), so we open one dropdown at a time and pick from it
+    // while it's the only listbox in the DOM — keeping the option labels unambiguous.
 
-    // Helper: find a Select's hidden listbox by matching the label text
-    function getSelectListbox(labelText: string): HTMLElement {
-      // Find all <label> elements with this text
-      const labels = Array.from(document.querySelectorAll("label")).filter(
-        (el) => el.textContent?.toLowerCase().includes(labelText.toLowerCase()),
-      );
-      if (!labels.length) throw new Error(`Label "${labelText}" not found`);
-      const labelId = labels[0]!.id;
-      // Find the listbox that is aria-labelledby this label
-      const listbox = document.querySelector(
-        `[role="listbox"][aria-labelledby="${labelId}"]`,
-      ) as HTMLElement | null;
-      if (!listbox) throw new Error(`Listbox for label "${labelText}" not found`);
-      return listbox;
-    }
+    // Default → "7 days" (fireEvent.click opens the Mantine 9 dropdown reliably in
+    // jsdom; scope to role="option" so the *other* select's displayed value — which
+    // is also "7 days" as text — doesn't collide with the option we want).
+    fireEvent.click(
+      screen.getByRole("combobox", { name: /default link validity/i }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "7 days" }));
 
-    // Click "7 days" in the Default select listbox (bypasses display:none via within)
-    const defListbox = getSelectListbox("Default link validity");
-    const sevenDaysOption = within(defListbox).getByRole("option", {
-      name: "7 days",
-      hidden: true,
-    });
-    await user.click(sevenDaysOption);
-
-    // Click "1 hour" in the Maximum select listbox
-    const maxListbox = getSelectListbox("Maximum link validity");
-    const oneHourOption = within(maxListbox).getByRole("option", {
-      name: "1 hour",
-      hidden: true,
-    });
-    await user.click(oneHourOption);
+    // Maximum → "1 hour"
+    fireEvent.click(
+      screen.getByRole("combobox", { name: /maximum link validity/i }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "1 hour" }));
 
     // Validation error must appear: "cannot exceed"
     await waitFor(() =>

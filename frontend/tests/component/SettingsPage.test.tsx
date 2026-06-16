@@ -268,8 +268,12 @@ describe("SettingsPage", () => {
     // General is the default tab — its fields are reachable by label.
     expect(screen.getByLabelText("Items per page")).toBeInTheDocument();
     // Security and MCP tab panels are also mounted (keepMounted) so RTL
-    // can find their fields by label even without clicking the tab.
-    expect(screen.getByLabelText(/minimum length/i)).toBeInTheDocument();
+    // can find their fields by label even without clicking the tab. Mantine 9
+    // mounts inactive keepMounted panels on a deferred tick (not the first
+    // render), so await the cross-panel field rather than asserting synchronously.
+    await waitFor(() =>
+      expect(screen.getByLabelText(/minimum length/i)).toBeInTheDocument(),
+    );
     expect(screen.getByLabelText(/enable mcp server/i)).toBeInTheDocument();
   });
 
