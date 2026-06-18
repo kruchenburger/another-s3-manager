@@ -90,6 +90,13 @@ export function FileRow({
             onToggleSelect(file.name, native.shiftKey ?? false);
           }}
           aria-label={`Select ${file.name}`}
+          // Shift+click extends the browser's native text selection across the
+          // rows being range-selected, which looks broken. Suppress only the
+          // shift case so plain (no-shift) selection of filenames still works
+          // for copy.
+          onMouseDown={(e) => {
+            if (e.shiftKey) e.preventDefault();
+          }}
           onClick={(e) => e.stopPropagation()}
         />
       </Table.Td>
