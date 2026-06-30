@@ -45,6 +45,7 @@ import {
   filesFromFolderInput,
 } from "@/utils/folderUpload";
 import { FileBrowserHeader } from "./FileBrowserHeader";
+import { BulkActionBar } from "./BulkActionBar";
 import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
 import { FileBrowserEmptyState } from "./FileBrowserEmptyState";
@@ -700,14 +701,8 @@ export function FileBrowser() {
             }}
             mode={mode}
             onModeChange={setMode}
-            selectedCount={selected.size}
-            onBulkDelete={() => requestDelete(Array.from(selected))}
-            onBulkCopyUrl={handleBulkCopyUrl}
             onUploadClick={handleUploadClick}
             onUploadFolderClick={handleUploadFolderClick}
-            disableDeletion={disableDeletion}
-            defaultTtl={presignedDefaultTtl}
-            maxTtl={presignedMaxTtl}
             objectCount={items.length}
             truncated={truncated}
             isLoadingMore={isFetchingNextPage}
@@ -891,6 +886,18 @@ export function FileBrowser() {
           size={previewState.size}
         />
       )}
+      {/* Contextual bulk-action bar — sibling of the modals, OUTSIDE the
+          virtualized scroll container. Portals to the body via Affix; appears
+          only while something is selected (see BulkActionBar). */}
+      <BulkActionBar
+        count={selected.size}
+        onClear={clearSelection}
+        onCopyUrls={handleBulkCopyUrl}
+        onDelete={() => requestDelete(Array.from(selected))}
+        disableDeletion={disableDeletion}
+        defaultTtl={presignedDefaultTtl}
+        maxTtl={presignedMaxTtl}
+      />
     </>
   );
 }

@@ -19,9 +19,6 @@ function renderHeader(
           onSearchChange={vi.fn()}
           mode="table"
           onModeChange={vi.fn()}
-          selectedCount={0}
-          onBulkDelete={vi.fn()}
-          onBulkCopyUrl={vi.fn()}
           onUploadClick={vi.fn()}
           onUploadFolderClick={vi.fn()}
           objectCount={0}
