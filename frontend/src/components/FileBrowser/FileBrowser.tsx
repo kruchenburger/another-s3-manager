@@ -244,7 +244,17 @@ export function FileBrowser() {
     }
   };
 
+  const [bulkCopying, setBulkCopying] = useState(false);
+  const bulkCopyingRef = useRef(false);
+
   const handleBulkCopyUrl = async (ttlSeconds?: number) => {
+    // Guard against double-submit: this fires N presigned-URL requests via
+    // Promise.all; a rapid second click before the button's disabled state
+    // renders would start a concurrent batch (same bug class fixed for
+    // Load-more/Load-all). The ref closes the click→render-latency gap.
+    if (bulkCopyingRef.current) return;
+    bulkCopyingRef.current = true;
+    setBulkCopying(true);
     const names = Array.from(selected);
     try {
       const responses = await Promise.all(
@@ -272,6 +282,9 @@ export function FileBrowser() {
         message: e instanceof Error ? e.message : "unknown error",
         autoClose: TOAST_DURATIONS.error,
       });
+    } finally {
+      bulkCopyingRef.current = false;
+      setBulkCopying(false);
     }
   };
 
@@ -892,6 +905,7 @@ export function FileBrowser() {
         disableDeletion={disableDeletion}
         defaultTtl={presignedDefaultTtl}
         maxTtl={presignedMaxTtl}
+        busy={bulkCopying}
       />
     </>
   );

@@ -28,6 +28,8 @@ interface BulkActionBarProps {
   defaultTtl?: number;
   /** Configured max presigned TTL (seconds). */
   maxTtl?: number;
+  /** True while a bulk copy is in flight — disables Copy URLs to block double-submit. */
+  busy?: boolean;
 }
 
 /**
@@ -51,6 +53,7 @@ export function BulkActionBar({
   disableDeletion = false,
   defaultTtl = 3600,
   maxTtl = 604800,
+  busy = false,
 }: BulkActionBarProps) {
   const open = count > 0;
   const [ttlOpen, setTtlOpen] = useState(false);
@@ -120,6 +123,8 @@ export function BulkActionBar({
                     size="sm"
                     leftSection={<Share2 size={14} />}
                     onClick={() => onCopyUrls()}
+                    loading={busy}
+                    disabled={busy}
                   >
                     Copy URLs
                   </Button>
@@ -129,10 +134,7 @@ export function BulkActionBar({
                   onClose={() => setTtlOpen(false)}
                   defaultTtl={defaultTtl}
                   maxTtl={maxTtl}
-                  onConfirm={(ttl) => {
-                    onCopyUrls(ttl);
-                    setTtlOpen(false);
-                  }}
+                  onConfirm={(ttl) => onCopyUrls(ttl)}
                   target={
                     <Button
                       variant="light"
@@ -140,6 +142,7 @@ export function BulkActionBar({
                       px={6}
                       onClick={() => setTtlOpen((o) => !o)}
                       aria-label="Choose link validity"
+                      disabled={busy}
                     >
                       <ChevronDown size={14} />
                     </Button>

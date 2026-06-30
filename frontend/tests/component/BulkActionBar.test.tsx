@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 import { BulkActionBar } from "@/components/FileBrowser/BulkActionBar";
@@ -87,5 +87,27 @@ describe("BulkActionBar", () => {
     expect(del).toBeDisabled();
     fireEvent.click(del);
     expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it("on Escape closes the TTL popover first and keeps the selection", async () => {
+    const user = userEvent.setup();
+    const { onClear } = renderBar({ count: 2 });
+    // Open the TTL popover via the chevron.
+    await user.click(screen.getByLabelText(/choose link validity/i));
+    expect(await screen.findByText(/share link validity/i)).toBeInTheDocument();
+    // First Escape dismisses the popover — it must NOT clear the selection.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClear).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.queryByText(/share link validity/i)).not.toBeInTheDocument(),
+    );
+  });
+
+  it("disables Copy URLs (and the TTL chevron) while a copy is in flight", () => {
+    renderBar({ count: 2, busy: true });
+    expect(screen.getByRole("button", { name: "Copy URLs" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: /choose link validity/i }),
+    ).toBeDisabled();
   });
 });
