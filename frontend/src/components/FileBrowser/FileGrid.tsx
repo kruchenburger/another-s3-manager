@@ -28,10 +28,14 @@ interface FileGridProps {
   onLoadMore: () => void;
 }
 
-// Fixed card-row height (px): 120px thumbnail box + checkbox/actions row +
-// single-line label + size line + Card padding + inter-row gap. Matches the
-// Card built in FileCard.tsx (mih=120 media area, lineClamp=1 label).
-const ROW_HEIGHT = 200;
+// Card-row height (px) = the MEASURED rendered height of one FileCard:
+// Mantine Card padding md (16×2) + checkbox/actions row + mb sm + 120px media
+// area + mb sm + single-line label + single-line size ≈ 241px. The virtualizer
+// spaces rows `ROW_HEIGHT + GAP` apart, so this MUST be ≥ the real card height
+// or rows overlap — cards stack onto the row below (was 200, which is ~41px too
+// short, so every row visibly overlapped the next). Re-measure if FileCard's
+// content changes.
+const ROW_HEIGHT = 241;
 const GAP = 16; // Mantine "md"
 
 // Column count by container width — mirrors the old SimpleGrid breakpoints
