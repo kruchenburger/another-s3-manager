@@ -45,6 +45,7 @@ import {
   filesFromFolderInput,
 } from "@/utils/folderUpload";
 import { FileBrowserHeader } from "./FileBrowserHeader";
+import { BulkActionBar } from "./BulkActionBar";
 import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
 import { FileBrowserEmptyState } from "./FileBrowserEmptyState";
@@ -243,7 +244,17 @@ export function FileBrowser() {
     }
   };
 
+  const [bulkCopying, setBulkCopying] = useState(false);
+  const bulkCopyingRef = useRef(false);
+
   const handleBulkCopyUrl = async (ttlSeconds?: number) => {
+    // Guard against double-submit: this fires N presigned-URL requests via
+    // Promise.all; a rapid second click before the button's disabled state
+    // renders would start a concurrent batch (same bug class fixed for
+    // Load-more/Load-all). The ref closes the click→render-latency gap.
+    if (bulkCopyingRef.current) return;
+    bulkCopyingRef.current = true;
+    setBulkCopying(true);
     const names = Array.from(selected);
     try {
       const responses = await Promise.all(
@@ -271,6 +282,9 @@ export function FileBrowser() {
         message: e instanceof Error ? e.message : "unknown error",
         autoClose: TOAST_DURATIONS.error,
       });
+    } finally {
+      bulkCopyingRef.current = false;
+      setBulkCopying(false);
     }
   };
 
@@ -700,14 +714,8 @@ export function FileBrowser() {
             }}
             mode={mode}
             onModeChange={setMode}
-            selectedCount={selected.size}
-            onBulkDelete={() => requestDelete(Array.from(selected))}
-            onBulkCopyUrl={handleBulkCopyUrl}
             onUploadClick={handleUploadClick}
             onUploadFolderClick={handleUploadFolderClick}
-            disableDeletion={disableDeletion}
-            defaultTtl={presignedDefaultTtl}
-            maxTtl={presignedMaxTtl}
             objectCount={items.length}
             truncated={truncated}
             isLoadingMore={isFetchingNextPage}
@@ -771,11 +779,6 @@ export function FileBrowser() {
                 {serverSearchTerm}
               </Badge>
             </Group>
-          )}
-          {truncated && selected.size > 0 && (
-            <Text size="xs" c="dimmed">
-              Selected {selected.size} of loaded items
-            </Text>
           )}
         </div>
 
@@ -891,6 +894,19 @@ export function FileBrowser() {
           size={previewState.size}
         />
       )}
+      {/* Contextual bulk-action bar — sibling of the modals, OUTSIDE the
+          virtualized scroll container. Portals to the body via Affix; appears
+          only while something is selected (see BulkActionBar). */}
+      <BulkActionBar
+        count={selected.size}
+        onClear={clearSelection}
+        onCopyUrls={handleBulkCopyUrl}
+        onDelete={() => requestDelete(Array.from(selected))}
+        disableDeletion={disableDeletion}
+        defaultTtl={presignedDefaultTtl}
+        maxTtl={presignedMaxTtl}
+        busy={bulkCopying}
+      />
     </>
   );
 }

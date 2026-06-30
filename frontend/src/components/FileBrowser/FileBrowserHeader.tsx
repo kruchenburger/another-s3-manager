@@ -1,8 +1,6 @@
-import { Button, Center, Group, SegmentedControl, Text, TextInput, Tooltip } from "@mantine/core";
-import { ChevronDown, FolderUp, LayoutGrid, List as ListIcon, Search, Share2, Trash2, Upload } from "lucide-react";
-import { useState } from "react";
+import { Button, Center, Group, SegmentedControl, Text, TextInput } from "@mantine/core";
+import { FolderUp, LayoutGrid, List as ListIcon, Search, Upload } from "lucide-react";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
-import { TtlPopover } from "@/components/TtlPopover/TtlPopover";
 import type { DisplayMode } from "@/hooks/useDisplayMode";
 
 interface FileBrowserHeaderProps {
@@ -13,16 +11,9 @@ interface FileBrowserHeaderProps {
   onSearchChange: (q: string) => void;
   mode: DisplayMode;
   onModeChange: (m: DisplayMode) => void;
-  selectedCount: number;
-  onBulkDelete: () => void;
-  /** Copy URLs for the selection. Optional TTL (seconds) from the popover;
-   *  the one-click main button passes none (server default). */
-  onBulkCopyUrl: (ttlSeconds?: number) => void;
   onUploadClick: () => void;
   /** Open the folder picker (webkitdirectory input). */
   onUploadFolderClick: () => void;
-  /** When true, bulk Delete is rendered disabled with a config-aware tooltip. */
-  disableDeletion?: boolean;
   /** Total object count (files + folders) currently loaded for this prefix. */
   objectCount: number;
   /** S3 has more objects beyond the loaded set — show "N+" and continuation controls. */
@@ -33,10 +24,6 @@ interface FileBrowserHeaderProps {
   onLoadMore: () => void;
   /** Drain all remaining chunks from the server. */
   onLoadAll: () => void;
-  /** Server default presigned TTL (seconds). */
-  defaultTtl?: number;
-  /** Configured max presigned TTL (seconds). */
-  maxTtl?: number;
 }
 
 export function FileBrowserHeader({
@@ -47,22 +34,14 @@ export function FileBrowserHeader({
   onSearchChange,
   mode,
   onModeChange,
-  selectedCount,
-  onBulkDelete,
-  onBulkCopyUrl,
   onUploadClick,
   onUploadFolderClick,
-  disableDeletion = false,
   objectCount,
   truncated,
   isLoadingMore,
   onLoadMore,
   onLoadAll,
-  defaultTtl = 3600,
-  maxTtl = 604800,
 }: FileBrowserHeaderProps) {
-  const [bulkTtlOpen, setBulkTtlOpen] = useState(false);
-
   return (
     <Group justify="space-between" mb="md" wrap="wrap" gap="sm">
       <FileBreadcrumbs bucket={bucket} roleId={roleId} path={path} />
@@ -131,61 +110,9 @@ export function FileBrowserHeader({
           ]}
           size="sm"
         />
-        {selectedCount > 0 && (
-          <>
-            <Button.Group>
-              <Tooltip
-                label="Copy shareable links (expire after the configured default; no login required)"
-                withArrow
-                multiline
-                w={260}
-              >
-                <Button
-                  variant="light"
-                  leftSection={<Share2 size={14} />}
-                  onClick={() => onBulkCopyUrl()}
-                  size="sm"
-                >
-                  Copy URLs ({selectedCount})
-                </Button>
-              </Tooltip>
-              <TtlPopover
-                opened={bulkTtlOpen}
-                onClose={() => setBulkTtlOpen(false)}
-                defaultTtl={defaultTtl}
-                maxTtl={maxTtl}
-                onConfirm={(ttl) => onBulkCopyUrl(ttl)}
-                target={
-                  <Button
-                    variant="light"
-                    size="sm"
-                    px={6}
-                    onClick={() => setBulkTtlOpen((o) => !o)}
-                    aria-label="Choose link validity"
-                  >
-                    <ChevronDown size={14} />
-                  </Button>
-                }
-              />
-            </Button.Group>
-            <Tooltip
-              label="Deletion is disabled in the server config."
-              withArrow
-              disabled={!disableDeletion}
-            >
-              <Button
-                color="red"
-                variant="light"
-                leftSection={<Trash2 size={14} />}
-                onClick={onBulkDelete}
-                size="sm"
-                disabled={disableDeletion}
-              >
-                Delete ({selectedCount})
-              </Button>
-            </Tooltip>
-          </>
-        )}
+        {/* Bulk Copy URLs + Delete moved out of the toolbar into the contextual
+            BulkActionBar (rendered by FileBrowser) so selecting files no longer
+            reflows this row. */}
         <Button
           leftSection={<FolderUp size={14} />}
           onClick={onUploadFolderClick}

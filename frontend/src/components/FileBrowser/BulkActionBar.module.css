@@ -1,0 +1,20 @@
+/* Bottom-CENTER pill. Mantine Affix sets `position: fixed; bottom: 16px`; we
+   centre it horizontally here so it never overlaps the ScrollToTopButton Affix
+   (bottom:20 right:36) and reads as a transient mode rather than new chrome. */
+.affix {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.bar {
+  background: var(--mantine-color-body);
+}
+
+/* Transition is driven by Mantine's <Transition> inline styles; nothing to
+   disable here directly, but keep the reduced-motion contract explicit so any
+   future hover/box-shadow transition on the pill is suppressed too. */
+@media (prefers-reduced-motion: reduce) {
+  .bar {
+    transition: none !important;
+  }
+}

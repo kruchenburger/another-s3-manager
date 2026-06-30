@@ -132,7 +132,8 @@ input:-webkit-autofill:focus {
 }
 body:has([data-scroll-to-top]) .mantine-Notifications-root[data-position^="bottom"],
 body:has([data-settings-save-bar])
-  .mantine-Notifications-root[data-position^="bottom"] {
+  .mantine-Notifications-root[data-position^="bottom"],
+body:has([data-bulk-bar]) .mantine-Notifications-root[data-position^="bottom"] {
   bottom: 80px;
 }
 
