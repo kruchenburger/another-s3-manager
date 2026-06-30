@@ -767,11 +767,6 @@ export function FileBrowser() {
               </Badge>
             </Group>
           )}
-          {truncated && selected.size > 0 && (
-            <Text size="xs" c="dimmed">
-              Selected {selected.size} of loaded items
-            </Text>
-          )}
         </div>
 
         {/* Loader / error / empty / list ALL render inside the scroll
