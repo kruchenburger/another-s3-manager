@@ -34,18 +34,20 @@ test.describe("Hybrid pagination via MinIO", () => {
     // shows an honest "N+ objects" counter (never a fabricated total).
     await expect(page.getByText(/\+ objects/)).toBeVisible();
 
-    // Load more / Load all live in the header — always visible, no scrolling
-    // through 50 rows to reach them.
-    const loadAll = page.getByRole("button", { name: /load all/i });
-    await expect(loadAll).toBeVisible();
+    // Load more + the "Load all" overflow menu live in the header — always
+    // visible, no scrolling through 50 rows to reach them.
+    await expect(page.getByRole("button", { name: /load more/i })).toBeVisible();
+    const loadMenu = page.getByRole("button", { name: /more load options/i });
+    await expect(loadMenu).toBeVisible();
 
     // file-250 is past the first chunk — not loaded into memory yet.
     await expect(
       page.locator("tr").filter({ hasText: "file-250.txt" }),
     ).toHaveCount(0);
 
-    // Drain the whole folder from the server.
-    await loadAll.click();
+    // Drain the whole folder from the server (Load all from the overflow menu).
+    await loadMenu.click();
+    await page.getByRole("menuitem", { name: /load all/i }).click();
 
     // After draining, the last object is in memory. With lazy loading on the
     // client-side slice auto-grows on scroll; scroll the in-memory list to the

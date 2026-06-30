@@ -49,60 +49,59 @@ describe("FileBrowserHeader object count", () => {
     expect(screen.getByText("5 objects")).toBeInTheDocument();
   });
 
-  it("renders 'N+ objects' and Load more/Load all buttons when truncated", () => {
+  it("renders 'N+ objects' and a Load more control when truncated", () => {
     renderHeader({ objectCount: 5, truncated: true });
     expect(screen.getByText("5+ objects")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /load more/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /load all/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load more" })).toBeInTheDocument();
   });
 
-  it("hides Load more/Load all when not truncated", () => {
+  it("hides the Load more control when not truncated", () => {
     renderHeader({ objectCount: 5, truncated: false });
     expect(
-      screen.queryByRole("button", { name: /load more/i }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /load all/i }),
+      screen.queryByRole("button", { name: "Load more" }),
     ).not.toBeInTheDocument();
   });
 
-  it("calls onLoadMore / onLoadAll when their buttons are clicked", async () => {
+  it("delegates onLoadMore when the primary Load more button is clicked", async () => {
     const onLoadMore = vi.fn();
-    const onLoadAll = vi.fn();
-    renderHeader({ objectCount: 5, truncated: true, onLoadMore, onLoadAll });
-    await userEvent.click(screen.getByRole("button", { name: /load more/i }));
+    renderHeader({ objectCount: 5, truncated: true, onLoadMore });
+    await userEvent.click(screen.getByRole("button", { name: "Load more" }));
     expect(onLoadMore).toHaveBeenCalledTimes(1);
-    await userEvent.click(screen.getByRole("button", { name: /load all/i }));
-    expect(onLoadAll).toHaveBeenCalledTimes(1);
   });
 
-  it("disables Load more / Load all while a continuation fetch is in flight", () => {
-    // Mantine's `loading` only shows a spinner; `disabled` is what actually
-    // blocks the double-click that would fire two concurrent fetchNextPage
-    // calls and append duplicate pages.
+  it("disables the Load more control while a continuation fetch is in flight", () => {
     renderHeader({ objectCount: 5, truncated: true, isLoadingMore: true });
-    expect(screen.getByRole("button", { name: /load more/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /load all/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Load more" })).toBeDisabled();
   });
 
-  it("renders SegmentedControl for view picker (Task 13 — verifying §4.4 already done)", () => {
+  it("does not render 'Load all' as a top-level button (it lives in the menu)", () => {
+    renderHeader({ objectCount: 5, truncated: true });
+    expect(
+      screen.queryByRole("button", { name: "Load all" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders SegmentedControl for view picker", () => {
     const { container } = renderHeader();
     // Mantine's SegmentedControl exposes role="radiogroup".
     expect(container.querySelector('[role="radiogroup"]')).not.toBeNull();
   });
 });
 
-describe("FileBrowserHeader — Upload folder button", () => {
-  it("renders the 'Upload folder' button and calls onUploadFolderClick when clicked", async () => {
-    const onUploadFolderClick = vi.fn();
-    renderHeader({ onUploadFolderClick });
-    const button = screen.getByRole("button", { name: /upload folder/i });
+describe("FileBrowserHeader — upload control", () => {
+  it("renders the primary Upload button and calls onUploadClick when clicked", async () => {
+    const onUploadClick = vi.fn();
+    renderHeader({ onUploadClick });
+    const button = screen.getByRole("button", { name: "Upload" });
     expect(button).toBeInTheDocument();
     await userEvent.click(button);
-    expect(onUploadFolderClick).toHaveBeenCalledTimes(1);
+    expect(onUploadClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not render 'Upload folder' as a top-level button (it lives in the menu)", () => {
+    renderHeader();
+    expect(
+      screen.queryByRole("button", { name: "Upload folder" }),
+    ).not.toBeInTheDocument();
   });
 });

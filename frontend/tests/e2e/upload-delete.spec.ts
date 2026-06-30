@@ -17,10 +17,10 @@ test.describe("Upload + delete via MinIO", () => {
     const uploadName = `upload-${Date.now()}.txt`;
 
     // The hidden <input type="file"> lives in FileBrowser.tsx and is triggered
-    // via ref by the Upload button's onClick. There is exactly one role=button
-    // with name "Upload" on the page, so getByRole is the stable hook.
+    // via ref by the UploadSplitButton primary's onClick. Use exact:true so the
+    // name doesn't also match the "More upload options" chevron (substring).
     const fileChooserPromise = page.waitForEvent("filechooser");
-    await page.getByRole("button", { name: "Upload" }).click();
+    await page.getByRole("button", { name: "Upload", exact: true }).click();
     const fileChooser = await fileChooserPromise;
     // Playwright lets us set virtual file content — avoids needing a fixture with this exact name.
     await fileChooser.setFiles({

@@ -17,7 +17,7 @@ test.describe("Special characters in S3 keys", () => {
     // sidesteps the NTFS limitation that prevents committing a fixture file
     // with ':' '?' in its name (Windows forbids those chars).
     const fileChooserPromise = page.waitForEvent("filechooser");
-    await page.getByRole("button", { name: "Upload" }).click();
+    await page.getByRole("button", { name: "Upload", exact: true }).click();
     const fileChooser = await fileChooserPromise;
     await fileChooser.setFiles({
       name: SPECIAL_NAME,

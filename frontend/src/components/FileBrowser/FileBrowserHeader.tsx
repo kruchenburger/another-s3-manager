@@ -1,6 +1,8 @@
-import { Button, Center, Group, SegmentedControl, Text, TextInput } from "@mantine/core";
-import { FolderUp, LayoutGrid, List as ListIcon, Search, Upload } from "lucide-react";
+import { Center, Group, SegmentedControl, Text, TextInput } from "@mantine/core";
+import { LayoutGrid, List as ListIcon, Search } from "lucide-react";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
+import { UploadSplitButton } from "./UploadSplitButton";
+import { LoadSplitButton } from "./LoadSplitButton";
 import type { DisplayMode } from "@/hooks/useDisplayMode";
 
 interface FileBrowserHeaderProps {
@@ -61,30 +63,11 @@ export function FileBrowserHeader({
               : `${objectCount} object${objectCount === 1 ? "" : "s"}`}
           </Text>
           {truncated && (
-            <>
-              <Button
-                size="xs"
-                variant="light"
-                onClick={onLoadMore}
-                loading={isLoadingMore}
-                // Mantine's `loading` shows a spinner but does NOT block clicks
-                // — without `disabled`, a double-click fires two concurrent
-                // fetchNextPage calls and appends duplicate pages (same
-                // double-submit guard as the Settings Save bar, PR #24/#37).
-                disabled={isLoadingMore}
-              >
-                Load more
-              </Button>
-              <Button
-                size="xs"
-                variant="subtle"
-                onClick={onLoadAll}
-                loading={isLoadingMore}
-                disabled={isLoadingMore}
-              >
-                Load all
-              </Button>
-            </>
+            <LoadSplitButton
+              onLoadMore={onLoadMore}
+              onLoadAll={onLoadAll}
+              loading={isLoadingMore}
+            />
           )}
         </Group>
         <SegmentedControl
@@ -110,20 +93,13 @@ export function FileBrowserHeader({
           ]}
           size="sm"
         />
-        {/* Bulk Copy URLs + Delete moved out of the toolbar into the contextual
-            BulkActionBar (rendered by FileBrowser) so selecting files no longer
-            reflows this row. */}
-        <Button
-          leftSection={<FolderUp size={14} />}
-          onClick={onUploadFolderClick}
-          size="sm"
-          variant="default"
-        >
-          Upload folder
-        </Button>
-        <Button leftSection={<Upload size={14} />} onClick={onUploadClick} size="sm">
-          Upload
-        </Button>
+        {/* Bulk Copy URLs + Delete live in the contextual BulkActionBar (rendered
+            by FileBrowser); upload + load-continuation are consolidated into the
+            two split buttons below. */}
+        <UploadSplitButton
+          onUploadFiles={onUploadClick}
+          onUploadFolder={onUploadFolderClick}
+        />
       </Group>
     </Group>
   );
