@@ -16,7 +16,8 @@ test.describe("FileBrowser scroll container + virtualization", () => {
       page.locator("tr").filter({ hasText: "file-001.txt" }),
     ).toBeVisible({ timeout: 15_000 });
 
-    await page.getByRole("button", { name: /load all/i }).click();
+    await page.getByRole("button", { name: /more load options/i }).click();
+    await page.getByRole("menuitem", { name: /load all/i }).click();
     // Wait until the truncation marker is gone (everything loaded).
     await expect(page.getByText(/\+ objects/)).toHaveCount(0, { timeout: 20_000 });
 

@@ -139,12 +139,16 @@ describe("FileBrowser hybrid pagination", () => {
     expect(screen.getByText(/3 objects/)).toBeInTheDocument();
   });
 
-  it("shows N+ count and Load more/all when truncated", () => {
+  it("shows N+ count and Load more/all controls when truncated", () => {
     mockTruncated = true;
     renderBrowser();
     expect(screen.getByText(/3\+ objects/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /load more/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /load all/i })).toBeInTheDocument();
+    // "Load all" now lives in the LoadSplitButton overflow menu — its trigger is
+    // the "More load options" chevron next to "Load more".
+    expect(
+      screen.getByRole("button", { name: /more load options/i }),
+    ).toBeInTheDocument();
   });
 
   it("Load more triggers the server continuation", () => {
@@ -158,10 +162,13 @@ describe("FileBrowser hybrid pagination", () => {
     expect(loadMoreMock).toHaveBeenCalledTimes(1);
   });
 
-  it("Load all triggers a full drain", () => {
+  it("Load all (from the overflow menu) triggers a full drain", async () => {
     mockTruncated = true;
     renderBrowser();
-    fireEvent.click(screen.getByRole("button", { name: /load all/i }));
+    fireEvent.click(screen.getByRole("button", { name: /more load options/i }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: /load all/i }),
+    );
     expect(loadAllMock).toHaveBeenCalledTimes(1);
   });
 
