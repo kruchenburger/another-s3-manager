@@ -236,30 +236,49 @@ export function RolesPage() {
                   </Table.Td>
                   <Table.Td>
                     <Group gap={4} className={classes.actions}>
-                      <Tooltip label="Edit">
-                        <ActionIcon
-                          variant="subtle"
-                          aria-label={`Edit ${r.name}`}
-                          disabled={readOnly}
-                          onClick={() =>
-                            navigate(
-                              `/admin/roles/${encodeURIComponent(r.name)}`,
-                            )
-                          }
-                        >
-                          <Pencil size={16} />
-                        </ActionIcon>
+                      <Tooltip
+                        label={
+                          readOnly
+                            ? "Roles are read-only (managed via ConfigMap)"
+                            : "Edit"
+                        }
+                      >
+                        {/* <span> so the Tooltip still fires while the ActionIcon
+                            is disabled (read-only) — disabled controls drop
+                            pointer events; mirrors the UsersPage pattern. */}
+                        <span>
+                          <ActionIcon
+                            variant="subtle"
+                            aria-label={`Edit ${r.name}`}
+                            disabled={readOnly}
+                            onClick={() =>
+                              navigate(
+                                `/admin/roles/${encodeURIComponent(r.name)}`,
+                              )
+                            }
+                          >
+                            <Pencil size={16} />
+                          </ActionIcon>
+                        </span>
                       </Tooltip>
-                      <Tooltip label="Delete">
-                        <ActionIcon
-                          variant="subtle"
-                          color="red"
-                          aria-label={`Delete ${r.name}`}
-                          disabled={readOnly}
-                          onClick={() => setDeleteTarget(r)}
-                        >
-                          <Trash2 size={16} />
-                        </ActionIcon>
+                      <Tooltip
+                        label={
+                          readOnly
+                            ? "Roles are read-only (managed via ConfigMap)"
+                            : "Delete"
+                        }
+                      >
+                        <span>
+                          <ActionIcon
+                            variant="subtle"
+                            color="red"
+                            aria-label={`Delete ${r.name}`}
+                            disabled={readOnly}
+                            onClick={() => setDeleteTarget(r)}
+                          >
+                            <Trash2 size={16} />
+                          </ActionIcon>
+                        </span>
                       </Tooltip>
                     </Group>
                   </Table.Td>

@@ -6,7 +6,7 @@
    tables and the MCP-token tables. */
 .actions {
   opacity: 0;
-  transition: opacity 150ms ease;
+  transition: opacity 200ms ease;
 }
 
 .row:hover .actions,
