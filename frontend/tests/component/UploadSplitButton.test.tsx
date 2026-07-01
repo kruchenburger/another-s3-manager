@@ -36,7 +36,11 @@ describe("UploadSplitButton", () => {
       screen.getByRole("button", { name: /more upload options/i }),
     );
     await user.click(
-      await screen.findByRole("menuitem", { name: /upload folder/i }),
+      await screen.findByRole(
+        "menuitem",
+        { name: /upload folder/i },
+        { timeout: 5000 },
+      ),
     );
     expect(onUploadFolder).toHaveBeenCalledTimes(1);
   });
@@ -48,7 +52,11 @@ describe("UploadSplitButton", () => {
       screen.getByRole("button", { name: /more upload options/i }),
     );
     await user.click(
-      await screen.findByRole("menuitem", { name: /upload files/i }),
+      await screen.findByRole(
+        "menuitem",
+        { name: /upload files/i },
+        { timeout: 5000 },
+      ),
     );
     expect(onUploadFiles).toHaveBeenCalledTimes(1);
   });

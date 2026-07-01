@@ -54,7 +54,16 @@ export function LoadSplitButton({
           </Button>
         </Menu.Target>
         <Menu.Dropdown>
-          <Menu.Item leftSection={<Files size={14} />} onClick={onLoadAll}>
+          {/* Defense-in-depth: the chevron that opens this menu is already
+              disabled while loading, so this item is normally unreachable
+              mid-fetch. `disabled={loading}` also covers the sub-frame race after
+              clicking "Load all" (before closeOnItemClick unmounts the menu),
+              keeping parity with the primary button's double-submit guard. */}
+          <Menu.Item
+            leftSection={<Files size={14} />}
+            onClick={onLoadAll}
+            disabled={loading}
+          >
             Load all
           </Menu.Item>
         </Menu.Dropdown>

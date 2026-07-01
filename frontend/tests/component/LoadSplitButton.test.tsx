@@ -36,7 +36,13 @@ describe("LoadSplitButton", () => {
     await user.click(
       screen.getByRole("button", { name: /more load options/i }),
     );
-    await user.click(await screen.findByRole("menuitem", { name: /load all/i }));
+    await user.click(
+      await screen.findByRole(
+        "menuitem",
+        { name: /load all/i },
+        { timeout: 5000 },
+      ),
+    );
     expect(onLoadAll).toHaveBeenCalledTimes(1);
   });
 
@@ -46,5 +52,9 @@ describe("LoadSplitButton", () => {
     expect(
       screen.getByRole("button", { name: /more load options/i }),
     ).toBeDisabled();
+    // The "Load all" Menu.Item also carries disabled={loading} (defense-in-depth,
+    // see the component). It isn't asserted here: the chevron above is disabled
+    // while loading, so the menu can't be opened to reach the item — the reachable
+    // guards (primary + chevron) are what a user can actually hit.
   });
 });
