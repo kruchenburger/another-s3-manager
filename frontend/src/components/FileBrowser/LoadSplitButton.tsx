@@ -1,5 +1,5 @@
 import { Button, Menu } from "@mantine/core";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Files } from "lucide-react";
 
 interface LoadSplitButtonProps {
   /** Fetch the next chunk of objects from the server. */
@@ -38,7 +38,10 @@ export function LoadSplitButton({
       >
         Load more
       </Button>
-      <Menu position="bottom-end" withinPortal>
+      {/* Dropdown width tracks the split-button group (~136px) + a touch, so it
+          reads as an extension of the "Load more" button — not a wide Upload-style
+          menu. */}
+      <Menu position="bottom-end" withinPortal width={144}>
         <Menu.Target>
           <Button
             variant="default"
@@ -51,7 +54,9 @@ export function LoadSplitButton({
           </Button>
         </Menu.Target>
         <Menu.Dropdown>
-          <Menu.Item onClick={onLoadAll}>Load all</Menu.Item>
+          <Menu.Item leftSection={<Files size={14} />} onClick={onLoadAll}>
+            Load all
+          </Menu.Item>
         </Menu.Dropdown>
       </Menu>
     </Button.Group>

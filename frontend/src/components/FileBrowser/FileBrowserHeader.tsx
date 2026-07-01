@@ -56,20 +56,6 @@ export function FileBrowserHeader({
           size="sm"
           style={{ minWidth: 200 }}
         />
-        <Group gap="xs" align="center" wrap="nowrap">
-          <Text size="sm" c="dimmed">
-            {truncated
-              ? `${objectCount}+ objects`
-              : `${objectCount} object${objectCount === 1 ? "" : "s"}`}
-          </Text>
-          {truncated && (
-            <LoadSplitButton
-              onLoadMore={onLoadMore}
-              onLoadAll={onLoadAll}
-              loading={isLoadingMore}
-            />
-          )}
-        </Group>
         <SegmentedControl
           value={mode}
           onChange={(v) => onModeChange(v as DisplayMode)}
@@ -93,9 +79,24 @@ export function FileBrowserHeader({
           ]}
           size="sm"
         />
-        {/* Bulk Copy URLs + Delete live in the contextual BulkActionBar (rendered
-            by FileBrowser); upload + load-continuation are consolidated into the
-            two split buttons below. */}
+        <Group gap="xs" align="center" wrap="nowrap">
+          <Text size="sm" c="dimmed">
+            {truncated
+              ? `${objectCount}+ objects`
+              : `${objectCount} object${objectCount === 1 ? "" : "s"}`}
+          </Text>
+          {truncated && (
+            <LoadSplitButton
+              onLoadMore={onLoadMore}
+              onLoadAll={onLoadAll}
+              loading={isLoadingMore}
+            />
+          )}
+        </Group>
+        {/* View toggle sits with the filter; the two split buttons (Load
+            continuation + Upload) are grouped together at the end so a control
+            never sits sandwiched between them. Bulk Copy URLs + Delete live in
+            the contextual BulkActionBar (rendered by FileBrowser). */}
         <UploadSplitButton
           onUploadFiles={onUploadClick}
           onUploadFolder={onUploadFolderClick}
