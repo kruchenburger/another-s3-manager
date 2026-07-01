@@ -3,6 +3,7 @@ import { Check, Pencil, Trash2 } from "lucide-react";
 import { formatBytes } from "@/utils/formatBytes";
 import { formatAbsolute, formatRelative } from "@/utils/formatDate";
 import type { ApiToken, ApiTokenWithOwner } from "@/types/api";
+import classes from "@/components/rowActions.module.css";
 
 interface TokensTableProps {
   tokens: (ApiToken | ApiTokenWithOwner)[];
@@ -40,7 +41,11 @@ export function TokensTable({
         {tokens.map((t) => {
           const isRevoked = !!t.revoked_at;
           return (
-            <Table.Tr key={t.id} c={isRevoked ? "dimmed" : undefined}>
+            <Table.Tr
+              key={t.id}
+              c={isRevoked ? "dimmed" : undefined}
+              className={classes.row}
+            >
               <Table.Td style={isRevoked ? { textDecoration: "line-through" } : undefined}>
                 {t.name}
               </Table.Td>
@@ -68,7 +73,7 @@ export function TokensTable({
               </Table.Td>
               <Table.Td>
                 {!isRevoked && (
-                  <Group gap="xs" wrap="nowrap">
+                  <Group gap="xs" wrap="nowrap" className={classes.actions}>
                     {onEdit && (
                       <ActionIcon
                         variant="subtle"

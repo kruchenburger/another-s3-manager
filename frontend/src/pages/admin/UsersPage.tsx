@@ -1,4 +1,5 @@
 import {
+  ActionIcon,
   Badge,
   Button,
   Group,
@@ -28,6 +29,7 @@ import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { getErrorMessage } from "@/utils/apiError";
 import { runWithToasts } from "@/utils/mutationToast";
 import type { AdminUser } from "@/types/api";
+import classes from "@/components/rowActions.module.css";
 
 export function UsersPage() {
   const { data: me } = useMe();
@@ -150,7 +152,7 @@ export function UsersPage() {
           {users.map((u) => {
             const isSelf = u.username === currentUsername;
             return (
-              <Table.Tr key={u.username}>
+              <Table.Tr key={u.username} className={classes.row}>
                 <Table.Td>{u.username}</Table.Td>
                 <Table.Td>
                   {u.is_admin && <Badge color="mutedSlateBlue">admin</Badge>}
@@ -165,10 +167,9 @@ export function UsersPage() {
                   </Group>
                 </Table.Td>
                 <Table.Td>
-                  <Group gap={4}>
+                  <Group gap={4} className={classes.actions}>
                     <Tooltip label="Edit">
-                      <Button
-                        size="xs"
+                      <ActionIcon
                         variant="subtle"
                         aria-label={`Edit ${u.username}`}
                         onClick={() => {
@@ -176,8 +177,8 @@ export function UsersPage() {
                           setDrawerMode("edit");
                         }}
                       >
-                        <Pencil size={14} />
-                      </Button>
+                        <Pencil size={16} />
+                      </ActionIcon>
                     </Tooltip>
                     <Tooltip
                       label={
@@ -187,31 +188,29 @@ export function UsersPage() {
                       }
                     >
                       <span>
-                        <Button
-                          size="xs"
+                        <ActionIcon
                           variant="subtle"
                           aria-label={`Reset password for ${u.username}`}
                           disabled={isSelf}
                           onClick={() => setResetTarget(u)}
                         >
-                          <KeyRound size={14} />
-                        </Button>
+                          <KeyRound size={16} />
+                        </ActionIcon>
                       </span>
                     </Tooltip>
                     <Tooltip
                       label={isSelf ? "You can't delete yourself" : "Delete"}
                     >
                       <span>
-                        <Button
-                          size="xs"
+                        <ActionIcon
                           variant="subtle"
                           color="red"
                           aria-label={`Delete ${u.username}`}
                           disabled={isSelf}
                           onClick={() => setDeleteTarget(u)}
                         >
-                          <Trash2 size={14} />
-                        </Button>
+                          <Trash2 size={16} />
+                        </ActionIcon>
                       </span>
                     </Tooltip>
                   </Group>
