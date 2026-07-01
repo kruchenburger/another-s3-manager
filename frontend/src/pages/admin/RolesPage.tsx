@@ -1,4 +1,5 @@
 import {
+  ActionIcon,
   Badge,
   Button,
   Group,
@@ -24,6 +25,7 @@ import { RoleDrawer } from "@/components/Admin/RoleDrawer";
 import { runWithToasts } from "@/utils/mutationToast";
 import { getErrorMessage } from "@/utils/apiError";
 import type { AppConfig, AppRole } from "@/types/api";
+import classes from "@/components/rowActions.module.css";
 
 export function RolesPage() {
   const { data: config, isLoading, error } = useAdminConfig();
@@ -203,7 +205,7 @@ export function RolesPage() {
             </Table.Thead>
             <Table.Tbody>
               {config.roles.map((r) => (
-                <Table.Tr key={r.name}>
+                <Table.Tr key={r.name} className={classes.row}>
                   <Table.Td>{r.name}</Table.Td>
                   <Table.Td>
                     <Badge color={typeColor(r.type)} variant="light">
@@ -233,28 +235,32 @@ export function RolesPage() {
                     </Text>
                   </Table.Td>
                   <Table.Td>
-                    <Group gap={4}>
-                      <Button
-                        size="xs"
-                        variant="subtle"
-                        aria-label={`Edit ${r.name}`}
-                        disabled={readOnly}
-                        onClick={() =>
-                          navigate(`/admin/roles/${encodeURIComponent(r.name)}`)
-                        }
-                      >
-                        <Pencil size={14} />
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="subtle"
-                        color="red"
-                        aria-label={`Delete ${r.name}`}
-                        disabled={readOnly}
-                        onClick={() => setDeleteTarget(r)}
-                      >
-                        <Trash2 size={14} />
-                      </Button>
+                    <Group gap={4} className={classes.actions}>
+                      <Tooltip label="Edit">
+                        <ActionIcon
+                          variant="subtle"
+                          aria-label={`Edit ${r.name}`}
+                          disabled={readOnly}
+                          onClick={() =>
+                            navigate(
+                              `/admin/roles/${encodeURIComponent(r.name)}`,
+                            )
+                          }
+                        >
+                          <Pencil size={16} />
+                        </ActionIcon>
+                      </Tooltip>
+                      <Tooltip label="Delete">
+                        <ActionIcon
+                          variant="subtle"
+                          color="red"
+                          aria-label={`Delete ${r.name}`}
+                          disabled={readOnly}
+                          onClick={() => setDeleteTarget(r)}
+                        >
+                          <Trash2 size={16} />
+                        </ActionIcon>
+                      </Tooltip>
                     </Group>
                   </Table.Td>
                 </Table.Tr>

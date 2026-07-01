@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { formatDate } from "@/utils/formatDate";
 import { getErrorMessage } from "@/utils/apiError";
 import { runWithToasts } from "@/utils/mutationToast";
+import classes from "@/components/rowActions.module.css";
 
 export function BansPage() {
   const { data: bans, isLoading, error } = useAdminBans();
@@ -58,7 +59,7 @@ export function BansPage() {
         </Table.Thead>
         <Table.Tbody>
           {bans.map((ban) => (
-            <Table.Tr key={ban.username}>
+            <Table.Tr key={ban.username} className={classes.row}>
               <Table.Td>{ban.username}</Table.Td>
               <Table.Td>
                 {formatDate(new Date(ban.banned_until * 1000).toISOString())}
@@ -68,6 +69,7 @@ export function BansPage() {
                 <Button
                   size="xs"
                   variant="light"
+                  className={classes.actions}
                   onClick={() => setTarget(ban.username)}
                 >
                   Unban

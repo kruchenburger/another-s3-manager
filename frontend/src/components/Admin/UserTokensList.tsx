@@ -27,6 +27,7 @@ import type {
   ApiTokenWithOwner,
   ApiTokenWithPlaintext,
 } from "@/types/api";
+import classes from "@/components/rowActions.module.css";
 
 interface UserTokensListProps {
   username: string;
@@ -94,7 +95,7 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
           </Table.Thead>
           <Table.Tbody>
             {tokens.map((t) => (
-              <Table.Tr key={t.id}>
+              <Table.Tr key={t.id} className={classes.row}>
                 <Table.Td>{t.name}</Table.Td>
                 <Table.Td>
                   {t.is_read_only ? (
@@ -112,7 +113,7 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
                   </Tooltip>
                 </Table.Td>
                 <Table.Td>
-                  <Group gap="xs" wrap="nowrap">
+                  <Group gap="xs" wrap="nowrap" className={classes.actions}>
                     <ActionIcon
                       variant="subtle"
                       aria-label={`Edit ${t.name}`}
