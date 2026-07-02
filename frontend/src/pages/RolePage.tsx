@@ -141,7 +141,7 @@ export function RolePage() {
     <Stack gap="md">
       <Title order={2}>{roleId}</Title>
       <Text c="dimmed">Pick a bucket to browse files.</Text>
-      <Table highlightOnHover striped="even" verticalSpacing="xs">
+      <Table highlightOnHover striped="even">
         <Table.Thead>
           <Table.Tr>
             <Table.Th>Bucket</Table.Th>

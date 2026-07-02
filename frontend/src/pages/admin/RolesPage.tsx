@@ -193,7 +193,7 @@ export function RolesPage() {
             </Button>
           </Group>
 
-          <Table highlightOnHover striped="even" verticalSpacing="xs">
+          <Table highlightOnHover striped="even">
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>Name</Table.Th>

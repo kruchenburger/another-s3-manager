@@ -121,10 +121,10 @@ const sharedComponents = {
   TextInput: { defaultProps: { size: "sm", radius: "md" } },
   PasswordInput: { defaultProps: { size: "sm", radius: "md" } },
   Select: { defaultProps: { size: "sm", radius: "md" } },
-  Card: { defaultProps: { radius: "lg", padding: "md", withBorder: true } }, // padding lg → md (density B)
+  Card: { defaultProps: { radius: 12, padding: "lg", withBorder: true } }, // airify: mockup card radius 12px, roomier padding
   Modal: {
     defaultProps: {
-      radius: "lg",
+      radius: 12,
       centered: true,
       closeButtonProps: { "aria-label": "Close" },
     },
@@ -138,7 +138,7 @@ const sharedComponents = {
   // CloseButton usages too, not just the Modal/Drawer cases above.
   CloseButton: { defaultProps: { "aria-label": "Close" } },
   Notification: { defaultProps: { radius: "md" } },
-  Table: { defaultProps: { verticalSpacing: "xs", horizontalSpacing: "sm" } }, // density B
+  Table: { defaultProps: { verticalSpacing: "sm", horizontalSpacing: "sm" } }, // airify: more air (FileTable pins xs — virtualized)
 };
 
 // Shared typography — tighter "tool-feel" scale from spec §3.2.

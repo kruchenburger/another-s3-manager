@@ -80,6 +80,10 @@ export function FileCard({
 
   return (
     <Card
+      // Grid density is deliberate: FileGrid's virtualizer assumes this
+      // card's rendered height (ROW_HEIGHT). Pin the pre-airify padding so
+      // the theme-level Card padding bump (md -> lg) can't reflow the grid.
+      padding="md"
       className={animateIn ? `${classes.row} ${classes.animateIn}` : classes.row}
       style={
         {
