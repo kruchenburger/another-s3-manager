@@ -7,7 +7,8 @@
 }
 
 .bar {
-  background: var(--mantine-color-body);
+  background: var(--as3m-surface);
+  box-shadow: var(--as3m-shadow-float);
 }
 
 /* Transition is driven by Mantine's <Transition> inline styles; nothing to

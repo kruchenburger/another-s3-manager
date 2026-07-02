@@ -58,7 +58,7 @@ export function AppShellLayout({
     >
       <AppShell.Header
         style={{
-          background: "light-dark(rgba(255, 255, 255, 0.6), rgba(26, 33, 46, 0.6))",
+          background: "var(--as3m-header)",
           backdropFilter: "blur(12px)",
           WebkitBackdropFilter: "blur(12px)",
         }}
