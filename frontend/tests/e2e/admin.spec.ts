@@ -25,6 +25,15 @@ test.describe("Admin pages", () => {
     ).toBeVisible();
   });
 
+  test("legacy vanilla bookmark /admin redirects to /admin/users", async ({
+    page,
+  }) => {
+    await loginAsAdmin(page);
+    await page.goto("/admin");
+    await expect(page).toHaveURL(/\/admin\/users$/);
+    await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
+  });
+
   test("Back to files returns to /", async ({ page }) => {
     await loginAsAdmin(page);
     await page.goto("/admin/settings");

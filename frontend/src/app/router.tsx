@@ -1,4 +1,4 @@
-import { createBrowserRouter } from "react-router-dom";
+import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AdminGuard } from "@/components/AdminLayout/AdminGuard";
 import { AdminLayout } from "@/components/AdminLayout/AdminLayout";
 import { AppShellLayout } from "@/components/AppShell/AppShellLayout";
@@ -49,6 +49,12 @@ export const router = createBrowserRouter(
                 {
                   element: <AdminLayout />,
                   children: [
+                    // Pre-Phase-7 the vanilla admin page lived at bare /admin —
+                    // keep old bookmarks working by landing them on Users.
+                    {
+                      path: "/admin",
+                      element: <Navigate to="/admin/users" replace />,
+                    },
                     { path: "/admin/users", element: <UsersPage /> },
                     { path: "/admin/bans", element: <BansPage /> },
                     { path: "/admin/roles", element: <RolesPage /> },
