@@ -30,7 +30,6 @@ services:
 
       # Optional tuning:
       # JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 180
-      # ITEMS_PER_PAGE: 200
       # MAX_FILE_SIZE: 104857600
       # DISABLE_DELETION: "false"
       # ENABLE_LAZY_LOADING: "true"

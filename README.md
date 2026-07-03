@@ -77,7 +77,6 @@ Role types: `default`, `profile`, `assume_role`, `credentials`. Any role can inc
 | `DATA_DIR`         | Directory for SQLite DB and runtime data                                         | `/app/data`          |
 | `MAX_FILE_SIZE`    | Max upload size in bytes                                                         | `104857600` (100 MB) |
 | `DISABLE_DELETION` | Disable delete operations                                                        | `false`              |
-| `ITEMS_PER_PAGE`   | Files per page                                                                   | `200`                |
 | `COOKIE_SECURE`    | Auth cookie `Secure` flag — set to `false` for local HTTP, `true` for HTTPS prod | `true`               |
 
 ## Authentication

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** the legacy vanilla UI is removed; the app now serves the React
+  interface at `/`. `/v2/*` URLs no longer exist (no redirects — they render
+  the SPA's 404 page). The `ITEMS_PER_PAGE` env var and `items_per_page` config
+  key are removed (ignored if present in existing `config.json`). The MCP
+  endpoint (`/mcp`) is unchanged.
+
 ### Changed
 
 - Upgraded the React SPA from Mantine 8 to Mantine 9 (and React 19.0 → 19.2,

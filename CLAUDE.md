@@ -7,7 +7,7 @@ Lightweight web UI for managing files in S3 and S3-compatible storage.
 ## Stack
 
 - **Backend**: Python 3.13+, FastAPI, Boto3, JWT auth (cookie-based), per-username ban for brute-force defense
-- **Frontend**: Vanilla HTML/JS/CSS (migration to React + Mantine in progress)
+- **Frontend**: React + Mantine (Vite); FastAPI serves the built SPA at `/`
 - **Deployment**: Docker, Docker Compose, Kubernetes (chart hosted at [github.com/kruchenburger/helm](https://github.com/kruchenburger/helm) — in progress)
 - **Package manager**: uv
 
@@ -27,11 +27,11 @@ another-s3-manager/
 │       ├── s3_client.py      # S3 client, role management
 │       ├── users.py          # User management (SQLite via SQLAlchemy)
 │       ├── utils.py          # Validation, sanitization
-│       └── static/           # Frontend assets (HTML/JS/CSS)
+│       └── static/app/       # React SPA build output (generated, not tracked)
 ├── migrations/               # Alembic migrations (env.py + versions/)
 ├── alembic.ini
 ├── tests/                    # pytest tests
-├── frontend/                 # React + Mantine scaffold (WIP)
+├── frontend/                 # React + Mantine source
 ├── data/                     # Runtime data (not tracked)
 ├── pyproject.toml
 ├── Dockerfile
@@ -89,7 +89,7 @@ cd frontend && npm install
 # Dev server with hot reload (proxies /api → http://localhost:8080)
 cd frontend && npm run dev   # opens on http://localhost:5173
 
-# Production build → bundles into ../src/another_s3_manager/static/v2/
+# Production build → bundles into ../src/another_s3_manager/static/app/
 # Vendor libs are split into separate chunks (react / mantine / tanstack / icons / gsap)
 # via `manualChunks` in `vite.config.ts` so browsers can cache them independently of
 # our app code — main entrypoint stays under the 500 KB warning threshold.
@@ -111,7 +111,7 @@ all E2E tests fail with connection refused. Override target via
 `E2E_BASE_URL=http://otherhost:port npx playwright test`.
 
 **Accessibility baseline:** `frontend/tests/e2e/a11y.spec.ts` runs axe-core
-(via `@axe-core/playwright`) against every covered route in `/v2/` and fails
+(via `@axe-core/playwright`) against every covered route and fails
 the build on any `critical`/`serious` violation. WCAG 2.1 AA + best-practice
 tags. `moderate`/`minor` are logged but non-blocking. See
 [`docs/accessibility.md`](docs/accessibility.md) for the full route list, how
@@ -161,22 +161,25 @@ See [`docs/testing-backends.md`](docs/testing-backends.md) for the MinIO vs mini
 Local dev requires both servers: backend on `8080` (FastAPI) + Vite on `5173`.
 Vite proxies `/api` → backend, so the React app talks to the real backend during
 dev. For production-like testing, run `npm run build` then visit
-`http://localhost:8080/v2/` (the FastAPI app serves the bundle directly).
+`http://localhost:8080/` (the FastAPI app serves the bundle directly).
 
 **`COOKIE_SECURE=false` is required when running locally over HTTP** — without it
 the browser drops the auth cookie.
 
-### Strangler-fig migration
+### SPA serving (Phase 7)
 
-The vanilla UI (`/`, `/login`, `/admin`) and the React SPA (`/v2/*`) coexist
-during the migration. Each release adds more pages to `/v2/`; the vanilla UI is
-removed only after `/v2/` has full feature parity (Phase 7).
-
-`/v2/*` is served by a single catch-all FastAPI route in `main.py` (not a
-`StaticFiles` mount). The route serves real files when they exist and falls back
-to `index.html` so React Router handles client-side navigation. Files are loaded
-into memory and returned via `Response` (not `FileResponse`) — kept as a small
-defensive choice; SPA bundles are <1MB so the cost is negligible.
+The React SPA owns every path from `/` (the vanilla UI was removed in Phase 7;
+old `/v2/*` URLs intentionally have no redirects and render the SPA's 404 page).
+It is served by a single catch-all FastAPI route in `main.py` (not a
+`StaticFiles` mount) registered at the very end of the file. **Route ordering
+invariant: API routes → `/mcp` mount → SPA catch-all LAST** — the catch-all is
+greedy, anything registered after it is unreachable. Unknown `api/`/`mcp/`
+paths (plus bare `api`/`mcp`/`metrics`/`health`) get a JSON 404 from the
+catch-all instead of index.html; bare `/mcp` 307-redirects to `/mcp/`. The
+route serves real files when they exist and falls back to `index.html` so
+React Router handles client-side navigation. Files are loaded into memory and
+returned via `Response` (not `FileResponse`) — kept as a small defensive
+choice; SPA bundles are <1MB so the cost is negligible.
 
 ## Versioning
 
@@ -192,7 +195,6 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 | `LOG_LEVEL`                       | No       | `info`                                  | Logging level                                                                                      |
 | `ADMIN_PASSWORD`                  | No       | `change_me_pls`                         | Admin user password                                                                                |
 | `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | No       | `180`                                   | JWT expiration (minutes)                                                                           |
-| `ITEMS_PER_PAGE`                  | No       | `200`                                   | Items per page in file listing                                                                     |
 | `DISABLE_DELETION`                | No       | `false`                                 | Disable file deletion                                                                              |
 | `MAX_FILE_SIZE`                   | No       | `104857600`                             | Max upload file size (bytes, 100MB)                                                                |
 | `PRESIGNED_URL_DEFAULT_TTL`       | No       | `3600`                                  | Default presigned-URL lifetime (seconds). Overridable per link up to the max.                      |
@@ -214,10 +216,10 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 - Granular per-role, per-bucket access control
 - Brute-force defense: per-username ban (3 failed attempts → 1h ban). **Admins exempt** to avoid DoS on the predictable `admin` username — admin protection must come from deployment layer (see "Production deployment" in README).
 - No application-level IP rate limit. Production exposure expects an authenticated reverse proxy (Cloudflare Access, Tunnel, WAF) — that's the right layer for IP-based throttling.
-- React SPA on `/v2/*`: collapsible sidebar with role/bucket tree, file browser (table+grid toggle, hover actions, bulk delete, drag-drop upload, preview modal).
-- React admin pages on `/v2/admin/*`: separate AdminLayout with grouped sidebar (ACCOUNTS: Users / Bans, INFRASTRUCTURE: Roles / Settings) reachable from "Admin Console" in UserMenu. Users page (CRUD + reset password + self-protect for delete/demote/reset). Bans page (view + unban). Roles page (table + create wizard with type-conditional credential fields + edit form, secret_access_key preserve-on-blank). Settings page (typed global settings with read-only k8s ConfigMap mode, MB↔bytes conversion preserves byte-precision when MB field unchanged). Backend endpoints unchanged from Phase 1; React pages reuse them via TanStack Query plus a small `update_user` self-demote guard.
-- Self-service password change at `/v2/change-password`: any authenticated user changes their own password via UserMenu → "Change password". Requires the current password (defence against stolen-cookie attacks) and rejects identical new password. Client-side validation: 8+ chars, confirm matches, current required.
-- **MCP server at `/mcp`** for AI agents (Claude Desktop, Cursor, Codex). Bearer auth via per-user MCP tokens; same role/permission model as web UI. Self-serve token management at `/v2/api-tokens` (UI labels them "MCP tokens"; URL kept for backwards compatibility). User can edit token metadata (name, read-only flag, max read bytes) without revoke + recreate. Admin can issue tokens on behalf of users. See `docs/mcp-setup.md`.
+- React SPA at `/`: collapsible sidebar with role/bucket tree, file browser (table+grid toggle, hover actions, bulk delete, drag-drop upload, preview modal).
+- React admin pages on `/admin/*`: separate AdminLayout with grouped sidebar (ACCOUNTS: Users / Bans, INFRASTRUCTURE: Roles / Settings) reachable from "Admin Console" in UserMenu. Users page (CRUD + reset password + self-protect for delete/demote/reset). Bans page (view + unban). Roles page (table + create wizard with type-conditional credential fields + edit form, secret_access_key preserve-on-blank). Settings page (typed global settings with read-only k8s ConfigMap mode, MB↔bytes conversion preserves byte-precision when MB field unchanged). Backend endpoints unchanged from Phase 1; React pages reuse them via TanStack Query plus a small `update_user` self-demote guard.
+- Self-service password change at `/change-password`: any authenticated user changes their own password via UserMenu → "Change password". Requires the current password (defence against stolen-cookie attacks) and rejects identical new password. Client-side validation: 8+ chars, confirm matches, current required.
+- **MCP server at `/mcp`** for AI agents (Claude Desktop, Cursor, Codex). Bearer auth via per-user MCP tokens; same role/permission model as web UI. Self-serve token management at `/api-tokens` (UI labels them "MCP tokens"; URL kept for backwards compatibility). User can edit token metadata (name, read-only flag, max read bytes) without revoke + recreate. Admin can issue tokens on behalf of users. See `docs/mcp-setup.md`.
 - **Prometheus metrics** at `/metrics` (optional basic auth via `METRICS_PASSWORD`). Covers HTTP, auth, S3 ops, MCP tool calls, DB query duration.
 
 ### React API surface
@@ -227,7 +229,7 @@ The React SPA consumes existing backend endpoints plus a small set added for SPA
 - `GET /api/me` — extended to include `allowed_roles: string[]` and `disable_deletion: bool` (env `DISABLE_DELETION` OR `config.disable_deletion`, env wins; surfaces the flag so the React UI can disable Delete controls before the user clicks)
 - `GET /api/buckets?role=...` — list buckets (already existed)
 - `GET /api/buckets/{b}/files?path=...&role=...` — list files (already existed)
-- `GET /api/buckets/{b}/files?...&client_load=1&search=<prefix>` — server-side name-prefix search: lists the current folder's immediate children (folders + files) whose name starts with `<prefix>`, case-sensitive, via S3 `ListObjectsV2(Prefix=…)`. client_load mode only (else 400). Powers the /v2 "Search on server" affordance shown when a folder is truncated.
+- `GET /api/buckets/{b}/files?...&client_load=1&search=<prefix>` — server-side name-prefix search: lists the current folder's immediate children (folders + files) whose name starts with `<prefix>`, case-sensitive, via S3 `ListObjectsV2(Prefix=…)`. client_load mode only (else 400). Powers the "Search on server" affordance shown when a folder is truncated.
 - `POST /api/buckets/{b}/upload` — single-file multipart upload (already existed)
 - `DELETE /api/buckets/{b}/files?path=...&role=...` — file or folder delete (already existed)
 - `GET /api/buckets/{b}/download?path=...&role=...` — streamed download (already existed; cookie-auth proxy used by Download button)

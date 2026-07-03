@@ -111,7 +111,7 @@ async with streamablehttp_client(
 
 ### `INVALID_TOKEN` error
 
-- Token may have been revoked. Check the `/v2/api-tokens` page.
+- Token may have been revoked. Check the `/api-tokens` page.
 - Copied with extra whitespace or truncated? Tokens are exactly 48 chars
   including the `as3m_` prefix.
 - The user account that created the token may have been deleted.

@@ -37,7 +37,7 @@ COPY alembic.ini .
 COPY migrations/ migrations/
 # SPA bundle goes into the installed package (Stage 2 uses --no-editable, so the
 # app imports from the wheel under .venv, not from /app/src/).
-COPY --from=frontend-builder /build/dist/ ${APP_PKG}/static/v2/
+COPY --from=frontend-builder /build/dist/ ${APP_PKG}/static/app/
 
 RUN mkdir -p /app/data && chown -R app:app /app/data /app
 

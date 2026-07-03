@@ -26,9 +26,9 @@ mc cp --recursive /fixtures/ "local/$BUCKET/"
 echo "special chars regression fixture" > /tmp/special-temp.txt
 mc cp /tmp/special-temp.txt "local/$BUCKET/test:colon#hash?question.txt"
 
-# Pagination fixtures: 250 small objects so the /v2 file browser crosses a
-# page boundary (items_per_page=200 in the e2e config → page 1 = 200, page 2 =
-# remaining 50). Guarded for idempotency: skip if the last object already exists.
+# Pagination fixtures: 250 small objects so the file browser crosses a
+# load boundary (max_client_load=50 in the e2e config → chunk 1 = 50, "Load
+# more" reveals the rest). Guarded for idempotency: skip if the last object already exists.
 if ! mc stat "local/$BUCKET/pagination/file-250.txt" >/dev/null 2>&1; then
   mkdir -p /tmp/pagination
   i=1
@@ -40,7 +40,7 @@ if ! mc stat "local/$BUCKET/pagination/file-250.txt" >/dev/null 2>&1; then
   mc cp --recursive /tmp/pagination/ "local/$BUCKET/pagination/"
 fi
 
-# Virtualization fixtures: 10000 small objects so the /v2 file browser exercises
+# Virtualization fixtures: 10000 small objects so the file browser exercises
 # list virtualization (constant DOM while scrolling) and auto-loadMore across
 # many server chunks (max_client_load=50 in the e2e config). Idempotent: skip if
 # the last object already exists. mc cp --recursive uploads the whole dir in one

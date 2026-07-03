@@ -1,7 +1,7 @@
 # Accessibility
 
 `another-s3-manager` runs an automated accessibility baseline against every
-covered route in `/v2/` (login + post-login + admin) on every PR via
+covered route (login + post-login + admin) on every PR via
 [`@axe-core/playwright`][axe-pw]. The goal is to keep real assistive-tech
 blockers from regressing — not to chase a perfect 100 / 100 lighthouse score.
 
@@ -22,21 +22,21 @@ blockers from regressing — not to chase a perfect 100 / 100 lighthouse score.
 ## What's covered
 
 The spec at `frontend/tests/e2e/a11y.spec.ts` walks every static route
-under `/v2/` (login + the post-login app shell + admin pages):
+(login + the post-login app shell + admin pages):
 
-- `/v2/login` (unauthenticated — first thing every user sees, so worth a check)
-- `/v2/` (home, after login)
-- `/v2/change-password`
-- `/v2/api-tokens` (self-serve MCP tokens)
-- `/v2/admin/users`
-- `/v2/admin/bans`
-- `/v2/admin/settings`
-- `/v2/admin/roles`
-- `/v2/admin/roles/new` (3-step wizard)
-- `/v2/admin/api-tokens`
+- `/login` (unauthenticated — first thing every user sees, so worth a check)
+- `/` (home, after login)
+- `/change-password`
+- `/api-tokens` (self-serve MCP tokens)
+- `/admin/users`
+- `/admin/bans`
+- `/admin/settings`
+- `/admin/roles`
+- `/admin/roles/new` (3-step wizard)
+- `/admin/api-tokens`
 
-Dynamic routes that require seeded S3 data (`/v2/r/:role`, `/v2/r/:role/b/:bucket`,
-`/v2/admin/roles/:name`) and modal-open variants (e.g. UserDrawer in edit
+Dynamic routes that require seeded S3 data (`/r/:role`, `/r/:role/b/:bucket`,
+`/admin/roles/:name`) and modal-open variants (e.g. UserDrawer in edit
 mode) are not in the baseline yet — they need a more involved fixture and
 will land in a follow-up.
 
