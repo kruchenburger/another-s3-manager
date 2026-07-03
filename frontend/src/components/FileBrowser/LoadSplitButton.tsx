@@ -42,7 +42,7 @@ export function LoadSplitButton({
         <Box component="span" visibleFrom="sm">
           Load more
         </Box>
-        <Box component="span" hiddenFrom="sm" style={{ display: "inline-flex" }}>
+        <Box component="span" hiddenFrom="sm" display="inline-flex">
           <ListPlus size={16} />
         </Box>
       </Button>

@@ -7,11 +7,14 @@ import { useEffect, useRef, useState } from "react";
  * flipping. */
 export function useAnimatedNumber(value: number): number {
   const [display, setDisplay] = useState(value);
-  const prevRef = useRef(value);
+  // Animate FROM the currently displayed value, not the previous target —
+  // otherwise a value change arriving mid-animation makes the counter snap
+  // to the old target before running toward the new one.
+  const displayRef = useRef(value);
+  displayRef.current = display;
 
   useEffect(() => {
-    const from = prevRef.current;
-    prevRef.current = value;
+    const from = displayRef.current;
     if (from === value) return;
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
       setDisplay(value);

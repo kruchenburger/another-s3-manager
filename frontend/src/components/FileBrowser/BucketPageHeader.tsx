@@ -36,7 +36,7 @@ export function BucketPageHeader({
           min-width:auto blocks lineClamp and a long bucket name
           (jet-internal-...-pyroscope-data) pushes the badge + count out of
           view. Full name stays reachable via the native title tooltip. */}
-      <Title order={2} lineClamp={1} title={bucket} style={{ minWidth: 0 }}>
+      <Title order={2} lineClamp={1} title={bucket} miw={0}>
         {bucket}
       </Title>
       {/* Badge and count never shrink — identity chrome must stay visible

@@ -10,9 +10,11 @@ export function RoleBadge({ roleId }: { roleId: string }) {
       radius="md"
       size="lg"
       // Role names are user-defined identifiers — never uppercase them.
-      // flexShrink 0: the chip must survive arbitrarily long bucket names
-      // in the header row (the Title is the only shrinkable element there).
-      style={{ textTransform: "none", flexShrink: 0 }}
+      tt="none"
+      // flexShrink 0 (no Mantine prop): the chip must survive arbitrarily
+      // long bucket names in the header row (the Title is the only
+      // shrinkable element there).
+      style={{ flexShrink: 0 }}
     >
       {roleId}
     </Badge>

@@ -55,7 +55,7 @@ export function FileBrowserHeader({
   // fit the narrower Androids). Desktop always shows the input.
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
 
-  const searchInput = (width: number | string) => (
+  const searchInput = (width: number | string, isMobileInstance = false) => (
     <TextInput
       placeholder="Filter files…"
       value={searchQuery}
@@ -63,9 +63,11 @@ export function FileBrowserHeader({
       leftSection={<Search size={14} />}
       size="sm"
       w={width}
-      autoFocus={mobileSearchOpen}
+      // Only the tap-to-expand mobile instance autofocuses on mount; the
+      // always-mounted desktop instance must never steal focus.
+      autoFocus={isMobileInstance}
       rightSection={
-        mobileSearchOpen ? (
+        isMobileInstance ? (
           <CloseButton
             size="sm"
             aria-label="Close search"
@@ -88,7 +90,7 @@ export function FileBrowserHeader({
         <Box visibleFrom="sm">{searchInput(200)}</Box>
         <Box hiddenFrom="sm">
           {mobileSearchOpen ? (
-            searchInput(180)
+            searchInput(180, true)
           ) : (
             <ActionIcon
               variant={searchQuery ? "light" : "subtle"}

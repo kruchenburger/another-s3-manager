@@ -443,7 +443,8 @@ export function FileBrowser() {
         message: `Bulk delete cancelled. Deleted ${success} of ${names.length}; ${remaining} skipped.`,
         autoClose: TOAST_DURATIONS.success,
       });
-    } else if (failed > 0) {
+    } else if (failed > 0 && success === 0) {
+      // Everything failed — one red summary.
       showToast({
         color: "red",
         message:
@@ -452,11 +453,18 @@ export function FileBrowser() {
             : `Failed to delete ${failed} of ${names.length} (first: ${firstError})`,
         autoClose: TOAST_DURATIONS.error,
       });
-    }
-    if (!aborted && !cancelRef.cancelled && success > 0) {
+    } else if (failed > 0) {
+      // Partial failure — ONE yellow summary (a red + green pair for the
+      // same batch read as contradictory).
+      showToast({
+        color: "yellow",
+        message: `Deleted ${success} of ${names.length}; ${failed} failed (first: ${firstError})`,
+        autoClose: TOAST_DURATIONS.error,
+      });
+    } else if (success > 0) {
       showToast({
         color: "green",
-        message: `Deleted ${success} item${success === 1 ? "" : "s"}${failed > 0 ? ` (${failed} failed)` : ""}`,
+        message: `Deleted ${success} item${success === 1 ? "" : "s"}`,
         autoClose: TOAST_DURATIONS.success,
       });
     }

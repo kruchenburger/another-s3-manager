@@ -1,4 +1,4 @@
-import { Box, Checkbox, Table, Text } from "@mantine/core";
+import { Box, Checkbox, Group, Table, Text } from "@mantine/core";
 import { formatBytes } from "@/utils/formatBytes";
 import { getFileIcon } from "@/utils/fileIcon";
 import { FileRowActionsMenu } from "./FileRowActionsMenu";
@@ -109,23 +109,18 @@ export function FileRow({
             (ROW_HEIGHT=44), so names must NEVER wrap — a 4-line name on a
             narrow screen would overlap the rows below. Full name stays
             reachable via the native title tooltip. */}
-        <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+        <Group gap={8} wrap="nowrap" miw={0}>
           {(() => {
             const { Icon: TypeIcon, color } = getFileIcon(
               file.name,
               file.is_directory,
             );
-            return (
-              <TypeIcon
-                size={16}
-                style={{ flexShrink: 0, marginRight: 8, color }}
-              />
-            );
+            return <TypeIcon size={16} style={{ flexShrink: 0, color }} />;
           })()}
-          <Text span size="sm" truncate title={file.name}>
+          <Text span size="sm" truncate title={file.name} miw={0}>
             {file.name}
           </Text>
-        </div>
+        </Group>
       </Table.Td>
       {/* Size + Modified hide below sm: with layout="fixed" their reserved
           widths (100+160) would starve the Name column to zero on phones.
