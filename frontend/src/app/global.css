@@ -130,9 +130,14 @@ input:-webkit-autofill:focus {
    Plain Paper stays on body on purpose: it's used as an inline section
    wrapper (e.g. RoleFormFields), not floating chrome. Explicit bg props on
    components still win (inline style beats any stylesheet rule). */
+/* Modal/Drawer HEADERS are listed too: Mantine paints them with
+   --mantine-color-body (they're sticky and must be opaque), which would
+   band against the surface-tinted content below. */
 .mantine-Card-root,
 .mantine-Modal-content,
+.mantine-Modal-header,
 .mantine-Drawer-content,
+.mantine-Drawer-header,
 .mantine-Menu-dropdown,
 .mantine-Popover-dropdown,
 .mantine-HoverCard-dropdown,

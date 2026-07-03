@@ -60,13 +60,14 @@
 
 /* Zebra stripe applied per-row by absolute index (FileRow sets `.stripe` on odd
    indices) instead of Mantine's nth-child `striped` prop, which flickers under
-   virtualization. Same colour Mantine's default striped table uses, so the look
-   is unchanged. Lower specificity than `.row:hover` / selected below, so those
-   states still win. */
+   virtualization. Airify: the dark stripe is a hue-NEUTRAL white wash, not a
+   palette shade — dark-6 (#222b3c) was near-identical to the blue selection
+   tint, making selected rows unreadable against the zebra. Lower specificity
+   than `.row:hover` / selected below, so those states still win. */
 .stripe {
   background: light-dark(
     var(--mantine-color-gray-0),
-    var(--mantine-color-dark-6)
+    rgba(255, 255, 255, 0.03)
   );
 }
 
@@ -86,9 +87,11 @@
    the row's cells collapse / overflow because tr can't host absolute-positioned
    children. `box-shadow: inset 3px 0` paints the rail without touching layout. */
 .row:has(input[type="checkbox"]:checked) {
+  /* 24% (was 14%): the airify slate surfaces sit close to the primary tint,
+     so the old strength camouflaged selection against the zebra. */
   background: color-mix(
     in srgb,
-    var(--mantine-primary-color-filled) 14%,
+    var(--mantine-primary-color-filled) 24%,
     transparent
   );
   box-shadow: inset 3px 0 0 var(--mantine-primary-color-filled);
@@ -97,7 +100,7 @@
 .row:has(input[type="checkbox"]:checked):hover {
   background: color-mix(
     in srgb,
-    var(--mantine-primary-color-filled) 20%,
+    var(--mantine-primary-color-filled) 30%,
     transparent
   );
 }

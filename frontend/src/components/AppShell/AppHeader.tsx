@@ -62,8 +62,12 @@ export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
       <Group gap="sm">
         {me?.is_admin && (
           <Tooltip label="Admin Console">
+            {/* Airify: header icons are borderless at rest (mockup) — subtle
+                shows a quiet wash only on hover; keyboard focus keeps the
+                global focus-visible ring. */}
             <ActionIcon
-              variant="default"
+              variant="subtle"
+              color="gray"
               size="lg"
               onClick={() => navigate("/admin/users")}
               aria-label="Open admin console"
@@ -78,7 +82,8 @@ export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
             href={GITHUB_URL}
             target="_blank"
             rel="noopener noreferrer"
-            variant="default"
+            variant="subtle"
+            color="gray"
             size="lg"
             aria-label="View source on GitHub"
           >
