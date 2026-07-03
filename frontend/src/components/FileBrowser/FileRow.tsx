@@ -1,6 +1,6 @@
 import { Checkbox, Table, Text } from "@mantine/core";
-import { File as FileIcon, Folder } from "lucide-react";
 import { formatBytes } from "@/utils/formatBytes";
+import { getFileIcon } from "@/utils/fileIcon";
 import { formatDate } from "@/utils/formatDate";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useConfig } from "@/hooks/useConfig";
@@ -104,25 +104,18 @@ export function FileRow({
         style={{ cursor: file.is_directory ? "pointer" : "default" }}
         onClick={() => file.is_directory && onNavigate(file.name)}
       >
-        {file.is_directory ? (
-          <Folder
-            size={16}
-            style={{
-              verticalAlign: "middle",
-              marginRight: 8,
-              color: "var(--mantine-primary-color-filled)",
-            }}
-          />
-        ) : (
-          <FileIcon
-            size={16}
-            style={{
-              verticalAlign: "middle",
-              marginRight: 8,
-              color: "var(--mantine-color-slate-5)",
-            }}
-          />
-        )}
+        {(() => {
+          const { Icon: TypeIcon, color } = getFileIcon(
+            file.name,
+            file.is_directory,
+          );
+          return (
+            <TypeIcon
+              size={16}
+              style={{ verticalAlign: "middle", marginRight: 8, color }}
+            />
+          );
+        })()}
         <Text span size="sm">
           {file.name}
         </Text>

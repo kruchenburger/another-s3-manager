@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Card, Checkbox, Group, Text } from "@mantine/core";
-import { File as FileIcon, Folder } from "lucide-react";
 import { formatBytes } from "@/utils/formatBytes";
+import { getFileIcon } from "@/utils/fileIcon";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useConfig } from "@/hooks/useConfig";
 import { getPreviewType } from "@/utils/filePreview";
@@ -77,6 +77,11 @@ export function FileCard({
   const [mediaError, setMediaError] = useState(false);
   // Stagger only the first screenful; later / lazy-revealed cards appear instantly.
   const animateIn = index < STAGGER_ROW_LIMIT;
+  // Per-type icon + tint for the folder and non-thumbnail branches below.
+  const { Icon: TypeIcon, color: iconColor } = getFileIcon(
+    file.name,
+    file.is_directory,
+  );
 
   return (
     <Card
@@ -145,10 +150,7 @@ export function FileCard({
           visual centerline consistent across all card types. */}
       <Group justify="center" align="center" mb="sm" mih={120}>
         {file.is_directory ? (
-          <Folder
-            size={64}
-            style={{ color: "var(--mantine-primary-color-filled)" }}
-          />
+          <TypeIcon size={64} style={{ color: iconColor }} />
         ) : kind === "image" && presigned.data?.url && !mediaError ? (
           <img
             src={presigned.data.url}
@@ -168,10 +170,7 @@ export function FileCard({
             className={classes.thumbnail}
           />
         ) : (
-          <FileIcon
-            size={64}
-            style={{ color: "var(--mantine-color-slate-5)" }}
-          />
+          <TypeIcon size={64} style={{ color: iconColor }} />
         )}
       </Group>
       <Text size="sm" ta="center" lineClamp={1} title={file.name}>
