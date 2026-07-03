@@ -144,7 +144,7 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
       )}
 
       <Text size="xs" c="dimmed">
-        User can also manage their own tokens at /v2/api-tokens.
+        User can also manage their own tokens at /api-tokens.
       </Text>
 
       {createOpened && (

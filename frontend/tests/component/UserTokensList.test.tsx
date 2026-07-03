@@ -82,7 +82,7 @@ describe("UserTokensList", () => {
     await waitFor(() =>
       expect(
         screen.getByText(
-          /user can also manage their own tokens at \/v2\/api-tokens/i,
+          /user can also manage their own tokens at \/api-tokens/i,
         ),
       ).toBeInTheDocument(),
     );
