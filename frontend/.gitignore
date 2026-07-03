@@ -10,5 +10,5 @@ test-results/
 .tsbuild-node/
 *.tsbuildinfo
 
-# Build output (vite outDir → ../src/another_s3_manager/static/v2/) is ignored
+# Build output (vite outDir → ../src/another_s3_manager/static/app/) is ignored
 # from the repo-root .gitignore — gitignore patterns can't escape this dir.

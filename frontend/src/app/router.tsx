@@ -69,5 +69,4 @@ export const router = createBrowserRouter(
       element: <NotFoundPage />,
     },
   ],
-  { basename: "/v2" },
 );
