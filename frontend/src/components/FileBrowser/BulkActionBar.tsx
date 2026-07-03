@@ -1,5 +1,6 @@
 import {
   Affix,
+  Box,
   Button,
   CloseButton,
   Group,
@@ -107,7 +108,9 @@ export function BulkActionBar({
           >
             <Group gap="xs" wrap="nowrap">
               <CloseButton aria-label="Clear selection" onClick={onClear} />
-              <Text size="sm" fw={600} pr={4}>
+              {/* nowrap: on narrow screens "7 selected" wrapped into two
+                  lines and stretched the pill vertically (smoke feedback). */}
+              <Text size="sm" fw={600} pr={4} style={{ whiteSpace: "nowrap" }}>
                 {count} selected
               </Text>
               <Button.Group>
@@ -125,8 +128,13 @@ export function BulkActionBar({
                     onClick={() => onCopyUrls()}
                     loading={busy}
                     disabled={busy}
+                    // aria-label keeps the accessible name when the visible
+                    // text label is hidden on phones (width budget).
+                    aria-label="Copy URLs"
                   >
-                    Copy URLs
+                    <Box component="span" visibleFrom="sm">
+                      Copy URLs
+                    </Box>
                   </Button>
                 </Tooltip>
                 <TtlPopover
@@ -161,8 +169,11 @@ export function BulkActionBar({
                   leftSection={<Trash2 size={14} />}
                   onClick={onDelete}
                   disabled={disableDeletion}
+                  aria-label="Delete"
                 >
-                  Delete
+                  <Box component="span" visibleFrom="sm">
+                    Delete
+                  </Box>
                 </Button>
               </Tooltip>
             </Group>

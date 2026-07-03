@@ -117,6 +117,41 @@
     var(--as3m-shadow-rest);
 }
 
+/* Breadcrumb items: cap + ellipsize long S3 names (full name in the title
+   tooltip). A CSS class, NOT an inline style — Mantine Breadcrumbs clones
+   its children and drops the style prop, but merges className. inline-block
+   is required for text-overflow on the inline Anchor. */
+.crumb {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+/* Split-button primaries on phones: the text label is hidden (icon-only),
+   so the leftSection's trailing margin would sit asymmetrically — drop it. */
+@media (max-width: 47.99em) {
+  .splitPrimary :global(.mantine-Button-section[data-position="left"]) {
+    margin-inline-end: 0;
+  }
+}
+
+/* Actions column: full inline icon row on desktop; a single ⋮ menu trigger
+   on phones (<sm), where four always-visible icons (hover: none) would
+   starve the Name column under table layout="fixed". Width must track
+   which variant FileRow renders (Box visibleFrom/hiddenFrom "sm"). */
+.actionsCol {
+  width: 180px;
+}
+
+@media (max-width: 47.99em) {
+  .actionsCol {
+    width: 56px;
+  }
+}
+
 /* Sticky table header inside the FileBrowser scroll area. Background prevents
    rows showing through as they scroll under it; z-index keeps it above the
    virtualized rows. */
@@ -147,5 +182,9 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* Never scroll horizontally: the fixed-layout table is width:100% and all
+     text truncates; any residual x-overflow is a rendering artifact (seen as
+     a stray bottom scrollbar on Android). */
+  overflow-x: hidden;
   position: relative;
 }

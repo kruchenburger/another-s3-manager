@@ -44,6 +44,7 @@ import {
   type FileWithRelativePath,
   filesFromFolderInput,
 } from "@/utils/folderUpload";
+import { BucketPageHeader } from "./BucketPageHeader";
 import { FileBrowserHeader } from "./FileBrowserHeader";
 import { BulkActionBar } from "./BulkActionBar";
 import { FileTable } from "./FileTable";
@@ -70,6 +71,9 @@ export function FileBrowser() {
   const [serverSearchTerm, setServerSearchTerm] = useState<string | null>(null);
   const serverSearchActive = serverSearchTerm !== null;
   const [searchQuery, setSearchQuery] = useState("");
+  // Optimistic header-counter offset during a bulk delete (batched every 50
+  // successes; reset after the post-batch refetch lands).
+  const [bulkDeletedCount, setBulkDeletedCount] = useState(0);
 
   const folder = useFiles(bucket, roleId, pathFromUrl);
   const search = useFileSearch(bucket, roleId, pathFromUrl, serverSearchTerm ?? "");
@@ -361,6 +365,16 @@ export function FileBrowser() {
       });
     }
 
+    // Failures are AGGREGATED into one summary toast — a per-file error toast
+    // turned an unreachable server into an unbounded notification storm
+    // (8k+ queued toasts the user had to dismiss for minutes). A run of
+    // consecutive failures aborts the batch outright: if 10 deletes in a row
+    // died, the server is gone and the remaining thousands will die too.
+    const MAX_CONSECUTIVE_FAILURES = 10;
+    let firstError: string | null = null;
+    let consecutiveFailures = 0;
+    let aborted = false;
+
     for (let i = 0; i < names.length; i++) {
       if (cancelRef.cancelled) break;
       const name = names[i];
@@ -377,13 +391,21 @@ export function FileBrowser() {
         // invalidation below refetches the file list ONCE after the batch.
         await deleteFile(bucket, roleId, fullPath);
         success++;
+        consecutiveFailures = 0;
+        // Optimistic header counter: batched every 50 successes (a per-file
+        // setState would reintroduce the N-rerenders problem above). The
+        // useAnimatedNumber in BucketPageHeader glides between steps.
+        if (success % 50 === 0) setBulkDeletedCount(success);
       } catch (e) {
         failed++;
-        showToast({
-          color: "red",
-          message: `Failed to delete ${name}: ${e instanceof Error ? e.message : "unknown error"}`,
-          autoClose: TOAST_DURATIONS.error,
-        });
+        consecutiveFailures++;
+        if (!firstError) {
+          firstError = `${name}: ${e instanceof Error ? e.message : "unknown error"}`;
+        }
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          aborted = true;
+          break;
+        }
       }
     }
 
@@ -394,24 +416,55 @@ export function FileBrowser() {
     // earlier this was guarded by `if (showProgress)` (multi-file only),
     // which left single-file deletes with no cache refresh: the file
     // would actually delete on the backend but the row stayed on screen
-    // until the user reloaded the page.
-    queryClient.invalidateQueries({
-      queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
-    });
-    queryClient.invalidateQueries({
-      queryKey: fileSearchFolderKey(bucket, roleId, pathFromUrl),
-    });
-    if (cancelRef.cancelled) {
+    // until the user reloaded the page. Await the refetch before resetting
+    // the optimistic counter, or the header briefly jumps back to the stale
+    // pre-delete total.
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
+      }),
+      queryClient.invalidateQueries({
+        queryKey: fileSearchFolderKey(bucket, roleId, pathFromUrl),
+      }),
+    ]);
+    setBulkDeletedCount(0);
+
+    if (aborted) {
+      const remaining = names.length - success - failed;
+      showToast({
+        color: "red",
+        message: `Bulk delete stopped after ${MAX_CONSECUTIVE_FAILURES} consecutive failures (${firstError}). Deleted ${success}, failed ${failed}, skipped ${remaining}.`,
+        autoClose: TOAST_DURATIONS.error,
+      });
+    } else if (cancelRef.cancelled) {
       const remaining = names.length - success - failed;
       showToast({
         color: "yellow",
         message: `Bulk delete cancelled. Deleted ${success} of ${names.length}; ${remaining} skipped.`,
         autoClose: TOAST_DURATIONS.success,
       });
+    } else if (failed > 0 && success === 0) {
+      // Everything failed — one red summary.
+      showToast({
+        color: "red",
+        message:
+          failed === 1 && names.length === 1
+            ? `Failed to delete ${firstError}`
+            : `Failed to delete ${failed} of ${names.length} (first: ${firstError})`,
+        autoClose: TOAST_DURATIONS.error,
+      });
+    } else if (failed > 0) {
+      // Partial failure — ONE yellow summary (a red + green pair for the
+      // same batch read as contradictory).
+      showToast({
+        color: "yellow",
+        message: `Deleted ${success} of ${names.length}; ${failed} failed (first: ${firstError})`,
+        autoClose: TOAST_DURATIONS.error,
+      });
     } else if (success > 0) {
       showToast({
         color: "green",
-        message: `Deleted ${success} item${success === 1 ? "" : "s"}${failed > 0 ? ` (${failed} failed)` : ""}`,
+        message: `Deleted ${success} item${success === 1 ? "" : "s"}`,
         autoClose: TOAST_DURATIONS.success,
       });
     }
@@ -702,6 +755,12 @@ export function FileBrowser() {
     <>
       <div className={classes.container}>
         <div className={classes.toolbar}>
+          <BucketPageHeader
+            bucket={bucket}
+            roleId={roleId}
+            objectCount={Math.max(0, items.length - bulkDeletedCount)}
+            truncated={truncated}
+          />
           <FileBrowserHeader
             bucket={bucket}
             roleId={roleId}
@@ -716,7 +775,6 @@ export function FileBrowser() {
             onModeChange={setMode}
             onUploadClick={handleUploadClick}
             onUploadFolderClick={handleUploadFolderClick}
-            objectCount={items.length}
             truncated={truncated}
             isLoadingMore={isFetchingNextPage}
             onLoadMore={handleLoadMore}

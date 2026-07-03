@@ -25,6 +25,7 @@ import { RoleDrawer } from "@/components/Admin/RoleDrawer";
 import { runWithToasts } from "@/utils/mutationToast";
 import { getErrorMessage } from "@/utils/apiError";
 import type { AppConfig, AppRole } from "@/types/api";
+import { roleTypeMeta } from "@/components/Admin/roleTypeMeta";
 import classes from "@/components/rowActions.module.css";
 
 export function RolesPage() {
@@ -208,9 +209,21 @@ export function RolesPage() {
                 <Table.Tr key={r.name} className={classes.row}>
                   <Table.Td>{r.name}</Table.Td>
                   <Table.Td>
-                    <Badge color={typeColor(r.type)} variant="light">
-                      {r.type}
-                    </Badge>
+                    {(() => {
+                      const meta = roleTypeMeta(r.type);
+                      const TypeIcon = meta.icon;
+                      return (
+                        <Tooltip label={meta.description}>
+                          <Badge
+                            color={typeColor(r.type)}
+                            variant="light"
+                            leftSection={<TypeIcon size={12} />}
+                          >
+                            {meta.badgeLabel}
+                          </Badge>
+                        </Tooltip>
+                      );
+                    })()}
                   </Table.Td>
                   <Table.Td>
                     {(r.allowed_buckets?.length ?? 0) === 0 ? (

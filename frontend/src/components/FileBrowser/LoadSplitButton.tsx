@@ -1,5 +1,5 @@
-import { Button, Menu } from "@mantine/core";
-import { ChevronDown, Files } from "lucide-react";
+import { Box, Button, Menu } from "@mantine/core";
+import { ChevronDown, Files, ListPlus } from "lucide-react";
 
 interface LoadSplitButtonProps {
   /** Fetch the next chunk of objects from the server. */
@@ -29,14 +29,22 @@ export function LoadSplitButton({
 }: LoadSplitButtonProps) {
   return (
     <Button.Group>
+      {/* Phones: the text swaps for a ListPlus icon (desktop stays text-only
+          per the #53 design iteration) so the toolbar row fits 360px. */}
       <Button
         variant="default"
         size="sm"
         onClick={onLoadMore}
         loading={loading}
         disabled={loading}
+        aria-label="Load more"
       >
-        Load more
+        <Box component="span" visibleFrom="sm">
+          Load more
+        </Box>
+        <Box component="span" hiddenFrom="sm" display="inline-flex">
+          <ListPlus size={16} />
+        </Box>
       </Button>
       {/* Dropdown width tracks the split-button group (~136px) + a touch, so it
           reads as an extension of the "Load more" button — not a wide Upload-style

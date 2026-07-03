@@ -38,13 +38,19 @@ interface FileGridProps {
 const ROW_HEIGHT = 241;
 const GAP = 16; // Mantine "md"
 
-// Column count by container width — mirrors the old SimpleGrid breakpoints
-// cols={{ base: 2, sm: 3, md: 4, lg: 6 }} using Mantine's px breakpoints.
-function columnsForWidth(width: number): number {
-  if (width >= 1200) return 6; // lg
-  if (width >= 992) return 4; // md
-  if (width >= 768) return 3; // sm
-  return 2; // base
+// Minimum card width (px) — smallest card that still fits the 120px media
+// area + filename + size comfortably (2026-05-20 critique §3.5).
+export const MIN_CARD = 180;
+
+// Auto-fill semantics inside the virtualizer: as many >=MIN_CARD columns as
+// fit the container (the CSS `repeat(auto-fill, minmax(180px, 1fr))` from the
+// critique can't be used — rows are virtualized and columns must be known in
+// JS). Cards stay ~180-230px at ANY viewport instead of stretching into a
+// fixed 2/3/4/6 grid; at low file counts the row left-aligns naturally.
+// Exported for tests.
+export function columnsForWidth(width: number): number {
+  if (width <= 0) return 6; // pre-measure fallback (matches old lg default)
+  return Math.max(2, Math.floor((width + GAP) / (MIN_CARD + GAP)));
 }
 
 export function FileGrid({

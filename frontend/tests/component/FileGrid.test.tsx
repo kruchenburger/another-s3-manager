@@ -24,14 +24,15 @@ vi.mock("@tanstack/react-virtual", () => ({
   }),
 }));
 
-// 4 columns regardless of width in jsdom (useElementSize returns 0 width there;
-// the component falls back to the `base` cols — override via mock so the test
-// is deterministic).
+// 4 columns deterministically (useElementSize returns 0 width in jsdom).
+// Width 900 → columnsForWidth: floor((900+16)/(180+16)) = 4. If MIN_CARD/GAP
+// change in FileGrid, re-derive a width that still yields 4 columns — the
+// grid-row math below (12 items / 4 cols = 3 rows) depends on it.
 vi.mock("@mantine/hooks", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@mantine/hooks")>();
   return {
     ...actual,
-    useElementSize: () => ({ ref: () => {}, width: 1000, height: 0 }),
+    useElementSize: () => ({ ref: () => {}, width: 900, height: 0 }),
   };
 });
 

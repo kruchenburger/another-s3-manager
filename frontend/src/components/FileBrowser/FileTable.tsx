@@ -1,5 +1,5 @@
 import { type RefObject } from "react";
-import { Checkbox, Table } from "@mantine/core";
+import { Box, Checkbox, Table } from "@mantine/core";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { FileEntry } from "@/types/api";
 import { FileRow } from "./FileRow";
@@ -35,8 +35,10 @@ interface FileTableProps {
 // change both together or rows will overlap/gap.
 const ROW_HEIGHT = 44;
 
-// Number of columns in the table (checkbox, name, size, modified, actions).
-const TABLE_COLUMN_COUNT = 5;
+// Virtualization spacer cells use colSpan={1} ON PURPOSE: a colSpan larger
+// than the number of VISIBLE columns (Size/Modified hide below sm) makes
+// the fixed-layout table mint phantom columns that swallow the Name width.
+// The spacer only needs to set row height — one borderless cell suffices.
 
 export function FileTable({
   files,
@@ -81,7 +83,11 @@ export function FileTable({
     // shifting render window flip every row's nth-child parity as you scroll (and
     // all at once when a chunk appends), so the zebra bands visibly flicker.
     // FileRow stripes itself by absolute row index instead (stable per row).
-    <Table verticalSpacing="xs">
+    // layout="fixed": all columns except Name have explicit widths, so Name
+    // gets the remainder and long names can ellipsize (FileRow truncates
+    // them). With auto layout a nowrap name would stretch the column and
+    // overflow the scroll container horizontally on narrow screens.
+    <Table verticalSpacing="xs" layout="fixed">
       <Table.Thead className={classes.stickyHead}>
         <Table.Tr>
           <Table.Th style={{ width: 40 }}>
@@ -93,15 +99,28 @@ export function FileTable({
             />
           </Table.Th>
           <Table.Th>Name</Table.Th>
-          <Table.Th style={{ width: 100 }}>Size</Table.Th>
-          <Table.Th style={{ width: 160 }}>Modified</Table.Th>
-          <Table.Th style={{ width: 180 }}>Actions</Table.Th>
+          {/* Hidden below sm (with the matching FileRow cells): their fixed
+              widths would starve the Name column on phones under
+              layout="fixed". */}
+          <Table.Th visibleFrom="sm" style={{ width: 100 }}>
+            Size
+          </Table.Th>
+          <Table.Th visibleFrom="sm" style={{ width: 160 }}>
+            Modified
+          </Table.Th>
+          <Table.Th className={classes.actionsCol}>
+            {/* The label doesn't fit the 56px mobile column and painted past
+                the viewport edge; the ⋮ triggers are self-explanatory there. */}
+            <Box component="span" visibleFrom="sm">
+              Actions
+            </Box>
+          </Table.Th>
         </Table.Tr>
       </Table.Thead>
       <Table.Tbody>
         {paddingTop > 0 && (
           <Table.Tr data-spacer aria-hidden>
-            <Table.Td colSpan={TABLE_COLUMN_COUNT} style={{ height: paddingTop, padding: 0, border: 0 }} />
+            <Table.Td colSpan={1} style={{ height: paddingTop, padding: 0, border: 0 }} />
           </Table.Tr>
         )}
         {virtualRows.map((vrow) => {
@@ -126,7 +145,7 @@ export function FileTable({
         })}
         {paddingBottom > 0 && (
           <Table.Tr data-spacer aria-hidden>
-            <Table.Td colSpan={TABLE_COLUMN_COUNT} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+            <Table.Td colSpan={1} style={{ height: paddingBottom, padding: 0, border: 0 }} />
           </Table.Tr>
         )}
       </Table.Tbody>

@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AppShell } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import { AppHeader } from "@/components/AppShell/AppHeader";
 import { Sidebar } from "@/components/Sidebar/Sidebar";
 
@@ -26,6 +26,17 @@ export function AppShellLayout({
   forceExpanded = false,
 }: AppShellLayoutProps = {}) {
   const [navOpened, { toggle: toggleNav, close: closeNav }] = useDisclosure(false);
+  const location = useLocation();
+
+  // Mobile UX: the burger nav is a full-width overlay below sm — after
+  // picking a role/bucket it used to stay open, hiding the very content the
+  // user just navigated to (they had to close it by hand). Auto-close on
+  // every route change; desktop is unaffected (the navbar there is
+  // persistent, `collapsed.mobile` only applies below the breakpoint).
+  useEffect(() => {
+    closeNav();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
   const [collapsedPref, setCollapsedPref] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     return localStorage.getItem(COLLAPSED_KEY) === "true";

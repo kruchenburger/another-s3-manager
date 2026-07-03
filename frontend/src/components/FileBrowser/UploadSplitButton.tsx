@@ -1,5 +1,6 @@
-import { Button, Menu } from "@mantine/core";
+import { Box, Button, Menu } from "@mantine/core";
 import { ChevronDown, FileUp, FolderUp, Upload } from "lucide-react";
+import classes from "./FileBrowser.module.css";
 
 interface UploadSplitButtonProps {
   /** Open the file picker (multi-file input). */
@@ -21,8 +22,19 @@ export function UploadSplitButton({
 }: UploadSplitButtonProps) {
   return (
     <Button.Group>
-      <Button leftSection={<Upload size={14} />} onClick={onUploadFiles} size="sm">
-        Upload
+      {/* Phones: icon-only (the text label hides) so the whole toolbar row —
+          search icon, view toggle, Load split, Upload split — fits 360px.
+          aria-label keeps the accessible name for tests/readers. */}
+      <Button
+        leftSection={<Upload size={14} />}
+        onClick={onUploadFiles}
+        size="sm"
+        aria-label="Upload"
+        className={classes.splitPrimary}
+      >
+        <Box component="span" visibleFrom="sm">
+          Upload
+        </Box>
       </Button>
       <Menu position="bottom-end" withinPortal>
         <Menu.Target>

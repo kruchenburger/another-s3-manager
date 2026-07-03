@@ -9,6 +9,26 @@
 .bar {
   background: var(--as3m-surface);
   box-shadow: var(--as3m-shadow-float);
+  /* Android Chrome's text autosizer selectively inflates text in the fixed
+     pill, making buttons render at different heights on real phones (they
+     measured equal in desktop Chromium). Opt the bar out entirely. */
+  text-size-adjust: none;
+  -webkit-text-size-adjust: none;
+}
+
+/* Phones: labels are hidden (icon-only buttons) — pin identical metrics so
+   no engine quirk (font boost, DPR rounding) can desync the three controls,
+   and drop the now-asymmetric left-section margin so icons sit centered. */
+@media (max-width: 47.99em) {
+  .bar :global(.mantine-Button-root) {
+    height: 36px;
+    min-height: 36px;
+    padding-inline: 12px;
+  }
+
+  .bar :global(.mantine-Button-section) {
+    margin-inline-end: 0;
+  }
 }
 
 /* Transition is driven by Mantine's <Transition> inline styles; nothing to
