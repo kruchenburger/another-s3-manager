@@ -14,6 +14,9 @@ function renderHeader(
     <MantineProvider>
       <MemoryRouter>
         <FileBrowserHeader
+          bucket="b"
+          roleId="r"
+          path=""
           searchQuery=""
           onSearchChange={vi.fn()}
           mode="table"
@@ -63,10 +66,15 @@ describe("FileBrowserHeader — load controls", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders SegmentedControl for view picker", () => {
-    const { container } = renderHeader();
-    // Mantine's SegmentedControl exposes role="radiogroup".
-    expect(container.querySelector('[role="radiogroup"]')).not.toBeNull();
+  it("renders the view toggle as pressed icon buttons", async () => {
+    const onModeChange = vi.fn();
+    renderHeader({ mode: "table", onModeChange });
+    const tableBtn = screen.getByRole("button", { name: "Table view" });
+    const gridBtn = screen.getByRole("button", { name: "Grid view" });
+    expect(tableBtn).toHaveAttribute("aria-pressed", "true");
+    expect(gridBtn).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(gridBtn);
+    expect(onModeChange).toHaveBeenCalledWith("grid");
   });
 });
 

@@ -14,7 +14,6 @@ function renderHeader(
         <BucketPageHeader
           bucket="my-bucket"
           roleId="R2"
-          path="photos/2026"
           objectCount={143}
           truncated={false}
           {...props}

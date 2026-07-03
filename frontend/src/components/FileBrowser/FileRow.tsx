@@ -1,6 +1,7 @@
-import { Checkbox, Table, Text } from "@mantine/core";
+import { Box, Checkbox, Table, Text } from "@mantine/core";
 import { formatBytes } from "@/utils/formatBytes";
 import { getFileIcon } from "@/utils/fileIcon";
+import { FileRowActionsMenu } from "./FileRowActionsMenu";
 import { formatDate } from "@/utils/formatDate";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useConfig } from "@/hooks/useConfig";
@@ -104,30 +105,39 @@ export function FileRow({
         style={{ cursor: file.is_directory ? "pointer" : "default" }}
         onClick={() => file.is_directory && onNavigate(file.name)}
       >
-        {(() => {
-          const { Icon: TypeIcon, color } = getFileIcon(
-            file.name,
-            file.is_directory,
-          );
-          return (
-            <TypeIcon
-              size={16}
-              style={{ verticalAlign: "middle", marginRight: 8, color }}
-            />
-          );
-        })()}
-        <Text span size="sm">
-          {file.name}
-        </Text>
+        {/* Flex + truncate: the row height is a virtualization constant
+            (ROW_HEIGHT=44), so names must NEVER wrap — a 4-line name on a
+            narrow screen would overlap the rows below. Full name stays
+            reachable via the native title tooltip. */}
+        <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+          {(() => {
+            const { Icon: TypeIcon, color } = getFileIcon(
+              file.name,
+              file.is_directory,
+            );
+            return (
+              <TypeIcon
+                size={16}
+                style={{ flexShrink: 0, marginRight: 8, color }}
+              />
+            );
+          })()}
+          <Text span size="sm" truncate title={file.name}>
+            {file.name}
+          </Text>
+        </div>
       </Table.Td>
-      <Table.Td>
+      {/* Size + Modified hide below sm: with layout="fixed" their reserved
+          widths (100+160) would starve the Name column to zero on phones.
+          Must stay in sync with the matching visibleFrom on the Th cells. */}
+      <Table.Td visibleFrom="sm">
         {!file.is_directory && (
           <Text size="xs" c="dimmed">
             {formatBytes(file.size)}
           </Text>
         )}
       </Table.Td>
-      <Table.Td>
+      <Table.Td visibleFrom="sm">
         {file.last_modified && (
           <Text size="xs" c="dimmed">
             {formatDate(file.last_modified)}
@@ -135,21 +145,38 @@ export function FileRow({
         )}
       </Table.Td>
       <Table.Td className={classes.actions}>
-        <FileActions
-          isDirectory={file.is_directory}
-          canPreview={canPreview}
-          filename={file.name}
-          onDownload={() => onDownload(file.name)}
-          onCopyUrl={() => onCopyUrl(file.name)}
-          onCopyUrlWithTtl={
-            onCopyUrlWithTtl ? (ttl) => onCopyUrlWithTtl(file.name, ttl) : undefined
-          }
-          onPreview={() => onPreview(file.name)}
-          onDelete={() => onDelete(file.name)}
-          disabled={disableDeletion}
-          defaultTtl={defaultTtl}
-          maxTtl={maxTtl}
-        />
+        {/* Desktop: inline hover-reveal icons. Phones (<sm): a single ⋮ menu
+            — four always-visible icons (no hover on touch) would starve the
+            Name column. Width contract lives in .actionsCol. */}
+        <Box visibleFrom="sm">
+          <FileActions
+            isDirectory={file.is_directory}
+            canPreview={canPreview}
+            filename={file.name}
+            onDownload={() => onDownload(file.name)}
+            onCopyUrl={() => onCopyUrl(file.name)}
+            onCopyUrlWithTtl={
+              onCopyUrlWithTtl ? (ttl) => onCopyUrlWithTtl(file.name, ttl) : undefined
+            }
+            onPreview={() => onPreview(file.name)}
+            onDelete={() => onDelete(file.name)}
+            disabled={disableDeletion}
+            defaultTtl={defaultTtl}
+            maxTtl={maxTtl}
+          />
+        </Box>
+        <Box hiddenFrom="sm">
+          <FileRowActionsMenu
+            isDirectory={file.is_directory}
+            canPreview={canPreview}
+            filename={file.name}
+            onDownload={() => onDownload(file.name)}
+            onCopyUrl={() => onCopyUrl(file.name)}
+            onPreview={() => onPreview(file.name)}
+            onDelete={() => onDelete(file.name)}
+            disabled={disableDeletion}
+          />
+        </Box>
       </Table.Td>
     </Table.Tr>
   );

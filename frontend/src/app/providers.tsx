@@ -25,7 +25,10 @@ export function AppProviders({ children }: AppProvidersProps) {
             — the `style` prop is copied by Mantine onto ALL six per-position
             root containers, so it stretched the top-* ones (top:16 + bottom:80)
             across half the viewport, where they silently swallowed clicks. */}
-        <Notifications position="bottom-right" />
+        {/* limit caps simultaneously visible toasts. Bulk operations must
+            still aggregate their errors (a huge queue would drip-feed
+            replacements for minutes even with a limit). */}
+        <Notifications position="bottom-right" limit={5} />
         {children}
       </ThemePreviewProvider>
     </QueryClientProvider>

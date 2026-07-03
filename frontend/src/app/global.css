@@ -183,6 +183,15 @@ body:has([data-bulk-bar]) .mantine-Notifications-root[data-position^="bottom"] {
   bottom: 80px;
 }
 
+/* Phones: the centered bulk bar reaches the scroll-to-top button's corner
+   (right: 36) and the round button lands ON the Delete button. Hide it
+   while a selection is active — desktop keeps both (no overlap there). */
+@media (max-width: 47.99em) {
+  body:has([data-bulk-bar]) [data-scroll-to-top] {
+    display: none;
+  }
+}
+
 /* Theme switch cross-fade. ThemeToggle wraps the color-scheme change in a View
    Transition (where supported), so the whole page dissolves from the old theme
    to the new one instead of snapping. This is the primary theme-transition

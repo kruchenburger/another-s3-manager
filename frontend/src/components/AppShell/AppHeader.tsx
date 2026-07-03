@@ -1,4 +1,4 @@
-import { ActionIcon, Burger, Group, Text, Title, Tooltip } from "@mantine/core";
+import { ActionIcon, Box, Burger, Group, Text, Title, Tooltip } from "@mantine/core";
 import { Link, useNavigate } from "react-router-dom";
 import { Github, Shield } from "lucide-react";
 import { useMe } from "@/features/auth/hooks/useMe";
@@ -49,16 +49,30 @@ export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
           aria-label="Go to home"
         >
           <CubeLogo size={32} mode="static" />
-          <Title order={4}>{appName}</Title>
+          {/* Full name is too wide for a phone header row (it pushed the
+              theme toggle + avatar out of the fixed 60px header, painting
+              them over the page). Below sm the brand collapses to the short
+              mark "as3m" (same as the token prefix). */}
+          <Title order={4} visibleFrom="sm">
+            {appName}
+          </Title>
+          <Title order={4} hiddenFrom="sm">
+            as3m
+          </Title>
         </Link>
         {/* Version chip lives OUTSIDE the home Link — it's static metadata,
-            clicking it shouldn't navigate. */}
+            clicking it shouldn't navigate. Hidden on phones (width budget). */}
         {versionLabel && (
-          <Text size="xs" c="dimmed">
+          <Text size="xs" c="dimmed" visibleFrom="sm">
             {versionLabel}
           </Text>
         )}
       </Group>
+      {/* Mobile (<sm): the AppShell header is a fixed 60px — a wrapped second
+          row of controls paints OVER the page content. Hide the secondary
+          controls: Admin Console stays reachable via UserMenu, GitHub is
+          non-essential, the default-role picker lives in the burger sidebar
+          flow. Theme toggle + user menu always fit. */}
       <Group gap="sm">
         {me?.is_admin && (
           <Tooltip label="Admin Console">
@@ -66,6 +80,7 @@ export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
                 shows a quiet wash only on hover; keyboard focus keeps the
                 global focus-visible ring. */}
             <ActionIcon
+              visibleFrom="sm"
               variant="subtle"
               color="gray"
               size="lg"
@@ -78,6 +93,7 @@ export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
         )}
         <Tooltip label="View source on GitHub">
           <ActionIcon
+            visibleFrom="sm"
             component="a"
             href={GITHUB_URL}
             target="_blank"
@@ -90,7 +106,9 @@ export function AppHeader({ navOpened, onNavToggle }: AppHeaderProps) {
             <Github size={18} />
           </ActionIcon>
         </Tooltip>
-        <DefaultRolePicker />
+        <Box visibleFrom="sm">
+          <DefaultRolePicker />
+        </Box>
         <ThemeToggle />
         <UserMenu />
       </Group>
