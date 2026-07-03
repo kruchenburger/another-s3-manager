@@ -153,45 +153,58 @@ def create_user(username, password="password", is_admin=False, allowed_roles=Non
     users_module.save_users(data)
 
 
-def test_root_returns_html(app_client):
-    response = app_client.get("/")
-    assert response.status_code == status.HTTP_200_OK
-    assert "<!DOCTYPE html>" in response.text
-
-
-def test_login_page_returns_html(app_client):
-    response = app_client.get("/login")
-    assert response.status_code == status.HTTP_200_OK
-    assert "<!DOCTYPE html>" in response.text
-
-
-def test_v2_spa_fallback_serves_index_for_unknown_paths(app_client, tmp_path, monkeypatch):
-    """REGRESSION: deep-linking into the React SPA (e.g. /v2/login, /v2/r/aws-prod/b/images)
-    must serve index.html so React Router can take over. Without the SPA fallback route,
-    StaticFiles returns 404 because no such file exists on disk."""
-    # Seed a fake index.html so the fallback has something to return
+def _seed_spa_index():
+    """Seed a fake SPA index.html; returns (index_file, created)."""
     from another_s3_manager.constants import STATIC_DIR
 
-    v2_dir = STATIC_DIR / "v2"
-    v2_dir.mkdir(parents=True, exist_ok=True)
-    index_file = v2_dir / "index.html"
+    spa_dir = STATIC_DIR / "app"
+    spa_dir.mkdir(parents=True, exist_ok=True)
+    index_file = spa_dir / "index.html"
     created = not index_file.exists()
     if created:
         index_file.write_text("<!DOCTYPE html><html><head></head><body><div id='root'></div></body></html>")
+    return index_file, created
 
+
+def test_root_serves_spa_index(app_client):
+    """Phase 7: the React SPA owns / — vanilla index.html is gone."""
+    index_file, created = _seed_spa_index()
     try:
-        # Direct deep-link should serve index.html (not 404)
-        response = app_client.get("/v2/login")
-        assert response.status_code == 200, f"deep-link /v2/login returned {response.status_code}"
-        assert "<div id='root'>" in response.text or '<div id="root">' in response.text
+        response = app_client.get("/")
+        assert response.status_code == status.HTTP_200_OK
+        assert "root" in response.text  # SPA mount div, not the vanilla page
+    finally:
+        if created:
+            index_file.unlink()
 
-        # Bare /v2 (no trailing slash) should also work
-        response = app_client.get("/v2")
-        assert response.status_code == 200
 
-        # Nested deep-link
-        response = app_client.get("/v2/r/aws-prod/b/images/p/2026/photos")
-        assert response.status_code == 200
+def test_spa_fallback_serves_index_for_unknown_paths(app_client):
+    """Deep links (/login, /r/.../b/...) and dead /v2 URLs all serve index.html
+    so React Router renders the page (or its 404)."""
+    index_file, created = _seed_spa_index()
+    try:
+        for path in ("/login", "/r/aws-prod/b/images/p/2026/photos", "/v2/anything"):
+            response = app_client.get(path)
+            assert response.status_code == 200, f"{path} -> {response.status_code}"
+            assert "root" in response.text
+    finally:
+        if created:
+            index_file.unlink()
+
+
+def test_spa_catchall_does_not_swallow_reserved_prefixes(app_client):
+    """Unknown api/* paths must be JSON 404, not index.html with HTTP 200 —
+    and /mcp must keep routing to the MCP mount (ordering invariant)."""
+    index_file, created = _seed_spa_index()
+    try:
+        response = app_client.get("/api/definitely-not-a-route")
+        assert response.status_code == 404
+        assert "<!DOCTYPE" not in response.text
+
+        response = app_client.get("/mcp/definitely-not-a-route")
+        assert "<!DOCTYPE" not in response.text  # anything but the SPA page
+
+        assert app_client.get("/health").status_code == 200
     finally:
         if created:
             index_file.unlink()
@@ -353,12 +366,6 @@ def test_get_app_info(app_client):
     data = response.json()
     assert "app_name" in data
     assert data["app_version"] == _constants_module.APP_VERSION
-
-
-def test_admin_page(app_client):
-    response = app_client.get("/admin")
-    assert response.status_code == status.HTTP_200_OK
-    assert "<!DOCTYPE html>" in response.text
 
 
 def test_list_users_requires_admin(app_client):
