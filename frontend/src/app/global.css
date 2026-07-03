@@ -127,9 +127,11 @@ input:-webkit-autofill:focus {
    providers.tsx imports @mantine/core/styles.css BEFORE global.css. Keep
    that import order.
 
-   Plain Paper stays on body on purpose: it's used as an inline section
-   wrapper (e.g. RoleFormFields), not floating chrome. Explicit bg props on
-   components still win (inline style beats any stylesheet rule). */
+   Plain Paper is deliberately NOT in this list: inline section-wrapper
+   Papers should stay on body. Floating-chrome Papers must opt in
+   explicitly (BulkActionBar.module.css, the Settings save bar's bg prop).
+   Explicit bg props on components still win (inline style beats any
+   stylesheet rule). */
 /* Modal/Drawer HEADERS are listed too: Mantine paints them with
    --mantine-color-body (they're sticky and must be opaque), which would
    band against the surface-tinted content below. */

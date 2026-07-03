@@ -57,8 +57,8 @@ export const coralRed: MantineColorsTuple = [
   "#f0a29a",
   "#ef7f74",
   "#ec6154", // 5 — dark-scheme error text (4.93:1 on body)
-  "#e8493f", // 6 — mockup --danger (dark)
-  "#e0463d", // 7 — mockup --danger (light)
+  "#e8493f", // 6 — mockup --danger; the filled shade in BOTH schemes
+  "#e0463d", // 7 — mockup's light-scheme danger, kept in-family (not a scheme split: primaryShade fills with [6] everywhere)
   "#c93a32", // 8 — light-scheme error text (4.74:1 on light body)
   "#a92e28",
 ];

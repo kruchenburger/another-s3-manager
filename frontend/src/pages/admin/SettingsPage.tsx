@@ -317,13 +317,15 @@ export function SettingsPage() {
             under the navbar. */}
         {!readOnly && (
           <Paper
-            shadow="md"
             p="sm"
             radius={0}
             withBorder
             // Marker for the global.css :has() rule that lifts bottom toasts
             // above this save bar so they never overlap the Save button.
             data-settings-save-bar
+            // Floating chrome gets the airify surface + float shadow (same
+            // treatment as BulkActionBar) — plain Paper would stay body-colored.
+            bg="var(--as3m-surface)"
             style={{
               position: "fixed",
               left: "var(--app-shell-navbar-width, 0px)",
@@ -333,6 +335,7 @@ export function SettingsPage() {
               borderLeft: 0,
               borderRight: 0,
               borderBottom: 0,
+              boxShadow: "var(--as3m-shadow-float)",
             }}
           >
             <Group justify="flex-end" gap="sm" px="md">

@@ -105,6 +105,18 @@
   );
 }
 
+/* Grid cards only: re-compose the airify resting shadow with the selection
+   rail. box-shadow doesn't merge across rules — the higher-specificity
+   selected rule above would otherwise REPLACE global.css's
+   `.mantine-Card-root { box-shadow: var(--as3m-shadow-rest) }`, so a
+   selected card lost its lift. Table rows (tr) never had a resting shadow,
+   hence the :global(.mantine-Card-root) scope. */
+.row:global(.mantine-Card-root):has(input[type="checkbox"]:checked) {
+  box-shadow:
+    inset 3px 0 0 var(--mantine-primary-color-filled),
+    var(--as3m-shadow-rest);
+}
+
 /* Sticky table header inside the FileBrowser scroll area. Background prevents
    rows showing through as they scroll under it; z-index keeps it above the
    virtualized rows. */

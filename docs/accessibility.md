@@ -98,8 +98,7 @@ axe-core docs for each rule: [https://dequeuniversity.com/rules/axe/4.11/](https
 
 ## Theme overrides for contrast compliance
 
-Two changes in `frontend/src/app/theme.ts` shifted the baseline from
-"10 failing routes" to "10 passing routes":
+These changes in `frontend/src/app/theme.ts` keep the baseline green:
 
 1. `Button` and `Badge` components opt in to `autoContrast: true` via
    `Button.extend(...)` / `Badge.extend(...)` in `components`. Mantine then
@@ -122,6 +121,12 @@ Two changes in `frontend/src/app/theme.ts` shifted the baseline from
    stylesheet) keeps the theme config in one place and dodges the
    CSS-specificity dance that would otherwise be needed to beat Mantine's
    own selectors.
+
+3. The primary filled-hover is pinned per scheme
+   (`PRIMARY_HOVER_DARK`/`PRIMARY_HOVER_LIGHT` in `theme.ts`). The design
+   mockup's dark hover lightens to `#6d8cb6`, which puts white button text
+   at 3.45:1 — the adopted `#57759b` keeps the lighten-on-hover idiom at
+   4.75:1. Also locked by `themeContrast.test.ts`.
 
 Future contrast fixes should follow the same pattern: prefer overriding the
 relevant Mantine CSS variable via `cssVariablesResolver` over per-component

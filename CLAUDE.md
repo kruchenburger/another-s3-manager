@@ -115,9 +115,10 @@ all E2E tests fail with connection refused. Override target via
 the build on any `critical`/`serious` violation. WCAG 2.1 AA + best-practice
 tags. `moderate`/`minor` are logged but non-blocking. See
 [`docs/accessibility.md`](docs/accessibility.md) for the full route list, how
-to fix common violations, and the rationale for our two theme adjustments
-(`autoContrast: true` scoped to Button + Badge, and `--mantine-color-dimmed`
-overridden via `cssVariablesResolver`, both in `src/app/theme.ts`).
+to fix common violations, and the rationale for our theme-level contrast
+adjustments (`autoContrast: true` scoped to Button + Badge, plus the
+`cssVariablesResolver` pins for dimmed / error / primary-hover, all in
+`src/app/theme.ts` and locked by `frontend/tests/unit/themeContrast.test.ts`).
 
 #### E2E specs that need a real S3 backend (MinIO)
 
