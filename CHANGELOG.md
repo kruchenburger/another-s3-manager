@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key are removed (ignored if present in existing `config.json`). The MCP
   endpoint (`/mcp`) is unchanged.
 
+### Security
+
+- **Breaking (upgrade note):** the container now runs as a non-root user
+  (uid 1001); v0.1.x images ran as root. When upgrading an existing
+  deployment, the data volume created by v0.1.x contains root-owned files the
+  new image cannot write. Do a one-time ownership fix before starting the new
+  image:
+  `docker run --rm -v <your-data-volume-or-dir>:/app/data alpine chown -R 1001:1001 /app/data`.
+  The in-repo `docker-compose.yml` does this automatically via its `init-data`
+  sidecar; fresh installs from `docker-compose.example.yml` are unaffected.
+  The upgrade path is covered by `scripts/upgrade-smoke.sh` (v0.1.2 → current
+  image, same volume and env).
+
 ### Changed
 
 - Upgraded the React SPA from Mantine 8 to Mantine 9 (and React 19.0 → 19.2,
