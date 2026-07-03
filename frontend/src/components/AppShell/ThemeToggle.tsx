@@ -27,7 +27,8 @@ export function ThemeToggle() {
 
   return (
     <ActionIcon
-      variant="default"
+      variant="subtle"
+      color="gray"
       size="lg"
       onClick={handleToggle}
       aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}

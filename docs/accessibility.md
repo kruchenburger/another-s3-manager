@@ -98,8 +98,7 @@ axe-core docs for each rule: [https://dequeuniversity.com/rules/axe/4.11/](https
 
 ## Theme overrides for contrast compliance
 
-Two changes in `frontend/src/app/theme.ts` shifted the baseline from
-"10 failing routes" to "10 passing routes":
+These changes in `frontend/src/app/theme.ts` keep the baseline green:
 
 1. `Button` and `Badge` components opt in to `autoContrast: true` via
    `Button.extend(...)` / `Badge.extend(...)` in `components`. Mantine then
@@ -109,13 +108,25 @@ Two changes in `frontend/src/app/theme.ts` shifted the baseline from
    `variant="filled"` (per Mantine 9 docs), so outline / subtle / transparent
    variants are unaffected and keep their explicit colours.
 
-2. `cssVariablesResolver` overrides `--mantine-color-dimmed` from `#828282`
-   to `#969696` in dark mode. Mantine's default failed 4.5:1 against the
-   standard dark body background `#242424` (came in at 4.03:1). The
-   replacement passes AA at 4.69:1 with no visible UI shift. Using the
-   resolver (instead of a separate stylesheet) keeps the theme config in one
-   place and dodges the CSS-specificity dance that would otherwise be needed
-   to beat Mantine's own selectors.
+2. `cssVariablesResolver` overrides `--mantine-color-dimmed` to `#9aa5b4`
+   (the airify slate "ink-dim") in dark mode, and pins
+   `--mantine-color-error` to `red.5` (dark) / `red.8` (light). The airify
+   palette makes the dark body `#1a212e` and elevated surfaces `#222b3c`;
+   `#9aa5b4` passes AA at 6.47:1 / 5.68:1 against them. The error pins fix
+   a gap that predates the coral retune: Mantine's own defaults (`red.8`
+   on dark, `red.6` on light) sit below the 4.5:1 AA threshold on our
+   bodies. All four ratios are locked by
+   `frontend/tests/unit/themeContrast.test.ts`, so palette tuning cannot
+   silently regress them. Using the resolver (instead of a separate
+   stylesheet) keeps the theme config in one place and dodges the
+   CSS-specificity dance that would otherwise be needed to beat Mantine's
+   own selectors.
+
+3. The primary filled-hover is pinned per scheme
+   (`PRIMARY_HOVER_DARK`/`PRIMARY_HOVER_LIGHT` in `theme.ts`). The design
+   mockup's dark hover lightens to `#6d8cb6`, which puts white button text
+   at 3.45:1 — the adopted `#57759b` keeps the lighten-on-hover idiom at
+   4.75:1. Also locked by `themeContrast.test.ts`.
 
 Future contrast fixes should follow the same pattern: prefer overriding the
 relevant Mantine CSS variable via `cssVariablesResolver` over per-component

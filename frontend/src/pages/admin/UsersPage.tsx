@@ -139,7 +139,7 @@ export function UsersPage() {
         </Button>
       </Group>
 
-      <Table highlightOnHover striped="even" verticalSpacing="xs">
+      <Table highlightOnHover striped="even">
         <Table.Thead>
           <Table.Tr>
             <Table.Th>Username</Table.Th>

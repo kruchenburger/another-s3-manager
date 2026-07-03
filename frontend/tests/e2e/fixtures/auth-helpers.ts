@@ -35,7 +35,12 @@ export async function loginAsAdmin(page: Page): Promise<void> {
   // match resolves to 2 elements. Anchor to the input's exact "Password" label.
   await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASSWORD);
   await page.getByRole("button", { name: "Login" }).click();
-  await expect(page).toHaveURL(/\/v2\/?$/);
+  // Successful login lands on /v2/, which HomePage immediately auto-redirects
+  // to /v2/r/<role>/... for any user with roles (default_role or first role).
+  // Asserting the transient /v2/ URL is a race the warm local backend loses —
+  // assert we LEFT the login route instead; the user-menu check below is what
+  // proves the authenticated shell actually mounted.
+  await expect(page).not.toHaveURL(/\/v2\/login/);
   // AppShell rendered → login actually succeeded. Without this, every
   // downstream assertion fails with a misleading "element not found" instead
   // of a clear "you never logged in".

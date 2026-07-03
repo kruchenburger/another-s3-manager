@@ -48,7 +48,7 @@ export function BansPage() {
     <Stack gap="md">
       <Title order={2}>Bans</Title>
       <Text c="dimmed">Users banned after repeated failed logins.</Text>
-      <Table highlightOnHover striped="even" verticalSpacing="xs">
+      <Table highlightOnHover striped="even">
         <Table.Thead>
           <Table.Tr>
             <Table.Th>Username</Table.Th>

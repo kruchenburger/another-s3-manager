@@ -116,6 +116,52 @@ input:-webkit-autofill:focus {
   }
 }
 
+/* ── Airify: layered surfaces (spec rev 2 §2) ────────────────────────────
+   Mantine paints Paper/Card/Modal/Menu with the SAME --mantine-color-body
+   as the page, so a palette override alone yields a flat app. Re-tint
+   elevated containers one step lighter with our own token.
+
+   Deliberately NOT :where(): Mantine's own background rules live on hashed
+   classes at specificity (0,1,0); a :where() (0,0,0) rule would lose. These
+   static-class selectors tie at (0,1,0) and win by cascade order —
+   providers.tsx imports @mantine/core/styles.css BEFORE global.css. Keep
+   that import order.
+
+   Plain Paper is deliberately NOT in this list: inline section-wrapper
+   Papers should stay on body. Floating-chrome Papers must opt in
+   explicitly (BulkActionBar.module.css, the Settings save bar's bg prop).
+   Explicit bg props on components still win (inline style beats any
+   stylesheet rule). */
+/* Modal/Drawer HEADERS are listed too: Mantine paints them with
+   --mantine-color-body (they're sticky and must be opaque), which would
+   band against the surface-tinted content below. */
+.mantine-Card-root,
+.mantine-Modal-content,
+.mantine-Modal-header,
+.mantine-Drawer-content,
+.mantine-Drawer-header,
+.mantine-Menu-dropdown,
+.mantine-Popover-dropdown,
+.mantine-HoverCard-dropdown,
+.mantine-Notification-root {
+  background-color: var(--as3m-surface);
+}
+
+/* Soft resting lift on cards; deep mockup shadow on floating overlays.
+   Cards keep withBorder — shadow adds depth, the hairline keeps the edge. */
+.mantine-Card-root {
+  box-shadow: var(--as3m-shadow-rest);
+}
+
+.mantine-Modal-content,
+.mantine-Drawer-content,
+.mantine-Menu-dropdown,
+.mantine-Popover-dropdown,
+.mantine-HoverCard-dropdown,
+.mantine-Notification-root {
+  box-shadow: var(--as3m-shadow-float);
+}
+
 /* Bottom toast stacks normally sit in the corner. Lift them to clear a
    bottom-anchored element ONLY while one is actually on screen — the floating
    scroll-to-top button (in the DOM only while scrolled past its threshold) or

@@ -18,7 +18,7 @@
 .collapsedItem:hover {
   background-color: light-dark(
     var(--mantine-color-slate-2),
-    var(--mantine-color-slate-7)
+    rgba(255, 255, 255, 0.07)
   );
 }
 

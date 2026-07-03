@@ -30,6 +30,9 @@ interface FileTableProps {
 }
 
 // Fixed row height (px). Matches Table verticalSpacing="xs" single-line rows.
+// The explicit verticalSpacing="xs" below is deliberate: the theme default
+// moved to "sm" (airify), but this table is virtualized against ROW_HEIGHT —
+// change both together or rows will overlap/gap.
 const ROW_HEIGHT = 44;
 
 // Number of columns in the table (checkbox, name, size, modified, actions).

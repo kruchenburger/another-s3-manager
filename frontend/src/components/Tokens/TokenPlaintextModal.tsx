@@ -68,7 +68,11 @@ export function TokenPlaintextModal({ opened, onClose, plaintext, noteForAdmin }
       withCloseButton={false}
     >
       <Stack gap="md">
-        <Alert color="red" title="This token will not be shown again">
+        {/* Gold warning, not red: nothing failed — yellow is the app's
+            warning color (ResetPasswordModal uses it for its overwrite
+            warning; red stays for errors/destructive confirms). Coral red's
+            light variant also reads muddy-maroon on the dark surface. */}
+        <Alert color="yellow" title="This token will not be shown again">
           Save it in your secret manager NOW. If you lose it, revoke and create a new one.
           {noteForAdmin && (
             <Text size="sm" mt="xs">
