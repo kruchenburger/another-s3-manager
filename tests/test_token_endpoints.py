@@ -108,6 +108,24 @@ def test_post_me_tokens_returns_plaintext_once(client_with_admin):
     assert items[0]["name"] == "Claude Desktop"
 
 
+def test_post_me_tokens_can_reuse_revoked_name(client_with_admin):
+    """create -> revoke -> create with the same name must succeed. Revoked
+    tokens are invisible in the UI, so a 409 here reads as a phantom
+    duplicate to the user."""
+    client, csrf = client_with_admin
+    payload = {"name": "phoenix", "is_read_only": True, "max_read_bytes": 1_048_576}
+    first = client.post("/api/me/tokens", json=payload, headers={"X-CSRF-Token": csrf})
+    assert first.status_code == 200, first.text
+    token_id = first.json()["id"]
+
+    del_resp = client.delete(f"/api/me/tokens/{token_id}", headers={"X-CSRF-Token": csrf})
+    assert del_resp.status_code == 200, del_resp.text
+
+    second = client.post("/api/me/tokens", json=payload, headers={"X-CSRF-Token": csrf})
+    assert second.status_code == 200, second.text
+    assert second.json()["id"] != token_id
+
+
 def test_post_me_tokens_updates_used_count(client_with_admin):
     client, csrf = client_with_admin
     client.post(

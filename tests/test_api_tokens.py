@@ -68,6 +68,26 @@ def test_create_token_duplicate_name_raises(alice_user):
         svc.create_token(alice_user, "dup", is_read_only=True, max_read_bytes=1024)
 
 
+def test_create_token_reuses_revoked_name(alice_user):
+    """Revoke is a soft delete and revoked tokens are hidden from every
+    listing, so their names must be reusable — otherwise the user gets a 409
+    for a token they can't see."""
+    token, _ = svc.create_token(alice_user, "dup", is_read_only=True, max_read_bytes=1024)
+    svc.revoke_token(token.id, by_user_id=alice_user, by_is_admin=False)
+    new_token, _ = svc.create_token(alice_user, "dup", is_read_only=True, max_read_bytes=1024)
+    assert new_token.id != token.id
+    assert new_token.name == "dup"
+
+
+def test_create_token_duplicate_active_name_raises_even_with_revoked_namesakes(alice_user):
+    """Uniqueness still holds among ACTIVE tokens after a revoked name is reused."""
+    token, _ = svc.create_token(alice_user, "dup", is_read_only=True, max_read_bytes=1024)
+    svc.revoke_token(token.id, by_user_id=alice_user, by_is_admin=False)
+    svc.create_token(alice_user, "dup", is_read_only=True, max_read_bytes=1024)
+    with pytest.raises(Exception):  # IntegrityError: one active "dup" exists
+        svc.create_token(alice_user, "dup", is_read_only=True, max_read_bytes=1024)
+
+
 def test_find_active_token_by_hash_returns_active(alice_user):
     _, plaintext = svc.create_token(alice_user, "t", is_read_only=True, max_read_bytes=1024)
     digest = hashlib.sha256(plaintext.encode()).hexdigest()
@@ -280,3 +300,12 @@ def test_update_token_name_collision_raises_integrity_error(alice_user):
 
     with pytest.raises(IntegrityError):
         svc.update_token(token_id=other_token.id, by_user_id=alice_user, by_is_admin=False, name="taken")
+
+
+def test_update_token_rename_to_revoked_name_allowed(alice_user):
+    """Renaming onto a REVOKED token's name is fine — only active names collide."""
+    old, _ = svc.create_token(alice_user, "retired", is_read_only=True, max_read_bytes=1024)
+    svc.revoke_token(old.id, by_user_id=alice_user, by_is_admin=False)
+    keeper, _ = svc.create_token(alice_user, "keeper", is_read_only=True, max_read_bytes=1024)
+    updated = svc.update_token(token_id=keeper.id, by_user_id=alice_user, by_is_admin=False, name="retired")
+    assert updated.name == "retired"

@@ -2,7 +2,18 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -67,7 +78,19 @@ class Ban(Base):
 class ApiToken(Base):
     __tablename__ = "api_tokens"
     __table_args__ = (
-        UniqueConstraint("user_id", "name", name="uq_api_token_user_name"),
+        # Uniqueness among ACTIVE tokens only. Revoke is a soft delete
+        # (revoked_at set) and revoked tokens are hidden from every listing,
+        # so an absolute UNIQUE(user_id, name) made a revoked token block its
+        # own name forever — a 409 for a token the user can't see. The
+        # partial index allows any number of revoked namesakes but at most
+        # one active token per (user, name).
+        Index(
+            "uq_api_token_user_name_active",
+            "user_id",
+            "name",
+            unique=True,
+            sqlite_where=text("revoked_at IS NULL"),
+        ),
         CheckConstraint(
             "max_read_bytes > 0 AND max_read_bytes <= 10485760",
             name="ck_api_token_max_read_bytes_range",

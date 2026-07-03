@@ -39,7 +39,9 @@ def create_token(
 
     Plaintext is returned ONLY here. Caller must persist it (response to client) immediately.
     Raises ValueError if the per-user active limit is reached.
-    Raises sqlalchemy.exc.IntegrityError on duplicate name (caught at endpoint layer -> 409).
+    Raises sqlalchemy.exc.IntegrityError on duplicate ACTIVE name (caught at
+    endpoint layer -> 409). Revoked tokens don't block their name — uniqueness
+    is a partial index over revoked_at IS NULL.
 
     Concurrency note: the COUNT-then-INSERT pair is not strictly serializable —
     two concurrent transactions can both see N<LIMIT and both INSERT, ending
@@ -49,8 +51,9 @@ def create_token(
         are scheduled cooperatively rather than truly concurrent
       - Per-user limit (10) is a soft cap, not a security boundary; over by 1-2
         is harmless
-    If we ever move to multi-worker uvicorn or Postgres, revisit with a
-    SELECT...FOR UPDATE or a unique partial index.
+    If we ever move to multi-worker uvicorn or Postgres, revisit with
+    SELECT...FOR UPDATE (unrelated to the name-uniqueness partial index
+    above — no unique index can express a "max N active rows" cap).
     """
     with session_scope() as session:
         active = session.execute(
