@@ -20,7 +20,6 @@ describe("usePasswordPolicy", () => {
   it("selects only the 5 policy fields from the config response", async () => {
     vi.mocked(getConfig).mockResolvedValueOnce({
       roles: [],
-      items_per_page: 200,
       enable_lazy_loading: true,
       max_file_size: 100 * 1024 * 1024,
       max_client_load: 10000,

@@ -9,13 +9,12 @@ import type { AppConfig } from "@/types/api";
  *   - `current_role`: response-only, computed per-request from per-user perms.
  *   - `is_read_only`: filesystem capability check, never config data.
  *
- * Vanilla admin.html builds the save payload via explicit allowlist for the
- * same reason — replicate that contract here.
+ * The save payload is built via explicit allowlist for the same reason
+ * (a contract inherited from the pre-Phase-7 vanilla admin page).
  */
 export function toWritableConfig(config: AppConfig): AppConfig {
   return {
     roles: config.roles,
-    items_per_page: config.items_per_page,
     enable_lazy_loading: config.enable_lazy_loading,
     max_file_size: config.max_file_size,
     max_client_load: config.max_client_load,

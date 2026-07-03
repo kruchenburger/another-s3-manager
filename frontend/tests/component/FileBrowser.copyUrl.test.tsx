@@ -49,7 +49,6 @@ vi.mock("@/features/files/hooks/useFiles", () => ({
 vi.mock("@/hooks/useConfig", () => ({
   useConfig: () => ({
     data: {
-      items_per_page: 200,
       enable_lazy_loading: true,
       max_client_load: 10000,
       max_file_size: 100 * 1024 * 1024,

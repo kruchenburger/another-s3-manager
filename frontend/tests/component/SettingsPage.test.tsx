@@ -23,7 +23,6 @@ const baseConfig = {
     { name: "MinIO", type: "s3_compatible" as const },
   ],
   default_role: "Default",
-  items_per_page: 200,
   enable_lazy_loading: true,
   max_file_size: 100 * 1024 * 1024,
   max_client_load: 10000,
@@ -89,9 +88,9 @@ describe("SettingsPage", () => {
     renderPage();
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Items per page")).toBeInTheDocument(),
+      expect(screen.getByLabelText("Max client load")).toBeInTheDocument(),
     );
-    expect(screen.getByLabelText("Items per page")).toHaveValue("200");
+    expect(screen.getByLabelText("Max client load")).toHaveValue("10000");
     // Mantine Switch components have role="switch"; addressed by accessible name.
     expect(
       screen.getByRole("switch", { name: /disable deletion/i }),
@@ -129,7 +128,7 @@ describe("SettingsPage", () => {
     });
     renderPage();
     await waitFor(() =>
-      expect(screen.getByLabelText("Items per page")).toBeDisabled(),
+      expect(screen.getByLabelText("Max client load")).toBeDisabled(),
     );
     expect(
       screen.getByRole("switch", { name: /disable deletion/i }),
@@ -147,16 +146,16 @@ describe("SettingsPage", () => {
 
     await waitForSaveButton();
     // Save is disabled until something is dirty (matches standard form UX).
-    // Bump items_per_page to enable Save without changing the MB field —
+    // Bump max_client_load to enable Save without changing the MB field —
     // that lets us verify the byte-precision-preserved path on max_file_size.
-    fireEvent.change(screen.getByLabelText("Items per page"), {
+    fireEvent.change(screen.getByLabelText("Max client load"), {
       target: { value: "300" },
     });
     clickSaveSettings();
 
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
-    expect(submitted.items_per_page).toBe(300);
+    expect(submitted.max_client_load).toBe(300);
     expect(submitted.max_file_size).toBe(100 * 1024 * 1024); // preserved from original
     expect(submitted.disable_deletion).toBe(false);
   });
@@ -173,10 +172,10 @@ describe("SettingsPage", () => {
 
     await waitForSaveButton();
     // Dirty an UNRELATED field so Save is enabled. The MB field must stay
-    // untouched — that's what this test is verifying. items_per_page lives
-    // in the General tab too, but its dirty state only affects the items
+    // untouched — that's what this test is verifying. max_client_load lives
+    // in the General tab too, but its dirty state only affects that one
     // field; max_file_size_mb stays clean and triggers the byte-preserve path.
-    fireEvent.change(screen.getByLabelText("Items per page"), {
+    fireEvent.change(screen.getByLabelText("Max client load"), {
       target: { value: "300" },
     });
     clickSaveSettings();
@@ -205,7 +204,7 @@ describe("SettingsPage", () => {
     renderPage();
     await waitForSaveButton();
     // Dirty any field so Save is enabled
-    fireEvent.change(screen.getByLabelText("Items per page"), {
+    fireEvent.change(screen.getByLabelText("Max client load"), {
       target: { value: "300" },
     });
     clickSaveSettings();
@@ -266,7 +265,7 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("tab", { name: /mcp/i })).toBeInTheDocument();
 
     // General is the default tab — its fields are reachable by label.
-    expect(screen.getByLabelText("Items per page")).toBeInTheDocument();
+    expect(screen.getByLabelText("Max client load")).toBeInTheDocument();
     // Security and MCP tab panels are also mounted (keepMounted) so RTL
     // can find their fields by label even without clicking the tab. Mantine 9
     // mounts inactive keepMounted panels on a deferred tick (not the first
@@ -290,7 +289,7 @@ describe("SettingsPage", () => {
     expect(saveButton()).toBeDisabled();
 
     // Dirty a field → Save activates
-    fireEvent.change(screen.getByLabelText("Items per page"), {
+    fireEvent.change(screen.getByLabelText("Max client load"), {
       target: { value: "500" },
     });
     expect(saveButton()).not.toBeDisabled();
@@ -308,11 +307,11 @@ describe("SettingsPage", () => {
     renderPage();
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Items per page")).toBeInTheDocument(),
+      expect(screen.getByLabelText("Max client load")).toBeInTheDocument(),
     );
 
     // Edit a General field
-    fireEvent.change(screen.getByLabelText("Items per page"), {
+    fireEvent.change(screen.getByLabelText("Max client load"), {
       target: { value: "500" },
     });
     // Edit a Security field (no tab switch needed — keepMounted exposes it)
@@ -324,7 +323,7 @@ describe("SettingsPage", () => {
     clickSaveSettings();
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
-    expect(submitted.items_per_page).toBe(500);
+    expect(submitted.max_client_load).toBe(500);
     expect(submitted.password_min_length).toBe(12);
   });
 
@@ -345,7 +344,7 @@ describe("SettingsPage", () => {
 
     await waitForSaveButton();
     // Dirty a field so Save is enabled
-    fireEvent.change(screen.getByLabelText("Items per page"), {
+    fireEvent.change(screen.getByLabelText("Max client load"), {
       target: { value: "300" },
     });
     // First click — should trigger one mutation
@@ -375,19 +374,19 @@ describe("SettingsPage", () => {
     const { rerender } = renderPage();
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Items per page")).toBeInTheDocument(),
+      expect(screen.getByLabelText("Max client load")).toBeInTheDocument(),
     );
 
     // User starts editing
-    fireEvent.change(screen.getByLabelText("Items per page"), {
+    fireEvent.change(screen.getByLabelText("Max client load"), {
       target: { value: "750" },
     });
-    expect(screen.getByLabelText("Items per page")).toHaveValue("750");
+    expect(screen.getByLabelText("Max client load")).toHaveValue("750");
 
     // Simulate a background refetch by re-resolving getConfig with a fresh
     // object — same payload, new reference. The component re-renders;
     // useEffect([config]) would fire and call setValues(populated) without
-    // the dirty guard, clobbering the user's "750" back to "200".
+    // the dirty guard, clobbering the user's "750" back to "10000".
     vi.mocked(getConfig).mockResolvedValueOnce({ ...baseConfig });
     rerender(
       <QueryClientProvider
@@ -410,23 +409,23 @@ describe("SettingsPage", () => {
     );
     // After "refetch", the user's typed value must still be 750 — NOT 200.
     // (This is the dirty-guard contract: while form.isDirty(), do not repopulate.)
-    expect(screen.getByLabelText("Items per page")).toHaveValue("750");
+    expect(screen.getByLabelText("Max client load")).toHaveValue("750");
   });
 
-  it("shows an inline error on Items per page when value exceeds the S3 1000-key cap", async () => {
+  it("shows an inline error on Max client load when value exceeds the 200000 cap", async () => {
     vi.mocked(getConfig).mockResolvedValue(baseConfig);
     vi.mocked(saveConfig).mockResolvedValue(undefined);
     renderPage();
     await waitForSaveButton();
 
-    // Push value over the backend's 1000 cap
-    fireEvent.change(screen.getByLabelText("Items per page"), {
-      target: { value: "1500" },
+    // Push value over the 200000 cap
+    fireEvent.change(screen.getByLabelText("Max client load"), {
+      target: { value: "500000" },
     });
 
     // Inline error renders under the input
     await waitFor(() =>
-      expect(screen.getByText(/maximum is 1000/i)).toBeInTheDocument(),
+      expect(screen.getByText(/maximum is 200000/i)).toBeInTheDocument(),
     );
 
     // Save is blocked while the form has validation errors — even though
@@ -453,7 +452,7 @@ describe("SettingsPage", () => {
     await waitForSaveButton();
 
     // Initial edit + click Save
-    fireEvent.change(screen.getByLabelText("Items per page"), {
+    fireEvent.change(screen.getByLabelText("Max client load"), {
       target: { value: "300" },
     });
     clickSaveSettings();
@@ -464,7 +463,7 @@ describe("SettingsPage", () => {
     // baseline on save success and silently lost (button goes disabled,
     // current value stays in the input but isDirty() returns false). The
     // fix uses form.getValues() so the live value stays dirty.
-    fireEvent.change(screen.getByLabelText("Items per page"), {
+    fireEvent.change(screen.getByLabelText("Max client load"), {
       target: { value: "400" },
     });
 
@@ -479,7 +478,7 @@ describe("SettingsPage", () => {
 
     // The value the user typed last must still be visible — not snapped
     // back to anything else.
-    expect(screen.getByLabelText("Items per page")).toHaveValue("400");
+    expect(screen.getByLabelText("Max client load")).toHaveValue("400");
   });
 });
 

@@ -13,10 +13,10 @@ export const filesQueryKey = (bucket: string, role: string, path: string) =>
  * `loadAll` drains the rest. The component holds the flattened `files` in memory
  * and paginates/filters/searches client-side (vanilla parity).
  *
- * Built on useInfiniteQuery so chunks cache and survive re-renders, but the page
- * param is the opaque continuation token (a chunk-of-max_client_load), NOT
- * items_per_page — so a small folder is fully loaded in page 0 and extra chunks
- * exist only when the user explicitly asks for them.
+ * Built on useInfiniteQuery so chunks cache and survive re-renders, and the page
+ * param is the opaque continuation token (a chunk-of-max_client_load) — so a
+ * small folder is fully loaded in page 0 and extra chunks exist only when the
+ * user explicitly asks for them.
  */
 export function useFiles(
   bucket: string | undefined,
