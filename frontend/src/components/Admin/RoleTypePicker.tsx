@@ -7,18 +7,9 @@ import {
   Text,
   Tooltip,
 } from "@mantine/core";
-import {
-  Cloud,
-  Globe,
-  Info,
-  Key,
-  Repeat,
-  User,
-} from "lucide-react";
+import { Info } from "lucide-react";
 import type { ReactNode } from "react";
-import type { AppRole } from "@/types/api";
-
-type RoleType = AppRole["type"];
+import { ROLE_TYPE_META, type RoleType } from "./roleTypeMeta";
 
 interface Option {
   value: RoleType;
@@ -30,11 +21,10 @@ interface Option {
   details?: ReactNode;
 }
 
-export const OPTIONS: Option[] = [
-  {
-    value: "default",
-    label: "AWS credential chain",
-    icon: <Cloud size={18} />,
+// Rich (JSX) copy stays here — roleTypeMeta.ts is plain-string only so the
+// RolesPage badge tooltip can consume it. value/label/icon come from meta.
+const RICH: Partial<Record<RoleType, { description: ReactNode; details?: ReactNode }>> = {
+  default: {
     description: <>Resolve credentials via the standard AWS chain. No keys stored in this app.</>,
     details: (
       <>
@@ -62,10 +52,7 @@ export const OPTIONS: Option[] = [
       </>
     ),
   },
-  {
-    value: "profile",
-    label: "Named AWS profile",
-    icon: <User size={18} />,
+  profile: {
     description: (
       <>
         Reference a profile from <Code>~/.aws/credentials</Code> or{" "}
@@ -73,25 +60,27 @@ export const OPTIONS: Option[] = [
       </>
     ),
   },
-  {
-    value: "assume_role",
-    label: "STS assume role",
-    icon: <Repeat size={18} />,
+  assume_role: {
     description: <>Assume a target IAM role via STS. Base creds need sts:AssumeRole.</>,
   },
-  {
-    value: "credentials",
-    label: "Static access key + secret",
-    icon: <Key size={18} />,
+  credentials: {
     description: <>Store an AWS access key + secret directly. Simplest, least secure.</>,
   },
-  {
-    value: "s3_compatible",
-    label: "Other S3-compatible service",
-    icon: <Globe size={18} />,
+  s3_compatible: {
     description: <>Cloudflare R2, MinIO, Backblaze B2, Wasabi, etc. Requires endpoint URL.</>,
   },
-];
+};
+
+export const OPTIONS: Option[] = ROLE_TYPE_META.map((m) => {
+  const IconCmp = m.icon;
+  return {
+    value: m.value,
+    label: m.label,
+    icon: <IconCmp size={18} />,
+    description: RICH[m.value]?.description ?? m.description,
+    details: RICH[m.value]?.details,
+  };
+});
 
 interface Props {
   value: RoleType;

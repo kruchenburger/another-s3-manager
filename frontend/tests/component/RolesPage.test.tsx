@@ -93,9 +93,9 @@ describe("RolesPage", () => {
 
     await waitFor(() => expect(screen.getByText("Default")).toBeInTheDocument());
     expect(screen.getByText("R2")).toBeInTheDocument();
-    // Type badges
-    expect(screen.getByText("default")).toBeInTheDocument();
-    expect(screen.getByText("s3_compatible")).toBeInTheDocument();
+    // Type badges — human labels from roleTypeMeta (raw values stay wizard-only)
+    expect(screen.getByText("AWS chain")).toBeInTheDocument();
+    expect(screen.getByText("S3-compatible")).toBeInTheDocument();
     // Bucket count for R2 (2 buckets)
     expect(screen.getByText("2 buckets")).toBeInTheDocument();
     // Description for R2
