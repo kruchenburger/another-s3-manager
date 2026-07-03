@@ -534,7 +534,6 @@ def test_update_config(app_client):
                 "description": "Use default credentials",
             }
         ],
-        "items_per_page": 50,
         "enable_lazy_loading": False,
         "max_file_size": 1024 * 1024,
     }
@@ -560,7 +559,6 @@ def test_update_config_clears_s3_client_cache(app_client):
 
     payload = {
         "roles": [{"name": "Default", "type": "default", "description": "Use default credentials"}],
-        "items_per_page": 50,
         "enable_lazy_loading": False,
         "max_file_size": 1024 * 1024,
     }
@@ -595,7 +593,6 @@ def test_update_config_clears_boto3_credential_cache(app_client, monkeypatch):
 
     payload = {
         "roles": [{"name": "Default", "type": "default", "description": "Use default credentials"}],
-        "items_per_page": 50,
         "enable_lazy_loading": False,
         "max_file_size": 1024 * 1024,
     }
@@ -1082,26 +1079,6 @@ def test_update_config_invalid_structure(app_client):
     assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
-def test_update_config_invalid_items_per_page_type(app_client):
-    _, headers = login(app_client)
-    payload = {
-        "roles": [],
-        "items_per_page": "many",
-    }
-    response = app_client.post("/api/config", json=payload, headers=headers)
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-
-
-def test_update_config_items_per_page_out_of_range(app_client):
-    _, headers = login(app_client)
-    payload = {
-        "roles": [],
-        "items_per_page": 5,
-    }
-    response = app_client.post("/api/config", json=payload, headers=headers)
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-
-
 def test_update_config_enable_lazy_loading_not_bool(app_client):
     _, headers = login(app_client)
     payload = {
@@ -1196,7 +1173,6 @@ def test_update_config_s3_compatible_success(app_client):
                 "addressing_style": "path",
             }
         ],
-        "items_per_page": 200,
         "enable_lazy_loading": True,
         "max_file_size": 100 * 1024 * 1024,
     }

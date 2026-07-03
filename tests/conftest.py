@@ -17,7 +17,6 @@ os.environ.setdefault("COOKIE_SECURE", "false")
 def _default_config() -> Dict[str, Any]:
     return {
         "roles": [{"name": "Default", "type": "default", "description": "Use default AWS credentials"}],
-        "items_per_page": 200,
         "enable_lazy_loading": True,
         "max_file_size": 100 * 1024 * 1024,
         "disable_deletion": False,

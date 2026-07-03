@@ -80,13 +80,26 @@ def test_migrate_config_does_not_reseed_a_cleared_list(tmp_path):
     assert data["auto_inline_extensions"] == []
 
 
+def test_load_config_tolerates_stale_items_per_page(tmp_path):
+    """Phase 7 removed items_per_page, but pre-1.0 config.json files still
+    contain it. The loader must keep loading (raw json.load, unknown keys
+    preserved) and the API must simply ignore the key."""
+    config = reload_config()
+    config.CONFIG_FILE = tmp_path / "config.json"
+    config.CONFIG_FILE.write_text(json.dumps({"roles": [], "items_per_page": 200}))
+    config._config_cache = {}
+    config._config_mtime = 0
+
+    loaded = config.load_config(force_reload=True)
+    assert loaded["roles"] == []
+    assert loaded.get("items_per_page") == 200  # preserved, harmless
+
+
 def test_get_default_config_respects_env(monkeypatch):
-    monkeypatch.setenv("ITEMS_PER_PAGE", "50")
     monkeypatch.setenv("MAX_FILE_SIZE", str(10 * 1024 * 1024))
 
     config = reload_config()
     defaults = config._get_default_config()
-    assert defaults["items_per_page"] == 50
     assert defaults["max_file_size"] == 10 * 1024 * 1024
 
 
@@ -136,10 +149,10 @@ def test_save_config_raises_when_read_only(monkeypatch, tmp_path):
 def test_get_config_value_returns_value():
     config = reload_config()
     data = config.load_config(force_reload=True)
-    data["items_per_page"] = 123
+    data["max_client_load"] = 123
     config.save_config(data)
 
-    value = config.get_config_value("items_per_page", default=50)
+    value = config.get_config_value("max_client_load", default=50)
     assert value == 123
 
 

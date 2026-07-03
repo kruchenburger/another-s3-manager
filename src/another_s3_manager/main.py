@@ -1137,13 +1137,6 @@ async def get_config(
     """Get current configuration (filtered by user permissions)."""
     config = load_config(force_reload=force_reload)
 
-    # Get items_per_page from config file, fallback to environment variable, then default
-    items_per_page = config.get("items_per_page")
-    if items_per_page is None:
-        items_per_page = int(os.getenv("ITEMS_PER_PAGE", "200"))
-    else:
-        items_per_page = int(items_per_page)
-
     # Check if deletion is disabled (from environment variable or config)
     disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
     disable_deletion_config = config.get("disable_deletion", False)
@@ -1197,7 +1190,6 @@ async def get_config(
         safe_config = {
             "roles": [sanitize_role(role) for role in config.get("roles", [])],
             "current_role": effective_role,  # Computed value for frontend (not stored in config)
-            "items_per_page": items_per_page,
             "disable_deletion": disable_deletion,
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
@@ -1233,7 +1225,6 @@ async def get_config(
         return {
             "roles": [],
             "current_role": "",
-            "items_per_page": items_per_page,
             "disable_deletion": disable_deletion,
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
@@ -1253,7 +1244,6 @@ async def get_config(
     return {
         "roles": filtered_roles,
         "current_role": effective_role,
-        "items_per_page": items_per_page,
         "disable_deletion": disable_deletion,
         "enable_lazy_loading": enable_lazy_loading,
         "max_file_size": max_file_size,
@@ -1312,21 +1302,6 @@ async def update_config(
         # Validate config structure
         if "roles" not in config:
             raise HTTPException(status_code=400, detail="Invalid config structure: 'roles' is required")
-
-        # Handle items_per_page - if provided, validate and use it; otherwise preserve existing
-        if "items_per_page" in config:
-            # Validate items_per_page
-            try:
-                items_per_page_val = int(config["items_per_page"])
-                if items_per_page_val < 10 or items_per_page_val > 1000:
-                    raise HTTPException(status_code=400, detail="items_per_page must be between 10 and 1000")
-            except (ValueError, TypeError):
-                raise HTTPException(status_code=400, detail="items_per_page must be a valid integer")
-        else:
-            # Preserve items_per_page from current config if not provided
-            current_config = load_config(force_reload=False)
-            if "items_per_page" in current_config:
-                config["items_per_page"] = current_config["items_per_page"]
 
         # Handle enable_lazy_loading - if provided, validate and use it; otherwise preserve existing or use env var/default
         if "enable_lazy_loading" in config:

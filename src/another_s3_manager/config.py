@@ -143,7 +143,6 @@ def _get_default_config() -> Dict[str, Any]:
     """Get default configuration."""
     from another_s3_manager.constants import (
         DEFAULT_AUTO_INLINE_EXTENSIONS,
-        DEFAULT_ITEMS_PER_PAGE,
         DEFAULT_MAX_CLIENT_LOAD,
         DEFAULT_MAX_FILE_SIZE,
         DEFAULT_PRESIGNED_URL_DEFAULT_TTL,
@@ -152,7 +151,6 @@ def _get_default_config() -> Dict[str, Any]:
 
     return {
         "roles": [{"name": "Default", "type": "default", "description": "Use default AWS credentials"}],
-        "items_per_page": int(os.getenv("ITEMS_PER_PAGE", str(DEFAULT_ITEMS_PER_PAGE))),
         "enable_lazy_loading": os.getenv("ENABLE_LAZY_LOADING", "true").lower() == "true",
         "max_file_size": int(os.getenv("MAX_FILE_SIZE", str(DEFAULT_MAX_FILE_SIZE))),
         "max_client_load": int(os.getenv("MAX_CLIENT_LOAD", str(DEFAULT_MAX_CLIENT_LOAD))),
