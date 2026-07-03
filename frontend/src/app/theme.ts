@@ -40,6 +40,13 @@ export const dark: MantineColorsTuple = [
 // --as3m-surface and the contrast guard test (tests/unit/themeContrast.test.ts).
 export const SURFACE_DARK = "#222b3c";
 
+// Primary filled-hover per scheme. The mockup's dark hover LIGHTENS
+// (its #6d8cb6), but white 13px button text on that is 3.45:1 — a real
+// axe serious violation whenever the button is hovered. #57759b keeps the
+// lighten-on-hover idiom at 4.75:1. Guarded by themeContrast.test.ts.
+export const PRIMARY_HOVER_DARK = "#57759b";
+export const PRIMARY_HOVER_LIGHT = "#52719a";
+
 // Mockup semantic families (Full scope), each anchored at index 6 — the
 // shade filled variants use (primaryShade {light:6, dark:6} applies to all
 // colors, not just the primary).
@@ -221,7 +228,7 @@ export const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-body": "#f5f7fa",
     "--mantine-color-default-border": "#e4e9f0",
     "--mantine-color-error": "var(--mantine-color-red-8)",
-    "--mantine-primary-color-filled-hover": "#52719a",
+    "--mantine-primary-color-filled-hover": PRIMARY_HOVER_LIGHT,
     "--as3m-surface": "#ffffff",
     "--as3m-panel": "rgba(255, 255, 255, 0.85)",
     "--as3m-header": "rgba(255, 255, 255, 0.92)",
@@ -232,7 +239,7 @@ export const cssVariablesResolver: CSSVariablesResolver = () => ({
     "--mantine-color-dimmed": "#9aa5b4",
     "--mantine-color-default-border": "rgba(255, 255, 255, 0.085)",
     "--mantine-color-error": "var(--mantine-color-red-5)",
-    "--mantine-primary-color-filled-hover": "#6d8cb6",
+    "--mantine-primary-color-filled-hover": PRIMARY_HOVER_DARK,
     "--as3m-surface": SURFACE_DARK,
     "--as3m-panel": "rgba(22, 27, 36, 0.72)",
     "--as3m-header": "rgba(27, 35, 49, 0.72)",

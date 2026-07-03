@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { coralRed, dark, SURFACE_DARK } from "@/app/theme";
+import {
+  coralRed,
+  dark,
+  PRIMARY_HOVER_DARK,
+  PRIMARY_HOVER_LIGHT,
+  SURFACE_DARK,
+} from "@/app/theme";
 
 // WCAG 2.1 relative luminance + contrast ratio. Guards the airify palette:
 // if live tuning nudges a shade below AA, this fails before axe ever runs.
@@ -48,5 +54,12 @@ describe("airify palette contrast guards (WCAG AA)", () => {
 
   it("coral controls (red.6) >= 3:1 UI-component contrast on dark body", () => {
     expect(contrast(coralRed[6], BODY_DARK)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("white button text >= 4.5:1 on primary filled-hover (both schemes)", () => {
+    // Hovered state is scanned by axe too — the mockup's own dark hover
+    // (#6d8cb6) failed this at 3.45:1.
+    expect(contrast("#ffffff", PRIMARY_HOVER_DARK)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast("#ffffff", PRIMARY_HOVER_LIGHT)).toBeGreaterThanOrEqual(4.5);
   });
 });
