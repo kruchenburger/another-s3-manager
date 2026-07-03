@@ -5,6 +5,8 @@ import { MantineProvider } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 import { FileBrowserHeader } from "@/components/FileBrowser/FileBrowserHeader";
 
+// Object-count rendering moved to BucketPageHeader (see its test file); this
+// suite covers the pure controls toolbar: filter, view toggle, Load, Upload.
 function renderHeader(
   overrides: Partial<React.ComponentProps<typeof FileBrowserHeader>> = {},
 ) {
@@ -12,16 +14,12 @@ function renderHeader(
     <MantineProvider>
       <MemoryRouter>
         <FileBrowserHeader
-          bucket="b"
-          roleId="r"
-          path=""
           searchQuery=""
           onSearchChange={vi.fn()}
           mode="table"
           onModeChange={vi.fn()}
           onUploadClick={vi.fn()}
           onUploadFolderClick={vi.fn()}
-          objectCount={0}
           truncated={false}
           isLoadingMore={false}
           onLoadMore={vi.fn()}
@@ -33,30 +31,14 @@ function renderHeader(
   );
 }
 
-describe("FileBrowserHeader object count", () => {
-  it("renders '0 objects' when count is zero", () => {
-    renderHeader({ objectCount: 0 });
-    expect(screen.getByText("0 objects")).toBeInTheDocument();
-  });
-
-  it("renders '1 object' (singular)", () => {
-    renderHeader({ objectCount: 1 });
-    expect(screen.getByText("1 object")).toBeInTheDocument();
-  });
-
-  it("renders 'N objects' when count > 1", () => {
-    renderHeader({ objectCount: 5 });
-    expect(screen.getByText("5 objects")).toBeInTheDocument();
-  });
-
-  it("renders 'N+ objects' and a Load more control when truncated", () => {
-    renderHeader({ objectCount: 5, truncated: true });
-    expect(screen.getByText("5+ objects")).toBeInTheDocument();
+describe("FileBrowserHeader — load controls", () => {
+  it("renders a Load more control when truncated", () => {
+    renderHeader({ truncated: true });
     expect(screen.getByRole("button", { name: "Load more" })).toBeInTheDocument();
   });
 
   it("hides the Load more control when not truncated", () => {
-    renderHeader({ objectCount: 5, truncated: false });
+    renderHeader({ truncated: false });
     expect(
       screen.queryByRole("button", { name: "Load more" }),
     ).not.toBeInTheDocument();
@@ -64,18 +46,18 @@ describe("FileBrowserHeader object count", () => {
 
   it("delegates onLoadMore when the primary Load more button is clicked", async () => {
     const onLoadMore = vi.fn();
-    renderHeader({ objectCount: 5, truncated: true, onLoadMore });
+    renderHeader({ truncated: true, onLoadMore });
     await userEvent.click(screen.getByRole("button", { name: "Load more" }));
     expect(onLoadMore).toHaveBeenCalledTimes(1);
   });
 
   it("disables the Load more control while a continuation fetch is in flight", () => {
-    renderHeader({ objectCount: 5, truncated: true, isLoadingMore: true });
+    renderHeader({ truncated: true, isLoadingMore: true });
     expect(screen.getByRole("button", { name: "Load more" })).toBeDisabled();
   });
 
   it("does not render 'Load all' as a top-level button (it lives in the menu)", () => {
-    renderHeader({ objectCount: 5, truncated: true });
+    renderHeader({ truncated: true });
     expect(
       screen.queryByRole("button", { name: "Load all" }),
     ).not.toBeInTheDocument();

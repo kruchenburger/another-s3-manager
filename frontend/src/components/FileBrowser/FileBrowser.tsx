@@ -44,6 +44,7 @@ import {
   type FileWithRelativePath,
   filesFromFolderInput,
 } from "@/utils/folderUpload";
+import { BucketPageHeader } from "./BucketPageHeader";
 import { FileBrowserHeader } from "./FileBrowserHeader";
 import { BulkActionBar } from "./BulkActionBar";
 import { FileTable } from "./FileTable";
@@ -702,10 +703,14 @@ export function FileBrowser() {
     <>
       <div className={classes.container}>
         <div className={classes.toolbar}>
-          <FileBrowserHeader
+          <BucketPageHeader
             bucket={bucket}
             roleId={roleId}
             path={pathFromUrl}
+            objectCount={items.length}
+            truncated={truncated}
+          />
+          <FileBrowserHeader
             searchQuery={searchQuery}
             onSearchChange={(q) => {
               setSearchQuery(q);
@@ -716,7 +721,6 @@ export function FileBrowser() {
             onModeChange={setMode}
             onUploadClick={handleUploadClick}
             onUploadFolderClick={handleUploadFolderClick}
-            objectCount={items.length}
             truncated={truncated}
             isLoadingMore={isFetchingNextPage}
             onLoadMore={handleLoadMore}

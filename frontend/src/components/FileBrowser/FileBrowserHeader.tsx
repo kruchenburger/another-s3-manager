@@ -1,14 +1,10 @@
-import { Center, Group, SegmentedControl, Text, TextInput } from "@mantine/core";
+import { Center, Group, SegmentedControl, TextInput } from "@mantine/core";
 import { LayoutGrid, List as ListIcon, Search } from "lucide-react";
-import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import { UploadSplitButton } from "./UploadSplitButton";
 import { LoadSplitButton } from "./LoadSplitButton";
 import type { DisplayMode } from "@/hooks/useDisplayMode";
 
 interface FileBrowserHeaderProps {
-  bucket: string;
-  roleId: string;
-  path: string;
   searchQuery: string;
   onSearchChange: (q: string) => void;
   mode: DisplayMode;
@@ -16,9 +12,8 @@ interface FileBrowserHeaderProps {
   onUploadClick: () => void;
   /** Open the folder picker (webkitdirectory input). */
   onUploadFolderClick: () => void;
-  /** Total object count (files + folders) currently loaded for this prefix. */
-  objectCount: number;
-  /** S3 has more objects beyond the loaded set — show "N+" and continuation controls. */
+  /** S3 has more objects beyond the loaded set — show continuation controls.
+   * The object count itself lives in BucketPageHeader now. */
   truncated: boolean;
   /** Server continuation fetch in flight (loadMore/loadAll). */
   isLoadingMore: boolean;
@@ -29,24 +24,19 @@ interface FileBrowserHeaderProps {
 }
 
 export function FileBrowserHeader({
-  bucket,
-  roleId,
-  path,
   searchQuery,
   onSearchChange,
   mode,
   onModeChange,
   onUploadClick,
   onUploadFolderClick,
-  objectCount,
   truncated,
   isLoadingMore,
   onLoadMore,
   onLoadAll,
 }: FileBrowserHeaderProps) {
   return (
-    <Group justify="space-between" mb="md" wrap="wrap" gap="sm">
-      <FileBreadcrumbs bucket={bucket} roleId={roleId} path={path} />
+    <Group justify="flex-end" mb="md" wrap="wrap" gap="sm">
       <Group gap="sm">
         <TextInput
           placeholder="Filter files…"
@@ -79,20 +69,13 @@ export function FileBrowserHeader({
           ]}
           size="sm"
         />
-        <Group gap="xs" align="center" wrap="nowrap">
-          <Text size="sm" c="dimmed">
-            {truncated
-              ? `${objectCount}+ objects`
-              : `${objectCount} object${objectCount === 1 ? "" : "s"}`}
-          </Text>
-          {truncated && (
-            <LoadSplitButton
-              onLoadMore={onLoadMore}
-              onLoadAll={onLoadAll}
-              loading={isLoadingMore}
-            />
-          )}
-        </Group>
+        {truncated && (
+          <LoadSplitButton
+            onLoadMore={onLoadMore}
+            onLoadAll={onLoadAll}
+            loading={isLoadingMore}
+          />
+        )}
         {/* View toggle sits with the filter; the two split buttons (Load
             continuation + Upload) are grouped together at the end so a control
             never sits sandwiched between them. Bulk Copy URLs + Delete live in
