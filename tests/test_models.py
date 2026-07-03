@@ -138,11 +138,23 @@ def test_api_token_model_basic_columns():
     }
 
 
-def test_api_token_unique_user_name_constraint():
+def test_api_token_unique_active_user_name_partial_index():
+    """Name uniqueness is a PARTIAL index (active tokens only): revoke is a
+    soft delete, so revoked tokens must not block their name from reuse."""
     from another_s3_manager.models import ApiToken
 
+    idx = next(
+        (i for i in ApiToken.__table__.indexes if i.name == "uq_api_token_user_name_active"),
+        None,
+    )
+    assert idx is not None
+    assert idx.unique is True
+    assert [c.name for c in idx.columns] == ["user_id", "name"]
+    # The partial predicate is what makes revoked names reusable.
+    assert "revoked_at IS NULL" in str(idx.dialect_options["sqlite"]["where"])
+    # The old absolute constraint must be gone.
     constraint_names = {c.name for c in ApiToken.__table__.constraints}
-    assert "uq_api_token_user_name" in constraint_names
+    assert "uq_api_token_user_name" not in constraint_names
 
 
 def test_api_token_check_max_read_bytes_constraint():
