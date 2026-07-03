@@ -5,10 +5,10 @@ test.describe("API tokens self-serve flow", () => {
   test("create token, see plaintext, revoke", async ({ page }) => {
     await loginAsAdmin(page);
 
-    // Navigate to /v2/api-tokens via UserMenu
+    // Navigate to /api-tokens via UserMenu
     await page.getByLabel("User menu").click();
     await page.getByRole("menuitem", { name: /api tokens/i }).click();
-    await expect(page).toHaveURL(/\/v2\/api-tokens$/);
+    await expect(page).toHaveURL(/\/api-tokens$/);
 
     // Open Create token modal
     await page.getByRole("button", { name: /create token/i }).click();
@@ -53,7 +53,7 @@ test.describe("API tokens self-serve flow", () => {
 
     await page.getByLabel("User menu").click();
     await page.getByRole("menuitem", { name: /api tokens|mcp tokens/i }).click();
-    await expect(page).toHaveURL(/\/v2\/api-tokens$/);
+    await expect(page).toHaveURL(/\/api-tokens$/);
 
     // Create a token to edit
     const initialName = `e2e-edit-${Date.now()}`;
@@ -95,10 +95,10 @@ test.describe("API tokens self-serve flow", () => {
   }) => {
     // Regression guard: PR #20 review caught that UserTokensList silently
     // discarded the plaintext from the create response. This walks the full
-    // flow from /v2/admin/users → drawer → "Issue token on behalf" → assert
+    // flow from /admin/users → drawer → "Issue token on behalf" → assert
     // the plaintext modal appears.
     await loginAsAdmin(page);
-    await page.goto("/v2/admin/users");
+    await page.goto("/admin/users");
 
     // Open the first user's edit drawer (the admin user always exists).
     await page.locator("tbody tr").first().getByLabel(/edit/i).click();
@@ -141,7 +141,7 @@ test.describe("API tokens self-serve flow", () => {
     // MUST be there since we just created it — assert visibility (auto-waits)
     // rather than a non-awaiting `isVisible()` conditional that could silently
     // skip cleanup and leak the token.
-    await page.goto("/v2/admin/api-tokens");
+    await page.goto("/admin/api-tokens");
     const newRow = page.locator("tr").filter({ hasText: onBehalfName });
     await expect(newRow).toBeVisible({ timeout: 5_000 });
     await newRow

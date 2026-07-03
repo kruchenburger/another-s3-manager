@@ -10,7 +10,7 @@ test.describe("FileBrowser scroll container + virtualization", () => {
   }) => {
     await login(page);
     // 250-object folder, cap=50: Load all drains it in 5 fast fetches.
-    await page.goto(`/v2/r/${ROLE}/b/${BUCKET}/p/pagination`);
+    await page.goto(`/r/${ROLE}/b/${BUCKET}/p/pagination`);
 
     await expect(
       page.locator("tr").filter({ hasText: "file-001.txt" }),
@@ -44,7 +44,7 @@ test.describe("FileBrowser scroll container + virtualization", () => {
   }) => {
     await login(page);
     // 10k folder, cap=50: scrolling must pull chunk after chunk automatically.
-    await page.goto(`/v2/r/${ROLE}/b/${BUCKET}/p/virtualization`);
+    await page.goto(`/r/${ROLE}/b/${BUCKET}/p/virtualization`);
 
     await expect(
       page.locator("tr").filter({ hasText: "vfile-00001.txt" }),

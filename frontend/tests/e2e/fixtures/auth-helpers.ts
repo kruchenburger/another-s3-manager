@@ -21,26 +21,26 @@ export const ADMIN_PASSWORD =
  * Log in as admin and assert the authenticated shell rendered.
  *
  * The URL check alone is misleading on failure: a wrong password or dropped
- * cookie leaves the browser on `/v2/login`, so Playwright reports "expected
- * /v2/?$ but got /v2/login" without telling you that the credentials were
+ * cookie leaves the browser on `/login`, so Playwright reports "expected
+ * /?$ but got /login" without telling you that the credentials were
  * never accepted. The follow-up element check confirms the AppShell mounted —
  * if the user menu button is present, the auth cookie was set and the React
  * router moved past the login route.
  */
 export async function loginAsAdmin(page: Page): Promise<void> {
-  await page.goto("/v2/login");
+  await page.goto("/login");
   await page.getByLabel("Username").fill(ADMIN_USER);
   // exact: true — Mantine 9 PasswordInput renders a "Toggle password visibility"
   // button whose aria-label also contains "password", so a substring getByLabel
   // match resolves to 2 elements. Anchor to the input's exact "Password" label.
   await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASSWORD);
   await page.getByRole("button", { name: "Login" }).click();
-  // Successful login lands on /v2/, which HomePage immediately auto-redirects
-  // to /v2/r/<role>/... for any user with roles (default_role or first role).
-  // Asserting the transient /v2/ URL is a race the warm local backend loses —
+  // Successful login lands on /, which HomePage immediately auto-redirects
+  // to /r/<role>/... for any user with roles (default_role or first role).
+  // Asserting the transient / URL is a race the warm local backend loses —
   // assert we LEFT the login route instead; the user-menu check below is what
   // proves the authenticated shell actually mounted.
-  await expect(page).not.toHaveURL(/\/v2\/login/);
+  await expect(page).not.toHaveURL(/\/login/);
   // AppShell rendered → login actually succeeded. Without this, every
   // downstream assertion fails with a misleading "element not found" instead
   // of a clear "you never logged in".

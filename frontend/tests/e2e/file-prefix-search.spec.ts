@@ -1,5 +1,5 @@
 /**
- * E2E: server-side prefix search (/v2 "Search on server" affordance).
+ * E2E: server-side prefix search (the "Search on server" affordance).
  *
  * Precondition: the pagination seed folder (e2e-test/pagination/) contains
  * file-001.txt … file-250.txt. The CI config sets max_client_load=50, so the
@@ -16,12 +16,12 @@ const ROLE = process.env.E2E_MINIO_ROLE ?? "MinIO-e2e";
 const BUCKET = process.env.E2E_MINIO_BUCKET ?? "e2e-test";
 
 // Inline login (not the shared loginAsAdmin): that helper asserts the post-login
-// URL is exactly /v2/, but an admin with role access auto-redirects to the
-// default role/bucket, so the URL is never /v2/. Assert success via the
+// URL is exactly /, but an admin with role access auto-redirects to the
+// default role/bucket, so the URL is never /. Assert success via the
 // "User menu" button instead — the same robust signal the helper uses
 // internally. Mirrors the approach in ministack.spec.ts.
 async function login(page: Page): Promise<void> {
-  await page.goto("/v2/login");
+  await page.goto("/login");
   await page.getByLabel("Username").fill(ADMIN_USER);
   await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASSWORD);
   await page.getByRole("button", { name: "Login" }).click();
@@ -34,7 +34,7 @@ test.describe("Server-side prefix search via MinIO", () => {
   }) => {
     await login(page);
     // Reuse the pagination folder: 250 objects, first chunk is file-001..file-050.
-    await page.goto(`/v2/r/${ROLE}/b/${BUCKET}/p/pagination`);
+    await page.goto(`/r/${ROLE}/b/${BUCKET}/p/pagination`);
 
     // Wait for the first chunk to render — same assertion as the pagination spec.
     await expect(
