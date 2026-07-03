@@ -51,8 +51,9 @@ def create_token(
         are scheduled cooperatively rather than truly concurrent
       - Per-user limit (10) is a soft cap, not a security boundary; over by 1-2
         is harmless
-    If we ever move to multi-worker uvicorn or Postgres, revisit with a
-    SELECT...FOR UPDATE or a unique partial index.
+    If we ever move to multi-worker uvicorn or Postgres, revisit with
+    SELECT...FOR UPDATE (unrelated to the name-uniqueness partial index
+    above — no unique index can express a "max N active rows" cap).
     """
     with session_scope() as session:
         active = session.execute(
