@@ -163,26 +163,5 @@ Set in `data/config.json` or via the admin Settings page:
 | `mcp_text_extensions`       | `[]`               | Per-deployment extension to the built-in text-extension whitelist for `read_file`. |
 | `mcp_global_max_read_bytes` | `10485760` (10 MB) | Server-level cap on `read_file` size. Cannot exceed 10 MB hard ceiling.            |
 
-Env vars:
-
-| Variable           | Default | Purpose                                                                                                            |
-| ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------ |
-| `LOG_FORMAT`       | `text`  | `text` or `json`. JSON is structured for log aggregators.                                                          |
-| `METRICS_PASSWORD` | unset   | Optional basic-auth for `/metrics` (username `metrics`, password `$METRICS_PASSWORD`). If unset, endpoint is open. |
-
-## Prometheus scrape
-
-Example scrape config:
-
-```yaml
-scrape_configs:
-  - job_name: another-s3-manager
-    metrics_path: /metrics
-    basic_auth:
-      username: metrics
-      password: ${METRICS_PASSWORD}
-    static_configs:
-      - targets: ["your-app.example.com:443"]
-```
-
-A Grafana dashboard JSON is on the roadmap (see backlog).
+MCP tool calls are covered by Prometheus metrics (`mcp_tool_calls_total`,
+`mcp_tool_response_bytes`, etc.) — see [observability.md](observability.md).
