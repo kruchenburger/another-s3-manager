@@ -4,6 +4,10 @@ Lightweight, self-hosted web UI for managing files across multiple S3-compatible
 
 Works with **AWS S3**, **MinIO**, **Cloudflare R2**, **Wasabi**, and any S3-compatible API.
 
+<p align="center">
+  <img src="docs/assets/hero.png" alt="Another S3 Manager — file browser with bulk actions and a grid view with live image previews" width="830">
+</p>
+
 ## Quick Start
 
 ```bash
