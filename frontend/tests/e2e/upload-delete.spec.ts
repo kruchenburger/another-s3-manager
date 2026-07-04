@@ -7,7 +7,7 @@ const BUCKET = process.env.E2E_MINIO_BUCKET ?? "e2e-test";
 test.describe("Upload + delete via MinIO", () => {
   test("upload a file then delete it", async ({ page }) => {
     await login(page);
-    await page.goto(`/v2/r/${ROLE}/b/${BUCKET}`);
+    await page.goto(`/r/${ROLE}/b/${BUCKET}`);
 
     // File table is the main file listing UI
     await page.locator("table").waitFor();

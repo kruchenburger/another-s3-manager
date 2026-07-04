@@ -2,18 +2,19 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath, URL } from "node:url";
 
-// Build output goes directly into the FastAPI static/v2 mount so the multi-stage
-// Dockerfile only needs to copy this one folder. Base "/v2/" matches the mount path.
+// Build output goes directly into the FastAPI static/app dir served by the
+// root SPA catch-all in main.py, so the multi-stage Dockerfile only needs to
+// copy this one folder.
 export default defineConfig({
   plugins: [react()],
-  base: "/v2/",
+  base: "/",
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
   build: {
-    outDir: "../src/another_s3_manager/static/v2",
+    outDir: "../src/another_s3_manager/static/app",
     emptyOutDir: true,
     sourcemap: true,
     rollupOptions: {

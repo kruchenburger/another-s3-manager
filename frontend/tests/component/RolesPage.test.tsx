@@ -30,7 +30,6 @@ const r2Role = {
 };
 const baseConfig = {
   roles: [baseRole, r2Role],
-  items_per_page: 200,
   enable_lazy_loading: true,
   max_file_size: 100 * 1024 * 1024,
   max_client_load: 10000,

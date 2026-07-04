@@ -36,10 +36,10 @@ import { ADMIN_USER, ADMIN_PASSWORD } from "./fixtures/auth-helpers";
  * Roles/buckets are env-parameterized but default to the seed's names.
  *
  * NOTE on login: we can't reuse the shared `loginAsAdmin` helper here. That
- * helper asserts the post-login URL is exactly `/v2/`, which holds only for an
+ * helper asserts the post-login URL is exactly `/`, which holds only for an
  * admin with no roles (the MinIO CI fixture). The ministack seed's roles ARE
  * admin-accessible, so HomePage auto-redirects to the default role's bucket and
- * the URL is never `/v2/`. We log in with the same canonical selectors and
+ * the URL is never `/`. We log in with the same canonical selectors and
  * assert success via the "User menu" button (the same robust signal the helper
  * uses internally), then navigate explicitly — independent of where the
  * post-login redirect lands.
@@ -52,19 +52,19 @@ const DEFAULT_ROLE = process.env.E2E_MINISTACK_DEFAULT_ROLE ?? "ministack-defaul
 const ALLOWED = process.env.E2E_MINISTACK_ALLOWED_BUCKET ?? "ministack-allowed";
 
 async function login(page: Page): Promise<void> {
-  await page.goto("/v2/login");
+  await page.goto("/login");
   await page.getByLabel("Username").fill(ADMIN_USER);
   await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASSWORD);
   await page.getByRole("button", { name: "Login" }).click();
-  // AppShell rendered → auth cookie set + router moved past /v2/login. We don't
+  // AppShell rendered → auth cookie set + router moved past /login. We don't
   // assert a specific URL: with admin-accessible roles, HomePage redirects to
-  // the default role/bucket, so the landing URL is intentionally not /v2/.
+  // the default role/bucket, so the landing URL is intentionally not /.
   await expect(page.getByLabel("User menu")).toBeVisible({ timeout: 15_000 });
 }
 
 async function browseBucket(page: Page, role: string, bucket: string): Promise<void> {
   // Real route from frontend/src/app/router.tsx: /r/:roleId/b/:bucket.
-  await page.goto(`/v2/r/${role}/b/${bucket}`);
+  await page.goto(`/r/${role}/b/${bucket}`);
   // File table is the main listing UI; wait for it before asserting the row.
   await page.locator("table").waitFor();
   // Seeded object proves the S3 round-trip reached the bucket.

@@ -312,7 +312,6 @@ def test_get_s3_client_without_roles_uses_default(mocker):
     config_module.save_config(
         {
             "roles": [],
-            "items_per_page": 200,
             "enable_lazy_loading": True,
             "max_file_size": 100,
         }
@@ -330,7 +329,6 @@ def test_get_s3_client_missing_named_role_raises(mocker):
     config_module.save_config(
         {
             "roles": [{"name": "OnlyDefault", "type": "default"}],
-            "items_per_page": 200,
             "enable_lazy_loading": True,
             "max_file_size": 100,
         }

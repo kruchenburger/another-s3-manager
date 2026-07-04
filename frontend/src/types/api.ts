@@ -141,7 +141,6 @@ export interface PasswordPolicy {
 export interface AppConfig {
   roles: AppRole[];
   default_role?: string;
-  items_per_page: number;
   enable_lazy_loading: boolean;
   max_file_size: number;
   // Cap on objects the /v2 UI loads into memory before showing "Load more".

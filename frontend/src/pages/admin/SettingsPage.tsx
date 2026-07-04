@@ -32,7 +32,6 @@ const MB = 1024 * 1024;
  *  `form` prop precisely — keeps `getInputProps("foo")` type-safe across the
  *  split components. */
 export interface SettingsFormValues {
-  items_per_page: number;
   max_client_load: number;
   disable_deletion: boolean;
   enable_lazy_loading: boolean;
@@ -72,7 +71,6 @@ export function SettingsPage() {
 
   const form = useForm<SettingsFormValues>({
     initialValues: {
-      items_per_page: 200,
       max_client_load: 10000,
       disable_deletion: false,
       enable_lazy_loading: true,
@@ -90,20 +88,13 @@ export function SettingsPage() {
       mcp_text_extensions: [],
       mcp_global_max_read_bytes_mb: 10,
     },
-    // Inline validation as the user types — so a value like 1500 in
-    // "Items per page" lights up the input in red with a tooltip-style
+    // Inline validation as the user types — so a value like 500000 in
+    // "Max client load" lights up the input in red with a tooltip-style
     // helper underneath, instead of waiting until Save is clicked. Same
     // visual pattern (red border + descriptive text under the input)
     // works for any field added here later.
     validateInputOnChange: true,
     validate: {
-      items_per_page: (value) => {
-        if (value < 10) return "Minimum is 10";
-        // Backend caps at 1000 (S3 list_objects_v2 protocol limit).
-        if (value > 1000)
-          return "Maximum is 1000 — S3 lists at most 1000 keys per request";
-        return null;
-      },
       max_client_load: (value) => {
         if (value < 1) return "Minimum is 1";
         if (value > 200000) return "Maximum is 200000";
@@ -134,7 +125,6 @@ export function SettingsPage() {
     // isDirty and lets the next refetch populate normally.
     if (form.isDirty()) return;
     const populated: SettingsFormValues = {
-      items_per_page: config.items_per_page,
       max_client_load: config.max_client_load,
       disable_deletion: config.disable_deletion,
       enable_lazy_loading: config.enable_lazy_loading,
@@ -177,7 +167,7 @@ export function SettingsPage() {
   const readOnly = config.is_read_only === true;
   const isDirty = form.isDirty();
   // Block Save while any field fails inline validation — otherwise the user
-  // could submit a known-bad value (e.g. items_per_page=1500) and watch the
+  // could submit a known-bad value (e.g. max_client_load=500000) and watch the
   // backend bounce it with a 400. Validating client-side first keeps the
   // error close to the offending input.
   const hasValidationErrors = Object.keys(form.errors).length > 0;
@@ -212,7 +202,6 @@ export function SettingsPage() {
   const onSubmit = form.onSubmit((values) => {
     const next: AppConfig = {
       ...toWritableConfig(config),
-      items_per_page: values.items_per_page,
       max_client_load: values.max_client_load,
       disable_deletion: values.disable_deletion,
       enable_lazy_loading: values.enable_lazy_loading,

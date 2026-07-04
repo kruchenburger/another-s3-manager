@@ -6,12 +6,12 @@ const ROLE = process.env.E2E_MINIO_ROLE ?? "MinIO-e2e";
 const BUCKET = process.env.E2E_MINIO_BUCKET ?? "e2e-test";
 
 // Inline login (not the shared loginAsAdmin): that helper asserts the post-login
-// URL is exactly /v2/, but an admin with role access auto-redirects to the
+// URL is exactly /, but an admin with role access auto-redirects to the
 // default role/bucket (the e2e config has the MinIO-e2e role), so that URL never
 // holds. Assert success via the "User menu" button instead. Mirrors
 // ministack.spec.ts and file-prefix-search.spec.ts.
 async function login(page: Page): Promise<void> {
-  await page.goto("/v2/login");
+  await page.goto("/login");
   await page.getByLabel("Username").fill(ADMIN_USER);
   await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASSWORD);
   await page.getByRole("button", { name: "Login" }).click();
@@ -23,7 +23,7 @@ test.describe("Hybrid pagination via MinIO", () => {
     page,
   }) => {
     await login(page);
-    await page.goto(`/v2/r/${ROLE}/b/${BUCKET}/p/pagination`);
+    await page.goto(`/r/${ROLE}/b/${BUCKET}/p/pagination`);
 
     // First client-load chunk (max_client_load=50 in the e2e config) loads fast.
     await expect(

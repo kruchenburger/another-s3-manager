@@ -11,5 +11,5 @@ export function ErrorPage() {
     message = error.message;
   }
 
-  return <ErrorFallback error={new Error(message)} onReset={() => window.location.assign("/v2/")} />;
+  return <ErrorFallback error={new Error(message)} onReset={() => window.location.assign("/")} />;
 }

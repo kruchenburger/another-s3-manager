@@ -89,7 +89,6 @@ COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() == "true"
 
 # File upload settings
 DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
-DEFAULT_ITEMS_PER_PAGE = 200
 DEFAULT_MAX_CLIENT_LOAD = 10000
 
 # Presigned URL TTL settings (seconds).

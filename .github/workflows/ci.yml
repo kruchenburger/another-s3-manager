@@ -109,7 +109,7 @@ jobs:
         run: npm run build
 
       - name: Check production bundle for dev-only theme leakage
-        run: bash scripts/ci/check-prod-bundle.sh src/another_s3_manager/static/v2
+        run: bash scripts/ci/check-prod-bundle.sh src/another_s3_manager/static/app
 
       - name: Seed admin config (MinIO-e2e role)
         # The Playwright specs expect a role named "MinIO-e2e" pointing at MinIO.
@@ -129,7 +129,6 @@ jobs:
                 "allowed_buckets": ["e2e-test"]
               }
             ],
-            "items_per_page": 200,
             "max_client_load": 50,
             "enable_lazy_loading": true,
             "max_file_size": 104857600,

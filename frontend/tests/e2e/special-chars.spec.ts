@@ -8,7 +8,7 @@ const SPECIAL_NAME = "test:colon#hash?question.txt";
 test.describe("Special characters in S3 keys", () => {
   test("file with : # ? in name uploads, renders, downloads, deletes", async ({ page }) => {
     await login(page);
-    await page.goto(`/v2/r/${ROLE}/b/${BUCKET}`);
+    await page.goto(`/r/${ROLE}/b/${BUCKET}`);
 
     await page.locator("table").waitFor();
 

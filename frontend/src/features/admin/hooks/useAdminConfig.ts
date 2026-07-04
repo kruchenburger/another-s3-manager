@@ -33,7 +33,7 @@ export function useSaveConfig() {
       // to 60s (useMe.staleTime).
       qc.invalidateQueries({ queryKey: meQueryKey });
       // Public /api/config (useConfig) drives FileBrowser pagination + preview
-      // behaviour (items_per_page, enable_lazy_loading, max_client_load,
+      // behaviour (enable_lazy_loading, max_client_load,
       // auto_inline_extensions). Without this, those changes stay stale in an
       // open file-browser tab until useConfig's staleTime expires.
       qc.invalidateQueries({ queryKey: configQueryKey });

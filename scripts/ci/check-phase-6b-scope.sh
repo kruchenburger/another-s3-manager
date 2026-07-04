@@ -88,7 +88,7 @@ ALLOW_PATTERNS=(
   # SPA index.html — favicon <link> for the browser tab.
   '^frontend/index\.html$'
   # Vite public/ folder — favicon.ico copied here so it ships in the
-  # /v2 build output (static/v2/favicon.ico) for the SPA tab icon.
+  # SPA build output (static/app/favicon.ico) for the browser tab icon.
   '^frontend/public/'
   # Legacy amber colour swaps across shared components — bulk of the
   # post-smoke cleanup so primary-coloured avatars/buttons/badges

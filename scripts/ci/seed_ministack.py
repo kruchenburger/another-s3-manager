@@ -163,7 +163,6 @@ def write_aws_credentials_file(path, key):
 def write_config(path, role_list):
     cfg = {
         "roles": role_list,
-        "items_per_page": 200,
         "max_client_load": 50,
         "enable_lazy_loading": True,
         "max_file_size": 104857600,

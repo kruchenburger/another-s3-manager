@@ -67,14 +67,12 @@ async def test_get_config_admin_env_fallbacks(monkeypatch, reload_main):
     patch_load_config(monkeypatch, main, base_config)
     monkeypatch.setattr("another_s3_manager.config.is_config_writable", lambda: True)
 
-    monkeypatch.setenv("ITEMS_PER_PAGE", "250")
     monkeypatch.setenv("DISABLE_DELETION", "true")
     monkeypatch.setenv("ENABLE_LAZY_LOADING", "false")
     monkeypatch.setenv("MAX_FILE_SIZE", str(50 * 1024 * 1024))
 
     result = await main.get_config(False, {"is_admin": True})
 
-    assert result["items_per_page"] == 250
     assert result["disable_deletion"] is True
     assert result["enable_lazy_loading"] is False
     assert result["max_file_size"] == 50 * 1024 * 1024
@@ -96,7 +94,6 @@ async def test_get_config_non_admin_filters_roles(monkeypatch, reload_main):
                 "secret_access_key": "KEEPME",
             },
         ],
-        "items_per_page": 100,
         "disable_deletion": False,
         "enable_lazy_loading": True,
         "max_file_size": 1234,
@@ -119,7 +116,6 @@ async def test_get_config_non_admin_filters_roles(monkeypatch, reload_main):
 
     assert result["roles"] == [{"name": "RoleB", "type": "credentials", "access_key_id": "AKIA1098765432ZYXW10"}]
     assert result["current_role"] == "RoleB"
-    assert result["items_per_page"] == 100
     assert result["max_file_size"] == 1234
 
 
@@ -203,7 +199,7 @@ async def test_update_config_preserves_existing_fields(monkeypatch, reload_main)
 
     current_config = {
         "roles": [{"name": "RoleA", "type": "default"}],
-        "items_per_page": 111,
+        "max_client_load": 111,
     }
 
     patch_load_config(monkeypatch, main, current_config)
@@ -225,7 +221,7 @@ async def test_update_config_preserves_existing_fields(monkeypatch, reload_main)
     assert response["message"] == "Configuration updated successfully"
 
     saved_config = saved["data"]
-    assert saved_config["items_per_page"] == 111
+    assert saved_config["max_client_load"] == 111
     assert saved_config["enable_lazy_loading"] is False
     assert saved_config["max_file_size"] == 5 * 1024 * 1024
 

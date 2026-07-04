@@ -272,7 +272,6 @@ def test_get_available_roles(db_session, monkeypatch):
             {"name": "Default"},
             {"name": "ReadOnly"},
         ],
-        "items_per_page": 200,
         "enable_lazy_loading": True,
         "max_file_size": 100,
     }

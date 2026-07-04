@@ -382,7 +382,7 @@ def test_update_config_preserves_max_client_load_when_omitted(app_client, moto_s
     # Save again WITHOUT max_client_load — it must be preserved, not reset.
     r2 = app_client.post(
         "/api/config",
-        json={"roles": [], "items_per_page": 50},
+        json={"roles": []},
         headers=headers,
     )
     assert r2.status_code == 200, r2.json()

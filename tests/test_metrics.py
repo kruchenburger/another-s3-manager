@@ -38,3 +38,55 @@ def test_http_request_counter_uses_path_template_not_concrete_url(app_client):
 def test_app_info_metric_present(app_client):
     resp = app_client.get("/metrics")
     assert "app_info" in resp.text
+
+
+def _seed_user(username: str, password: str) -> None:
+    from another_s3_manager.auth import hash_password
+    from another_s3_manager.database import session_scope
+    from another_s3_manager.models import User
+
+    with session_scope() as session:
+        session.add(User(username=username, password_hash=hash_password(password), is_admin=False))
+
+
+def _sample(name: str, labels: dict) -> float:
+    from another_s3_manager.metrics import REGISTRY
+
+    return REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+def test_auth_login_metrics_count_success_and_failure(app_client):
+    """auth_logins_total must increment on both login outcomes (was defined but unwired)."""
+    ok_before = _sample("auth_logins_total", {"result": "success"})
+    bad_before = _sample("auth_logins_total", {"result": "invalid_password"})
+
+    resp = app_client.post("/api/login", data={"username": "admin", "password": "nope"})
+    assert resp.status_code == 401
+    resp = app_client.post("/api/login", data={"username": "admin", "password": "admin123"})
+    assert resp.status_code == 200
+
+    assert _sample("auth_logins_total", {"result": "success"}) == ok_before + 1
+    assert _sample("auth_logins_total", {"result": "invalid_password"}) == bad_before + 1
+
+    body = app_client.get("/metrics").text
+    assert 'auth_logins_total{result="success"}' in body
+
+
+def test_auth_banned_login_metric_and_active_bans_gauge(app_client):
+    """A login attempt against a banned account counts as result=banned, and
+    auth_bans_active reports the live number of active bans at scrape time."""
+    banned_before = _sample("auth_logins_total", {"result": "banned"})
+
+    _seed_user("metrics_bob", "Sup3rSecret1")
+    for _ in range(3):
+        resp = app_client.post("/api/login", data={"username": "metrics_bob", "password": "wrong"})
+        assert resp.status_code == 401
+
+    # 4th attempt hits the banned branch — even with the correct password
+    resp = app_client.post("/api/login", data={"username": "metrics_bob", "password": "Sup3rSecret1"})
+    assert resp.status_code == 403
+
+    assert _sample("auth_logins_total", {"result": "banned"}) == banned_before + 1
+
+    body = app_client.get("/metrics").text
+    assert "auth_bans_active 1.0" in body  # fresh per-test DB → exactly one active ban

@@ -12,14 +12,6 @@ export function SettingsGeneralTab({ form, readOnly }: SettingsGeneralTabProps) 
   return (
     <Stack gap="md" maw={520} mt="md">
       <NumberInput
-        label="Items per page"
-        min={10}
-        max={1000}
-        step={10}
-        disabled={readOnly}
-        {...form.getInputProps("items_per_page")}
-      />
-      <NumberInput
         label="Max client load"
         description="Objects loaded into the browser before 'Load more' appears. Larger folders paginate on the server beyond this. Default 10000."
         min={1}

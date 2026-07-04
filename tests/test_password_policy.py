@@ -148,7 +148,6 @@ def test_migration_adds_missing_password_policy_fields(isolated_config):
     cfg_path, config_module = isolated_config
     legacy = {
         "roles": [{"name": "Default", "type": "default"}],
-        "items_per_page": 200,
         "enable_lazy_loading": True,
         "max_file_size": 100 * 1024 * 1024,
         "disable_deletion": False,
@@ -167,7 +166,6 @@ def test_migration_preserves_existing_password_policy_values(isolated_config):
     cfg_path, config_module = isolated_config
     existing = {
         "roles": [{"name": "Default", "type": "default"}],
-        "items_per_page": 200,
         "enable_lazy_loading": True,
         "max_file_size": 100 * 1024 * 1024,
         "disable_deletion": False,

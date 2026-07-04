@@ -40,8 +40,7 @@ from io import BytesIO
 
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
@@ -73,6 +72,8 @@ from another_s3_manager.constants import (
 from another_s3_manager.errors import S3OperationError
 from another_s3_manager.metrics import (
     REGISTRY,
+    auth_bans_active,
+    auth_logins_total,
     http_request_duration_seconds,
     http_requests_total,
 )
@@ -268,6 +269,11 @@ def _check_metrics_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
+# Scrape-time callback: load_bans() already filters to active bans, so the
+# gauge is always live without a background updater or hooks in ban/unban paths.
+auth_bans_active.set_function(lambda: float(len(load_bans())))
+
+
 @app.get("/metrics")
 async def metrics_endpoint(request: Request):
     """Prometheus metrics exposition endpoint. Optional METRICS_PASSWORD basic auth."""
@@ -279,65 +285,6 @@ async def metrics_endpoint(request: Request):
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": APP_VERSION}
-
-
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-# /v2 React SPA (built by frontend/, bundled into static/v2/ by the multi-stage Dockerfile).
-# During strangler-fig migration vanilla UI keeps serving /, /login, /admin.
-#
-# Single catch-all route: real files (JS/CSS/images under /v2/assets, favicon, etc.)
-# are served via FileResponse; everything else falls back to index.html so React Router
-# can handle client-side navigation. Avoids mount-vs-route ordering bugs in Starlette
-# (see https://github.com/encode/starlette/issues/437).
-_V2_DIR = STATIC_DIR / "v2"
-
-
-@app.get("/v2", response_class=HTMLResponse)
-@app.get("/v2/", response_class=HTMLResponse)
-async def serve_v2_root():
-    """Bare /v2 → index.html."""
-    return await serve_v2_spa("")
-
-
-@app.get("/v2/{full_path:path}")
-async def serve_v2_spa(full_path: str):
-    """SPA-aware static handler:
-    - If a real file exists at static/v2/<full_path>, serve it (correct content-type).
-    - Otherwise serve index.html so React Router takes over the URL.
-
-    Files are read fully into memory and returned via Response (not FileResponse).
-    SPA bundles are tiny enough (~600KB) that this is fine.
-    """
-    import mimetypes
-
-    from fastapi import Response
-
-    # Block path traversal at the route level too (sanitize_path is for S3 keys, not local FS)
-    if ".." in full_path or full_path.startswith("/"):
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    if full_path:
-        candidate = _V2_DIR / full_path
-        # Resolve to absolute path and verify it stays within _V2_DIR (defense-in-depth)
-        try:
-            candidate_resolved = candidate.resolve()
-            v2_resolved = _V2_DIR.resolve()
-            if v2_resolved in candidate_resolved.parents and candidate.is_file():
-                content_type, _ = mimetypes.guess_type(str(candidate))
-                if not content_type:
-                    content_type = "application/octet-stream"
-                return Response(content=candidate.read_bytes(), media_type=content_type)
-        except (OSError, ValueError):
-            pass  # fall through to index.html
-
-    # SPA fallback
-    index_file = _V2_DIR / "index.html"
-    if not index_file.exists():
-        raise HTTPException(status_code=404, detail="React SPA not built yet")
-    with open(index_file, "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
 
 
 def _migrate_legacy_default_role() -> None:
@@ -392,22 +339,6 @@ def _enforce_password_policy(password: str) -> None:
 # ============================================================================
 
 
-@app.get("/", response_class=HTMLResponse)
-async def root():
-    """Main page with file manager interface (auth handled by frontend)"""
-    html_file = STATIC_DIR / "index.html"
-    with open(html_file, "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
-
-
-@app.get("/login", response_class=HTMLResponse)
-async def login_page():
-    """Login page"""
-    html_file = STATIC_DIR / "login.html"
-    with open(html_file, "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
-
-
 @app.post("/api/login")
 async def login(
     request: Request,
@@ -425,6 +356,7 @@ async def login(
             import time
 
             remaining = int((banned_until - time.time()) / 60)
+            auth_logins_total.labels(result="banned").inc()
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Account is banned. Try again in {remaining} minutes.",
@@ -435,6 +367,8 @@ async def login(
 
         if user is None:
             record_login_attempt(username, False)
+            # Same label as a wrong password — metrics must not enumerate usernames.
+            auth_logins_total.labels(result="invalid_password").inc()
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect username or password",
@@ -443,6 +377,7 @@ async def login(
         # Verify password
         if not verify_password(password, user.get("password_hash", "")):
             record_login_attempt(username, False)
+            auth_logins_total.labels(result="invalid_password").inc()
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect username or password",
@@ -450,6 +385,7 @@ async def login(
 
         # Successful login
         record_login_attempt(username, True)
+        auth_logins_total.labels(result="success").inc()
 
         # Generate CSRF token and embed in the signed JWT (defence-in-depth).
         # The JWT itself is delivered as an httpOnly cookie so JS cannot read it;
@@ -543,14 +479,6 @@ async def get_app_info():
         "app_description": APP_DESCRIPTION,
         "app_version": APP_VERSION,
     }
-
-
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_page():
-    """Admin page (authentication checked on client side)"""
-    html_file = STATIC_DIR / "admin.html"
-    with open(html_file, "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
 
 
 @app.get("/api/admin/users")
@@ -1221,13 +1149,6 @@ async def get_config(
     """Get current configuration (filtered by user permissions)."""
     config = load_config(force_reload=force_reload)
 
-    # Get items_per_page from config file, fallback to environment variable, then default
-    items_per_page = config.get("items_per_page")
-    if items_per_page is None:
-        items_per_page = int(os.getenv("ITEMS_PER_PAGE", "200"))
-    else:
-        items_per_page = int(items_per_page)
-
     # Check if deletion is disabled (from environment variable or config)
     disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
     disable_deletion_config = config.get("disable_deletion", False)
@@ -1281,7 +1202,6 @@ async def get_config(
         safe_config = {
             "roles": [sanitize_role(role) for role in config.get("roles", [])],
             "current_role": effective_role,  # Computed value for frontend (not stored in config)
-            "items_per_page": items_per_page,
             "disable_deletion": disable_deletion,
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
@@ -1317,7 +1237,6 @@ async def get_config(
         return {
             "roles": [],
             "current_role": "",
-            "items_per_page": items_per_page,
             "disable_deletion": disable_deletion,
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
@@ -1337,7 +1256,6 @@ async def get_config(
     return {
         "roles": filtered_roles,
         "current_role": effective_role,
-        "items_per_page": items_per_page,
         "disable_deletion": disable_deletion,
         "enable_lazy_loading": enable_lazy_loading,
         "max_file_size": max_file_size,
@@ -1396,21 +1314,6 @@ async def update_config(
         # Validate config structure
         if "roles" not in config:
             raise HTTPException(status_code=400, detail="Invalid config structure: 'roles' is required")
-
-        # Handle items_per_page - if provided, validate and use it; otherwise preserve existing
-        if "items_per_page" in config:
-            # Validate items_per_page
-            try:
-                items_per_page_val = int(config["items_per_page"])
-                if items_per_page_val < 10 or items_per_page_val > 1000:
-                    raise HTTPException(status_code=400, detail="items_per_page must be between 10 and 1000")
-            except (ValueError, TypeError):
-                raise HTTPException(status_code=400, detail="items_per_page must be a valid integer")
-        else:
-            # Preserve items_per_page from current config if not provided
-            current_config = load_config(force_reload=False)
-            if "items_per_page" in current_config:
-                config["items_per_page"] = current_config["items_per_page"]
 
         # Handle enable_lazy_loading - if provided, validate and use it; otherwise preserve existing or use env var/default
         if "enable_lazy_loading" in config:
@@ -2351,11 +2254,83 @@ async def delete_file(
 
 
 # Mount MCP sub-app at /mcp — must come AFTER all @app.get/@app.post route
-# registrations and AFTER middleware is wired up, so Starlette's middleware
-# stack is already complete when the mount is added.
+# registrations (so the middleware stack is complete) and BEFORE the SPA
+# catch-all below: the catch-all is greedy, anything registered after it is
+# unreachable. ROUTE ORDERING INVARIANT: API routes -> /mcp mount -> SPA
+# catch-all LAST.
 from another_s3_manager.mcp_server import get_mcp_app
 
 app.mount("/mcp", get_mcp_app())
+
+
+# Root React SPA (built by frontend/, bundled into static/app/ by the
+# multi-stage Dockerfile). Phase 7 removed the vanilla UI — the SPA owns
+# every path, including the old /v2/* URLs (they render the router's 404).
+#
+# Single catch-all: real files (assets, favicon) are served with the right
+# content-type; everything else falls back to index.html so React Router
+# handles the URL. Files are read fully into memory and returned via
+# Response (not FileResponse) — SPA bundles are <1MB, the cost is
+# negligible and it avoids Starlette mount-vs-route ordering bugs
+# (https://github.com/encode/starlette/issues/437).
+_SPA_DIR = STATIC_DIR / "app"
+
+# Unknown paths under these prefixes 404 as JSON instead of serving
+# index.html — an HTML 200 for a typo'd API call reads as success to
+# clients and would mask MCP misroutes. (Known routes and the /mcp mount
+# win by registration order; this guard covers the UNKNOWN remainder.)
+_RESERVED_PREFIXES = ("api/", "mcp/")
+_RESERVED_EXACT = {"api", "mcp", "metrics", "health"}
+
+
+# Pre-Phase-7, bare /mcp worked via Starlette's redirect_slashes (307 to
+# /mcp/). The GET catch-all below shadows that mechanism (full match beats
+# the redirect fallback; for POST the catch-all's partial match turns into
+# a 405). Existing agent configs point at /mcp without a trailing slash, so
+# keep the redirect explicit. Methods = MCP streamable-HTTP verbs.
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
+async def mcp_no_slash_redirect():
+    return RedirectResponse(url="/mcp/", status_code=307)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def serve_spa_root():
+    """Bare / → index.html."""
+    return await serve_spa("")
+
+
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    """SPA-aware static handler (see block comment above)."""
+    import mimetypes
+
+    from fastapi import Response
+
+    if full_path in _RESERVED_EXACT or full_path.startswith(_RESERVED_PREFIXES):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Block path traversal at the route level (sanitize_path is for S3 keys)
+    if ".." in full_path or full_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if full_path:
+        candidate = _SPA_DIR / full_path
+        try:
+            candidate_resolved = candidate.resolve()
+            spa_resolved = _SPA_DIR.resolve()
+            if spa_resolved in candidate_resolved.parents and candidate.is_file():
+                content_type, _ = mimetypes.guess_type(str(candidate))
+                if not content_type:
+                    content_type = "application/octet-stream"
+                return Response(content=candidate.read_bytes(), media_type=content_type)
+        except (OSError, ValueError):
+            pass  # fall through to index.html
+
+    index_file = _SPA_DIR / "index.html"
+    if not index_file.exists():
+        raise HTTPException(status_code=404, detail="React SPA not built yet")
+    with open(index_file, "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
 
 
 if __name__ == "__main__":  # pragma: no cover

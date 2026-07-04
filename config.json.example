@@ -38,7 +38,6 @@
     }
   ],
   "default_role": "Default",
-  "items_per_page": 200,
   "enable_lazy_loading": true,
   "max_file_size": 104857600,
   "disable_deletion": false,

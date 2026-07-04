@@ -26,7 +26,6 @@ describe("useConfig", () => {
 
   it("fetches /api/config and returns the AppConfig payload", async () => {
     apiRequestMock.mockResolvedValueOnce({
-      items_per_page: 200,
       enable_lazy_loading: true,
       max_file_size: 100 * 1024 * 1024,
       disable_deletion: false,
@@ -36,7 +35,6 @@ describe("useConfig", () => {
     const { result } = renderHook(() => useConfig(), { wrapper: wrap() });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.items_per_page).toBe(200);
     expect(result.current.data?.enable_lazy_loading).toBe(true);
     expect(apiRequestMock).toHaveBeenCalledWith("/api/config");
   });
