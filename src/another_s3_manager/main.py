@@ -72,6 +72,8 @@ from another_s3_manager.constants import (
 from another_s3_manager.errors import S3OperationError
 from another_s3_manager.metrics import (
     REGISTRY,
+    auth_bans_active,
+    auth_logins_total,
     http_request_duration_seconds,
     http_requests_total,
 )
@@ -267,6 +269,11 @@ def _check_metrics_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
+# Scrape-time callback: load_bans() already filters to active bans, so the
+# gauge is always live without a background updater or hooks in ban/unban paths.
+auth_bans_active.set_function(lambda: float(len(load_bans())))
+
+
 @app.get("/metrics")
 async def metrics_endpoint(request: Request):
     """Prometheus metrics exposition endpoint. Optional METRICS_PASSWORD basic auth."""
@@ -349,6 +356,7 @@ async def login(
             import time
 
             remaining = int((banned_until - time.time()) / 60)
+            auth_logins_total.labels(result="banned").inc()
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Account is banned. Try again in {remaining} minutes.",
@@ -359,6 +367,8 @@ async def login(
 
         if user is None:
             record_login_attempt(username, False)
+            # Same label as a wrong password — metrics must not enumerate usernames.
+            auth_logins_total.labels(result="invalid_password").inc()
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect username or password",
@@ -367,6 +377,7 @@ async def login(
         # Verify password
         if not verify_password(password, user.get("password_hash", "")):
             record_login_attempt(username, False)
+            auth_logins_total.labels(result="invalid_password").inc()
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect username or password",
@@ -374,6 +385,7 @@ async def login(
 
         # Successful login
         record_login_attempt(username, True)
+        auth_logins_total.labels(result="success").inc()
 
         # Generate CSRF token and embed in the signed JWT (defence-in-depth).
         # The JWT itself is delivered as an httpOnly cookie so JS cannot read it;
