@@ -47,15 +47,25 @@ export function CreateTokenFormFields({
 
   const slotFull = used >= limit;
 
+  const handleSubmit = form.onSubmit((vals) => {
+    const max_read_bytes = Math.min(HARD_CEILING, Math.round(vals.max_read_mb * 1024 * 1024));
+    onSubmit(
+      { name: vals.name.trim(), is_read_only: vals.is_read_only, max_read_bytes },
+      adminMode && vals.user_id ? Number(vals.user_id) : undefined,
+    );
+  });
+
   return (
     <form
-      onSubmit={form.onSubmit((vals) => {
-        const max_read_bytes = Math.min(HARD_CEILING, Math.round(vals.max_read_mb * 1024 * 1024));
-        onSubmit(
-          { name: vals.name.trim(), is_read_only: vals.is_read_only, max_read_bytes },
-          adminMode && vals.user_id ? Number(vals.user_id) : undefined,
-        );
-      })}
+      onSubmit={(event) => {
+        // CreateTokenModal renders in a portal, but React bubbles events
+        // through the REACT tree, not the DOM tree — when this form lives
+        // under UserDrawer's <form> (UserTokensList call site), the submit
+        // would also fire the outer user-edit form, saving the user and
+        // closing the drawer before the plaintext modal can render.
+        event.stopPropagation();
+        handleSubmit(event);
+      }}
     >
       <Stack gap="md">
         <Text size="sm" c="dimmed">
