@@ -31,7 +31,7 @@ test.describe("FileBrowser scroll container + virtualization", () => {
     const filter = page.getByPlaceholder(/filter files/i);
     await expect(filter).toBeVisible();
     await page
-      .locator('[class*="scrollArea"]')
+      .locator('main [class*="scrollArea"]')
       .evaluate((el) => (el.scrollTop = el.scrollHeight));
     await expect(filter).toBeVisible();
 
@@ -57,7 +57,7 @@ test.describe("FileBrowser scroll container + virtualization", () => {
 
     // Scroll the list down repeatedly; lazy auto-load should fetch the next
     // chunk(s) without ever clicking "Load more".
-    const scrollArea = page.locator('[class*="scrollArea"]');
+    const scrollArea = page.locator('main [class*="scrollArea"]');
     await expect(async () => {
       await scrollArea.evaluate((el) => (el.scrollTop = el.scrollTop + 4000));
       await expect(

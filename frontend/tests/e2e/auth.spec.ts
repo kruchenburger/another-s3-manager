@@ -11,8 +11,12 @@ test("login and logout flow", async ({ page }) => {
   await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASS);
   await page.getByRole("button", { name: "Login" }).click();
 
-  // Land on home, see Welcome (root URL)
-  await expect(page).toHaveURL("/");
+  // Login succeeded: we left /login and the authenticated shell mounted.
+  // Don't assert the exact URL — HomePage auto-redirects any user with roles
+  // to /r/<role>/..., so the landing URL depends on the backend's config
+  // (in CI the admin sees the seeded MinIO role and never stays on /).
+  await expect(page).not.toHaveURL(/\/login/);
+  await expect(page.getByLabel("User menu")).toBeVisible();
 
   // Open user menu and logout
   await page.getByLabel("User menu").click();

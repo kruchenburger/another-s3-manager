@@ -5,9 +5,10 @@ test.describe("API tokens self-serve flow", () => {
   test("create token, see plaintext, revoke", async ({ page }) => {
     await loginAsAdmin(page);
 
-    // Navigate to /api-tokens via UserMenu
+    // Navigate to /api-tokens via UserMenu (the item is labeled "MCP tokens"
+    // since the PR #20 rename; the URL keeps /api-tokens for compatibility)
     await page.getByLabel("User menu").click();
-    await page.getByRole("menuitem", { name: /api tokens/i }).click();
+    await page.getByRole("menuitem", { name: /mcp tokens/i }).click();
     await expect(page).toHaveURL(/\/api-tokens$/);
 
     // Open Create token modal
@@ -25,8 +26,13 @@ test.describe("API tokens self-serve flow", () => {
       page.getByText(/will not be shown again/i),
     ).toBeVisible({ timeout: 5_000 });
 
-    // The token is rendered in a <Code block> element — check the as3m_ prefix
-    const tokenLocator = page.locator("code").first();
+    // The token is rendered in a <Code block> element — Mantine renders
+    // block-mode Code as <pre>, not <code>. Scope by the modal's accessible
+    // name: other dialogs can be open underneath (e.g. the UserDrawer).
+    const tokenLocator = page
+      .getByRole("dialog", { name: /token created/i })
+      .locator("pre")
+      .first();
     const tokenText = await tokenLocator.textContent();
     expect(tokenText).toMatch(/^as3m_/);
 
@@ -72,9 +78,11 @@ test.describe("API tokens self-serve flow", () => {
     await expect(row).toBeVisible({ timeout: 5_000 });
     await row.getByRole("button", { name: `Edit ${initialName}` }).click();
 
-    // Rename and save
+    // Rename and save. Scope by the drawer's accessible name — the create
+    // drawer stays in the DOM for its ~250ms close animation, so a bare
+    // getByRole("dialog") can strict-mode-collide with it.
     const renamed = `${initialName}-renamed`;
-    const editDialog = page.getByRole("dialog");
+    const editDialog = page.getByRole("dialog", { name: "Edit MCP token" });
     await editDialog.getByLabel("Name").fill(renamed);
     await editDialog.getByRole("button", { name: /^save$/i }).click();
 
@@ -128,7 +136,12 @@ test.describe("API tokens self-serve flow", () => {
     await expect(
       page.getByText(/this token will not be shown again/i),
     ).toBeVisible({ timeout: 5_000 });
-    const plaintextLocator = page.locator("code").first();
+    // Mantine renders block-mode Code as <pre>, not <code>. Scope by the
+    // modal's accessible name — the UserDrawer dialog is open underneath.
+    const plaintextLocator = page
+      .getByRole("dialog", { name: /token created/i })
+      .locator("pre")
+      .first();
     const plaintextText = await plaintextLocator.textContent();
     expect(plaintextText).toMatch(/^as3m_/);
 

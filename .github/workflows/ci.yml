@@ -179,18 +179,29 @@ jobs:
           E2E_ADMIN_PASSWORD: TestPass1
           E2E_MINIO_ROLE: MinIO-e2e
           E2E_MINIO_BUCKET: e2e-test
+          # The ministack spec needs the AWS emulator — that's the e2e-ministack
+          # job's whole purpose. Without this flag those 4 tests fail here.
+          E2E_IGNORE_MINISTACK: "1"
         run: |
           # Re-confirm backend is alive (catches the case where it died between steps).
           curl -fs http://localhost:8080/health \
             || { echo "::error::Backend died between steps"; cat /tmp/backend.log; exit 1; }
           npx playwright test
 
+      - name: Dump backend log on failure
+        if: failure()
+        run: cat /tmp/backend.log
+
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
-          path: frontend/playwright-report/
+          # test-results/ carries traces + per-test error-context snapshots;
+          # playwright-report/ is the browsable html summary.
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
           retention-days: 14
 
   e2e-ministack:
@@ -294,12 +305,20 @@ jobs:
             || { echo "::error::Backend died between steps"; cat /tmp/backend.log; exit 1; }
           npx playwright test ministack.spec.ts
 
+      - name: Dump backend log on failure
+        if: failure()
+        run: cat /tmp/backend.log
+
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-ministack
-          path: frontend/playwright-report/
+          # test-results/ carries traces + per-test error-context snapshots;
+          # playwright-report/ is the browsable html summary.
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
           retention-days: 14
 
   build:

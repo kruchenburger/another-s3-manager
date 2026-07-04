@@ -18,9 +18,18 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests/e2e",
+  // The ministack spec needs the AWS emulator (S3+IAM+STS) on :4566, which only
+  // the dedicated `e2e-ministack` CI job (or the local ministack compose overlay)
+  // provides. The MinIO CI job sets E2E_IGNORE_MINISTACK=1 so those 4 tests
+  // don't burn 3 retries × 30s each against a backend that can't serve them.
+  testIgnore: process.env.E2E_IGNORE_MINISTACK ? ["**/ministack.spec.ts"] : [],
   fullyParallel: false, // tests share the same backend DB; run sequentially to avoid races
   retries: process.env.CI ? 2 : 0,
   workers: 1,
+  // Explicit html reporter: CI uploads playwright-report/ as an artifact on
+  // failure, and without "html" here that directory is never created (the
+  // default CI reporter is dot-only), so the upload step finds nothing.
+  reporter: process.env.CI ? [["dot"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:8080",
     trace: "on-first-retry",
