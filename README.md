@@ -5,6 +5,12 @@ Lightweight, self-hosted web UI for managing files across multiple S3-compatible
 Works with **AWS S3**, **MinIO**, **Cloudflare R2**, **Wasabi**, and any S3-compatible API.
 
 <p align="center">
+  <a href="https://github.com/kruchenburger/another-s3-manager/releases"><img src="https://img.shields.io/github/v/release/kruchenburger/another-s3-manager?label=release" alt="Latest release"></a>
+  <a href="https://github.com/kruchenburger/another-s3-manager/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/kruchenburger/another-s3-manager/ci.yml?branch=main&label=CI" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+</p>
+
+<p align="center">
   <img src="docs/assets/hero.png" alt="Another S3 Manager — file browser with bulk actions and a grid view with live image previews" width="830">
 </p>
 
@@ -31,16 +37,22 @@ For a `docker compose` setup see [`docker-compose.example.yml`](docker-compose.e
 
 - **Multi-provider** — connect AWS accounts, MinIO, R2, Wasabi in one UI
 - **Multi-account** — switch between roles (default credentials, named profiles, assume role, direct keys)
-- **User management** — create users, assign per-role and per-bucket access
+- **Fast file browser** — table + grid views with image thumbnails; virtualized lists stay smooth in 10k+ object folders
 - **Upload & download** — single files, multiple files, or entire folders; drag-and-drop supported
-- **Bulk operations** — select and delete multiple files at once
-- **Virtual scrolling** — handles directories with millions of objects
-- **Security** — JWT auth, bcrypt passwords, CSRF protection, IP ban after failed logins
+- **Bulk operations** — multi-select with bulk delete and bulk link copying
+- **File preview** — images, video, PDF and text inline (text extensions are admin-configurable)
+- **Share links** — presigned URLs with a configurable lifetime, per-link override up to 7 days
+- **Server-side search** — prefix search inside folders too large to load client-side
+- **User management** — per-role and per-bucket access, configurable password policy, forced first-login password change
+- **MCP server** — AI agents (Claude Desktop, Cursor) browse the same storage with the same permissions
+- **Observability** — Prometheus `/metrics`, optional structured JSON logs
+- **Security** — JWT in an httpOnly cookie, bcrypt passwords, CSRF protection, per-username ban after failed logins
 - **Dark / light theme**
 
 ## Configuration
 
-Configure roles through the web UI (**Admin > Configure**) or by editing `config.json`:
+Configure roles through the web UI (**Admin console → Roles**; global settings live under
+**Admin console → Settings**) or by editing `config.json`:
 
 ```json
 {
@@ -72,16 +84,22 @@ Role types: `default`, `profile`, `assume_role`, `credentials`. Any role can inc
 
 ## Environment Variables
 
-| Variable           | Description                                                                      | Default              |
-| ------------------ | -------------------------------------------------------------------------------- | -------------------- |
-| `JWT_SECRET_KEY`   | **Required.** Secret for JWT tokens                                              | —                    |
-| `ADMIN_PASSWORD`   | Initial admin password                                                           | `change_me_pls`      |
-| `PORT`             | Server port                                                                      | `8080`               |
-| `AWS_REGION`       | Default AWS region                                                               | from env             |
-| `DATA_DIR`         | Directory for SQLite DB and runtime data                                         | `/app/data`          |
-| `MAX_FILE_SIZE`    | Max upload size in bytes                                                         | `104857600` (100 MB) |
-| `DISABLE_DELETION` | Disable delete operations                                                        | `false`              |
-| `COOKIE_SECURE`    | Auth cookie `Secure` flag — set to `false` for local HTTP, `true` for HTTPS prod | `true`               |
+| Variable                          | Description                                                                      | Default              |
+| --------------------------------- | -------------------------------------------------------------------------------- | -------------------- |
+| `JWT_SECRET_KEY`                  | **Required.** Secret for JWT tokens                                              | —                    |
+| `ADMIN_PASSWORD`                  | Initial admin password                                                           | `change_me_pls`      |
+| `PORT`                            | Server port                                                                      | `8080`               |
+| `AWS_REGION`                      | Default AWS region                                                               | from env             |
+| `DATA_DIR`                        | Directory for SQLite DB and runtime data                                         | `/app/data`          |
+| `MAX_FILE_SIZE`                   | Max upload size in bytes                                                         | `104857600` (100 MB) |
+| `DISABLE_DELETION`                | Disable delete operations                                                        | `false`              |
+| `COOKIE_SECURE`                   | Auth cookie `Secure` flag — set to `false` for local HTTP, `true` for HTTPS prod | `true`               |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Session lifetime in minutes                                                      | `180`                |
+| `PRESIGNED_URL_DEFAULT_TTL`       | Default share-link lifetime in seconds                                           | `3600`               |
+| `PRESIGNED_URL_MAX_TTL`           | Max share-link lifetime in seconds (7-day SigV4 ceiling)                         | `604800`             |
+| `ENABLE_LAZY_LOADING`             | Lazy loading for large file lists                                                | `true`               |
+| `LOG_FORMAT`                      | Log output: `text` or `json` (for log aggregators)                               | `text`               |
+| `METRICS_PASSWORD`                | Basic-auth password for `/metrics` (endpoint is open if unset)                   | —                    |
 
 ## Authentication
 
@@ -131,6 +149,11 @@ infrequently and benefits from human readability.
 
 DB schema is managed via Alembic. Migrations run at startup
 (`alembic upgrade head`).
+
+**Upgrading from v0.1.x?** The upgrade is seamless (same volume, same env),
+with one caveat: the container now runs as a non-root user, so a data volume
+created by v0.1.x needs a one-time ownership fix. See the upgrade note in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Docker Compose
 
