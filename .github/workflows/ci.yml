@@ -330,8 +330,12 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
+          # metadata-action strips the tag's "v" prefix (v1.0.0 -> 1.0.0); the UI
+          # and /health expect a bare semver, so passing github.ref_name here
+          # would render as "vv1.0.0". Every line of build-args becomes a
+          # --build-arg, so this note must live outside the block scalar.
           build-args: |
-            BUILD_VERSION=${{ github.ref_name }}
+            BUILD_VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
