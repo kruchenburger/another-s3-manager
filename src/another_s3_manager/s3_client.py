@@ -3,6 +3,7 @@ S3 client management module
 """
 
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Iterator, Optional, Tuple, TypeVar
@@ -228,12 +229,22 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
         if not role_arn:
             raise ValueError("role_arn is required for assume_role type")
 
+        # Region for the STS + assumed-role S3 clients: the role's own region
+        # wins, then the AWS_REGION env this app documents. botocore itself only
+        # falls back to AWS_DEFAULT_REGION / shared config — in a bare container
+        # with just AWS_REGION set, creating the STS client raises NoRegionError
+        # ("You must specify a region") even though S3 clients with an explicit
+        # endpoint_url get away without one. None keeps botocore's own chain.
+        region = (role.get("region") or "").strip() or os.environ.get("AWS_REGION") or None
+
         def refresh_assumed_role_credentials():
             """Refresh credentials by assuming the role again using current pod identity credentials."""
             try:
                 logger.debug(f"Refreshing credentials for assumed role: {role_arn}")
                 # Create a fresh STS client that will use current pod identity credentials
-                sts_client = boto3.client("sts", use_ssl=use_ssl, verify=verify_ssl, config=boto_config)
+                sts_client = boto3.client(
+                    "sts", region_name=region, use_ssl=use_ssl, verify=verify_ssl, config=boto_config
+                )
 
                 assumed_role = sts_client.assume_role(RoleArn=role_arn, RoleSessionName="s3-file-manager-session")
                 creds = assumed_role["Credentials"]
@@ -268,7 +279,9 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
             try:
                 logger.info(f"Creating STS client for assume_role: {role_arn} (attempt {sts_attempts + 1})")
                 # Get initial credentials
-                sts_client = boto3.client("sts", use_ssl=use_ssl, verify=verify_ssl, config=boto_config)
+                sts_client = boto3.client(
+                    "sts", region_name=region, use_ssl=use_ssl, verify=verify_ssl, config=boto_config
+                )
 
                 logger.info(f"Attempting to assume role: {role_arn}")
                 assumed_role = sts_client.assume_role(RoleArn=role_arn, RoleSessionName="s3-file-manager-session")
@@ -429,6 +442,8 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
             "verify": verify_ssl,
             "config": boto_config,
         }
+        if region:
+            client_kwargs["region_name"] = region
         if endpoint_url:
             client_kwargs["endpoint_url"] = endpoint_url
 

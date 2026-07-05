@@ -517,6 +517,90 @@ def test_assume_role_refreshes_via_refreshable_credentials(mocker):
     assert sts.assume_role.call_count == 2
 
 
+def test_assume_role_sts_region_falls_back_to_aws_region_env(mocker, monkeypatch):
+    """The STS client gets its region from AWS_REGION when the role has none.
+
+    botocore itself only reads AWS_DEFAULT_REGION / shared config for the
+    region — without this fallback an assume_role role in a bare container
+    (only AWS_REGION set, per the README env table) dies with NoRegionError
+    ("You must specify a region") before it can even call AssumeRole.
+    """
+    from another_s3_manager import s3_client
+
+    monkeypatch.setenv("AWS_REGION", "eu-central-1")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    creds = {
+        "AccessKeyId": "AKIATEST",
+        "SecretAccessKey": "secret",
+        "SessionToken": "token",
+        "Expiration": "2999-01-01T00:00:00Z",
+    }
+    sts = mocker.Mock()
+    sts.assume_role.return_value = {"Credentials": creds}
+    boto_client = mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    create_client = mocker.patch.object(s3_client.BotocoreSession, "create_client", return_value=mocker.Mock())
+
+    role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
+    s3_client._create_s3_client_from_role(role)
+
+    assert boto_client.call_args.kwargs["region_name"] == "eu-central-1"
+    # The assumed-role S3 client inherits the same region.
+    assert create_client.call_args.kwargs["region_name"] == "eu-central-1"
+
+
+def test_assume_role_role_region_beats_aws_region_env(mocker, monkeypatch):
+    """An explicit region on the role config wins over the AWS_REGION env."""
+    from another_s3_manager import s3_client
+
+    monkeypatch.setenv("AWS_REGION", "eu-central-1")
+
+    creds = {
+        "AccessKeyId": "AKIATEST",
+        "SecretAccessKey": "secret",
+        "SessionToken": "token",
+        "Expiration": "2999-01-01T00:00:00Z",
+    }
+    sts = mocker.Mock()
+    sts.assume_role.return_value = {"Credentials": creds}
+    boto_client = mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    mocker.patch.object(s3_client.BotocoreSession, "create_client", return_value=mocker.Mock())
+
+    role = {
+        "name": "r",
+        "type": "assume_role",
+        "role_arn": "arn:aws:iam::000000000000:role/x",
+        "region": "us-west-2",
+    }
+    s3_client._create_s3_client_from_role(role)
+
+    assert boto_client.call_args.kwargs["region_name"] == "us-west-2"
+
+
+def test_assume_role_region_none_without_any_source(mocker, monkeypatch):
+    """No role region and no AWS_REGION → region_name=None keeps botocore's own chain."""
+    from another_s3_manager import s3_client
+
+    monkeypatch.delenv("AWS_REGION", raising=False)
+
+    creds = {
+        "AccessKeyId": "AKIATEST",
+        "SecretAccessKey": "secret",
+        "SessionToken": "token",
+        "Expiration": "2999-01-01T00:00:00Z",
+    }
+    sts = mocker.Mock()
+    sts.assume_role.return_value = {"Credentials": creds}
+    boto_client = mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    create_client = mocker.patch.object(s3_client.BotocoreSession, "create_client", return_value=mocker.Mock())
+
+    role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
+    s3_client._create_s3_client_from_role(role)
+
+    assert boto_client.call_args.kwargs["region_name"] is None
+    assert "region_name" not in create_client.call_args.kwargs
+
+
 def test_create_s3_client_s3_compatible_path_style_backward_compat(mocker):
     module = reload_s3_client()
     mock_client = mocker.MagicMock()
