@@ -15,7 +15,11 @@ from another_s3_manager.utils import (
 
 
 def test_sanitize_path_normalizes_and_trims():
-    assert sanitize_path("/folder/sub/file.txt/") == "folder/sub/file.txt"
+    # Leading `/` is now treated as a path-traversal attempt (blocks escape from
+    # the bucket-key namespace). Only trailing slashes and whitespace are stripped.
+    assert sanitize_path("folder/sub/file.txt/") == "folder/sub/file.txt"
+    with pytest.raises(ValueError, match="path traversal"):
+        sanitize_path("/folder/sub/file.txt/")
 
 
 def test_sanitize_path_empty_returns_empty():
@@ -28,9 +32,23 @@ def test_sanitize_path_raises_on_traversal():
         sanitize_path("../secret.txt")
 
 
+def test_sanitize_path_blocks_leading_slash_with_whitespace():
+    """REGRESSION: ' /etc/passwd' (space + slash) must NOT bypass the leading-`/` guard.
+    Previously whitespace was stripped AFTER the startswith check, leaving the slash
+    to be silently removed by strip('/')."""
+    with pytest.raises(ValueError, match="path traversal not allowed"):
+        sanitize_path(" /etc/passwd")
+    with pytest.raises(ValueError, match="path traversal not allowed"):
+        sanitize_path("\t/etc/passwd")
+    with pytest.raises(ValueError, match="path traversal not allowed"):
+        sanitize_path("  /folder/file.txt")
+
+
 def test_sanitize_path_raises_on_invalid_chars():
+    # `<` and `>` are valid in S3 keys — only ASCII control chars are blocked.
+    # Verify that a genuine control char still raises.
     with pytest.raises(ValueError, match="contains invalid characters"):
-        sanitize_path("folder/<bad>.txt")
+        sanitize_path("folder/bad\x00file.txt")
 
 
 # -----------------------------------------------------------------------------
@@ -248,3 +266,62 @@ def test_format_content_disposition_special_characters():
     result = format_content_disposition("file (1).txt")
     assert "attachment" in result
     assert 'filename="file (1).txt"' in result or "filename*=" in result
+
+
+# -----------------------------------------------------------------------------
+# sanitize_path — relaxed S3-key character set (regression tests for valid chars)
+# -----------------------------------------------------------------------------
+
+
+def test_sanitize_path_allows_colon():
+    """S3 keys with ISO-8601 timestamps like '2026-04-30T15:00:00.log' are valid."""
+    assert sanitize_path("logs/2026-04-30T15:00:00.log") == "logs/2026-04-30T15:00:00.log"
+
+
+def test_sanitize_path_allows_hash():
+    """`#` is valid in S3 keys (used in URL anchors but fine in object names)."""
+    assert sanitize_path("notes/draft#1.md") == "notes/draft#1.md"
+
+
+def test_sanitize_path_allows_question_mark():
+    """`?` is valid in S3 keys (commonly seen in cached query-string filenames)."""
+    assert sanitize_path("cache/page?id=1.html") == "cache/page?id=1.html"
+
+
+def test_sanitize_path_allows_ampersand_and_equals():
+    """`&` and `=` are valid in S3 keys."""
+    assert sanitize_path("a=b&c=d.txt") == "a=b&c=d.txt"
+
+
+def test_sanitize_path_allows_unicode():
+    """S3 keys are UTF-8; emojis and non-Latin scripts must work."""
+    assert sanitize_path("фото/отпуск 🏖️.jpg") == "фото/отпуск 🏖️.jpg"
+
+
+def test_sanitize_path_allows_spaces():
+    """S3 keys with spaces are extremely common (browser-saved filenames)."""
+    assert sanitize_path("My Documents/report final.pdf") == "My Documents/report final.pdf"
+
+
+def test_sanitize_path_still_blocks_path_traversal():
+    """`..` segments are the actual security risk we must block."""
+    with pytest.raises(ValueError, match="path traversal"):
+        sanitize_path("../etc/passwd")
+
+
+def test_sanitize_path_still_blocks_leading_slash():
+    """Leading `/` would let user escape the bucket-key namespace."""
+    with pytest.raises(ValueError, match="path traversal"):
+        sanitize_path("/etc/passwd")
+
+
+def test_sanitize_path_still_blocks_null_byte():
+    """Null bytes never appear in legitimate S3 keys and indicate injection."""
+    with pytest.raises(ValueError, match="invalid characters"):
+        sanitize_path("file\x00.txt")
+
+
+def test_sanitize_path_still_blocks_control_chars():
+    """ASCII control chars (`\\x01-\\x1f`) are not valid in S3 keys."""
+    with pytest.raises(ValueError, match="invalid characters"):
+        sanitize_path("file\x01.txt")

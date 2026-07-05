@@ -1,0 +1,137 @@
+import { useState } from "react";
+import { Button, Group, Stack, Text, Title } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
+import { Plus } from "lucide-react";
+import { useMyTokens } from "@/features/tokens/hooks/useMyTokens";
+import { useCreateMyToken } from "@/features/tokens/hooks/useCreateToken";
+import { useDeleteMyToken } from "@/features/tokens/hooks/useDeleteToken";
+import { useUpdateMyToken } from "@/features/tokens/hooks/useUpdateToken";
+import { TokensTable } from "@/components/Tokens/TokensTable";
+import { CreateTokenDrawer } from "@/components/Tokens/CreateTokenDrawer";
+import { TokenEditDrawer } from "@/components/Tokens/TokenEditDrawer";
+import { TokenPlaintextModal } from "@/components/Tokens/TokenPlaintextModal";
+import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
+import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
+import { notifications } from "@mantine/notifications";
+import { runWithToasts } from "@/utils/mutationToast";
+import { getErrorMessage } from "@/utils/apiError";
+import type { ApiToken, ApiTokenWithPlaintext, CreateTokenPayload } from "@/types/api";
+
+export function ApiTokensPage() {
+  const { data, isLoading, error } = useMyTokens();
+  const createMutation = useCreateMyToken();
+  const deleteMutation = useDeleteMyToken();
+  const updateMutation = useUpdateMyToken();
+
+  const [createOpen, create] = useDisclosure(false);
+  const [plaintextResult, setPlaintextResult] = useState<ApiTokenWithPlaintext | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<ApiToken | null>(null);
+  const [editTarget, setEditTarget] = useState<ApiToken | null>(null);
+
+  const tokens = data?.tokens ?? [];
+
+  function handleCreate(payload: CreateTokenPayload) {
+    // Use mutate directly to capture the token plaintext from onSuccess data.
+    createMutation.mutate(payload, {
+      onSuccess: (token) => {
+        notifications.show({ title: "Success", message: "Token created", color: "green" });
+        create.close();
+        setPlaintextResult(token);
+      },
+      onError: (e) => {
+        notifications.show({
+          title: "Error",
+          message: getErrorMessage(e),
+          color: "red",
+          autoClose: false,
+        });
+      },
+    });
+  }
+
+  function handleRevoke() {
+    if (!revokeTarget) return;
+    runWithToasts(
+      deleteMutation,
+      revokeTarget.id,
+      `Token "${revokeTarget.name}" revoked`,
+      () => {
+        setRevokeTarget(null);
+      },
+    );
+  }
+
+  return (
+    <Stack gap="md">
+        {error ? (
+          <QueryErrorState error={error} title="Couldn't load tokens" />
+        ) : (
+          <>
+            <Group justify="space-between">
+              <Title order={2}>MCP tokens</Title>
+              <Button leftSection={<Plus size={16} />} onClick={create.open}>
+                Create token
+              </Button>
+            </Group>
+            <Text size="sm" c="dimmed">
+              Use these tokens to authorize AI agents (Claude Desktop, Cursor, etc.) at the{" "}
+              <Text span ff="monospace">/mcp</Text> endpoint. They do <strong>not</strong>{" "}
+              grant access to the web API — that uses your login cookie.
+            </Text>
+            {data && (
+              <Text size="sm" c="dimmed">
+                Used {data.used} of {data.limit} token slots
+              </Text>
+            )}
+            {!isLoading && (
+              <TokensTable
+                tokens={tokens}
+                onRevoke={(t) => setRevokeTarget(t)}
+                onEdit={(t) => setEditTarget(t)}
+              />
+            )}
+          </>
+        )}
+      <CreateTokenDrawer
+        opened={createOpen}
+        onClose={create.close}
+        onSubmit={handleCreate}
+        loading={createMutation.isPending}
+        used={data?.used ?? 0}
+        limit={data?.limit ?? 10}
+      />
+
+      {plaintextResult && (
+        <TokenPlaintextModal
+          opened
+          onClose={() => setPlaintextResult(null)}
+          plaintext={plaintextResult.token_plaintext}
+        />
+      )}
+
+      <ConfirmDeleteModal
+        opened={revokeTarget !== null}
+        onClose={() => setRevokeTarget(null)}
+        onConfirm={handleRevoke}
+        items={revokeTarget ? [`token "${revokeTarget.name}"`] : []}
+        loading={deleteMutation.isPending}
+      />
+
+      <TokenEditDrawer
+        opened={editTarget !== null}
+        onClose={() => setEditTarget(null)}
+        loading={updateMutation.isPending}
+        token={editTarget}
+        onSubmit={(payload) => {
+          if (!editTarget) return;
+          runWithToasts(
+            updateMutation,
+            { id: editTarget.id, payload },
+            "Token updated",
+            () => setEditTarget(null),
+          );
+        }}
+      />
+    </Stack>
+  );
+}

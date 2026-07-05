@@ -1,0 +1,218 @@
+/* frontend/src/app/global.css
+ *
+ * Cross-cutting CSS rules that Mantine theme cannot express directly.
+ * Phase 6b additions: letter-spacing on titles, focus-ring override,
+ * ::selection, scrollbar tokens, theme-transition smoothing.
+ *
+ * All rules use `:where()` where applicable to keep specificity (0,0,0),
+ * so per-component overrides win without !important. */
+
+:root {
+  --as3m-title-tracking: -0.01em;
+}
+
+/* Title letter-spacing — Mantine headings.sizes does not have a tracking slot.
+   Applied to h1/h2/h3 and Mantine's Title[data-order=N]. */
+h1,
+h2,
+h3,
+.mantine-Title-root[data-order="1"],
+.mantine-Title-root[data-order="2"],
+.mantine-Title-root[data-order="3"] {
+  letter-spacing: var(--as3m-title-tracking);
+}
+
+/* Focus ring — amber on dark used to be loud; mutedSlateBlue at shade 5
+   on dark is too quiet without help. Shade 3 outline + 25% halo. */
+:where(:focus-visible) {
+  outline: 2px solid var(--mantine-color-mutedSlateBlue-3);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px
+    color-mix(in srgb, var(--mantine-color-mutedSlateBlue-5) 25%, transparent);
+}
+
+/* System mid-tone tokens — browsers source these from --mantine-primary-color
+   or fall through to hardcoded defaults. Override so they pick up the new
+   accent. Spec §6.7. */
+::selection {
+  background: var(--mantine-color-mutedSlateBlue-3);
+  color: var(--mantine-color-black);
+}
+
+* {
+  caret-color: var(--mantine-color-mutedSlateBlue-5);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--mantine-color-slate-6);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--mantine-color-slate-5);
+}
+
+/* Chrome autofill — preserve the slate background instead of pale yellow. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--mantine-color-default-color);
+  -webkit-box-shadow: 0 0 0 30px var(--mantine-color-default) inset;
+  caret-color: var(--mantine-color-mutedSlateBlue-5);
+}
+
+/* Per-element colour transition smoothing — parity with vanilla style.css:40.
+
+   NOTE: the dark/light *theme switch* is driven by the View Transition at the
+   bottom of this file (ThemeToggle wraps the toggle in startViewTransition),
+   NOT by this block — Mantine forces `transition: none` during the swap and
+   overrides the colour transition on AppShell/Title, so these per-element
+   rules cannot carry the whole-page fade on their own. This block still smooths
+   other colour changes (and is a no-op fallback where View Transitions are
+   unsupported). Keep it; don't assume the View Transition makes it dead. Spec §6.8.
+
+   The selector list covers every surface that paints a background or border
+   from a Mantine CSS variable — without one of these, that surface would
+   snap to its new colour while the rest of the page fades.
+
+   `:where()` keeps specificity at (0,0,0) so component-level transitions
+   (e.g., GSAP cleanups on CubeLogo) still win. */
+:where(html, body),
+:where(
+  .mantine-AppShell-root,
+  .mantine-AppShell-main,
+  .mantine-AppShell-header,
+  .mantine-AppShell-navbar,
+  .mantine-AppShell-footer,
+  .mantine-AppShell-aside
+),
+:where(.mantine-Paper-root, .mantine-Card-root, .mantine-Modal-content),
+:where(.mantine-Button-root, .mantine-ActionIcon-root),
+:where(
+  .mantine-TextInput-input,
+  .mantine-PasswordInput-input,
+  .mantine-Select-input,
+  .mantine-Textarea-input,
+  .mantine-NumberInput-input
+),
+:where(.mantine-NavLink-root, .mantine-Tabs-tab, .mantine-Tabs-list),
+:where(.mantine-Table-table, .mantine-Table-th, .mantine-Table-td),
+:where(.mantine-Menu-dropdown, .mantine-Popover-dropdown),
+:where(.mantine-Alert-root, .mantine-Notification-root),
+:where(.mantine-Drawer-content) {
+  transition:
+    background-color 240ms ease,
+    color 240ms ease,
+    border-color 240ms ease,
+    box-shadow 240ms ease;
+}
+
+/* Reduced-motion override — no transitions / animations at all. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}
+
+/* ── Airify: layered surfaces (spec rev 2 §2) ────────────────────────────
+   Mantine paints Paper/Card/Modal/Menu with the SAME --mantine-color-body
+   as the page, so a palette override alone yields a flat app. Re-tint
+   elevated containers one step lighter with our own token.
+
+   Deliberately NOT :where(): Mantine's own background rules live on hashed
+   classes at specificity (0,1,0); a :where() (0,0,0) rule would lose. These
+   static-class selectors tie at (0,1,0) and win by cascade order —
+   providers.tsx imports @mantine/core/styles.css BEFORE global.css. Keep
+   that import order.
+
+   Plain Paper is deliberately NOT in this list: inline section-wrapper
+   Papers should stay on body. Floating-chrome Papers must opt in
+   explicitly (BulkActionBar.module.css, the Settings save bar's bg prop).
+   Explicit bg props on components still win (inline style beats any
+   stylesheet rule). */
+/* Modal/Drawer HEADERS are listed too: Mantine paints them with
+   --mantine-color-body (they're sticky and must be opaque), which would
+   band against the surface-tinted content below. */
+.mantine-Card-root,
+.mantine-Modal-content,
+.mantine-Modal-header,
+.mantine-Drawer-content,
+.mantine-Drawer-header,
+.mantine-Menu-dropdown,
+.mantine-Popover-dropdown,
+.mantine-HoverCard-dropdown,
+.mantine-Notification-root {
+  background-color: var(--as3m-surface);
+}
+
+/* Soft resting lift on cards; deep mockup shadow on floating overlays.
+   Cards keep withBorder — shadow adds depth, the hairline keeps the edge. */
+.mantine-Card-root {
+  box-shadow: var(--as3m-shadow-rest);
+}
+
+.mantine-Modal-content,
+.mantine-Drawer-content,
+.mantine-Menu-dropdown,
+.mantine-Popover-dropdown,
+.mantine-HoverCard-dropdown,
+.mantine-Notification-root {
+  box-shadow: var(--as3m-shadow-float);
+}
+
+/* Bottom toast stacks normally sit in the corner. Lift them to clear a
+   bottom-anchored element ONLY while one is actually on screen — the floating
+   scroll-to-top button (in the DOM only while scrolled past its threshold) or
+   the admin Settings save bar (present only on that page in edit mode). The
+   `:has()` checks read their presence with zero JS state; the transition keeps
+   the shift smooth.
+
+   Scoped to the bottom-* position containers only: Mantine renders one
+   Notifications root per position, and raising the top-* ones (which keep
+   top: 16px) would stretch them across ~half the viewport, where they would
+   intercept clicks. */
+.mantine-Notifications-root[data-position^="bottom"] {
+  transition: bottom 200ms ease;
+}
+body:has([data-scroll-to-top]) .mantine-Notifications-root[data-position^="bottom"],
+body:has([data-settings-save-bar])
+  .mantine-Notifications-root[data-position^="bottom"],
+body:has([data-bulk-bar]) .mantine-Notifications-root[data-position^="bottom"] {
+  bottom: 80px;
+}
+
+/* Phones: the centered bulk bar reaches the scroll-to-top button's corner
+   (right: 36) and the round button lands ON the Delete button. Hide it
+   while a selection is active — desktop keeps both (no overlap there). */
+@media (max-width: 47.99em) {
+  body:has([data-bulk-bar]) [data-scroll-to-top] {
+    display: none;
+  }
+}
+
+/* Theme switch cross-fade. ThemeToggle wraps the color-scheme change in a View
+   Transition (where supported), so the whole page dissolves from the old theme
+   to the new one instead of snapping. This is the primary theme-transition
+   mechanism — the per-element `:where()` color transitions above can't carry it
+   on their own because Mantine forces `transition: none` during the swap and
+   overrides the colour transition on AppShell/Title. These rules just give the
+   default root cross-fade a calm, brand-consistent 240ms.
+
+   The dissolve is a snapshot overlay, so it animates uniformly regardless of
+   which elements declare CSS transitions. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 240ms;
+  animation-timing-function: ease;
+}
+
+/* Honour reduced-motion even if a View Transition is somehow started (the JS
+   already skips it; this is the CSS belt-and-suspenders). */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}

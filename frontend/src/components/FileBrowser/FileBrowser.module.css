@@ -1,0 +1,190 @@
+/* First-screen entry stagger. Applied (via JS in FileRow/FileCard) ONLY to the
+   first screenful of rows on cold load — never to lazy-revealed rows. The
+   `--row-index * 28ms` delay is why this must be capped: without the cap, a
+   lazy-revealed row at index 60 waited 1.8s at opacity 0 before fading in
+   (it looked like an empty table that "goes to the Moon" on every scroll).
+   FileRow/FileCard only set this class (and --row-index) while
+   index < STAGGER_ROW_LIMIT, so the delay can never run away and rows past the
+   first screen render instantly. */
+.animateIn {
+  opacity: 0;
+  animation: fadeIn 200ms ease-out forwards;
+  animation-delay: calc(var(--row-index, 0) * 28ms);
+}
+
+@keyframes fadeIn {
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animateIn {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+.actions {
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.row:hover .actions,
+.actions:focus-within {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .actions {
+    opacity: 1;
+  }
+}
+
+/* Grid-card thumbnail for <img>/<video>. Shared between image and video so the
+   poster frame renders at exactly the same size as a static thumbnail.
+   - 120x120 box: large enough to actually see what the file looks like
+     (the previous 48px square felt like the icon-fallback, not a preview);
+     the surrounding Card padding stays the same so the grid layout is
+     unchanged at the card level.
+   - object-fit: contain (was `cover`) so the whole image fits inside the
+     thumbnail box without edge cropping. Non-square images get letterbox
+     on the long axis; that matches the user expectation of "I see what
+     the picture actually is" instead of "I see the centre slice". */
+.thumbnail {
+  max-width: 120px;
+  max-height: 120px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+/* Zebra stripe applied per-row by absolute index (FileRow sets `.stripe` on odd
+   indices) instead of Mantine's nth-child `striped` prop, which flickers under
+   virtualization. Airify: the dark stripe is a hue-NEUTRAL white wash, not a
+   palette shade — dark-6 (#222b3c) was near-identical to the blue selection
+   tint, making selected rows unreadable against the zebra. Lower specificity
+   than `.row:hover` / selected below, so those states still win. */
+.stripe {
+  background: light-dark(
+    var(--mantine-color-gray-0),
+    rgba(255, 255, 255, 0.03)
+  );
+}
+
+/* Phase 6b: hover vs selected differentiation. Spec §6.6.
+   Hover stays neutral (Mantine's default-hover token, no colour shift).
+   Selected uses the project primary accent + left rail (like the sidebar
+   active-state) so a selected row reads as structural state distinct from
+   a passing cursor. Implemented via `:has(input:checked)` so no JSX
+   change to FileRow/FileCard is needed (checkboxes already react to the
+   `selected` prop). */
+.row:hover {
+  background: var(--mantine-color-default-hover);
+}
+
+/* Selected: tint background + a left rail drawn via inset box-shadow.
+   `position: relative` + `::before` on a `<tr>` breaks CSS table layout —
+   the row's cells collapse / overflow because tr can't host absolute-positioned
+   children. `box-shadow: inset 3px 0` paints the rail without touching layout. */
+.row:has(input[type="checkbox"]:checked) {
+  /* 24% (was 14%): the airify slate surfaces sit close to the primary tint,
+     so the old strength camouflaged selection against the zebra. */
+  background: color-mix(
+    in srgb,
+    var(--mantine-primary-color-filled) 24%,
+    transparent
+  );
+  box-shadow: inset 3px 0 0 var(--mantine-primary-color-filled);
+}
+
+.row:has(input[type="checkbox"]:checked):hover {
+  background: color-mix(
+    in srgb,
+    var(--mantine-primary-color-filled) 30%,
+    transparent
+  );
+}
+
+/* Grid cards only: re-compose the airify resting shadow with the selection
+   rail. box-shadow doesn't merge across rules — the higher-specificity
+   selected rule above would otherwise REPLACE global.css's
+   `.mantine-Card-root { box-shadow: var(--as3m-shadow-rest) }`, so a
+   selected card lost its lift. Table rows (tr) never had a resting shadow,
+   hence the :global(.mantine-Card-root) scope. */
+.row:global(.mantine-Card-root):has(input[type="checkbox"]:checked) {
+  box-shadow:
+    inset 3px 0 0 var(--mantine-primary-color-filled),
+    var(--as3m-shadow-rest);
+}
+
+/* Breadcrumb items: cap + ellipsize long S3 names (full name in the title
+   tooltip). A CSS class, NOT an inline style — Mantine Breadcrumbs clones
+   its children and drops the style prop, but merges className. inline-block
+   is required for text-overflow on the inline Anchor. */
+.crumb {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+/* Split-button primaries on phones: the text label is hidden (icon-only),
+   so the leftSection's trailing margin would sit asymmetrically — drop it. */
+@media (max-width: 47.99em) {
+  .splitPrimary :global(.mantine-Button-section[data-position="left"]) {
+    margin-inline-end: 0;
+  }
+}
+
+/* Actions column: full inline icon row on desktop; a single ⋮ menu trigger
+   on phones (<sm), where four always-visible icons (hover: none) would
+   starve the Name column under table layout="fixed". Width must track
+   which variant FileRow renders (Box visibleFrom/hiddenFrom "sm"). */
+.actionsCol {
+  width: 180px;
+}
+
+@media (max-width: 47.99em) {
+  .actionsCol {
+    width: 56px;
+  }
+}
+
+/* Sticky table header inside the FileBrowser scroll area. Background prevents
+   rows showing through as they scroll under it; z-index keeps it above the
+   virtualized rows. */
+.stickyHead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--mantine-color-body);
+}
+
+/* Fixed-height app-chrome layout (vanilla .file-list-container parity): the
+   toolbar stays pinned while only the list scrolls. Height fills the viewport
+   remainder below the 60px AppShell header, minus the AppShell.Main md padding
+   top+bottom. dvh keeps it correct on mobile browser chrome. */
+.container {
+  display: flex;
+  flex-direction: column;
+  height: calc(
+    100dvh - var(--app-shell-header-height, 60px) - 2 * var(--mantine-spacing-md)
+  );
+}
+
+.toolbar {
+  flex: 0 0 auto;
+}
+
+.scrollArea {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* Never scroll horizontally: the fixed-layout table is width:100% and all
+     text truncates; any residual x-overflow is a rendering artifact (seen as
+     a stray bottom scrollbar on Android). */
+  overflow-x: hidden;
+  position: relative;
+}

@@ -2,6 +2,7 @@
 Authentication and authorization module
 """
 
+import logging
 import os
 import secrets
 import time
@@ -9,7 +10,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
@@ -20,14 +20,14 @@ from another_s3_manager.constants import (
     MAX_LOGIN_ATTEMPTS,
 )
 
+logger = logging.getLogger(__name__)
+
 # Initialize password context with bcrypt, fallback to pbkdf2_sha256 if bcrypt fails
 try:
     pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 except Exception as e:
     print(f"Warning: bcrypt initialization failed: {e}. Using pbkdf2_sha256 instead.")
     pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
-
-security = HTTPBearer()
 
 # Login attempts tracking (in-memory, resets on restart)
 _login_attempts: Dict[str, Dict[str, Any]] = {}
@@ -49,12 +49,20 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         if len(password_bytes) > 72:
             plain_password = password_bytes[:72].decode("utf-8", errors="ignore")
         return pwd_context.verify(plain_password, hashed_password)
-    except Exception:
-        # If verification fails, try with pbkdf2_sha256 context
+    except Exception as primary_exc:
+        # Try pbkdf2_sha256 fallback before giving up — historical migration path.
         try:
             pwd_context_fallback = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
             return pwd_context_fallback.verify(plain_password, hashed_password)
-        except Exception:
+        except Exception as fallback_exc:
+            # Both schemes failed — the hash is likely corrupted. Return False so
+            # the user gets a normal "wrong password" response, but warn so
+            # operators can spot data corruption in the logs.
+            logger.warning(
+                "verify_password: both bcrypt and pbkdf2_sha256 raised; treating as failure (primary=%s, fallback=%s)",
+                primary_exc,
+                fallback_exc,
+            )
             return False
 
 
@@ -93,26 +101,30 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
     return encoded_jwt
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
-    """Get current authenticated user from JWT token."""
+def get_current_user(request: Request) -> Dict[str, Any]:
+    """Get current authenticated user from JWT token in httpOnly cookie."""
     # Import here to avoid circular dependency
     from another_s3_manager.users import load_users, save_users
 
+    token = request.cookies.get("access_token")
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+
     try:
-        token = credentials.credentials
         payload = jwt.decode(token, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
-        username: str = payload.get("sub")
+        username: Optional[str] = payload.get("sub")
         if username is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials",
-                headers={"WWW-Authenticate": "Bearer"},
             )
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
         )
 
     users = load_users()
@@ -121,7 +133,6 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
-            headers={"WWW-Authenticate": "Bearer"},
         )
 
     # Add CSRF token from JWT to user dict for validation
@@ -181,11 +192,18 @@ def check_ban(username: str) -> bool:
 
 
 def record_login_attempt(username: str, success: bool) -> None:
-    """Record a login attempt and ban user if too many failures."""
+    """Record a login attempt and ban user if too many failures.
+
+    Admins are exempt from auto-ban: the `admin` username is predictable, and a
+    drive-by attacker could lock the only admin out of the system with three
+    wrong-password requests. Brute-force defense for admin accounts must come
+    from the deployment layer (Cloudflare Access / WAF / strong password / 2FA),
+    not from auto-ban.
+    """
     # Import here to avoid circular dependency
     from datetime import datetime
 
-    from another_s3_manager.users import load_bans, save_bans
+    from another_s3_manager.users import load_bans, load_users, save_bans
 
     if username not in _login_attempts:
         _login_attempts[username] = {"attempts": [], "failed_count": 0}
@@ -207,8 +225,21 @@ def record_login_attempt(username: str, success: bool) -> None:
         user_attempts["attempts"].append(current_time)
         user_attempts["failed_count"] = len(user_attempts["attempts"])
 
-        # Ban if too many failures
+        # Ban if too many failures — but never ban an admin (DoS-on-admin protection).
         if user_attempts["failed_count"] >= MAX_LOGIN_ATTEMPTS:
+            user_record = next(
+                (u for u in load_users().get("users", []) if u.get("username") == username),
+                None,
+            )
+            if user_record and user_record.get("is_admin"):
+                # Admin — log the burst but don't ban.
+                logger.warning(
+                    "%d failed login attempts for admin '%s' (not banning)",
+                    user_attempts["failed_count"],
+                    username,
+                )
+                return
+
             bans = load_bans()
             banned_until = current_time + (BAN_DURATION_MINUTES * 60)
             bans[username] = {
@@ -217,4 +248,4 @@ def record_login_attempt(username: str, success: bool) -> None:
                 "reason": "Too many failed login attempts",
             }
             save_bans(bans)
-            print(f"User {username} banned until {datetime.fromtimestamp(banned_until)}")
+            logger.warning("User %s banned until %s", username, datetime.fromtimestamp(banned_until))

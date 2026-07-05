@@ -123,3 +123,58 @@ def test_app_version_defaults_to_dev(monkeypatch):
         assert reloaded.APP_VERSION == "dev"
     finally:
         importlib.reload(constants_module)
+
+
+def test_get_db_path_uses_data_dir(monkeypatch, tmp_path):
+    """get_db_path() returns <DATA_DIR>/another_s3_manager.db."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    import importlib
+
+    from another_s3_manager import constants
+
+    importlib.reload(constants)
+    assert constants.get_db_path() == tmp_path / "another_s3_manager.db"
+
+
+def test_get_db_path_creates_data_dir_if_missing(monkeypatch, tmp_path):
+    """get_db_path() ensures the parent directory exists."""
+    db_dir = tmp_path / "newly-created"
+    assert not db_dir.exists()
+    monkeypatch.setenv("DATA_DIR", str(db_dir))
+    import importlib
+
+    from another_s3_manager import constants
+
+    importlib.reload(constants)
+    constants.get_db_path()
+    assert db_dir.exists()
+
+
+def test_cookie_secure_defaults_to_true(monkeypatch):
+    monkeypatch.delenv("COOKIE_SECURE", raising=False)
+    import importlib
+
+    from another_s3_manager import constants
+
+    importlib.reload(constants)
+    assert constants.COOKIE_SECURE is True
+
+
+def test_cookie_secure_respects_env_false(monkeypatch):
+    monkeypatch.setenv("COOKIE_SECURE", "false")
+    import importlib
+
+    from another_s3_manager import constants
+
+    importlib.reload(constants)
+    assert constants.COOKIE_SECURE is False
+
+
+def test_cookie_secure_case_insensitive(monkeypatch):
+    monkeypatch.setenv("COOKIE_SECURE", "FALSE")
+    import importlib
+
+    from another_s3_manager import constants
+
+    importlib.reload(constants)
+    assert constants.COOKIE_SECURE is False

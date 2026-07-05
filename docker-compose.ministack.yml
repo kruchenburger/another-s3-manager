@@ -1,0 +1,28 @@
+# Test-only overlay: a local AWS emulator (S3 + IAM + STS) so the app's
+# assume_role / credentials / IAM paths can be exercised without real AWS.
+# Mirrors docker-compose.minio.yml. Bring up with:
+#   docker compose -f docker-compose.yml -f docker-compose.ministack.yml up
+services:
+  ministack:
+    # Pinned by digest per docker.md "never :latest — supply chain risk".
+    # Bump together with the matching reference in .github/workflows/ci.yml.
+    image: ministackorg/ministack@sha256:176654570cf2fdb07b9dda08e595410c513040aa609cf9138e25555bc148c535
+    container_name: another-s3-manager-ministack
+    ports:
+      - "4566:4566"
+    environment:
+      # Pin the emulated account id so the assume_role role_arn in the seed is static.
+      MINISTACK_ACCOUNT_ID: "000000000000"
+    healthcheck:
+      # The ministack image ships no curl/wget — only python3. Probe /health
+      # with a stdlib one-liner (exit 1 on any non-2xx / connection error).
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:4566/health',timeout=3).status==200 else 1)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 5

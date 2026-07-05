@@ -1,0 +1,135 @@
+import {
+  Anchor,
+  Code,
+  Group,
+  Radio,
+  Stack,
+  Text,
+  Tooltip,
+} from "@mantine/core";
+import { Info } from "lucide-react";
+import type { ReactNode } from "react";
+import { ROLE_TYPE_META, type RoleType } from "./roleTypeMeta";
+
+interface Option {
+  value: RoleType;
+  label: string;
+  icon: ReactNode;
+  /** One-liner shown beneath the label. */
+  description: ReactNode;
+  /** Optional richer explanation revealed via Tooltip on the info icon. */
+  details?: ReactNode;
+}
+
+// Rich (JSX) copy stays here — roleTypeMeta.ts is plain-string only so the
+// RolesPage badge tooltip can consume it. value/label/icon come from meta.
+const RICH: Partial<Record<RoleType, { description: ReactNode; details?: ReactNode }>> = {
+  default: {
+    description: <>Resolve credentials via the standard AWS chain. No keys stored in this app.</>,
+    details: (
+      <>
+        Sources tried in order: env vars (AWS_ACCESS_KEY_ID etc.), ~/.aws/config
+        profile, EC2/ECS/EKS instance metadata, or credential_process hooks like{" "}
+        <Anchor
+          href="https://docs.aws.amazon.com/rolesanywhere/latest/userguide/introduction.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          inherit
+          underline="always"
+        >
+          IAM Roles Anywhere
+        </Anchor>
+        .{" "}
+        <Anchor
+          href="https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          inherit
+          underline="always"
+        >
+          Full chain reference
+        </Anchor>
+      </>
+    ),
+  },
+  profile: {
+    description: (
+      <>
+        Reference a profile from <Code>~/.aws/credentials</Code> or{" "}
+        <Code>~/.aws/config</Code>. The container needs that file mounted.
+      </>
+    ),
+  },
+  assume_role: {
+    description: <>Assume a target IAM role via STS. Base creds need sts:AssumeRole.</>,
+  },
+  credentials: {
+    description: <>Store an AWS access key + secret directly. Simplest, least secure.</>,
+  },
+  s3_compatible: {
+    description: <>Cloudflare R2, MinIO, Backblaze B2, Wasabi, etc. Requires endpoint URL.</>,
+  },
+};
+
+export const OPTIONS: Option[] = ROLE_TYPE_META.map((m) => {
+  const IconCmp = m.icon;
+  return {
+    value: m.value,
+    label: m.label,
+    icon: <IconCmp size={18} />,
+    description: RICH[m.value]?.description ?? m.description,
+    details: RICH[m.value]?.details,
+  };
+});
+
+interface Props {
+  value: RoleType;
+  onChange: (next: RoleType) => void;
+  disabled?: boolean;
+}
+
+export function RoleTypePicker({ value, onChange, disabled }: Props) {
+  return (
+    <Radio.Group value={value} onChange={(v) => onChange(v as RoleType)}>
+      <Stack gap="sm" mt="xs">
+        {OPTIONS.map((opt) => (
+          <Radio
+            key={opt.value}
+            value={opt.value}
+            disabled={disabled}
+            label={
+              <Stack gap={2}>
+                <Group gap="xs" wrap="nowrap">
+                  {opt.icon}
+                  <Text fw={500}>{opt.label}</Text>
+                  <Code>{opt.value}</Code>
+                  {opt.details && (
+                    <Tooltip
+                      label={opt.details}
+                      multiline
+                      w={340}
+                      withArrow
+                      position="right"
+                      color="dark"
+                      c="white"
+                      events={{ hover: true, focus: true, touch: true }}
+                    >
+                      <Info
+                        size={14}
+                        aria-label={`More details about ${opt.label}`}
+                        style={{ cursor: "help", opacity: 0.6 }}
+                      />
+                    </Tooltip>
+                  )}
+                </Group>
+                <Text size="xs" c="dimmed">
+                  {opt.description}
+                </Text>
+              </Stack>
+            }
+          />
+        ))}
+      </Stack>
+    </Radio.Group>
+  );
+}

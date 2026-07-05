@@ -1,0 +1,16 @@
+/* frontend/src/components/CubeLogo/CubeLogo.module.css
+ *
+ * Just transform-box plumbing for the inner <g class="cube"> so GSAP
+ * (idle / error / notfound / crash modes) can scale/rotate the cube
+ * polygons around their own bbox centre instead of the SVG origin.
+ *
+ * The loader CSS animation that used to live here was removed in
+ * Phase 6b — loading states across the app are now served by Mantine
+ * <Loader /> via DelayedLoader. See that component for the rationale
+ * (SVG filter halo stalled under heavy file-table render and tripped
+ * Firefox's "slow page" detector). */
+
+.cube {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}

@@ -3,11 +3,14 @@ Configuration management module
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from another_s3_manager.constants import CONFIG_FILE
+
+logger = logging.getLogger(__name__)
 
 # Global cache for configuration
 _config_cache: Dict[str, Any] = {}
@@ -70,9 +73,66 @@ def _migrate_config() -> bool:
     if "max_file_size" not in _config_cache:
         _config_cache["max_file_size"] = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
         config_modified = True
-    if "auto_inline_extensions" not in _config_cache:
-        _config_cache["auto_inline_extensions"] = []
+    if "max_client_load" not in _config_cache:
+        _config_cache["max_client_load"] = int(os.getenv("MAX_CLIENT_LOAD", "10000"))
         config_modified = True
+    # auto_inline_extensions: the /v2 preview UI treats this list as the single
+    # source of truth for which files preview inline as text. Seed it with the
+    # built-in text defaults the FIRST time a config is migrated — this covers
+    # fresh installs and legacy configs whose field was an inert []. The one-time
+    # `_auto_inline_seeded` marker (preserved across saves in update_config) means
+    # we never re-seed, so an admin who deliberately clears the list to [] keeps
+    # it empty.
+    if not _config_cache.get("_auto_inline_seeded"):
+        from another_s3_manager.constants import DEFAULT_AUTO_INLINE_EXTENSIONS
+
+        if not _config_cache.get("auto_inline_extensions"):
+            _config_cache["auto_inline_extensions"] = list(DEFAULT_AUTO_INLINE_EXTENSIONS)
+        _config_cache["_auto_inline_seeded"] = True
+        config_modified = True
+    # Password policy defaults — added Phase 4d. Conservative baseline:
+    # require length+uppercase+lowercase+digit, leave special opt-in.
+    if "password_min_length" not in _config_cache:
+        _config_cache["password_min_length"] = 8
+        config_modified = True
+    if "password_min_uppercase" not in _config_cache:
+        _config_cache["password_min_uppercase"] = 1
+        config_modified = True
+    if "password_min_lowercase" not in _config_cache:
+        _config_cache["password_min_lowercase"] = 1
+        config_modified = True
+    if "password_min_digits" not in _config_cache:
+        _config_cache["password_min_digits"] = 1
+        config_modified = True
+    if "password_min_special" not in _config_cache:
+        _config_cache["password_min_special"] = 0
+        config_modified = True
+    # MCP server defaults — added Phase 5
+    if "mcp_enabled" not in _config_cache:
+        _config_cache["mcp_enabled"] = True
+        config_modified = True
+    if "mcp_disable_writes" not in _config_cache:
+        _config_cache["mcp_disable_writes"] = False
+        config_modified = True
+    if "mcp_text_extensions" not in _config_cache:
+        _config_cache["mcp_text_extensions"] = []
+        config_modified = True
+    if "mcp_global_max_read_bytes" not in _config_cache:
+        _config_cache["mcp_global_max_read_bytes"] = 10_485_760
+        config_modified = True
+    if "presigned_url_default_ttl" not in _config_cache or "presigned_url_max_ttl" not in _config_cache:
+        from another_s3_manager.constants import DEFAULT_PRESIGNED_URL_DEFAULT_TTL, DEFAULT_PRESIGNED_URL_MAX_TTL
+
+        if "presigned_url_default_ttl" not in _config_cache:
+            _config_cache["presigned_url_default_ttl"] = int(
+                os.getenv("PRESIGNED_URL_DEFAULT_TTL", str(DEFAULT_PRESIGNED_URL_DEFAULT_TTL))
+            )
+            config_modified = True
+        if "presigned_url_max_ttl" not in _config_cache:
+            _config_cache["presigned_url_max_ttl"] = int(
+                os.getenv("PRESIGNED_URL_MAX_TTL", str(DEFAULT_PRESIGNED_URL_MAX_TTL))
+            )
+            config_modified = True
     # Note: data_dir is not migrated automatically - it should be set explicitly if needed
     # Note: default_role is optional and not migrated automatically - it should be set explicitly if needed
 
@@ -81,16 +141,91 @@ def _migrate_config() -> bool:
 
 def _get_default_config() -> Dict[str, Any]:
     """Get default configuration."""
-    from another_s3_manager.constants import DEFAULT_ITEMS_PER_PAGE, DEFAULT_MAX_FILE_SIZE
+    from another_s3_manager.constants import (
+        DEFAULT_AUTO_INLINE_EXTENSIONS,
+        DEFAULT_MAX_CLIENT_LOAD,
+        DEFAULT_MAX_FILE_SIZE,
+        DEFAULT_PRESIGNED_URL_DEFAULT_TTL,
+        DEFAULT_PRESIGNED_URL_MAX_TTL,
+    )
 
     return {
         "roles": [{"name": "Default", "type": "default", "description": "Use default AWS credentials"}],
-        "items_per_page": int(os.getenv("ITEMS_PER_PAGE", str(DEFAULT_ITEMS_PER_PAGE))),
         "enable_lazy_loading": os.getenv("ENABLE_LAZY_LOADING", "true").lower() == "true",
         "max_file_size": int(os.getenv("MAX_FILE_SIZE", str(DEFAULT_MAX_FILE_SIZE))),
+        "max_client_load": int(os.getenv("MAX_CLIENT_LOAD", str(DEFAULT_MAX_CLIENT_LOAD))),
         "disable_deletion": False,
-        "auto_inline_extensions": [],
+        # Seeded with the text defaults; admin-owned thereafter (see migration).
+        "auto_inline_extensions": list(DEFAULT_AUTO_INLINE_EXTENSIONS),
+        "_auto_inline_seeded": True,
+        "password_min_length": 8,
+        "password_min_uppercase": 1,
+        "password_min_lowercase": 1,
+        "password_min_digits": 1,
+        "password_min_special": 0,
+        "mcp_enabled": True,
+        "mcp_disable_writes": False,
+        "mcp_text_extensions": [],
+        "mcp_global_max_read_bytes": 10_485_760,
+        "presigned_url_default_ttl": int(
+            os.getenv("PRESIGNED_URL_DEFAULT_TTL", str(DEFAULT_PRESIGNED_URL_DEFAULT_TTL))
+        ),
+        "presigned_url_max_ttl": int(os.getenv("PRESIGNED_URL_MAX_TTL", str(DEFAULT_PRESIGNED_URL_MAX_TTL))),
     }
+
+
+def resolve_presigned_ttls(config: Dict[str, Any]) -> tuple[int, int]:
+    """Resolve (default_ttl, max_ttl) for presigned URLs in seconds.
+
+    Resolution order per field: config value → env var → hardcoded default.
+    `max_ttl` is clamped to the 7-day SigV4 ceiling. If a hand-edited config
+    has default > max, the effective default is min(default, max) (logged).
+    Garbage values fall back to the hardcoded defaults.
+    """
+    from another_s3_manager.constants import (
+        DEFAULT_PRESIGNED_URL_DEFAULT_TTL,
+        DEFAULT_PRESIGNED_URL_MAX_TTL,
+        PRESIGNED_URL_HARD_CEILING,
+    )
+
+    def _coerce(value: Any, env_name: str, fallback: int) -> int:
+        if value is None:
+            value = os.getenv(env_name)
+        if value is None:
+            return fallback
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            logger.warning("Invalid %s value %r — using default %d", env_name, value, fallback)
+            return fallback
+
+    max_ttl = _coerce(
+        config.get("presigned_url_max_ttl"),
+        "PRESIGNED_URL_MAX_TTL",
+        DEFAULT_PRESIGNED_URL_MAX_TTL,
+    )
+    if max_ttl > PRESIGNED_URL_HARD_CEILING:
+        logger.warning(
+            "presigned_url_max_ttl %d exceeds the 7-day ceiling — clamping to %d",
+            max_ttl,
+            PRESIGNED_URL_HARD_CEILING,
+        )
+        max_ttl = PRESIGNED_URL_HARD_CEILING
+
+    default_ttl = _coerce(
+        config.get("presigned_url_default_ttl"),
+        "PRESIGNED_URL_DEFAULT_TTL",
+        DEFAULT_PRESIGNED_URL_DEFAULT_TTL,
+    )
+    if default_ttl > max_ttl:
+        logger.warning(
+            "presigned_url_default_ttl %d exceeds max %d — using max as the effective default",
+            default_ttl,
+            max_ttl,
+        )
+        default_ttl = max_ttl
+
+    return default_ttl, max_ttl
 
 
 def is_config_writable() -> bool:

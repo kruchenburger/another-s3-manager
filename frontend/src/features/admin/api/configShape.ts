@@ -1,0 +1,42 @@
+import type { AppConfig } from "@/types/api";
+
+/**
+ * Strip derived/runtime fields the backend adds to GET /api/config responses
+ * but does NOT expect on POST. Notably:
+ *   - `data_dir`: response is the resolved current value; persisting it would
+ *     latch the path into config.json and override env-var resolution on
+ *     future deployments (constants.py:get_data_dir falls back to config).
+ *   - `current_role`: response-only, computed per-request from per-user perms.
+ *   - `is_read_only`: filesystem capability check, never config data.
+ *
+ * The save payload is built via explicit allowlist for the same reason
+ * (a contract inherited from the pre-Phase-7 vanilla admin page).
+ */
+export function toWritableConfig(config: AppConfig): AppConfig {
+  return {
+    roles: config.roles,
+    enable_lazy_loading: config.enable_lazy_loading,
+    max_file_size: config.max_file_size,
+    max_client_load: config.max_client_load,
+    disable_deletion: config.disable_deletion,
+    auto_inline_extensions: config.auto_inline_extensions,
+    password_min_length: config.password_min_length,
+    password_min_uppercase: config.password_min_uppercase,
+    password_min_lowercase: config.password_min_lowercase,
+    password_min_digits: config.password_min_digits,
+    password_min_special: config.password_min_special,
+    // Presigned URL TTL settings.
+    presigned_url_default_ttl: config.presigned_url_default_ttl,
+    presigned_url_max_ttl: config.presigned_url_max_ttl,
+    // MCP server settings.
+    // NOTE: mcp_global_max_read_bytes is in BYTES, not MB. SettingsPage edits
+    // an MB-converted shadow field (mcp_global_max_read_bytes_mb) and converts
+    // back to bytes before save. Any other caller of toWritableConfig that
+    // wants to override this field MUST do the same conversion — passing the
+    // raw MB value would silently shrink the cap by 1024×.
+    mcp_enabled: config.mcp_enabled,
+    mcp_disable_writes: config.mcp_disable_writes,
+    mcp_text_extensions: config.mcp_text_extensions,
+    mcp_global_max_read_bytes: config.mcp_global_max_read_bytes,
+  };
+}

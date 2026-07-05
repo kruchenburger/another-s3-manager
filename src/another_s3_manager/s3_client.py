@@ -3,8 +3,10 @@ S3 client management module
 """
 
 import logging
+import os
+import time
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional, TypeVar
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple, TypeVar
 from typing import Any as AnyType
 
 import boto3
@@ -13,6 +15,7 @@ from botocore.credentials import RefreshableCredentials
 from botocore.exceptions import ClientError, CredentialRetrievalError, MetadataRetrievalError
 from botocore.session import Session as BotocoreSession
 
+from another_s3_manager.config import load_config
 from another_s3_manager.constants import S3_USE_SSL, S3_VERIFY_SSL
 
 # Cache for S3 clients per role
@@ -42,21 +45,23 @@ def _clear_boto3_cached_credentials() -> None:
             try:
                 if hasattr(default_session, "_credentials"):
                     default_session._credentials = None
-            except Exception:  # noqa: BLE001 - best effort cleanup
-                pass
+            except Exception as exc:  # noqa: BLE001 - best effort cleanup
+                logger.debug("_clear_boto3_cached_credentials: default_session._credentials clear failed: %s", exc)
             try:
                 inner_session = getattr(default_session, "_session", None)
                 if inner_session is not None and hasattr(inner_session, "_credentials"):
                     inner_session._credentials = None
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - best effort cleanup
+                logger.debug(
+                    "_clear_boto3_cached_credentials: default_session._session._credentials clear failed: %s", exc
+                )
 
         module_session = getattr(boto3, "_session", None)
         if module_session is not None and hasattr(module_session, "_credentials"):
             try:
                 module_session._credentials = None
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - best effort cleanup
+                logger.debug("_clear_boto3_cached_credentials: module_session._credentials clear failed: %s", exc)
 
         # Clear credential resolver caches on a fresh botocore session
         import botocore.session
@@ -224,12 +229,22 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
         if not role_arn:
             raise ValueError("role_arn is required for assume_role type")
 
+        # Region for the STS + assumed-role S3 clients: the role's own region
+        # wins, then the AWS_REGION env this app documents. botocore itself only
+        # falls back to AWS_DEFAULT_REGION / shared config — in a bare container
+        # with just AWS_REGION set, creating the STS client raises NoRegionError
+        # ("You must specify a region") even though S3 clients with an explicit
+        # endpoint_url get away without one. None keeps botocore's own chain.
+        region = (role.get("region") or "").strip() or os.environ.get("AWS_REGION") or None
+
         def refresh_assumed_role_credentials():
             """Refresh credentials by assuming the role again using current pod identity credentials."""
             try:
                 logger.debug(f"Refreshing credentials for assumed role: {role_arn}")
                 # Create a fresh STS client that will use current pod identity credentials
-                sts_client = boto3.client("sts", use_ssl=use_ssl, verify=verify_ssl, config=boto_config)
+                sts_client = boto3.client(
+                    "sts", region_name=region, use_ssl=use_ssl, verify=verify_ssl, config=boto_config
+                )
 
                 assumed_role = sts_client.assume_role(RoleArn=role_arn, RoleSessionName="s3-file-manager-session")
                 creds = assumed_role["Credentials"]
@@ -264,7 +279,9 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
             try:
                 logger.info(f"Creating STS client for assume_role: {role_arn} (attempt {sts_attempts + 1})")
                 # Get initial credentials
-                sts_client = boto3.client("sts", use_ssl=use_ssl, verify=verify_ssl, config=boto_config)
+                sts_client = boto3.client(
+                    "sts", region_name=region, use_ssl=use_ssl, verify=verify_ssl, config=boto_config
+                )
 
                 logger.info(f"Attempting to assume role: {role_arn}")
                 assumed_role = sts_client.assume_role(RoleArn=role_arn, RoleSessionName="s3-file-manager-session")
@@ -299,7 +316,11 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                     sts_attempts += 1
                     continue  # Retry once
                 else:
-                    # Second attempt failed or not an expired token error
+                    # Second attempt failed or not an expired token error.
+                    # Convert to typed CredentialsExpiredError so the HTTP boundary
+                    # can return 401 (re-auth required) instead of bare 400.
+                    from another_s3_manager.errors import CredentialsExpiredError
+
                     logger.error(
                         f"Failed to retrieve credentials for STS client (needed to assume role {role_arn})",
                         extra={
@@ -309,13 +330,18 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                         },
                         exc_info=True,
                     )
-                    raise ValueError(
-                        f"Unable to retrieve AWS credentials needed to assume role {role_arn}. "
-                        f"In Kubernetes, ensure IRSA (IAM Roles for Service Accounts) or eks-pod-identity is configured, "
-                        f"or that the pod has access to instance profile credentials. "
-                        f"Error: {str(e)}"
+                    raise CredentialsExpiredError(
+                        code="CredentialRetrievalError",
+                        message=(
+                            f"Unable to retrieve AWS credentials needed to assume role {role_arn}. "
+                            f"In Kubernetes, ensure IRSA (IAM Roles for Service Accounts) or eks-pod-identity is configured, "
+                            f"or that the pod has access to instance profile credentials. "
+                            f"Error: {str(e)}"
+                        ),
                     ) from e
             except ClientError as e:
+                from another_s3_manager.errors import S3AccessDeniedError, classify_boto_error
+
                 error_code = (
                     e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") and e.response else ""
                 )
@@ -331,19 +357,31 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                     },
                     exc_info=True,
                 )
-                # Re-raise with more context
-                if error_code == "AccessDenied":
-                    raise ValueError(
-                        f"Access denied when trying to assume role {role_arn}. "
-                        f"Check that the pod/service account has permission to assume this role. "
-                        f"Error: {error_msg}"
-                    ) from e
-                raise ValueError(f"Failed to assume role {role_arn}: {error_msg or str(e)}") from e
+                # Convert to typed exception via classifier (preserves boto code +
+                # http_status). Preserve the role ARN context in the message —
+                # admins need to know which role's config is broken.
+                typed = classify_boto_error(e)
+                original = typed.args[0] if typed.args else str(e)
+                # Preserve role-arn context. For AccessDenied specifically,
+                # add the IRSA / pod-identity hint that helps admins debug
+                # trust-policy bugs (the boto message names the principal but
+                # not the resolution path).
+                if isinstance(typed, S3AccessDeniedError):
+                    typed.args = (
+                        f"assume_role for {role_arn}: {original}. "
+                        f"Check that the pod/service account has permission to assume this role "
+                        f"(IAM trust policy must allow the calling principal).",
+                    )
+                else:
+                    typed.args = (f"assume_role for {role_arn}: {original}",)
+                raise typed from e
             except Exception as e:
                 error_type = type(e).__name__
                 error_msg = str(e)
-                # Check for NoCredentialsError
+                # Check for NoCredentialsError — re-auth required, not bad config.
                 if "NoCredentialsError" in error_type or "Unable to locate credentials" in error_msg:
+                    from another_s3_manager.errors import CredentialsExpiredError
+
                     logger.error(
                         f"No AWS credentials found (needed to assume role {role_arn})",
                         extra={
@@ -352,19 +390,28 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                         },
                         exc_info=True,
                     )
-                    raise ValueError(
-                        f"Unable to locate AWS credentials needed to assume role {role_arn}. "
-                        f"In Kubernetes, ensure IRSA (IAM Roles for Service Accounts) or eks-pod-identity is configured, "
-                        f"or that the pod has access to instance profile credentials. "
-                        f"Error: {error_msg}"
+                    raise CredentialsExpiredError(
+                        code="NoCredentialsError",
+                        message=(
+                            f"Unable to locate AWS credentials needed to assume role {role_arn}. "
+                            f"In Kubernetes, ensure IRSA (IAM Roles for Service Accounts) or eks-pod-identity is configured, "
+                            f"or that the pod has access to instance profile credentials. "
+                            f"Error: {error_msg}"
+                        ),
                     ) from e
+
+                from another_s3_manager.errors import S3OperationError
 
                 logger.error(
                     f"Unexpected error while assuming role {role_arn}",
                     extra={"role_arn": role_arn, "error_type": error_type},
                     exc_info=True,
                 )
-                raise ValueError(f"Unexpected error while assuming role {role_arn}: {error_msg}") from e
+                raise S3OperationError(
+                    code="Unknown",
+                    message=f"Unexpected error while assuming role {role_arn}: {error_msg}",
+                    http_status=500,
+                ) from e
 
         # Verify that we successfully obtained credentials
         if initial_credentials is None:
@@ -395,6 +442,8 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
             "verify": verify_ssl,
             "config": boto_config,
         }
+        if region:
+            client_kwargs["region_name"] = region
         if endpoint_url:
             client_kwargs["endpoint_url"] = endpoint_url
 
@@ -478,6 +527,13 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     """
     Get S3 client for the specified role (cached).
 
+    On cache miss, after creation we probe the client with a lightweight
+    call (list_buckets, falling back to head_bucket on the role's first
+    allowed_bucket if list_buckets is denied). If the probe raises, the
+    client is NOT cached and the failure is propagated as a typed
+    S3OperationError so callers see the real error code immediately
+    instead of caching a broken client.
+
     Args:
         role_name: Name of the role to use, or None for default
 
@@ -486,6 +542,11 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     """
     # Import here to avoid circular dependency
     from another_s3_manager.config import load_config
+    from another_s3_manager.errors import (
+        S3AccessDeniedError,
+        S3OperationError,
+        classify_boto_error,
+    )
 
     # Use cache key based on role name
     cache_key = role_name or "default"
@@ -510,14 +571,11 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
             # Fallback to default AWS credentials
             role = {"name": "Default", "type": "default", "description": "Use default AWS credentials"}
 
-    # Create and cache client
+    # Create client
     try:
         role_type = role.get("type", "unknown")
         logger.debug(f"Creating S3 client for role '{role_name or 'default'}' (type: {role_type})")
         client = _create_s3_client_from_role(role)
-        _s3_clients_cache[cache_key] = client
-        logger.debug(f"Successfully created and cached S3 client for role '{role_name or 'default'}'")
-        return client
     except Exception:
         logger.error(
             f"Failed to create S3 client for role '{role_name or 'default'}'",
@@ -530,20 +588,81 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
         )
         raise
 
+    # Probe the client to surface bad config (invalid region, unreachable
+    # endpoint, expired credentials) BEFORE caching. Roles with
+    # allowed_buckets configured are expected to lack ListAllMyBuckets
+    # permission — fall back to head_bucket. We iterate ALL allowed_buckets
+    # (not just the first) so a single deleted/renamed bucket out-of-band
+    # doesn't brick the entire role for users who only access the others.
+    try:
+        client.list_buckets()
+    except Exception as probe_error:
+        typed = classify_boto_error(probe_error)
+        if isinstance(typed, S3AccessDeniedError):
+            allowed_buckets = role.get("allowed_buckets") or []
+            if isinstance(allowed_buckets, list) and allowed_buckets:
+                # Try each allowed bucket until one succeeds. As long as at
+                # least ONE responds, the credentials are valid — cache the
+                # client. Per-bucket NoSuchBucket / AccessDenied for the rest
+                # will surface on the actual operation, not at probe time.
+                head_failures: list[tuple[str, S3OperationError]] = []
+                for bucket_name in allowed_buckets:
+                    try:
+                        client.head_bucket(Bucket=str(bucket_name))
+                        break  # success — fall through to cache
+                    except Exception as head_error:
+                        head_failures.append((str(bucket_name), classify_boto_error(head_error)))
+                else:
+                    # Loop exhausted without break — every allowed bucket failed.
+                    # Surface the most-recent typed error with context about which
+                    # buckets were tried, so admins can spot config-vs-runtime issues.
+                    last_typed = head_failures[-1][1]
+                    bucket_summary = ", ".join(f"{name} ({err.code})" for name, err in head_failures)
+                    logger.error(
+                        f"S3 client probe (head_bucket) failed for ALL allowed_buckets on role "
+                        f"'{role_name or 'default'}': {bucket_summary}"
+                    )
+                    raise type(last_typed)(
+                        code=last_typed.code,
+                        message=(
+                            f"All allowed_buckets failed for this role: {bucket_summary}. "
+                            "Check the bucket names + credentials in the role config."
+                        ),
+                    ) from probe_error
+            else:
+                # No allowed_buckets configured AND the role's creds can't
+                # list all buckets. Wrap with the same friendly message that
+                # the legacy /api/buckets handler used (PR #14 contract) so
+                # frontend keeps showing actionable guidance, and add the
+                # fix path for admins.
+                logger.error(
+                    f"S3 client probe denied for role '{role_name or 'default'}' and no allowed_buckets configured"
+                )
+                raise S3AccessDeniedError(
+                    code=typed.code,
+                    message=(
+                        "Your credentials don't have permission to list all buckets. "
+                        "This is normal for scoped tokens (R2, MinIO, AWS IAM with bucket-scoped policies). "
+                        "Edit this role and fill in 'Allowed Buckets' with the bucket names you want to access, "
+                        "or grant ListAllMyBuckets."
+                    ),
+                ) from probe_error
+        else:
+            logger.error(
+                f"S3 client probe failed for role '{role_name or 'default'}': "
+                f"code={typed.code} status={typed.http_status}"
+            )
+            raise typed from probe_error
 
-def execute_with_s3_retry(role_name: Optional[str], callback: Callable[[AnyType], T]) -> T:
+    _s3_clients_cache[cache_key] = client
+    logger.debug(f"Successfully created, probed and cached S3 client for role '{role_name or 'default'}'")
+    return client
+
+
+def _execute_with_retry_inner(role_name: Optional[str], callback: Callable[[AnyType], T]) -> T:
     """
-    Run an S3 operation with automatic credential refresh on expiration.
-
-    Args:
-        role_name: Role name used to resolve the client.
-        callback: Callable receiving the S3 client and returning any value.
-
-    Returns:
-        Result of callback execution.
-
-    Raises:
-        Exception: Re-raises the original exception if retry is not possible.
+    Inner retry loop for S3 operations with automatic credential refresh.
+    Does not record metrics — called by execute_with_s3_retry which handles that.
     """
     # Import HTTPException here to avoid circular dependency
     from fastapi import HTTPException
@@ -632,7 +751,879 @@ def execute_with_s3_retry(role_name: Optional[str], callback: Callable[[AnyType]
     raise RuntimeError("Unexpected S3 execution failure without exception")
 
 
+def execute_with_s3_retry(role_name: Optional[str], operation: str, callback: Callable[[AnyType], T]) -> T:
+    """
+    Run an S3 operation with automatic credential refresh on expiration.
+
+    Records s3_operations_total and s3_operation_duration_seconds metrics.
+    Counts only the final outcome — retries do not produce duplicate counter increments.
+
+    Args:
+        role_name: Role name used to resolve the client.
+        operation: Operation label for metrics ('list'|'get'|'put'|'delete'|'head').
+        callback: Callable receiving the S3 client and returning any value.
+
+    Returns:
+        Result of callback execution.
+
+    Raises:
+        Exception: Re-raises the original exception if retry is not possible.
+    """
+    from another_s3_manager.metrics import (
+        s3_operation_duration_seconds,
+        s3_operations_total,
+        safe_role_label,
+    )
+
+    role_lbl = safe_role_label(role_name or "unknown")
+    start = time.perf_counter()
+    try:
+        result = _execute_with_retry_inner(role_name, callback)
+        s3_operations_total.labels(role=role_lbl, operation=operation, result="ok").inc()
+        return result
+    except Exception:
+        s3_operations_total.labels(role=role_lbl, operation=operation, result="error").inc()
+        raise
+    finally:
+        s3_operation_duration_seconds.labels(operation=operation).observe(time.perf_counter() - start)
+
+
 def clear_s3_clients_cache() -> None:
-    """Clear the S3 clients cache."""
+    """Clear the S3 clients cache AND the underlying boto3/botocore credential cache.
+
+    A bare dict clear is insufficient for roles backed by `assume_role` (STS) or
+    AWS `profile` credentials: boto3/botocore keeps its own credential cache on
+    the default session, so a new client built after the dict clear would still
+    inherit the OLD assumed-role / profile credentials until they naturally
+    expire (~1h for STS). The credential flush matches what the per-role
+    `invalidate_s3_client + _clear_boto3_cached_credentials` retry sites do.
+    """
     global _s3_clients_cache
     _s3_clients_cache.clear()
+    _clear_boto3_cached_credentials()
+
+
+# ---------------------------------------------------------------------------
+# Permission-aware helpers for both web routes and MCP tools
+# ---------------------------------------------------------------------------
+
+
+def validate_role_access(role_name: Optional[str], user_dict: Dict[str, Any]) -> Optional[str]:
+    """
+    Validate that user_dict permits using role_name.
+
+    Raises PermissionError (not HTTPException) — callers translate to the
+    appropriate boundary error (HTTP 403 or McpError).
+
+    Returns the validated role name, or None if role_name is None.
+    """
+    if role_name is None:
+        return None
+
+    # Admins have access to all roles.
+    if user_dict.get("is_admin", False):
+        return role_name
+
+    allowed_roles = user_dict.get("allowed_roles", [])
+    if role_name not in allowed_roles:
+        raise PermissionError(f"Access denied: You don't have permission to use role '{role_name}'")
+
+    return role_name
+
+
+def _validate_bucket_access(role: str, bucket: str, user_dict: Dict[str, Any]) -> None:
+    """
+    Validate role access and bucket access in one call.
+
+    Raises PermissionError if the user cannot use `role` OR if `bucket`
+    is not in the role's allowed_buckets (when that list is configured).
+    """
+    # Role-level check (raises PermissionError if not allowed).
+    validate_role_access(role, user_dict)
+
+    # Bucket-level check.
+    from another_s3_manager.config import load_config
+
+    config = load_config(force_reload=False)
+    roles = config.get("roles", [])
+    role_config = next((r for r in roles if r.get("name") == role), None)
+    if role_config is None:
+        # Role not found in config — s3_client.get_s3_client will raise ValueError later.
+        return
+    allowed_buckets = role_config.get("allowed_buckets")
+    if allowed_buckets and bucket not in allowed_buckets:
+        raise PermissionError(f"bucket '{bucket}' not in allowed_buckets for role '{role}'")
+
+
+# Role types that sign with temporary (STS) credentials — a presigned URL
+# cannot outlive the credentials that signed it, so long TTLs may expire early.
+_TEMPORARY_CREDENTIAL_ROLE_TYPES = frozenset({"assume_role", "profile"})
+
+
+def role_uses_temporary_credentials(role_name: str) -> bool:
+    """Return True if `role_name` signs with temporary STS credentials.
+
+    Used to decide whether a long-lived presigned URL needs a warning that it
+    may stop working when the role's session expires. Unknown roles return
+    False (no false alarm).
+    """
+    config = load_config(force_reload=False)
+    role_config = next((r for r in config.get("roles", []) if r.get("name") == role_name), None)
+    if role_config is None:
+        return False
+    return role_config.get("type") in _TEMPORARY_CREDENTIAL_ROLE_TYPES
+
+
+def list_buckets_for_role(role: str, user_dict: Dict[str, Any]) -> list:
+    """
+    Return list of bucket names accessible via `role` for `user_dict`.
+
+    Raises PermissionError if the user cannot use `role`.
+    If the role has allowed_buckets configured, returns that list directly.
+    Otherwise lists all buckets via S3 (requires s3:ListAllMyBuckets).
+    """
+    validated_role = validate_role_access(role, user_dict)
+
+    from another_s3_manager.config import load_config
+
+    config = load_config(force_reload=False)
+    roles = config.get("roles", [])
+    role_config = (
+        next((r for r in roles if r.get("name") == validated_role), None)
+        if validated_role
+        else (roles[0] if roles else None)
+    )
+
+    if role_config and "allowed_buckets" in role_config and role_config["allowed_buckets"]:
+        allowed_buckets = role_config["allowed_buckets"]
+        if isinstance(allowed_buckets, list):
+            return allowed_buckets
+        raise ValueError("allowed_buckets must be a list")
+
+    def fetch_buckets(s3_client):
+        response = s3_client.list_buckets()
+        return [bucket["Name"] for bucket in response["Buckets"]]
+
+    return execute_with_s3_retry(validated_role, "list", fetch_buckets)
+
+
+def list_objects_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> list:
+    """
+    List objects in `bucket` under `path` for `role`.
+
+    Returns list of file-object dicts (same shape as /api/buckets/{b}/files).
+    Raises PermissionError on role/bucket access violation.
+    """
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    prefix = path + "/" if path else ""
+
+    def fetch_files(s3_client):
+        files = []
+        directories: set = set()
+
+        paginator = s3_client.get_paginator("list_objects_v2")
+        pages = paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/")
+
+        for page in pages:
+            if "CommonPrefixes" in page:
+                for prefix_obj in page["CommonPrefixes"]:
+                    dir_name = prefix_obj["Prefix"][len(prefix) :].rstrip("/")
+                    if dir_name and dir_name not in directories:
+                        directories.add(dir_name)
+                        files.append({"name": dir_name, "is_directory": True, "size": 0})
+
+            if "Contents" in page:
+                for obj in page["Contents"]:
+                    if obj["Key"].endswith("/") and obj["Size"] == 0:
+                        continue
+                    file_name = obj["Key"][len(prefix) :]
+                    if file_name:
+                        files.append(
+                            {
+                                "name": file_name,
+                                "is_directory": False,
+                                "size": obj["Size"],
+                                "last_modified": obj["LastModified"].isoformat(),
+                            }
+                        )
+
+        files.sort(key=lambda x: (not x["is_directory"], x["name"].lower()))
+        return files
+
+    return execute_with_s3_retry(validated_role, "list", fetch_files)
+
+
+def list_objects_recursive_for_role(
+    role: str,
+    bucket: str,
+    prefix: str,
+    user_dict: Dict[str, Any],
+    max_keys: int = 1000,
+    continuation_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List ALL objects under `prefix` recursively (no Delimiter), with pagination.
+
+    Designed for MCP agents that want to see/count an entire subtree without
+    walking it dir-by-dir (which would mean N+1 calls). Hard ceiling: 10000
+    keys per call (S3's own ListObjectsV2 limit).
+
+    Returns:
+        {
+            "files": [{key, size, last_modified}, ...],   # flat keys, no is_directory
+            "is_truncated": bool,
+            "next_continuation_token": str | None,        # pass back to continue
+            "key_count": int,                             # number returned this page
+        }
+
+    Note: `prefix` is used verbatim (no trailing slash injection); pass
+    "logs/2026/" to scope to that subtree, "" to scan from bucket root.
+    """
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    # S3's hard limit per ListObjectsV2 call is 1000; for larger pages, paginate.
+    # We cap MaxKeys here for safety so a single MCP call can't return more than
+    # 10k entries even if a future caller asks for it.
+    max_keys = max(1, min(max_keys, 10_000))
+
+    def fetch(s3_client) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "Bucket": bucket,
+            "Prefix": prefix,
+            "MaxKeys": min(max_keys, 1000),  # per-call cap
+        }
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+
+        files: list = []
+        next_token: Optional[str] = None
+        is_truncated = False
+
+        # Paginate up to max_keys total. Stop early once we have enough.
+        while True:
+            resp = s3_client.list_objects_v2(**kwargs)
+            for obj in resp.get("Contents", []) or []:
+                # Skip empty "directory marker" objects (key ends with /).
+                if obj["Key"].endswith("/") and obj["Size"] == 0:
+                    continue
+                files.append(
+                    {
+                        "key": obj["Key"],
+                        "size": obj["Size"],
+                        "last_modified": obj["LastModified"].isoformat(),
+                    }
+                )
+                if len(files) >= max_keys:
+                    break
+
+            if len(files) >= max_keys:
+                # Caller asked for at most max_keys; signal truncation if S3
+                # also has more or we cut mid-page.
+                is_truncated = bool(resp.get("IsTruncated")) or len(resp.get("Contents", []) or []) >= kwargs["MaxKeys"]
+                next_token = resp.get("NextContinuationToken") if is_truncated else None
+                break
+
+            if resp.get("IsTruncated"):
+                kwargs["ContinuationToken"] = resp["NextContinuationToken"]
+                continue
+
+            break
+
+        return {
+            "files": files,
+            "is_truncated": is_truncated,
+            "next_continuation_token": next_token,
+            "key_count": len(files),
+        }
+
+    return execute_with_s3_retry(validated_role, "list", fetch)
+
+
+def list_objects_paginated_for_role(
+    role: Optional[str],
+    bucket: str,
+    path: str,
+    user_dict: Dict[str, Any],
+    max_keys: int,
+    continuation_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Paginated non-recursive listing with CommonPrefixes (directories).
+
+    Directories appear ONLY on the first page (when `continuation_token` is
+    None). Subsequent pages return `directories: []` and continue iterating
+    files via S3's NextContinuationToken.
+
+    First-page implementation note: S3's MaxKeys caps Contents + CommonPrefixes
+    combined, so a small page size (e.g. 50) would silently drop directories
+    that lie past that window. To guarantee the /v2 UI sees every direct
+    sub-folder up front, the first page issues TWO list_objects_v2 calls — one
+    with MaxKeys=1000 to enumerate every CommonPrefix, then one with the
+    caller's MaxKeys to fetch the first page of files. Real-world folders
+    very rarely have >1000 direct sub-directories; if that ever happens, the
+    overflow is silently dropped (acceptable: hidden directories are also
+    hidden from `list_objects_for_role`, the legacy helper).
+
+    Race window: a directory created between the discovery call and the
+    file-page call within the same first-page request will not appear in
+    this response; it surfaces on the next first-page reload. Cost: N+1 S3
+    calls for an N-page listing — the +1 is the directory-discovery call.
+
+    Returns:
+        {
+            "directories": [{name, is_directory, size}, ...],   # only on first page
+            "files":       [{name, is_directory, size, last_modified}, ...],
+            "next_token":  str | None,
+            "has_more":    bool,
+        }
+    """
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    # Defensive clamp — route already validates 1..1000 via FastAPI Query
+    # constraints, but the helper is called directly from tests too.
+    max_keys = max(1, min(max_keys, 1000))
+
+    prefix = path + "/" if path else ""
+
+    def fetch(s3_client) -> Dict[str, Any]:
+        directories: list = []
+        if continuation_token is None:
+            # First page: dedicated directory-discovery call. MaxKeys=1000 is
+            # S3's per-call ceiling; this is the most CommonPrefixes a single
+            # ListObjectsV2 can ever surface in one shot.
+            dir_resp = s3_client.list_objects_v2(
+                Bucket=bucket,
+                Prefix=prefix,
+                Delimiter="/",
+                MaxKeys=1000,
+            )
+            for prefix_obj in dir_resp.get("CommonPrefixes", []) or []:
+                dir_name = prefix_obj["Prefix"][len(prefix) :].rstrip("/")
+                if dir_name:
+                    directories.append(
+                        {
+                            "name": dir_name,
+                            "is_directory": True,
+                            "size": 0,
+                        }
+                    )
+            directories.sort(key=lambda d: d["name"].lower())
+
+        # File-page call (also the only call on subsequent pages).
+        file_kwargs: Dict[str, Any] = {
+            "Bucket": bucket,
+            "Prefix": prefix,
+            "Delimiter": "/",
+            "MaxKeys": max_keys,
+        }
+        if continuation_token:
+            file_kwargs["ContinuationToken"] = continuation_token
+
+        file_resp = s3_client.list_objects_v2(**file_kwargs)
+
+        files: list = []
+        for obj in file_resp.get("Contents", []) or []:
+            # Skip empty directory-marker objects (key ends with /).
+            if obj["Key"].endswith("/") and obj["Size"] == 0:
+                continue
+            file_name = obj["Key"][len(prefix) :]
+            if not file_name:
+                continue
+            files.append(
+                {
+                    "name": file_name,
+                    "is_directory": False,
+                    "size": obj["Size"],
+                    "last_modified": obj["LastModified"].isoformat(),
+                }
+            )
+        files.sort(key=lambda f: f["name"].lower())
+
+        is_truncated = bool(file_resp.get("IsTruncated"))
+        next_token = file_resp.get("NextContinuationToken") if is_truncated else None
+
+        return {
+            "directories": directories,
+            "files": files,
+            "next_token": next_token,
+            "has_more": is_truncated,
+        }
+
+    return execute_with_s3_retry(validated_role, "list", fetch)
+
+
+def list_objects_client_load_for_role(
+    role: Optional[str],
+    bucket: str,
+    path: str,
+    user_dict: Dict[str, Any],
+    max_client_load: int,
+    continuation_token: Optional[str] = None,
+    name_prefix: str = "",
+) -> Dict[str, Any]:
+    """Aggregate S3 pages up to `max_client_load` objects for the /v2 client.
+
+    The /v2 UI holds the result in memory and paginates/filters/searches it
+    client-side (vanilla-style), so this returns a chunk of up to
+    `max_client_load` files in one logical load instead of one S3 page.
+
+    Directories (CommonPrefixes) are collected only on the FIRST chunk (when
+    `continuation_token` is None), same rationale as
+    `list_objects_paginated_for_role`. Continuation chunks return
+    `directories: []`.
+
+    The per-S3-call MaxKeys is capped at `min(1000, remaining_budget)` so the
+    S3 page boundary aligns with the chunk boundary: when the chunk fills, the
+    returned NextContinuationToken points exactly past the last emitted object,
+    making continuation resumable at the correct offset.
+
+    `name_prefix` (default "") narrows results to children of the folder whose
+    NAME starts with it: S3 filters on `<base><name_prefix>` while child names
+    are still stripped relative to `<base>`, so they stay folder-relative
+    (e.g. a folder `4f2a1c/` matched by name_prefix="4f2a" displays as "4f2a1c").
+
+    Returns:
+        {
+            "directories": [...],   # only on first chunk
+            "files":       [...],   # up to max_client_load
+            "truncated":   bool,    # True if S3 has more beyond this chunk
+            "next_token":  str | None,
+        }
+    """
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    # Defensive clamp. 1..200000 — high enough for the 595k-folder "Load all"
+    # case to drain in a handful of chunks, low enough to refuse absurd values.
+    max_client_load = max(1, min(max_client_load, 200_000))
+
+    # `base` is the folder prefix used to strip child names; `s3_prefix` is what
+    # S3 filters on. name_prefix="" → s3_prefix == base (normal folder listing).
+    base = path + "/" if path else ""
+    s3_prefix = base + name_prefix
+
+    def fetch(s3_client) -> Dict[str, Any]:
+        directories: list = []
+        if continuation_token is None:
+            # First chunk: dedicated directory-discovery call (not budget-limited).
+            dir_resp = s3_client.list_objects_v2(
+                Bucket=bucket,
+                Prefix=s3_prefix,
+                Delimiter="/",
+                MaxKeys=1000,
+            )
+            for prefix_obj in dir_resp.get("CommonPrefixes", []) or []:
+                dir_name = prefix_obj["Prefix"][len(base) :].rstrip("/")
+                if dir_name:
+                    directories.append(
+                        {
+                            "name": dir_name,
+                            "is_directory": True,
+                            "size": 0,
+                        }
+                    )
+            directories.sort(key=lambda d: d["name"].lower())
+
+        files: list = []
+        token = continuation_token
+        truncated = False
+        next_token: Optional[str] = None
+
+        while len(files) < max_client_load:
+            # Cap MaxKeys at the remaining budget so the S3 page boundary
+            # aligns with the chunk boundary and the continuation token is
+            # correct.
+            remaining = max_client_load - len(files)
+            kwargs: Dict[str, Any] = {
+                "Bucket": bucket,
+                "Prefix": s3_prefix,
+                "Delimiter": "/",
+                "MaxKeys": min(1000, remaining),
+            }
+            if token:
+                kwargs["ContinuationToken"] = token
+
+            resp = s3_client.list_objects_v2(**kwargs)
+
+            for obj in resp.get("Contents", []) or []:
+                # Skip empty directory-marker objects (key ends with /).
+                if obj["Key"].endswith("/") and obj["Size"] == 0:
+                    continue
+                file_name = obj["Key"][len(base) :]
+                if not file_name:
+                    continue
+                files.append(
+                    {
+                        "name": file_name,
+                        "is_directory": False,
+                        "size": obj["Size"],
+                        "last_modified": obj["LastModified"].isoformat(),
+                    }
+                )
+
+            if resp.get("IsTruncated"):
+                token = resp.get("NextContinuationToken")
+                if len(files) >= max_client_load:
+                    truncated = True
+                    next_token = token
+                    break
+                # else loop to pull the next S3 page into this same chunk
+            else:
+                truncated = False
+                next_token = None
+                break
+
+        files.sort(key=lambda f: f["name"].lower())
+
+        return {
+            "directories": directories,
+            "files": files,
+            "truncated": truncated,
+            "next_token": next_token,
+        }
+
+    return execute_with_s3_retry(validated_role, "list", fetch)
+
+
+def head_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> int:
+    """
+    Return the ContentLength (bytes) of an object in `bucket` at `path`.
+
+    Raises PermissionError on role/bucket access violation.
+    Raises FileNotFoundError if the object does not exist.
+    """
+    from botocore.exceptions import ClientError as _ClientError
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_head(s3_client):
+        try:
+            response = s3_client.head_object(Bucket=bucket, Key=path)
+            return response["ContentLength"]
+        except _ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+            if error_code in {"404", "NoSuchKey"}:
+                raise FileNotFoundError(f"Object '{path}' not found in bucket '{bucket}'") from e
+            raise
+
+    return execute_with_s3_retry(validated_role, "head", do_head)
+
+
+def read_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> bytes:
+    """
+    Download and return the full body of an object in `bucket` at `path`.
+
+    Raises PermissionError on role/bucket access violation.
+    Raises FileNotFoundError if the object does not exist.
+    Increments the s3_bytes_downloaded_total metric.
+    """
+    from botocore.exceptions import ClientError as _ClientError
+
+    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_get(s3_client):
+        try:
+            response = s3_client.get_object(Bucket=bucket, Key=path)
+            body: bytes = response["Body"].read()
+            s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
+                len(body)
+            )
+            return body
+        except _ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+            if error_code in {"404", "NoSuchKey"}:
+                raise FileNotFoundError(f"Object '{path}' not found in bucket '{bucket}'") from e
+            raise
+
+    return execute_with_s3_retry(validated_role, "get", do_get)
+
+
+def iter_object_for_role(
+    role: str,
+    bucket: str,
+    path: str,
+    user_dict: Dict[str, Any],
+    chunk_size: int = 8192,
+) -> Tuple[Dict[str, Any], Iterator[bytes]]:
+    """Stream object body in chunks for ``role``.
+
+    Returns ``(metadata, body_iterator)`` where ``metadata`` is::
+
+        {"content_length": int, "content_type": str}
+
+    and ``body_iterator`` lazily yields ``bytes`` chunks of at most
+    ``chunk_size`` bytes. Increments ``s3_bytes_downloaded_total`` exactly
+    once with the full ``content_length`` BEFORE the body starts flowing,
+    so the metric reflects the requested object size even if the client
+    disconnects mid-stream (mirrors ``read_object_for_role``).
+
+    Raises ``PermissionError`` on role/bucket access violation.
+    Raises ``FileNotFoundError`` if the object does not exist.
+    """
+    from botocore.exceptions import ClientError as _ClientError
+
+    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_fetch(s3_client):
+        try:
+            return s3_client.get_object(Bucket=bucket, Key=path)
+        except _ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+            if error_code in {"404", "NoSuchKey"}:
+                raise FileNotFoundError(f"Object '{path}' not found in bucket '{bucket}'") from e
+            raise
+
+    response = execute_with_s3_retry(validated_role, "get", do_fetch)
+
+    content_length = response.get("ContentLength", 0)
+    content_type = response.get("ContentType", "application/octet-stream")
+
+    if content_length:
+        s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
+            content_length
+        )
+
+    def body_iter() -> Iterator[bytes]:
+        body = response["Body"]
+        try:
+            while True:
+                chunk = body.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            if hasattr(body, "close"):
+                try:
+                    body.close()
+                except Exception:
+                    pass
+
+    metadata = {"content_length": content_length, "content_type": content_type}
+    return metadata, body_iter()
+
+
+def read_object_range_for_role(
+    role: str, bucket: str, path: str, start: int, end: int, user_dict: Dict[str, Any]
+) -> bytes:
+    """
+    Download and return a byte range of an object in `bucket` at `path`.
+
+    Uses boto3 Range parameter: bytes=start-end (inclusive).
+    Raises PermissionError on role/bucket access violation.
+    Raises FileNotFoundError if the object does not exist.
+    Increments the s3_bytes_downloaded_total metric for the returned slice size.
+    """
+    from botocore.exceptions import ClientError as _ClientError
+
+    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_get_range(s3_client):
+        try:
+            response = s3_client.get_object(Bucket=bucket, Key=path, Range=f"bytes={start}-{end}")
+            body: bytes = response["Body"].read()
+            s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
+                len(body)
+            )
+            return body
+        except _ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+            if error_code in {"404", "NoSuchKey"}:
+                raise FileNotFoundError(f"Object '{path}' not found in bucket '{bucket}'") from e
+            raise
+
+    return execute_with_s3_retry(validated_role, "get", do_get_range)
+
+
+# Extensions for which we force `Content-Type: <type>; charset=utf-8` on the
+# presigned URL. S3 typically returns these as `text/plain` or
+# `application/octet-stream` without a charset — Chrome/Safari then guess
+# Latin-1 and Cyrillic / CJK / emoji renders as mojibake when opened in a
+# new tab. Overriding the response Content-Type via the presigned URL
+# (boto3 `ResponseContentType` param) fixes the rendering without re-uploading
+# the object.
+#
+# `.html`/`.htm` and `.svg` are INTENTIONALLY EXCLUDED — overriding their
+# Content-Type to a renderable `text/html` / `image/svg+xml` would let an
+# authenticated user upload a malicious HTML/SVG file and share its presigned
+# URL as a phishing page on a "trusted" S3 origin. They keep S3's stored
+# Content-Type (typically octet-stream after AppFlow → browser downloads).
+# Likewise, `.js`/`.css` are excluded — no reason to force them inline.
+_TEXT_EXTENSION_TO_MIME = {
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".csv": "text/csv",
+    ".tsv": "text/tab-separated-values",
+    ".log": "text/plain",
+    ".json": "application/json",
+    ".yaml": "text/yaml",
+    ".yml": "text/yaml",
+    ".xml": "application/xml",
+    ".py": "text/x-python",
+    ".sh": "application/x-sh",
+    ".sql": "application/sql",
+    ".toml": "application/toml",
+    ".ini": "text/plain",
+    ".conf": "text/plain",
+    ".srt": "text/plain",
+    ".vtt": "text/vtt",
+}
+
+
+def _utf8_text_content_type_for(path: str) -> Optional[str]:
+    """Return `<mime>; charset=utf-8` for known text extensions, else None.
+
+    Inline-displayed text files served from S3 without a charset render as
+    mojibake for non-ASCII content (Cyrillic, CJK, emoji) because the browser
+    falls back to Latin-1. We attach an explicit charset only for extensions
+    we're confident are UTF-8 text — everything else keeps S3's stored
+    Content-Type so binary downloads (zip, pdf, png, …) aren't broken.
+    """
+    lower = path.lower()
+    for ext, mime in _TEXT_EXTENSION_TO_MIME.items():
+        if lower.endswith(ext):
+            return f"{mime}; charset=utf-8"
+    return None
+
+
+def generate_presigned_url_for_role(
+    role: str,
+    bucket: str,
+    path: str,
+    user_dict: Dict[str, Any],
+    expires_in: int = 3600,
+) -> str:
+    """
+    Generate a boto3 presigned GET URL for an object in `bucket` at `path`.
+
+    The URL is signed with the role's credentials and is valid for `expires_in`
+    seconds (default 1 hour). Anyone holding the URL can fetch the object until
+    it expires — no session cookie required. Use for shareable links and for
+    browser-side <img>/<video> tags that can't carry the auth cookie reliably
+    (e.g. third-party CDNs, copy-to-clipboard flows).
+
+    For text extensions in `_TEXT_EXTENSION_TO_MIME`, the URL embeds a
+    `ResponseContentType: <mime>; charset=utf-8` override so the browser
+    renders Cyrillic / CJK / emoji correctly when the link is opened in a new
+    tab. Without this, S3 typically serves text files without a charset and
+    the browser guesses wrong.
+
+    Raises PermissionError on role/bucket access violation.
+    """
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    params: Dict[str, Any] = {"Bucket": bucket, "Key": path}
+    utf8_content_type = _utf8_text_content_type_for(path)
+    if utf8_content_type is not None:
+        params["ResponseContentType"] = utf8_content_type
+
+    def do_presign(s3_client):
+        return s3_client.generate_presigned_url(
+            "get_object",
+            Params=params,
+            ExpiresIn=expires_in,
+        )
+
+    return execute_with_s3_retry(validated_role, "get", do_presign)
+
+
+def put_object_for_role(
+    role: str,
+    bucket: str,
+    path: str,
+    content: bytes,
+    user_dict: Dict[str, Any],
+    content_type: str = "application/octet-stream",
+    content_disposition: Optional[str] = None,
+) -> None:
+    """
+    Upload `content` to `bucket`/`path` using `role`.
+
+    Raises PermissionError on role/bucket access violation.
+    Increments the s3_bytes_uploaded_total metric on success.
+    """
+    from another_s3_manager.metrics import s3_bytes_uploaded_total, safe_role_label
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_put(s3_client):
+        put_params: Dict[str, Any] = {
+            "Bucket": bucket,
+            "Key": path,
+            "Body": content,
+            "ContentType": content_type,
+        }
+        if content_disposition:
+            put_params["ContentDisposition"] = content_disposition
+        s3_client.put_object(**put_params)
+        s3_bytes_uploaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
+            len(content)
+        )
+
+    execute_with_s3_retry(validated_role, "put", do_put)
+
+
+def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> dict:
+    """
+    Delete a file or recursively delete a directory from `bucket`.
+
+    `path` ending with "/" is treated as a directory (recursive delete).
+    Raises PermissionError on role/bucket access violation.
+    Raises FileNotFoundError if the object/directory does not exist.
+    Returns {"message": ..., "count": N}.
+    """
+    from botocore.exceptions import ClientError as _ClientError
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    is_directory = path.endswith("/")
+    prefix = path.rstrip("/")
+
+    def do_delete(s3_client):
+        deleted_count = 0
+        paginator = s3_client.get_paginator("list_objects_v2")
+        pages = paginator.paginate(Bucket=bucket, Prefix=prefix + ("/" if is_directory else ""))
+
+        objects_to_delete = []
+        for page in pages:
+            if "Contents" in page:
+                for obj in page["Contents"]:
+                    objects_to_delete.append({"Key": obj["Key"]})
+
+        if not is_directory and not objects_to_delete:
+            try:
+                s3_client.delete_object(Bucket=bucket, Key=prefix)
+                deleted_count = 1
+            except _ClientError as e:
+                error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+                if error_code in ("404", "NoSuchKey"):
+                    raise FileNotFoundError(f"File or directory '{path}' not found") from e
+                raise
+        else:
+            if objects_to_delete:
+                for i in range(0, len(objects_to_delete), 1000):
+                    batch = objects_to_delete[i : i + 1000]
+                    s3_client.delete_objects(Bucket=bucket, Delete={"Objects": batch, "Quiet": True})
+                    deleted_count += len(batch)
+
+        if deleted_count == 0:
+            raise FileNotFoundError(f"File or directory '{path}' not found")
+
+        return {"message": f"Successfully deleted {deleted_count} object(s)", "count": deleted_count}
+
+    return execute_with_s3_retry(validated_role, "delete", do_delete)

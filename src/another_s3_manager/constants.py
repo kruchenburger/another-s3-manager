@@ -55,6 +55,11 @@ def get_bans_file() -> Path:
     return get_data_dir() / "bans.json"
 
 
+def get_db_path() -> Path:
+    """Get the SQLite DB file path. Lives next to users.json/bans.json under DATA_DIR."""
+    return get_data_dir() / "another_s3_manager.db"
+
+
 # Security settings
 JWT_ALGORITHM = "HS256"
 # JWT token expiration - can be overridden by JWT_ACCESS_TOKEN_EXPIRE_MINUTES env var
@@ -78,9 +83,31 @@ else:
 MAX_LOGIN_ATTEMPTS = 3
 BAN_DURATION_MINUTES = 60  # 1 hour
 
+# Cookie security — Set-Cookie Secure flag.
+# Default true (production-safe). MUST be set to false on localhost (HTTP) or browser will silently drop the cookie.
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() == "true"
+
 # File upload settings
 DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
-DEFAULT_ITEMS_PER_PAGE = 200
+DEFAULT_MAX_CLIENT_LOAD = 10000
+
+# Presigned URL TTL settings (seconds).
+# SigV4 allows up to 7 days when signing with long-lived IAM access keys.
+# STS-backed roles (assume_role / profile) are signed with temporary
+# credentials and can expire sooner regardless of the requested TTL — the
+# presigned endpoint surfaces a warning for those, it does not hard-clamp.
+DEFAULT_PRESIGNED_URL_DEFAULT_TTL = 3600  # 1 hour
+DEFAULT_PRESIGNED_URL_MAX_TTL = 604800  # 7 days
+PRESIGNED_URL_HARD_CEILING = 604800  # 7 days — absolute SigV4 ceiling
+PRESIGNED_URL_MIN_TTL = 60  # reject links shorter than 1 minute
+# When a request asks for more than this on an STS-backed role, attach a
+# warning that the link may die when the role's session expires.
+PRESIGNED_STS_WARNING_THRESHOLD = 3600  # 1 hour
+
+# Text extensions seeded into config.auto_inline_extensions for new/legacy
+# configs. The /v2 preview UI treats this list as the single source of truth for
+# which files preview inline as text — it is admin-editable (add / remove / clear).
+DEFAULT_AUTO_INLINE_EXTENSIONS = ["txt", "md", "json", "yaml", "yml", "log", "csv"]
 
 # S3 settings
 S3_USE_SSL = True

@@ -1,0 +1,27 @@
+/* Shared per-row table actions: hidden at rest, revealed on row hover or when a
+   control inside gets keyboard focus (focus-within), and always visible on touch
+   devices with no hover. Mirrors the file-browser row-actions pattern
+   (FileBrowser.module.css). Buttons keep their layout space at opacity 0 so
+   revealing them never shifts the row. Used by the admin Users / Roles / Bans
+   tables and the MCP-token tables. */
+.actions {
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.row:hover .actions,
+.actions:focus-within {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .actions {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .actions {
+    transition: none;
+  }
+}

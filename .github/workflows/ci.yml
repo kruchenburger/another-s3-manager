@@ -20,6 +20,315 @@ jobs:
         env:
           JWT_SECRET_KEY: test-secret-key
 
+  test-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check Phase 6b file-scope guard
+        if: github.head_ref == 'feat/phase-6b-visual-refresh'
+        run: bash scripts/ci/check-phase-6b-scope.sh origin/release/1.0.0
+      - name: Check pagination-v2 file-scope guard
+        if: github.head_ref == 'feat/pagination-v2'
+        run: bash scripts/ci/check-pagination-v2-scope.sh origin/release/1.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Type-check
+        working-directory: frontend
+        run: npm run lint
+      - name: Unit tests
+        working-directory: frontend
+        run: npm test -- --run
+
+  e2e:
+    name: Frontend E2E (Playwright + MinIO)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start MinIO
+        # GHA service containers can't override CMD, so we run MinIO via docker run
+        # to control `server /data --console-address`. `--network host` is Linux-only
+        # (we run on ubuntu-latest); local devs spin up the same fixture via
+        # `docker compose -f docker-compose.minio.yml up` (which uses a bridge network).
+        run: |
+          docker run -d --name minio --network host \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:9000/minio/health/live; then
+              echo "MinIO ready"
+              break
+            fi
+            sleep 1
+          done
+          # Fail loudly if MinIO never came up — otherwise the next mc step
+          # gives a confusing error against a dead server.
+          curl -fs http://localhost:9000/minio/health/live \
+            || { echo "::error::MinIO did not become healthy in 30s"; docker logs minio; exit 1; }
+
+      - name: Seed MinIO bucket
+        # `minio/mc` image entrypoint is `mc` itself — without --entrypoint sh
+        # the trailing `sh /seed.sh` would be passed to mc as args ("mc sh /seed.sh")
+        # and the shell script would never run. The compose sidecar avoids this
+        # via `entrypoint: ["/bin/sh", "/seed.sh"]` in docker-compose.minio.yml.
+        run: |
+          docker run --rm --network host \
+            --entrypoint /bin/sh \
+            -v "${PWD}/frontend/tests/e2e/fixtures:/fixtures:ro" \
+            -v "${PWD}/scripts/ci/seed-minio.sh:/seed.sh:ro" \
+            -e MC_HOST=http://localhost:9000 \
+            minio/mc:RELEASE.2025-08-13T08-35-41Z \
+            /seed.sh
+
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen --all-extras
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps + Playwright
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Build frontend bundle
+        working-directory: frontend
+        run: npm run build
+
+      - name: Check production bundle for dev-only theme leakage
+        run: bash scripts/ci/check-prod-bundle.sh src/another_s3_manager/static/app
+
+      - name: Seed admin config (MinIO-e2e role)
+        # The Playwright specs expect a role named "MinIO-e2e" pointing at MinIO.
+        # We seed it directly in data/config.json so the backend serves it on first start.
+        run: |
+          mkdir -p data
+          cat > data/config.json <<'EOF'
+          {
+            "roles": [
+              {
+                "name": "MinIO-e2e",
+                "type": "s3_compatible",
+                "access_key_id": "minioadmin",
+                "secret_access_key": "minioadmin",
+                "endpoint_url": "http://localhost:9000",
+                "addressing_style": "path",
+                "allowed_buckets": ["e2e-test"]
+              }
+            ],
+            "max_client_load": 50,
+            "enable_lazy_loading": true,
+            "max_file_size": 104857600,
+            "disable_deletion": false,
+            "auto_inline_extensions": [],
+            "password_min_length": 8,
+            "password_min_uppercase": 1,
+            "password_min_lowercase": 1,
+            "password_min_digits": 1,
+            "password_min_special": 0
+          }
+          EOF
+
+      - name: Start backend
+        # nohup + redirect + disown so the process survives this step's bash
+        # exit and is reachable from the next step. A bare `&` would attach the
+        # process to the step's shell as a job and SIGHUP would kill it on exit.
+        env:
+          JWT_SECRET_KEY: ci-test-secret
+          # Use a policy-compliant password (8+ chars, upper, lower, digit) so
+          # any future test that exercises change-password against this admin
+          # doesn't fail. Login itself only checks the bcrypt hash, but having
+          # a compliant seed avoids drift if a test later calls /api/me/password.
+          ADMIN_PASSWORD: TestPass1
+          DATA_DIR: ./data
+          S3_FILE_MANAGER_CONFIG: ./data/config.json
+          COOKIE_SECURE: "false"
+          UVICORN_HOST: "127.0.0.1"
+          # Without this, python block-buffers stdout when redirected to the
+          # nohup log file and the "dump backend log on failure" step shows
+          # only the startup lines — request-time errors never get flushed.
+          PYTHONUNBUFFERED: "1"
+        run: |
+          nohup uv run python -m another_s3_manager.main > /tmp/backend.log 2>&1 &
+          disown
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:8080/health; then
+              echo "Backend ready"
+              break
+            fi
+            sleep 1
+          done
+          # Fail loudly if backend never became healthy. Dump log on failure.
+          curl -fs http://localhost:8080/health \
+            || { echo "::error::Backend did not become healthy in 30s"; cat /tmp/backend.log; exit 1; }
+
+      - name: Run Playwright tests
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          E2E_ADMIN_USERNAME: admin
+          E2E_ADMIN_PASSWORD: TestPass1
+          E2E_MINIO_ROLE: MinIO-e2e
+          E2E_MINIO_BUCKET: e2e-test
+          # The ministack spec needs the AWS emulator — that's the e2e-ministack
+          # job's whole purpose. Without this flag those 4 tests fail here.
+          E2E_IGNORE_MINISTACK: "1"
+        run: |
+          # Re-confirm backend is alive (catches the case where it died between steps).
+          curl -fs http://localhost:8080/health \
+            || { echo "::error::Backend died between steps"; cat /tmp/backend.log; exit 1; }
+          npx playwright test
+
+      - name: Dump backend log on failure
+        if: failure()
+        run: cat /tmp/backend.log
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          # test-results/ carries traces + per-test error-context snapshots;
+          # playwright-report/ is the browsable html summary.
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 14
+
+  e2e-ministack:
+    name: Frontend E2E (Playwright + ministack)
+    # Separate job from `e2e` so the default pipeline stays fast and the MinIO
+    # and AWS-emulator (S3+IAM+STS) paths run in parallel. Gated identically to
+    # `e2e` (no `needs:`, no `if:`) — runs on every push to main / tag / PR-to-main.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start ministack
+        # ministack is a local AWS emulator (S3 + IAM + STS) on :4566. Pinned by
+        # digest (never :latest — supply chain risk).
+        # Bump together with the matching reference in docker-compose.ministack.yml.
+        run: |
+          docker run -d --name ministack -p 4566:4566 \
+            -e MINISTACK_ACCOUNT_ID=000000000000 \
+            ministackorg/ministack@sha256:176654570cf2fdb07b9dda08e595410c513040aa609cf9138e25555bc148c535
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:4566/health; then
+              echo "ministack ready"
+              break
+            fi
+            sleep 1
+          done
+          # Fail loudly if ministack never came up — otherwise the seed step
+          # gives a confusing error against a dead server.
+          curl -fs http://localhost:4566/health \
+            || { echo "::error::ministack did not become healthy in 30s"; docker logs ministack; exit 1; }
+
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen --all-extras
+
+      - name: Seed ministack + write config
+        # seed_ministack.py provisions buckets/IAM/role and writes a full
+        # config.json with the ministack-assume / ministack-creds roles the
+        # Playwright spec expects. JWT_SECRET_KEY is required by the import chain.
+        run: |
+          mkdir -p data
+          JWT_SECRET_KEY=ci uv run python scripts/ci/seed_ministack.py \
+            --config-out data/config.json \
+            --aws-credentials-out data/aws-credentials
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps + Playwright
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Build frontend bundle
+        working-directory: frontend
+        run: npm run build
+
+      - name: Start backend
+        # ministack env redirects the app's STS/S3 clients — no backend code change.
+        # nohup + redirect + disown so the process survives this step's bash exit
+        # and is reachable from the next step (a bare `&` would die on SIGHUP).
+        env:
+          JWT_SECRET_KEY: ci-test-secret
+          ADMIN_PASSWORD: TestPass1
+          DATA_DIR: ./data
+          S3_FILE_MANAGER_CONFIG: ./data/config.json
+          COOKIE_SECURE: "false"
+          UVICORN_HOST: "127.0.0.1"
+          # Without this, python block-buffers stdout when redirected to the
+          # nohup log file and the "dump backend log on failure" step shows
+          # only the startup lines — request-time errors never get flushed.
+          PYTHONUNBUFFERED: "1"
+          AWS_ENDPOINT_URL: http://localhost:4566
+          AWS_ENDPOINT_URL_STS: http://localhost:4566
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_SHARED_CREDENTIALS_FILE: ./data/aws-credentials
+        run: |
+          nohup uv run python -m another_s3_manager.main > /tmp/backend.log 2>&1 &
+          disown
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:8080/health; then
+              echo "Backend ready"
+              break
+            fi
+            sleep 1
+          done
+          # Fail loudly if backend never became healthy. Dump log on failure.
+          curl -fs http://localhost:8080/health \
+            || { echo "::error::Backend did not become healthy in 30s"; cat /tmp/backend.log; exit 1; }
+
+      - name: Run ministack Playwright spec
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          E2E_ADMIN_USERNAME: admin
+          E2E_ADMIN_PASSWORD: TestPass1
+        run: |
+          # Re-confirm backend is alive (catches the case where it died between steps).
+          curl -fs http://localhost:8080/health \
+            || { echo "::error::Backend died between steps"; cat /tmp/backend.log; exit 1; }
+          npx playwright test ministack.spec.ts
+
+      - name: Dump backend log on failure
+        if: failure()
+        run: cat /tmp/backend.log
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-ministack
+          # test-results/ carries traces + per-test error-context snapshots;
+          # playwright-report/ is the browsable html summary.
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 14
+
   build:
     needs: [test-backend]
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
@@ -48,13 +357,17 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
+          # metadata-action strips the tag's "v" prefix (v1.0.0 -> 1.0.0); the UI
+          # and /health expect a bare semver, so passing github.ref_name here
+          # would render as "vv1.0.0". Every line of build-args becomes a
+          # --build-arg, so this note must live outside the block scalar.
           build-args: |
-            BUILD_VERSION=${{ github.ref_name }}
+            BUILD_VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   notify:
-    needs: [test-backend, build]
+    needs: [test-backend, test-frontend, e2e, e2e-ministack, build]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -62,4 +375,4 @@ jobs:
         with:
           token: ${{ secrets.TG_NTF_TOKEN }}
           chat_id: ${{ secrets.TG_NTF_CHAT_ID }}
-          status: ${{ needs.build.result || needs.test-backend.result }}
+          status: ${{ contains(needs.*.result, 'failure') && 'failure' || 'success' }}

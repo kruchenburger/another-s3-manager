@@ -51,13 +51,55 @@ def test_migrate_config_adds_missing_fields(tmp_path):
     assert "max_file_size" in data
 
 
+def test_migrate_config_seeds_auto_inline_defaults(tmp_path):
+    """A legacy config (no auto_inline field, no seed marker) gets the text
+    defaults seeded once, with the marker set so it never re-seeds."""
+    from another_s3_manager.constants import DEFAULT_AUTO_INLINE_EXTENSIONS
+
+    config = reload_config()
+    config.CONFIG_FILE = Path(os.environ["S3_FILE_MANAGER_CONFIG"])
+    config.CONFIG_FILE.write_text(json.dumps({"roles": []}))
+    config._config_cache = {}
+    config._config_mtime = 0
+
+    data = config.load_config(force_reload=True)
+    assert data["auto_inline_extensions"] == list(DEFAULT_AUTO_INLINE_EXTENSIONS)
+    assert data["_auto_inline_seeded"] is True
+
+
+def test_migrate_config_does_not_reseed_a_cleared_list(tmp_path):
+    """Once seeded, an admin's intentional clear to [] must persist — migration
+    must NOT re-seed defaults over it."""
+    config = reload_config()
+    config.CONFIG_FILE = Path(os.environ["S3_FILE_MANAGER_CONFIG"])
+    config.CONFIG_FILE.write_text(json.dumps({"roles": [], "auto_inline_extensions": [], "_auto_inline_seeded": True}))
+    config._config_cache = {}
+    config._config_mtime = 0
+
+    data = config.load_config(force_reload=True)
+    assert data["auto_inline_extensions"] == []
+
+
+def test_load_config_tolerates_stale_items_per_page(tmp_path):
+    """Phase 7 removed items_per_page, but pre-1.0 config.json files still
+    contain it. The loader must keep loading (raw json.load, unknown keys
+    preserved) and the API must simply ignore the key."""
+    config = reload_config()
+    config.CONFIG_FILE = tmp_path / "config.json"
+    config.CONFIG_FILE.write_text(json.dumps({"roles": [], "items_per_page": 200}))
+    config._config_cache = {}
+    config._config_mtime = 0
+
+    loaded = config.load_config(force_reload=True)
+    assert loaded["roles"] == []
+    assert loaded.get("items_per_page") == 200  # preserved, harmless
+
+
 def test_get_default_config_respects_env(monkeypatch):
-    monkeypatch.setenv("ITEMS_PER_PAGE", "50")
     monkeypatch.setenv("MAX_FILE_SIZE", str(10 * 1024 * 1024))
 
     config = reload_config()
     defaults = config._get_default_config()
-    assert defaults["items_per_page"] == 50
     assert defaults["max_file_size"] == 10 * 1024 * 1024
 
 
@@ -107,10 +149,10 @@ def test_save_config_raises_when_read_only(monkeypatch, tmp_path):
 def test_get_config_value_returns_value():
     config = reload_config()
     data = config.load_config(force_reload=True)
-    data["items_per_page"] = 123
+    data["max_client_load"] = 123
     config.save_config(data)
 
-    value = config.get_config_value("items_per_page", default=50)
+    value = config.get_config_value("max_client_load", default=50)
     assert value == 123
 
 
@@ -190,3 +232,37 @@ def test_get_config_value_env_string(monkeypatch):
     config = reload_config()
     value = config.get_config_value("missing", default="default", env_var="STRING_VALUE")
     assert value == "text"
+
+
+def test_default_config_includes_mcp_fields():
+    from another_s3_manager.config import _get_default_config
+
+    cfg = _get_default_config()
+    assert cfg["mcp_enabled"] is True
+    assert cfg["mcp_disable_writes"] is False
+    assert cfg["mcp_text_extensions"] == []
+    assert cfg["mcp_global_max_read_bytes"] == 10_485_760
+
+
+def test_migrate_config_adds_mcp_fields_to_legacy_config(monkeypatch, tmp_path):
+    """A legacy config.json without MCP fields should get them auto-added on load."""
+    import json
+
+    from another_s3_manager import config as config_module
+
+    legacy = tmp_path / "config.json"
+    legacy.write_text(json.dumps({"roles": [], "items_per_page": 200}))
+    monkeypatch.setattr(config_module, "CONFIG_FILE", legacy)
+    config_module._config_cache = {}
+    config_module._config_mtime = 0
+
+    loaded = config_module.load_config(force_reload=True)
+    assert "mcp_enabled" in loaded
+    assert "mcp_disable_writes" in loaded
+    assert "mcp_text_extensions" in loaded
+    assert "mcp_global_max_read_bytes" in loaded
+    # Verify defaults are correct, not just presence
+    assert loaded["mcp_enabled"] is True
+    assert loaded["mcp_disable_writes"] is False
+    assert loaded["mcp_text_extensions"] == []
+    assert loaded["mcp_global_max_read_bytes"] == 10_485_760

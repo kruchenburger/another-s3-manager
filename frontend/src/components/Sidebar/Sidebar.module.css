@@ -1,0 +1,62 @@
+.shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--as3m-panel);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-right: 1px solid var(--mantine-color-default-border);
+}
+
+.scrollArea {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--mantine-spacing-xs);
+}
+
+.footer {
+  padding: var(--mantine-spacing-xs);
+  border-top: 1px solid var(--mantine-color-default-border);
+  display: flex;
+  justify-content: center;
+  gap: var(--mantine-spacing-xs);
+}
+
+/* CSS Modules scope every bare class name unless wrapped in :global().
+   `.mantine-NavLink-root` is Mantine's GLOBAL class emitted on every
+   NavLink — without :global() Vite's css-modules transform renames it
+   to `.mantine-NavLink-root_<hash>_<line>` and the rule stops matching
+   the real component. Three earlier round-7/8/9 attempts to override
+   the hover background all failed for exactly this reason. */
+.shell :global(.mantine-NavLink-root):hover {
+  background-color: light-dark(
+    var(--mantine-color-slate-1),
+    rgba(255, 255, 255, 0.05)
+  ) !important;
+}
+
+/* Phase 6b sidebar active-state — left rail + soft tint, replacing the
+   filled amber pill. Spec §5. Both role and bucket items render through
+   Mantine <NavLink>, so a single rule against `[data-active="true"]`
+   covers both levels. Using `--mantine-primary-color-filled` keeps the
+   rail theme-agnostic — flips with whatever palette is active. */
+.shell :global(.mantine-NavLink-root)[data-active="true"] {
+  background: color-mix(
+    in srgb,
+    var(--mantine-primary-color-filled) 12%,
+    transparent
+  ) !important;
+  font-weight: 500;
+  position: relative;
+}
+
+.shell :global(.mantine-NavLink-root)[data-active="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  background: var(--mantine-primary-color-filled);
+  border-radius: 0 2px 2px 0;
+}

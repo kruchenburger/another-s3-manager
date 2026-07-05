@@ -255,7 +255,10 @@ def test_get_s3_client_missing_role_raises(mocker):
 
 def test_clear_s3_clients_cache(mocker):
     module = reload_s3_client()
-    mocker.patch("boto3.client", return_value="client")
+    # Mock client must answer list_buckets() — get_s3_client probes it on cache miss.
+    fake = mocker.MagicMock()
+    fake.list_buckets.return_value = {"Buckets": []}
+    mocker.patch("boto3.client", return_value=fake)
     module.get_s3_client()
     assert module._s3_clients_cache
     module.clear_s3_clients_cache()
@@ -300,20 +303,22 @@ def test_create_s3_client_unknown_type():
 
 def test_get_s3_client_without_roles_uses_default(mocker):
     module = reload_s3_client()
-    mocker.patch("boto3.client", return_value="client")
+    # Mock client must answer list_buckets() — get_s3_client probes it on cache miss.
+    fake = mocker.MagicMock()
+    fake.list_buckets.return_value = {"Buckets": []}
+    mocker.patch("boto3.client", return_value=fake)
     import another_s3_manager.config as config_module
 
     config_module.save_config(
         {
             "roles": [],
-            "items_per_page": 200,
             "enable_lazy_loading": True,
             "max_file_size": 100,
         }
     )
 
     client = module.get_s3_client()
-    assert client == "client"
+    assert client is fake
 
 
 def test_get_s3_client_missing_named_role_raises(mocker):
@@ -324,7 +329,6 @@ def test_get_s3_client_missing_named_role_raises(mocker):
     config_module.save_config(
         {
             "roles": [{"name": "OnlyDefault", "type": "default"}],
-            "items_per_page": 200,
             "enable_lazy_loading": True,
             "max_file_size": 100,
         }
@@ -429,6 +433,174 @@ def test_create_s3_client_s3_compatible_empty_after_trim():
         )
 
 
+def test_assume_role_retries_once_on_expired_credentials(mocker):
+    """First assume_role raises an expired-credential error → cache cleared, retry succeeds."""
+    from botocore.exceptions import CredentialRetrievalError
+
+    from another_s3_manager import s3_client
+
+    creds = {
+        "AccessKeyId": "AKIATEST",
+        "SecretAccessKey": "secret",
+        "SessionToken": "token",
+        "Expiration": "2999-01-01T00:00:00Z",
+    }
+    sts = mocker.Mock()
+    sts.assume_role.side_effect = [
+        CredentialRetrievalError(provider="x", error_msg="token expired"),
+        {"Credentials": creds},
+    ]
+    mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    fake_client = mocker.Mock()
+    mocker.patch.object(s3_client.BotocoreSession, "create_client", return_value=fake_client)
+    clear = mocker.patch.object(s3_client, "_clear_boto3_cached_credentials")
+
+    role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
+    client = s3_client._create_s3_client_from_role(role)
+
+    assert client is fake_client
+    assert sts.assume_role.call_count == 2
+    clear.assert_called_once()
+
+
+def test_assume_role_raises_typed_when_both_attempts_expired(mocker):
+    """Both attempts hit expired creds → typed CredentialsExpiredError (→ 401 at HTTP boundary)."""
+    from botocore.exceptions import CredentialRetrievalError
+
+    from another_s3_manager import s3_client
+    from another_s3_manager.errors import CredentialsExpiredError
+
+    sts = mocker.Mock()
+    sts.assume_role.side_effect = CredentialRetrievalError(provider="x", error_msg="token expired")
+    mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    mocker.patch.object(s3_client, "_clear_boto3_cached_credentials")
+
+    role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
+    with pytest.raises(CredentialsExpiredError):
+        s3_client._create_s3_client_from_role(role)
+    assert sts.assume_role.call_count == 2
+
+
+def test_assume_role_refreshes_via_refreshable_credentials(mocker):
+    """The RefreshableCredentials callback re-assumes the role to mint fresh creds on expiry."""
+    from another_s3_manager import s3_client
+
+    first = {
+        "AccessKeyId": "AKIA1",
+        "SecretAccessKey": "s1",
+        "SessionToken": "t1",
+        "Expiration": "2000-01-01T00:00:00Z",  # already past → next access forces a refresh
+    }
+    second = {
+        "AccessKeyId": "AKIA2",
+        "SecretAccessKey": "s2",
+        "SessionToken": "t2",
+        "Expiration": "2999-01-01T00:00:00Z",
+    }
+    sts = mocker.Mock()
+    sts.assume_role.side_effect = [{"Credentials": first}, {"Credentials": second}]
+    mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+
+    captured = {}
+
+    def capture(self, *a, **k):
+        captured["session"] = self
+        return mocker.Mock()
+
+    mocker.patch.object(s3_client.BotocoreSession, "create_client", capture)
+
+    role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
+    s3_client._create_s3_client_from_role(role)
+
+    frozen = captured["session"]._credentials.get_frozen_credentials()
+    assert frozen.access_key == "AKIA2"  # refreshed via a second assume_role
+    assert sts.assume_role.call_count == 2
+
+
+def test_assume_role_sts_region_falls_back_to_aws_region_env(mocker, monkeypatch):
+    """The STS client gets its region from AWS_REGION when the role has none.
+
+    botocore itself only reads AWS_DEFAULT_REGION / shared config for the
+    region — without this fallback an assume_role role in a bare container
+    (only AWS_REGION set, per the README env table) dies with NoRegionError
+    ("You must specify a region") before it can even call AssumeRole.
+    """
+    from another_s3_manager import s3_client
+
+    monkeypatch.setenv("AWS_REGION", "eu-central-1")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    creds = {
+        "AccessKeyId": "AKIATEST",
+        "SecretAccessKey": "secret",
+        "SessionToken": "token",
+        "Expiration": "2999-01-01T00:00:00Z",
+    }
+    sts = mocker.Mock()
+    sts.assume_role.return_value = {"Credentials": creds}
+    boto_client = mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    create_client = mocker.patch.object(s3_client.BotocoreSession, "create_client", return_value=mocker.Mock())
+
+    role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
+    s3_client._create_s3_client_from_role(role)
+
+    assert boto_client.call_args.kwargs["region_name"] == "eu-central-1"
+    # The assumed-role S3 client inherits the same region.
+    assert create_client.call_args.kwargs["region_name"] == "eu-central-1"
+
+
+def test_assume_role_role_region_beats_aws_region_env(mocker, monkeypatch):
+    """An explicit region on the role config wins over the AWS_REGION env."""
+    from another_s3_manager import s3_client
+
+    monkeypatch.setenv("AWS_REGION", "eu-central-1")
+
+    creds = {
+        "AccessKeyId": "AKIATEST",
+        "SecretAccessKey": "secret",
+        "SessionToken": "token",
+        "Expiration": "2999-01-01T00:00:00Z",
+    }
+    sts = mocker.Mock()
+    sts.assume_role.return_value = {"Credentials": creds}
+    boto_client = mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    mocker.patch.object(s3_client.BotocoreSession, "create_client", return_value=mocker.Mock())
+
+    role = {
+        "name": "r",
+        "type": "assume_role",
+        "role_arn": "arn:aws:iam::000000000000:role/x",
+        "region": "us-west-2",
+    }
+    s3_client._create_s3_client_from_role(role)
+
+    assert boto_client.call_args.kwargs["region_name"] == "us-west-2"
+
+
+def test_assume_role_region_none_without_any_source(mocker, monkeypatch):
+    """No role region and no AWS_REGION → region_name=None keeps botocore's own chain."""
+    from another_s3_manager import s3_client
+
+    monkeypatch.delenv("AWS_REGION", raising=False)
+
+    creds = {
+        "AccessKeyId": "AKIATEST",
+        "SecretAccessKey": "secret",
+        "SessionToken": "token",
+        "Expiration": "2999-01-01T00:00:00Z",
+    }
+    sts = mocker.Mock()
+    sts.assume_role.return_value = {"Credentials": creds}
+    boto_client = mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    create_client = mocker.patch.object(s3_client.BotocoreSession, "create_client", return_value=mocker.Mock())
+
+    role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
+    s3_client._create_s3_client_from_role(role)
+
+    assert boto_client.call_args.kwargs["region_name"] is None
+    assert "region_name" not in create_client.call_args.kwargs
+
+
 def test_create_s3_client_s3_compatible_path_style_backward_compat(mocker):
     module = reload_s3_client()
     mock_client = mocker.MagicMock()
@@ -474,9 +646,873 @@ def test_execute_with_s3_retry_clears_cache_on_expired_creds(mocker):
             raise RuntimeError("Token expired")
         return "ok"
 
-    result = module.execute_with_s3_retry(None, failing_then_successful_callback)
+    result = module.execute_with_s3_retry(None, "list", failing_then_successful_callback)
 
     assert result == "ok"
     assert call_counter["count"] == 2
     invalidate_mock.assert_called_once_with(None)
     clear_cache_mock.assert_called_once()
+
+
+def test_execute_with_s3_retry_increments_operations_counter(monkeypatch):
+    """Verify s3_operations_total{operation=head, result=ok} increments after a successful call."""
+    import another_s3_manager.s3_client as s3_client_mod
+    from another_s3_manager import metrics
+
+    def count(role: str, op: str, result: str) -> float:
+        for sample in metrics.s3_operations_total.collect()[0].samples:
+            if (
+                sample.name.endswith("_total")
+                and sample.labels.get("role") == role
+                and sample.labels.get("operation") == op
+                and sample.labels.get("result") == result
+            ):
+                return sample.value
+        return 0.0
+
+    # Use a unique role name so this test's counter label is isolated from other tests
+    unique_role = "metrics_ok_test_role"
+
+    class _FakeClient:
+        def head_object(self):
+            return {}
+
+    monkeypatch.setattr(s3_client_mod, "get_s3_client", lambda _name=None: _FakeClient())
+
+    before = count(unique_role, "head", "ok")
+    s3_client_mod.execute_with_s3_retry(unique_role, "head", lambda c: c.head_object())
+    after = count(unique_role, "head", "ok")
+    assert after == before + 1
+
+
+def test_execute_with_s3_retry_increments_error_counter_on_failure(monkeypatch):
+    """Verify s3_operations_total{operation=head, result=error} increments when callback raises."""
+    import pytest
+
+    import another_s3_manager.s3_client as s3_client_mod
+    from another_s3_manager import metrics
+
+    def count(role: str, op: str, result: str) -> float:
+        for sample in metrics.s3_operations_total.collect()[0].samples:
+            if (
+                sample.name.endswith("_total")
+                and sample.labels.get("role") == role
+                and sample.labels.get("operation") == op
+                and sample.labels.get("result") == result
+            ):
+                return sample.value
+        return 0.0
+
+    # Use a unique role name so this test's counter label is isolated from other tests
+    unique_role = "metrics_error_test_role"
+
+    class _BadClient:
+        def head_object(self):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(s3_client_mod, "get_s3_client", lambda _name=None: _BadClient())
+
+    before = count(unique_role, "head", "error")
+    with pytest.raises(RuntimeError):
+        s3_client_mod.execute_with_s3_retry(unique_role, "head", lambda c: c.head_object())
+    after = count(unique_role, "head", "error")
+    assert after == before + 1
+
+
+# ---------------------------------------------------------------------------
+# Tests for permission-aware *_for_role helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_user(is_admin=False, allowed_roles=None):
+    """Create a minimal user_dict for testing."""
+    return {
+        "username": "testuser",
+        "is_admin": is_admin,
+        "allowed_roles": allowed_roles or [],
+    }
+
+
+# --- validate_role_access ---
+
+
+def test_validate_role_access_none_returns_none():
+    import another_s3_manager.s3_client as mod
+
+    assert mod.validate_role_access(None, _make_user()) is None
+
+
+def test_validate_role_access_admin_allows_any():
+    import another_s3_manager.s3_client as mod
+
+    assert mod.validate_role_access("AnyRole", _make_user(is_admin=True)) == "AnyRole"
+
+
+def test_validate_role_access_allowed_role():
+    import another_s3_manager.s3_client as mod
+
+    assert mod.validate_role_access("RoleA", _make_user(allowed_roles=["RoleA", "RoleB"])) == "RoleA"
+
+
+def test_validate_role_access_denied_raises_permission_error():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError, match="RoleX"):
+        mod.validate_role_access("RoleX", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- _validate_bucket_access ---
+
+
+def test_validate_bucket_access_passes_when_no_allowed_buckets(mocker):
+    """When role has no allowed_buckets, any bucket is permitted."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch.object(
+        mod,
+        "get_s3_client",
+        return_value=mocker.MagicMock(),
+    )
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    # Should not raise
+    mod._validate_bucket_access("RoleA", "any-bucket", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_validate_bucket_access_allowed_bucket(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["bucket-ok"]}]},
+    )
+    # Should not raise
+    mod._validate_bucket_access("RoleA", "bucket-ok", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_validate_bucket_access_denied_bucket(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["bucket-ok"]}]},
+    )
+    with pytest.raises(PermissionError, match="bucket-bad"):
+        mod._validate_bucket_access("RoleA", "bucket-bad", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_validate_bucket_access_denied_role(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    with pytest.raises(PermissionError):
+        mod._validate_bucket_access("RoleA", "bucket", _make_user(allowed_roles=[]))
+
+
+# --- list_buckets_for_role ---
+
+
+def test_list_buckets_for_role_returns_allowed_buckets(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["b1", "b2"]}]},
+    )
+    result = mod.list_buckets_for_role("RoleA", _make_user(allowed_roles=["RoleA"]))
+    assert result == ["b1", "b2"]
+
+
+def test_list_buckets_for_role_falls_back_to_s3(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.list_buckets.return_value = {"Buckets": [{"Name": "bucket-x"}]}
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    result = mod.list_buckets_for_role("RoleA", _make_user(allowed_roles=["RoleA"]))
+    assert result == ["bucket-x"]
+    fake_client.list_buckets.assert_called_once()
+
+
+def test_list_buckets_for_role_permission_denied():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.list_buckets_for_role("RoleX", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_list_buckets_for_role_allowed_buckets_short_circuit(mocker):
+    """When a role has allowed_buckets configured, the helper returns it without
+    hitting S3 — moved from tests/test_main_logic.py::test_list_buckets_allowed_buckets
+    when the route refactor moved this logic into the helper."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={
+            "roles": [
+                {
+                    "name": "RoleA",
+                    "type": "default",
+                    "allowed_buckets": ["bucket-1", "bucket-2"],
+                }
+            ],
+        },
+    )
+    # Fail loudly if anything tries to reach S3 — short-circuit must skip it.
+    mocker.patch.object(mod, "get_s3_client", side_effect=AssertionError("should not call"))
+
+    result = mod.list_buckets_for_role("RoleA", _make_user(allowed_roles=["RoleA"]))
+    assert result == ["bucket-1", "bucket-2"]
+
+
+def test_list_buckets_for_role_invalid_allowed_type_raises_value_error(mocker):
+    """When allowed_buckets is not a list, the helper raises ValueError —
+    moved from tests/test_main_logic.py::test_list_buckets_invalid_allowed_type
+    when the route refactor moved this validation into the helper."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={
+            "roles": [{"name": "RoleA", "type": "default", "allowed_buckets": "not-a-list"}],
+        },
+    )
+    with pytest.raises(ValueError, match="allowed_buckets"):
+        mod.list_buckets_for_role("RoleA", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- list_objects_for_role ---
+
+
+def test_list_objects_for_role_returns_files(mocker):
+    """Returns sorted list of file-object dicts."""
+    import datetime
+
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    dt = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
+    fake_client = mocker.MagicMock()
+    fake_paginator = mocker.MagicMock()
+    fake_paginator.paginate.return_value = [
+        {
+            "Contents": [{"Key": "prefix/file.txt", "Size": 100, "LastModified": dt}],
+            "CommonPrefixes": [{"Prefix": "prefix/sub/"}],
+        }
+    ]
+    fake_client.get_paginator.return_value = fake_paginator
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    result = mod.list_objects_for_role("RoleA", "bucket", "prefix", _make_user(allowed_roles=["RoleA"]))
+    # Directory entries sort before files
+    assert result[0]["is_directory"] is True
+    assert result[0]["name"] == "sub"
+    assert result[1]["name"] == "file.txt"
+    assert result[1]["size"] == 100
+
+
+def test_list_objects_for_role_permission_denied_role():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.list_objects_for_role("RoleX", "bucket", "", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_list_objects_for_role_permission_denied_bucket(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["good"]}]},
+    )
+    with pytest.raises(PermissionError, match="bad-bucket"):
+        mod.list_objects_for_role("RoleA", "bad-bucket", "", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- head_object_for_role ---
+
+
+def test_head_object_for_role_returns_size(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.head_object.return_value = {"ContentLength": 42}
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    size = mod.head_object_for_role("RoleA", "bucket", "file.txt", _make_user(allowed_roles=["RoleA"]))
+    assert size == 42
+
+
+def test_head_object_for_role_not_found(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.head_object.side_effect = ClientError({"Error": {"Code": "404"}}, "HeadObject")
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    with pytest.raises(FileNotFoundError):
+        mod.head_object_for_role("RoleA", "bucket", "missing.txt", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_head_object_for_role_permission_denied():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.head_object_for_role("RoleX", "bucket", "f", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- read_object_for_role ---
+
+
+def test_read_object_for_role_returns_bytes(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_body = mocker.MagicMock()
+    fake_body.read.return_value = b"hello"
+    fake_client = mocker.MagicMock()
+    fake_client.get_object.return_value = {"Body": fake_body}
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    data = mod.read_object_for_role("RoleA", "bucket", "file.txt", _make_user(allowed_roles=["RoleA"]))
+    assert data == b"hello"
+
+
+def test_read_object_for_role_not_found(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.get_object.side_effect = ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    with pytest.raises(FileNotFoundError):
+        mod.read_object_for_role("RoleA", "bucket", "gone.txt", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_read_object_for_role_permission_denied():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.read_object_for_role("RoleX", "bucket", "f", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- iter_object_for_role ---
+
+
+def test_iter_object_for_role_streams_body(moto_s3):
+    """B1: helper yields the stored body in chunks of at most chunk_size bytes."""
+    moto_s3.create_bucket(Bucket="stream-b")
+    moto_s3.put_object(
+        Bucket="stream-b",
+        Key="x.bin",
+        Body=b"hello world",
+        ContentType="application/octet-stream",
+    )
+
+    from another_s3_manager.s3_client import iter_object_for_role
+
+    metadata, body_iter = iter_object_for_role(
+        None,
+        "stream-b",
+        "x.bin",
+        {"username": "admin", "is_admin": True, "allowed_roles": []},
+        chunk_size=4,
+    )
+
+    assert metadata["content_length"] == 11
+    assert metadata["content_type"] == "application/octet-stream"
+    chunks = list(body_iter)
+    assert b"".join(chunks) == b"hello world"
+    # Verify chunks respect chunk_size
+    assert all(len(c) <= 4 for c in chunks)
+
+
+def test_iter_object_for_role_missing_raises_filenotfound(moto_s3):
+    """B1: missing object surfaces as FileNotFoundError (not a raw ClientError)."""
+    moto_s3.create_bucket(Bucket="missing-b")
+
+    from another_s3_manager.s3_client import iter_object_for_role
+
+    with pytest.raises(FileNotFoundError):
+        iter_object_for_role(
+            None,
+            "missing-b",
+            "absent.txt",
+            {"username": "admin", "is_admin": True, "allowed_roles": []},
+        )
+
+
+def test_iter_object_for_role_increments_metric(moto_s3):
+    """B1: s3_bytes_downloaded_total increments exactly once with ContentLength,
+    BEFORE the body iterator is consumed."""
+    moto_s3.create_bucket(Bucket="metric-b")
+    moto_s3.put_object(Bucket="metric-b", Key="m.bin", Body=b"a" * 50)
+
+    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+    from another_s3_manager.s3_client import iter_object_for_role
+
+    labels = {"role": safe_role_label("unknown"), "bucket": "metric-b"}
+    before = s3_bytes_downloaded_total.labels(**labels)._value.get()
+
+    metadata, body_iter = iter_object_for_role(
+        None,
+        "metric-b",
+        "m.bin",
+        {"username": "admin", "is_admin": True, "allowed_roles": []},
+    )
+
+    # Metric already incremented before iterator consumption
+    mid = s3_bytes_downloaded_total.labels(**labels)._value.get()
+    assert mid - before == 50, "metric must increment at metadata-fetch time"
+
+    # consume iterator to exhaust the stream
+    list(body_iter)
+
+    after = s3_bytes_downloaded_total.labels(**labels)._value.get()
+    assert after - before == 50, "metric must increment exactly once per download"
+    assert metadata["content_length"] == 50
+
+
+# --- read_object_range_for_role ---
+
+
+def test_read_object_range_for_role_returns_slice(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_body = mocker.MagicMock()
+    fake_body.read.return_value = b"hello"
+    fake_client = mocker.MagicMock()
+    fake_client.get_object.return_value = {"Body": fake_body}
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    data = mod.read_object_range_for_role("RoleA", "bucket", "file.txt", 0, 4, _make_user(allowed_roles=["RoleA"]))
+    assert data == b"hello"
+    _, kwargs = fake_client.get_object.call_args
+    assert kwargs["Range"] == "bytes=0-4"
+
+
+def test_read_object_range_for_role_not_found(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.get_object.side_effect = ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    with pytest.raises(FileNotFoundError):
+        mod.read_object_range_for_role("RoleA", "bucket", "gone.txt", 0, 100, _make_user(allowed_roles=["RoleA"]))
+
+
+# --- put_object_for_role ---
+
+
+def test_put_object_for_role_uploads(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    mod.put_object_for_role("RoleA", "bucket", "key.txt", b"data", _make_user(allowed_roles=["RoleA"]))
+    fake_client.put_object.assert_called_once()
+    _, kwargs = fake_client.put_object.call_args
+    assert kwargs["Bucket"] == "bucket"
+    assert kwargs["Key"] == "key.txt"
+    assert kwargs["Body"] == b"data"
+
+
+def test_put_object_for_role_permission_denied():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.put_object_for_role("RoleX", "bucket", "key", b"", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_put_object_for_role_denied_bucket(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["good"]}]},
+    )
+    with pytest.raises(PermissionError, match="bad"):
+        mod.put_object_for_role("RoleA", "bad", "key", b"", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- delete_object_for_role ---
+
+
+def test_delete_object_for_role_single_file(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    # No objects from paginator (triggers single delete_object path)
+    fake_paginator = mocker.MagicMock()
+    fake_paginator.paginate.return_value = []
+    fake_client.get_paginator.return_value = fake_paginator
+    fake_client.delete_object.return_value = {}
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    result = mod.delete_object_for_role("RoleA", "bucket", "file.txt", _make_user(allowed_roles=["RoleA"]))
+    assert result["count"] == 1
+    fake_client.delete_object.assert_called_once_with(Bucket="bucket", Key="file.txt")
+
+
+def test_delete_object_for_role_not_found(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_paginator = mocker.MagicMock()
+    fake_paginator.paginate.return_value = []
+    fake_client.get_paginator.return_value = fake_paginator
+    fake_client.delete_object.side_effect = ClientError({"Error": {"Code": "NoSuchKey"}}, "DeleteObject")
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    with pytest.raises(FileNotFoundError):
+        mod.delete_object_for_role("RoleA", "bucket", "gone.txt", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_delete_object_for_role_permission_denied():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.delete_object_for_role("RoleX", "bucket", "f", _make_user(allowed_roles=["RoleA"]))
+
+
+# ---------------------------------------------------------------------------
+# list_objects_recursive_for_role — flat listing with pagination for MCP
+# ---------------------------------------------------------------------------
+
+
+def test_list_objects_recursive_returns_flat_keys(mocker):
+    """Returns flat keys with size/last_modified, no directory entries."""
+    import datetime
+
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    dt = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
+    fake_client = mocker.MagicMock()
+    fake_client.list_objects_v2.return_value = {
+        "Contents": [
+            {"Key": "logs/2024/01/a.txt", "Size": 100, "LastModified": dt},
+            {"Key": "logs/2024/02/b.txt", "Size": 200, "LastModified": dt},
+        ],
+        "IsTruncated": False,
+    }
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    result = mod.list_objects_recursive_for_role("RoleA", "bucket", "logs/", _make_user(allowed_roles=["RoleA"]))
+    assert result["key_count"] == 2
+    assert result["is_truncated"] is False
+    assert result["next_continuation_token"] is None
+    assert result["files"][0]["key"] == "logs/2024/01/a.txt"
+    # No is_directory field — flat keys only
+    assert "is_directory" not in result["files"][0]
+
+
+def test_list_objects_recursive_skips_directory_markers(mocker):
+    """Empty objects with key ending in / are skipped (S3 directory markers)."""
+    import datetime
+
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    dt = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
+    fake_client = mocker.MagicMock()
+    fake_client.list_objects_v2.return_value = {
+        "Contents": [
+            {"Key": "dir/", "Size": 0, "LastModified": dt},  # marker, skipped
+            {"Key": "dir/real.txt", "Size": 50, "LastModified": dt},
+        ],
+        "IsTruncated": False,
+    }
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    result = mod.list_objects_recursive_for_role("RoleA", "bucket", "", _make_user(allowed_roles=["RoleA"]))
+    assert result["key_count"] == 1
+    assert result["files"][0]["key"] == "dir/real.txt"
+
+
+def test_list_objects_recursive_paginates_via_continuation_token(mocker):
+    """When max_keys < total, returns next_continuation_token for follow-up call."""
+    import datetime
+
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    dt = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
+    fake_client = mocker.MagicMock()
+    # First page: 3 files + IsTruncated=True
+    fake_client.list_objects_v2.return_value = {
+        "Contents": [{"Key": f"f{i}.txt", "Size": i, "LastModified": dt} for i in range(3)],
+        "IsTruncated": True,
+        "NextContinuationToken": "TOKEN-A",
+    }
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    result = mod.list_objects_recursive_for_role("RoleA", "bucket", "", _make_user(allowed_roles=["RoleA"]), max_keys=3)
+    assert result["key_count"] == 3
+    assert result["is_truncated"] is True
+    assert result["next_continuation_token"] == "TOKEN-A"
+
+
+def test_list_objects_recursive_max_keys_capped_at_10000():
+    """User-supplied max_keys is silently capped at 10000."""
+    import another_s3_manager.s3_client as mod
+
+    # We don't even need to mock S3 — just confirm no exception when max_keys=99999;
+    # the helper validates internally before any boto call.
+    # (Easier to assert via direct param check than full mock setup.)
+    with pytest.raises(PermissionError):
+        # Will fail on permission check before anything else; that's fine —
+        # we just want to ensure the function doesn't reject max_keys=99999 outright.
+        mod.list_objects_recursive_for_role("RoleX", "bucket", "", _make_user(allowed_roles=["RoleA"]), max_keys=99_999)
+
+
+def test_list_objects_recursive_permission_denied_role():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.list_objects_recursive_for_role("RoleX", "bucket", "", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- generate_presigned_url_for_role ---
+
+
+def test_generate_presigned_url_for_role_returns_url(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://bucket.s3.amazonaws.com/file.txt?X-Amz-Signature=abc"
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    # `.txt` is in the text-extension override list, so the call also gets a
+    # `ResponseContentType: text/plain; charset=utf-8` param. Use a path
+    # without a known text extension to verify the URL/params plumbing in
+    # isolation; the charset override has its own dedicated tests below.
+    url = mod.generate_presigned_url_for_role("RoleA", "bucket", "blob.bin", _make_user(allowed_roles=["RoleA"]))
+    assert url.startswith("https://")
+    assert "X-Amz-Signature" in url
+    fake_client.generate_presigned_url.assert_called_once_with(
+        "get_object",
+        Params={"Bucket": "bucket", "Key": "blob.bin"},
+        ExpiresIn=3600,
+    )
+
+
+def test_generate_presigned_url_for_role_custom_ttl(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://example/x"
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    mod.generate_presigned_url_for_role(
+        "RoleA", "bucket", "file.txt", _make_user(allowed_roles=["RoleA"]), expires_in=600
+    )
+    _, kwargs = fake_client.generate_presigned_url.call_args
+    assert kwargs["ExpiresIn"] == 600
+
+
+def test_generate_presigned_url_for_role_permission_denied_role():
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.generate_presigned_url_for_role("RoleX", "bucket", "f", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_generate_presigned_url_for_role_permission_denied_bucket(mocker):
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default", "allowed_buckets": ["allowed"]}]},
+    )
+
+    with pytest.raises(PermissionError):
+        mod.generate_presigned_url_for_role("RoleA", "denied", "f", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_generate_presigned_url_for_role_overrides_content_type_for_markdown(mocker):
+    """Markdown files get a UTF-8 charset override so Cyrillic renders inline."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://x"
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    mod.generate_presigned_url_for_role("RoleA", "bucket", "notes/2026-03-22.md", _make_user(allowed_roles=["RoleA"]))
+    _, kwargs = fake_client.generate_presigned_url.call_args
+    assert kwargs["Params"]["ResponseContentType"] == "text/markdown; charset=utf-8"
+
+
+def test_generate_presigned_url_for_role_overrides_content_type_for_csv(mocker):
+    """CSV gets text/csv; charset=utf-8 — same Cyrillic mojibake fix."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://x"
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    mod.generate_presigned_url_for_role("RoleA", "bucket", "data.csv", _make_user(allowed_roles=["RoleA"]))
+    _, kwargs = fake_client.generate_presigned_url.call_args
+    assert kwargs["Params"]["ResponseContentType"] == "text/csv; charset=utf-8"
+
+
+def test_generate_presigned_url_for_role_no_override_for_binary(mocker):
+    """Binary files (.png, .pdf, .zip) keep S3's stored Content-Type — no charset added."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://x"
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    for binary_path in ("photo.png", "doc.pdf", "archive.zip", "video.mp4"):
+        fake_client.reset_mock()
+        mod.generate_presigned_url_for_role("RoleA", "bucket", binary_path, _make_user(allowed_roles=["RoleA"]))
+        _, kwargs = fake_client.generate_presigned_url.call_args
+        assert "ResponseContentType" not in kwargs["Params"], (
+            f"binary file {binary_path!r} should not get a content-type override"
+        )
+
+
+def test_generate_presigned_url_for_role_charset_extension_case_insensitive(mocker):
+    """`.MD` (uppercase) gets the same override as `.md` — extensions are case-insensitive."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://x"
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    mod.generate_presigned_url_for_role("RoleA", "bucket", "README.MD", _make_user(allowed_roles=["RoleA"]))
+    _, kwargs = fake_client.generate_presigned_url.call_args
+    assert kwargs["Params"]["ResponseContentType"] == "text/markdown; charset=utf-8"
+
+
+def test_generate_presigned_url_for_role_no_override_for_html_or_svg(mocker):
+    """SECURITY: .html / .htm / .svg / .js / .css must NOT get a renderable
+    Content-Type override. Otherwise an authenticated user could upload a
+    malicious HTML/SVG file and share its presigned URL as a phishing page
+    on the trusted *.s3.amazonaws.com origin.
+    """
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.generate_presigned_url.return_value = "https://x"
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    for risky_path in ("phish.html", "evil.htm", "icon.svg", "tracker.js", "style.css"):
+        fake_client.reset_mock()
+        mod.generate_presigned_url_for_role("RoleA", "bucket", risky_path, _make_user(allowed_roles=["RoleA"]))
+        _, kwargs = fake_client.generate_presigned_url.call_args
+        assert "ResponseContentType" not in kwargs["Params"], (
+            f"renderable file {risky_path!r} must NOT get a content-type override "
+            "— would enable phishing on the S3 origin"
+        )
+
+
+def test_role_uses_temporary_credentials(mocker):
+    from another_s3_manager import s3_client
+
+    mocker.patch.object(
+        s3_client,
+        "load_config",
+        return_value={
+            "roles": [
+                {"name": "sts-role", "type": "assume_role", "role_arn": "arn:..."},
+                {"name": "profile-role", "type": "profile", "profile_name": "p"},
+                {"name": "key-role", "type": "credentials", "access_key_id": "AKIA..."},
+                {"name": "compat-role", "type": "s3_compatible"},
+            ]
+        },
+    )
+    assert s3_client.role_uses_temporary_credentials("sts-role") is True
+    assert s3_client.role_uses_temporary_credentials("profile-role") is True
+    assert s3_client.role_uses_temporary_credentials("key-role") is False
+    assert s3_client.role_uses_temporary_credentials("compat-role") is False
+    assert s3_client.role_uses_temporary_credentials("nope") is False

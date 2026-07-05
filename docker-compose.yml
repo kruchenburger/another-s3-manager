@@ -1,24 +1,55 @@
+# Local dev stack — builds the image from source and bind-mounts ./data so SQLite
+# + config.json + any uploaded files live next to the repo (visible in your IDE,
+# easy to back up, easy to wipe with `rm -rf data`).
+#
+# Quick start (one command after `cp .env.example .env` + paste a JWT key):
+#   docker compose up --build
+#
+# For self-host (server, no source clone), see docker-compose.example.yml.
+#
+# Override port with APP_PORT=9000 if 8080 is in use.
 services:
+  # One-shot init: ensures ./data is writable by the non-root user (uid 1001) inside
+  # the app container. Without this, bind-mount writes fail on Linux and inconsistently
+  # on Windows. Runs to completion before `app` starts; takes <1 second on a primed host.
+  init-data:
+    image: alpine:3
+    command: chown -R 1001:1001 /data
+    volumes:
+      - ./data:/data
+    restart: "no"
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Set to 1 to ship the dev theme switcher inside this production build
+        # (used for visual smoke-testing Phase 6b palette vs amber baseline).
+        #   VITE_SHOW_THEME_SWITCHER=1 docker compose up --build
+        VITE_SHOW_THEME_SWITCHER: ${VITE_SHOW_THEME_SWITCHER:-}
     container_name: another-s3-manager-local
     ports:
       - "${APP_PORT:-8080}:8080"
     env_file: .env
     environment:
-      - PORT=8080
       - UVICORN_HOST=0.0.0.0
       - DATA_DIR=/app/data
       - S3_FILE_MANAGER_CONFIG=/app/data/config.json
+      # Local HTTP — without this the browser drops the auth cookie.
+      - COOKIE_SECURE=false
+      # Pass through APP_VERSION so the header/footer version chrome
+      # renders when set, e.g. `APP_VERSION=1.0.0 docker compose up`.
+      # Defaults to "dev" (which the frontend hides as noise).
+      - APP_VERSION=${APP_VERSION:-dev}
     volumes:
       - ./data:/app/data
-      - ./src:/app/src
+      # Optional: mount your AWS profile so SSO/profile-typed roles in config.json work.
+      # Uncomment the line for your OS:
+      # - ${HOME}/.aws:/home/app/.aws:ro          # Linux / macOS
+      # - ${USERPROFILE}/.aws:/home/app/.aws:ro   # Windows (Docker Desktop)
+    depends_on:
+      init-data:
+        condition: service_completed_successfully
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 5s
+    # Healthcheck is defined in the Dockerfile; no override needed here.
