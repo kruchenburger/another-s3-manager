@@ -157,6 +157,10 @@ jobs:
           S3_FILE_MANAGER_CONFIG: ./data/config.json
           COOKIE_SECURE: "false"
           UVICORN_HOST: "127.0.0.1"
+          # Without this, python block-buffers stdout when redirected to the
+          # nohup log file and the "dump backend log on failure" step shows
+          # only the startup lines — request-time errors never get flushed.
+          PYTHONUNBUFFERED: "1"
         run: |
           nohup uv run python -m another_s3_manager.main > /tmp/backend.log 2>&1 &
           disown
@@ -273,6 +277,10 @@ jobs:
           S3_FILE_MANAGER_CONFIG: ./data/config.json
           COOKIE_SECURE: "false"
           UVICORN_HOST: "127.0.0.1"
+          # Without this, python block-buffers stdout when redirected to the
+          # nohup log file and the "dump backend log on failure" step shows
+          # only the startup lines — request-time errors never get flushed.
+          PYTHONUNBUFFERED: "1"
           AWS_ENDPOINT_URL: http://localhost:4566
           AWS_ENDPOINT_URL_STS: http://localhost:4566
           AWS_REGION: us-east-1
