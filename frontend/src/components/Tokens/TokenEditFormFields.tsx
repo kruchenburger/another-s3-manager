@@ -82,7 +82,7 @@ export function TokenEditFormFields({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token?.id, token?.name, token?.is_read_only, token?.max_read_bytes]);
 
-  const handleSubmit = form.onSubmit((values) => {
+  const submitValues = form.onSubmit((values) => {
     const bytes = Math.min(
       HARD_CEILING_BYTES,
       Math.round(values.max_read_mb * 1024 * 1024),
@@ -93,6 +93,15 @@ export function TokenEditFormFields({
       max_read_bytes: bytes,
     });
   });
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    // TokenEditModal renders in a portal, but React bubbles events through
+    // the REACT tree, not the DOM tree — when this form lives under
+    // UserDrawer's <form> (UserTokensList call site), the submit would also
+    // fire the outer user-edit form, saving the user and closing the drawer.
+    event.stopPropagation();
+    submitValues(event);
+  };
 
   if (variant === "modal") {
     // Modal: form + flex-end footer (Mantine Modal sizes to content).

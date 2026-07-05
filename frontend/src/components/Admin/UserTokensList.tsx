@@ -56,7 +56,12 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
     <Stack gap="sm">
       <Group justify="space-between">
         <Title order={5}>MCP tokens</Title>
+        {/* type="button" is load-bearing on every control in this component:
+            UserTokensList renders INSIDE UserDrawer's <form>, and a native
+            button defaults to type="submit" there — clicking "Issue token"
+            would silently save the user form and close the drawer. */}
         <Button
+          type="button"
           variant="light"
           size="xs"
           leftSection={<Plus size={14} />}
@@ -115,6 +120,7 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
                 <Table.Td>
                   <Group gap="xs" wrap="nowrap" className={classes.actions}>
                     <ActionIcon
+                      type="button"
                       variant="subtle"
                       aria-label={`Edit ${t.name}`}
                       onClick={() => setEditTarget(t)}
@@ -122,6 +128,7 @@ export function UserTokensList({ username, userId }: UserTokensListProps) {
                       <Pencil size={14} />
                     </ActionIcon>
                     <ActionIcon
+                      type="button"
                       variant="subtle"
                       color="red"
                       aria-label={`Revoke ${t.name}`}

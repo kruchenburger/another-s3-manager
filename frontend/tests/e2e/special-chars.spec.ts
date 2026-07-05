@@ -16,8 +16,15 @@ test.describe("Special characters in S3 keys", () => {
     // This makes the test idempotent (works on retry without re-seeding) and
     // sidesteps the NTFS limitation that prevents committing a fixture file
     // with ':' '?' in its name (Windows forbids those chars).
-    const fileChooserPromise = page.waitForEvent("filechooser");
+    // First Upload click in a fresh browser context opens the drag-and-drop
+    // hint modal (its localStorage dismiss flag is never set in Playwright's
+    // isolated context) — the native file chooser opens from the modal's CTA.
     await page.getByRole("button", { name: "Upload", exact: true }).click();
+    const fileChooserPromise = page.waitForEvent("filechooser");
+    await page
+      .getByRole("dialog", { name: "Upload files" })
+      .getByRole("button", { name: "Choose files" })
+      .click();
     const fileChooser = await fileChooserPromise;
     await fileChooser.setFiles({
       name: SPECIAL_NAME,

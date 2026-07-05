@@ -19,8 +19,15 @@ test.describe("Upload + delete via MinIO", () => {
     // The hidden <input type="file"> lives in FileBrowser.tsx and is triggered
     // via ref by the UploadSplitButton primary's onClick. Use exact:true so the
     // name doesn't also match the "More upload options" chevron (substring).
-    const fileChooserPromise = page.waitForEvent("filechooser");
+    // First Upload click in a fresh browser context opens the drag-and-drop
+    // hint modal (its localStorage dismiss flag is never set in Playwright's
+    // isolated context) — the native file chooser opens from the modal's CTA.
     await page.getByRole("button", { name: "Upload", exact: true }).click();
+    const fileChooserPromise = page.waitForEvent("filechooser");
+    await page
+      .getByRole("dialog", { name: "Upload files" })
+      .getByRole("button", { name: "Choose files" })
+      .click();
     const fileChooser = await fileChooserPromise;
     // Playwright lets us set virtual file content — avoids needing a fixture with this exact name.
     await fileChooser.setFiles({
