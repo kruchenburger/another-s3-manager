@@ -72,6 +72,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `assume_role` roles no longer fail with "You must specify a region" in
+  containers without a shared AWS config: the STS client (and the assumed-role
+  S3 client) now honor the role's `region` field and the `AWS_REGION` env var.
 - Admin edits to roles apply without a container restart — the S3 client and
   boto3 credential caches are flushed on config save, and config changes apply
   live in open browser tabs.
