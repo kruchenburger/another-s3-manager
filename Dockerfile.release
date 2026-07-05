@@ -1,0 +1,12 @@
+# check=skip=InvalidDefaultArgInFrom
+# ^ parser directive (must be the first line): BASE_IMAGE intentionally has no
+#   default — release.yml always injects it.
+#
+# Release promotion layer: stamps the release version onto the exact image
+# that was built and tested on main (see release.yml). File-system layers stay
+# byte-identical to the tested :<short-sha> image — only APP_VERSION changes.
+ARG BASE_IMAGE
+# hadolint ignore=DL3006
+FROM ${BASE_IMAGE}
+ARG BUILD_VERSION
+ENV APP_VERSION=${BUILD_VERSION}

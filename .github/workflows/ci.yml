@@ -1,13 +1,42 @@
 name: CI/CD
 
+# Pipeline model (see also release.yml):
+#   PR → main:    lint (hadolint) + tests + build-check (amd64, no push)
+#   push to main: tests + build & push :main / :<short-sha>
+#   tag v*:       handled entirely by release.yml — no re-tests, no full
+#                 rebuild; the tested :<short-sha> image is promoted.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    # No paths-ignore here on purpose: every main commit must produce a
+    # :<short-sha> image or release.yml has nothing to promote (release-prep
+    # commits are typically CHANGELOG-only and would otherwise be skipped).
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+
+# A new push to the same PR supersedes the previous run — cancel it. Never
+# cancel main builds (each must publish its :<short-sha> image).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  hadolint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+      - name: Lint Dockerfile.release
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile.release
+
   test-backend:
     runs-on: ubuntu-latest
     steps:
@@ -329,9 +358,27 @@ jobs:
             frontend/test-results/
           retention-days: 14
 
+  build-check:
+    # PRs only: prove the Dockerfile still builds, without publishing anything.
+    # amd64 only — arm64 via QEMU would roughly double the time and there is
+    # nothing arch-specific a Python+SPA image would catch.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          push: false
+          platforms: linux/amd64
+          build-args: |
+            BUILD_VERSION=pr-check
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   build:
     needs: [test-backend]
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -348,26 +395,25 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
+          # :<short-sha> is what release.yml later promotes to :X.Y.Z + :latest.
           tags: |
             type=ref,event=branch
-            type=semver,pattern={{version}}
             type=sha,prefix=
       - uses: docker/build-push-action@v6
         with:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
-          # metadata-action strips the tag's "v" prefix (v1.0.0 -> 1.0.0); the UI
-          # and /health expect a bare semver, so passing github.ref_name here
-          # would render as "vv1.0.0". Every line of build-args becomes a
-          # --build-arg, so this note must live outside the block scalar.
+          # On main pushes meta.version is "main" — the :main dev channel
+          # reports that as its APP_VERSION. Releases get their real semver
+          # stamped by release.yml's promote job, not here.
           build-args: |
             BUILD_VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   notify:
-    needs: [test-backend, test-frontend, e2e, e2e-ministack, build]
+    needs: [hadolint, test-backend, test-frontend, e2e, e2e-ministack, build-check, build]
     if: always()
     runs-on: ubuntu-latest
     steps:
