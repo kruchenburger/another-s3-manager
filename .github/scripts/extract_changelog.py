@@ -7,6 +7,62 @@ import os
 import re
 import sys
 
+_HEADER_RE = re.compile(r"^#{1,6}\s")
+_LIST_RE = re.compile(r"^(\s*)([-*+]|\d+\.)\s")
+_FENCE_RE = re.compile(r"^\s*```")
+
+
+def _is_joinable_prev(line: str) -> bool:
+    """A previous line a continuation may be appended to (a paragraph or bullet),
+    as opposed to a header / table row / blockquote / fence / blank."""
+    stripped = line.strip()
+    if stripped == "" or _HEADER_RE.match(stripped) or _FENCE_RE.match(line):
+        return False
+    return not (stripped.startswith("|") or stripped.startswith(">"))
+
+
+def reflow_release_notes(text: str) -> str:
+    """Collapse soft-wrapped continuation lines into single physical lines.
+
+    GitHub renders release notes with GFM ``breaks: true``, so every single
+    newline inside a paragraph or bullet becomes a ``<br>``. A CHANGELOG that is
+    hard-wrapped at ~80 columns (nice to read in an editor) therefore renders as
+    a narrow, ragged left column on the release page. Joining each wrapped
+    paragraph/bullet back into one line lets it wrap naturally to the page width.
+
+    Preserved verbatim: blank lines, ATX headers, list markers (so separate
+    bullets stay separate), Markdown table rows, blockquotes, and fenced code
+    blocks (nothing inside ``` fences is touched).
+    """
+    out: list[str] = []
+    in_fence = False
+    for raw in text.split("\n"):
+        line = raw.rstrip("\r")
+
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+
+        stripped = line.strip()
+        starts_new_block = (
+            stripped == ""
+            or bool(_HEADER_RE.match(stripped))
+            or bool(_LIST_RE.match(line))
+            or stripped.startswith("|")
+            or stripped.startswith(">")
+        )
+
+        if out and not starts_new_block and _is_joinable_prev(out[-1]):
+            out[-1] = out[-1].rstrip() + " " + stripped
+        else:
+            out.append(line)
+
+    return "\n".join(out)
+
 
 def extract_changelog(version: str, changelog_path: str = "CHANGELOG.md", output_path: str = "release_notes.md"):
     """
@@ -52,6 +108,10 @@ def extract_changelog(version: str, changelog_path: str = "CHANGELOG.md", output
             notes = match.group(0).strip()
         else:
             notes = content
+
+    # Unwrap hard-wrapped lines so the release page doesn't render as a narrow
+    # <br>-separated column (GitHub release notes use GFM breaks: true).
+    notes = reflow_release_notes(notes)
 
     # Write to output file
     with open(output_path, "w", encoding="utf-8") as f:
