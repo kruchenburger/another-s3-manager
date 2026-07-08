@@ -298,6 +298,81 @@ def test_client_load_continuation_appends_next_chunk(moto_s3):
     assert page2["next_token"] is not None
 
 
+def test_client_load_folder_heavy_is_bounded_and_terminates(moto_s3):
+    """A level with many sub-folders and NO files returns a bounded chunk.
+
+    Regression: previously the file loop counted only files toward
+    max_client_load, so a folder dominated by sub-folders (real case: 600k
+    sub-folders, zero files) paginated the entire keyspace hunting for files
+    that don't exist, hanging the request. Directories now count toward the
+    budget, so the chunk is bounded and the file loop never runs.
+    """
+    _seed(
+        moto_s3,
+        "folder-heavy",
+        files=[],
+        directories=[f"d{i:04d}" for i in range(400)],
+    )
+
+    result = list_objects_client_load_for_role(
+        role=None,
+        bucket="folder-heavy",
+        path="",
+        user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
+        max_client_load=300,
+    )
+
+    # Folders count toward the budget: capped at exactly max_client_load.
+    assert len(result["directories"]) == 300
+    assert [d["name"] for d in result["directories"]] == [f"d{i:04d}" for i in range(300)]
+    assert result["files"] == []
+    # More sub-folders exist beyond this chunk → truncated indicator.
+    assert result["truncated"] is True
+
+
+def test_client_load_folder_heavy_makes_few_s3_calls(monkeypatch):
+    """Regression guard: a sub-folder-dominated level must not fan out into many
+    ListObjectsV2 calls. A fake, inexhaustible folder keyspace (every page is
+    CommonPrefixes, IsTruncated forever) would loop endlessly under the old
+    code; the fake raises past a small call budget so a regression fails loudly
+    instead of hanging the suite.
+    """
+    from another_s3_manager import s3_client
+
+    calls = {"n": 0}
+
+    class FakeS3:
+        def list_objects_v2(self, **kwargs):
+            calls["n"] += 1
+            if calls["n"] > 5:
+                raise RuntimeError(f"grind detected: {calls['n']} ListObjectsV2 calls")
+            max_keys = kwargs.get("MaxKeys", 1000)
+            prefixes = [{"Prefix": f"d{i:06d}/"} for i in range(min(max_keys, 1000))]
+            return {
+                "CommonPrefixes": prefixes,
+                "Contents": [],
+                "IsTruncated": True,
+                "NextContinuationToken": "tok",
+            }
+
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role_name=None: FakeS3())
+
+    result = s3_client.list_objects_client_load_for_role(
+        role=None,
+        bucket="whatever",
+        path="",
+        user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
+        max_client_load=300,
+    )
+
+    # Only the directory-discovery call runs; the file loop is skipped because
+    # sub-folders already filled the budget.
+    assert calls["n"] == 1
+    assert len(result["directories"]) == 300
+    assert result["files"] == []
+    assert result["truncated"] is True
+
+
 def test_config_has_max_client_load_default(monkeypatch, tmp_path):
     """A fresh config exposes max_client_load defaulting to 10000."""
     import importlib
