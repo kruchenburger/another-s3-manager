@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-07-08
+
+### Added
+
+- MCP server gains three tools: `copy_object` (server-side copy within a role;
+  `delete_source=true` moves/renames), `presigned_url` (hand an agent a
+  time-limited download link — works for binary files too), and
+  `get_object_metadata` (size / last-modified / content-type / etag without
+  downloading). Write-tool descriptions now clearly flag their side effects.
+
+### Fixed
+
+- Expired sessions no longer trap the page in a redirect loop between the login
+  page and the app (the address bar flickered and nothing was clickable). The
+  login page now only bounces to the app on a genuinely valid session.
+- The Roles page no longer labels a role with no bucket restriction as "No
+  buckets" (which read as broken/empty). It now shows "Any bucket" with a
+  tooltip explaining the role lists every bucket its credentials can access.
+- The documented minimum IAM policy now includes the required `s3:ListBucket`
+  permission (needed for browsing) and explains which action powers each
+  feature, including copy/move.
+
 ## [1.0.1] - 2026-07-08
 
 ### Fixed
