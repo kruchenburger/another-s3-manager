@@ -1,5 +1,5 @@
-import { Box, Button, Menu } from "@mantine/core";
-import { ChevronDown, Files, ListPlus } from "lucide-react";
+import { Box, Button, Group, Loader, Menu } from "@mantine/core";
+import { ChevronDown, Files, ListPlus, Square } from "lucide-react";
 
 interface LoadSplitButtonProps {
   /** Fetch the next chunk of objects from the server. */
@@ -8,6 +8,10 @@ interface LoadSplitButtonProps {
   onLoadAll: () => void;
   /** Server continuation fetch in flight — spinner + double-submit guard. */
   loading: boolean;
+  /** A "Load all" drain is running (many chunks) — show a Stop button instead. */
+  loadingAll?: boolean;
+  /** Halt an in-progress "Load all". */
+  onStopLoadAll?: () => void;
 }
 
 /**
@@ -15,6 +19,10 @@ interface LoadSplitButtonProps {
  * Primary "Load more" (next chunk) with a chevron menu for "Load all" (drain
  * everything). Mirrors UploadSplitButton; replaces the two separate Load more /
  * Load all buttons in FileBrowserHeader.
+ *
+ * While a "Load all" drain runs (potentially thousands of chunks on a huge
+ * level) the whole control collapses to a single "Stop" button — draining
+ * 800k objects 300-at-a-time is long, so the user must be able to halt it.
  *
  * `loading` drives both the spinner and the `disabled` re-click guard: Mantine's
  * `loading` shows a spinner but does NOT block clicks, so without `disabled` a
@@ -26,7 +34,29 @@ export function LoadSplitButton({
   onLoadMore,
   onLoadAll,
   loading,
+  loadingAll = false,
+  onStopLoadAll,
 }: LoadSplitButtonProps) {
+  if (loadingAll) {
+    // A spinner makes the ongoing drain obvious (the plain Stop button alone
+    // read as idle); the object count is already shown in the page header.
+    return (
+      <Group gap="xs" wrap="nowrap">
+        <Loader size="xs" color="gray" />
+        <Button
+          variant="light"
+          color="red"
+          size="sm"
+          onClick={onStopLoadAll}
+          leftSection={<Square size={14} fill="currentColor" />}
+          aria-label="Stop loading"
+        >
+          Stop
+        </Button>
+      </Group>
+    );
+  }
+
   return (
     <Button.Group>
       {/* Phones: the text swaps for a ListPlus icon (desktop stays text-only

@@ -27,6 +27,8 @@ function renderHeader(
           isLoadingMore={false}
           onLoadMore={vi.fn()}
           onLoadAll={vi.fn()}
+          loadingAll={false}
+          onStopLoadAll={vi.fn()}
           {...overrides}
         />
       </MemoryRouter>

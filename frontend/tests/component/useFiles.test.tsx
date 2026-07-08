@@ -120,6 +120,43 @@ describe("useFiles (client-load)", () => {
     expect(result.current.truncated).toBe(false);
   });
 
+  it("accumulates directories across chunks (folder pagination), deduped", async () => {
+    listFilesMock
+      .mockResolvedValueOnce({
+        directories: [
+          { name: "d1", is_directory: true, size: 0 },
+          { name: "d2", is_directory: true, size: 0 },
+        ],
+        files: [],
+        truncated: true,
+        next_token: "tok-1",
+      })
+      .mockResolvedValueOnce({
+        // A page refetch could re-surface d2; it must not duplicate.
+        directories: [
+          { name: "d2", is_directory: true, size: 0 },
+          { name: "d3", is_directory: true, size: 0 },
+        ],
+        files: [],
+        truncated: false,
+        next_token: null,
+      });
+
+    const { result } = renderHook(() => useFiles("b", "r", ""), {
+      wrapper: wrap(newQc()),
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.directories.map((d) => d.name)).toEqual(["d1", "d2"]);
+
+    await act(async () => {
+      await result.current.loadMore();
+    });
+
+    // Folders from both chunks are present, d2 appears once.
+    expect(result.current.directories.map((d) => d.name)).toEqual(["d1", "d2", "d3"]);
+    expect(result.current.truncated).toBe(false);
+  });
+
   it("filesQueryKey is the 3-arg prefix used for invalidation", () => {
     expect(filesQueryKey("b", "r", "p")).toEqual(["files", "list", "r", "b", "p"]);
   });

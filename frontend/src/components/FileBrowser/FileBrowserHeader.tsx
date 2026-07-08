@@ -33,6 +33,10 @@ interface FileBrowserHeaderProps {
   onLoadMore: () => void;
   /** Drain all remaining chunks from the server. */
   onLoadAll: () => void;
+  /** A "Load all" drain is running — the control shows Stop instead. */
+  loadingAll: boolean;
+  /** Halt an in-progress "Load all". */
+  onStopLoadAll: () => void;
 }
 
 export function FileBrowserHeader({
@@ -49,6 +53,8 @@ export function FileBrowserHeader({
   isLoadingMore,
   onLoadMore,
   onLoadAll,
+  loadingAll,
+  onStopLoadAll,
 }: FileBrowserHeaderProps) {
   // Mobile-only: the filter collapses to a search icon so filter + view
   // toggle + Upload share one row on any phone (a fixed-width input didn't
@@ -133,11 +139,13 @@ export function FileBrowserHeader({
             </ActionIcon>
           </Tooltip>
         </Group>
-        {truncated && (
+        {(truncated || loadingAll) && (
           <LoadSplitButton
             onLoadMore={onLoadMore}
             onLoadAll={onLoadAll}
             loading={isLoadingMore}
+            loadingAll={loadingAll}
+            onStopLoadAll={onStopLoadAll}
           />
         )}
         {/* View toggle sits with the filter; the two split buttons (Load

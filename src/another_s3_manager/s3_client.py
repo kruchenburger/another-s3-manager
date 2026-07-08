@@ -1167,12 +1167,16 @@ def list_objects_client_load_for_role(
 
     The /v2 UI holds the result in memory and paginates/filters/searches it
     client-side (vanilla-style), so this returns a chunk of up to
-    `max_client_load` files in one logical load instead of one S3 page.
+    `max_client_load` objects in one logical load instead of one S3 page.
 
-    Directories (CommonPrefixes) are collected only on the FIRST chunk (when
-    `continuation_token` is None), same rationale as
-    `list_objects_paginated_for_role`. Continuation chunks return
-    `directories: []`.
+    Directories (CommonPrefixes) and files (Contents) are BOTH counted toward
+    `max_client_load` and BOTH can appear on any chunk — a single Delimiter
+    walk pages through the level in S3 key order, so continuation (Load more /
+    Load all / lazy scroll) resumes uniformly regardless of whether the next
+    objects are folders or files. A level made entirely of sub-folders
+    paginates exactly like a level made entirely of files; the caller
+    accumulates `directories` across chunks the same way it accumulates
+    `files`.
 
     The per-S3-call MaxKeys is capped at `min(1000, remaining_budget)` so the
     S3 page boundary aligns with the chunk boundary: when the chunk fills, the
@@ -1186,8 +1190,8 @@ def list_objects_client_load_for_role(
 
     Returns:
         {
-            "directories": [...],   # only on first chunk
-            "files":       [...],   # up to max_client_load
+            "directories": [...],   # this chunk's sub-folders
+            "files":       [...],   # this chunk's files
             "truncated":   bool,    # True if S3 has more beyond this chunk
             "next_token":  str | None,
         }
@@ -1205,37 +1209,31 @@ def list_objects_client_load_for_role(
     s3_prefix = base + name_prefix
 
     def fetch(s3_client) -> Dict[str, Any]:
+        # Directories (CommonPrefixes) and files (Contents) are BOTH objects at
+        # this level and both count toward max_client_load. A single Delimiter
+        # walk pages through the whole level in S3 key order, so continuation
+        # (Load more / Load all / lazy scroll) resumes uniformly whether the
+        # next objects are folders, files, or a mix — a level made entirely of
+        # sub-folders paginates exactly like a level made entirely of files.
         directories: list = []
-        if continuation_token is None:
-            # First chunk: dedicated directory-discovery call (not budget-limited).
-            dir_resp = s3_client.list_objects_v2(
-                Bucket=bucket,
-                Prefix=s3_prefix,
-                Delimiter="/",
-                MaxKeys=1000,
-            )
-            for prefix_obj in dir_resp.get("CommonPrefixes", []) or []:
-                dir_name = prefix_obj["Prefix"][len(base) :].rstrip("/")
-                if dir_name:
-                    directories.append(
-                        {
-                            "name": dir_name,
-                            "is_directory": True,
-                            "size": 0,
-                        }
-                    )
-            directories.sort(key=lambda d: d["name"].lower())
-
         files: list = []
         token = continuation_token
         truncated = False
         next_token: Optional[str] = None
 
-        while len(files) < max_client_load:
-            # Cap MaxKeys at the remaining budget so the S3 page boundary
-            # aligns with the chunk boundary and the continuation token is
-            # correct.
-            remaining = max_client_load - len(files)
+        # Defensive bound on S3 round-trips per chunk. Every returned entry
+        # (folder or file) counts toward the budget, so ceil(budget/1000) pages
+        # always fill it; the slack only absorbs pages thinned by skipped
+        # self-markers. This is what makes a 800k-sub-folder level return a
+        # bounded chunk in one call instead of grinding the whole keyspace.
+        max_pages = (max_client_load // 1000) + 8
+        pages = 0
+
+        while (len(directories) + len(files)) < max_client_load and pages < max_pages:
+            pages += 1
+            # Cap MaxKeys at the remaining budget so the S3 page boundary aligns
+            # with the chunk boundary and the continuation token is correct.
+            remaining = max_client_load - (len(directories) + len(files))
             kwargs: Dict[str, Any] = {
                 "Bucket": bucket,
                 "Prefix": s3_prefix,
@@ -1246,6 +1244,17 @@ def list_objects_client_load_for_role(
                 kwargs["ContinuationToken"] = token
 
             resp = s3_client.list_objects_v2(**kwargs)
+
+            for prefix_obj in resp.get("CommonPrefixes", []) or []:
+                dir_name = prefix_obj["Prefix"][len(base) :].rstrip("/")
+                if dir_name:
+                    directories.append(
+                        {
+                            "name": dir_name,
+                            "is_directory": True,
+                            "size": 0,
+                        }
+                    )
 
             for obj in resp.get("Contents", []) or []:
                 # Skip empty directory-marker objects (key ends with /).
@@ -1265,7 +1274,7 @@ def list_objects_client_load_for_role(
 
             if resp.get("IsTruncated"):
                 token = resp.get("NextContinuationToken")
-                if len(files) >= max_client_load:
+                if (len(directories) + len(files)) >= max_client_load or pages >= max_pages:
                     truncated = True
                     next_token = token
                     break
@@ -1275,6 +1284,7 @@ def list_objects_client_load_for_role(
                 next_token = None
                 break
 
+        directories.sort(key=lambda d: d["name"].lower())
         files.sort(key=lambda f: f["name"].lower())
 
         return {
