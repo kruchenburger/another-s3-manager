@@ -6,7 +6,7 @@ vi.mock("@/features/auth/hooks/useMe", () => ({
   useMe: () => ({ data: { disable_deletion: false } }),
 }));
 vi.mock("@/hooks/useConfig", () => ({
-  useConfig: () => ({ data: { auto_inline_extensions: [] } }),
+  useConfig: () => ({ data: { preview_text_extensions: [] } }),
 }));
 vi.mock("@/features/files/hooks/usePresignedUrl", () => ({
   usePresignedUrl: vi.fn(),

@@ -36,7 +36,8 @@ export interface SettingsFormValues {
   disable_deletion: boolean;
   enable_lazy_loading: boolean;
   max_file_size_mb: number;
-  auto_inline_extensions: string[];
+  preview_text_extensions: string[];
+  upload_inline_extensions: string[];
   presigned_url_default_ttl: number;
   presigned_url_max_ttl: number;
   password_min_length: number;
@@ -75,7 +76,8 @@ export function SettingsPage() {
       disable_deletion: false,
       enable_lazy_loading: true,
       max_file_size_mb: 100,
-      auto_inline_extensions: [],
+      preview_text_extensions: [],
+      upload_inline_extensions: [],
       presigned_url_default_ttl: 3600,
       presigned_url_max_ttl: 604800,
       password_min_length: 8,
@@ -129,7 +131,8 @@ export function SettingsPage() {
       disable_deletion: config.disable_deletion,
       enable_lazy_loading: config.enable_lazy_loading,
       max_file_size_mb: Math.round(config.max_file_size / MB),
-      auto_inline_extensions: config.auto_inline_extensions ?? [],
+      preview_text_extensions: config.preview_text_extensions ?? [],
+      upload_inline_extensions: config.upload_inline_extensions ?? [],
       presigned_url_default_ttl: config.presigned_url_default_ttl,
       presigned_url_max_ttl: config.presigned_url_max_ttl,
       password_min_length: config.password_min_length,
@@ -210,7 +213,8 @@ export function SettingsPage() {
       max_file_size: form.isDirty("max_file_size_mb")
         ? values.max_file_size_mb * MB
         : config.max_file_size,
-      auto_inline_extensions: values.auto_inline_extensions,
+      preview_text_extensions: values.preview_text_extensions,
+      upload_inline_extensions: values.upload_inline_extensions,
       presigned_url_default_ttl: values.presigned_url_default_ttl,
       presigned_url_max_ttl: values.presigned_url_max_ttl,
       password_min_length: values.password_min_length,

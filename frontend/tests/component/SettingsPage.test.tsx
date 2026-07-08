@@ -29,7 +29,7 @@ const baseConfig = {
   presigned_url_default_ttl: 3600,
   presigned_url_max_ttl: 604800,
   disable_deletion: false,
-  auto_inline_extensions: [],
+  preview_text_extensions: [],
   is_read_only: false,
   password_min_length: 8,
   password_min_uppercase: 0,

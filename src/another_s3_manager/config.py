@@ -76,19 +76,41 @@ def _migrate_config() -> bool:
     if "max_client_load" not in _config_cache:
         _config_cache["max_client_load"] = int(os.getenv("MAX_CLIENT_LOAD", "10000"))
         config_modified = True
-    # auto_inline_extensions: the /v2 preview UI treats this list as the single
-    # source of truth for which files preview inline as text. Seed it with the
-    # built-in text defaults the FIRST time a config is migrated — this covers
-    # fresh installs and legacy configs whose field was an inert []. The one-time
-    # `_auto_inline_seeded` marker (preserved across saves in update_config) means
-    # we never re-seed, so an admin who deliberately clears the list to [] keeps
-    # it empty.
-    if not _config_cache.get("_auto_inline_seeded"):
-        from another_s3_manager.constants import DEFAULT_AUTO_INLINE_EXTENSIONS
+    # Split the legacy `auto_inline_extensions` key (which conflated two unrelated
+    # features) into two:
+    #   - preview_text_extensions: which TEXT files preview inline in the web UI
+    #   - upload_inline_extensions: which uploads get Content-Disposition: inline
+    #     (so they open in the browser when served via CDN / presigned URL)
+    # Presence of `preview_text_extensions` is the "already migrated" marker, so
+    # an admin who clears either list to [] keeps it empty (no re-seed).
+    if "preview_text_extensions" not in _config_cache:
+        from another_s3_manager.constants import (
+            DEFAULT_PREVIEW_TEXT_EXTENSIONS,
+            DEFAULT_UPLOAD_INLINE_EXTENSIONS,
+        )
 
-        if not _config_cache.get("auto_inline_extensions"):
-            _config_cache["auto_inline_extensions"] = list(DEFAULT_AUTO_INLINE_EXTENSIONS)
-        _config_cache["_auto_inline_seeded"] = True
+        legacy = _config_cache.get("auto_inline_extensions")
+        legacy_list = list(legacy) if isinstance(legacy, list) else None
+        # Preserve the current preview behavior verbatim; fall back to the text
+        # defaults for fresh installs / configs that never had the key.
+        _config_cache["preview_text_extensions"] = (
+            legacy_list if legacy_list is not None else list(DEFAULT_PREVIEW_TEXT_EXTENSIONS)
+        )
+        # Upload-inline: preserve every extension the legacy list already made
+        # inline (zero regression for admins who customized it) AND union in the
+        # pdf+images defaults, so browser-open PDFs are restored even when the
+        # legacy list was the text-only re-seed. Fresh installs get just the
+        # defaults.
+        if "upload_inline_extensions" not in _config_cache:
+            if legacy_list is not None:
+                _config_cache["upload_inline_extensions"] = legacy_list + [
+                    e for e in DEFAULT_UPLOAD_INLINE_EXTENSIONS if e not in legacy_list
+                ]
+            else:
+                _config_cache["upload_inline_extensions"] = list(DEFAULT_UPLOAD_INLINE_EXTENSIONS)
+        # Drop the obsolete legacy keys so config.json stops carrying them.
+        _config_cache.pop("auto_inline_extensions", None)
+        _config_cache.pop("_auto_inline_seeded", None)
         config_modified = True
     # Password policy defaults — added Phase 4d. Conservative baseline:
     # require length+uppercase+lowercase+digit, leave special opt-in.
@@ -142,11 +164,12 @@ def _migrate_config() -> bool:
 def _get_default_config() -> Dict[str, Any]:
     """Get default configuration."""
     from another_s3_manager.constants import (
-        DEFAULT_AUTO_INLINE_EXTENSIONS,
         DEFAULT_MAX_CLIENT_LOAD,
         DEFAULT_MAX_FILE_SIZE,
         DEFAULT_PRESIGNED_URL_DEFAULT_TTL,
         DEFAULT_PRESIGNED_URL_MAX_TTL,
+        DEFAULT_PREVIEW_TEXT_EXTENSIONS,
+        DEFAULT_UPLOAD_INLINE_EXTENSIONS,
     )
 
     return {
@@ -155,9 +178,9 @@ def _get_default_config() -> Dict[str, Any]:
         "max_file_size": int(os.getenv("MAX_FILE_SIZE", str(DEFAULT_MAX_FILE_SIZE))),
         "max_client_load": int(os.getenv("MAX_CLIENT_LOAD", str(DEFAULT_MAX_CLIENT_LOAD))),
         "disable_deletion": False,
-        # Seeded with the text defaults; admin-owned thereafter (see migration).
-        "auto_inline_extensions": list(DEFAULT_AUTO_INLINE_EXTENSIONS),
-        "_auto_inline_seeded": True,
+        # Two independent lists (see migration): text-preview vs upload-inline.
+        "preview_text_extensions": list(DEFAULT_PREVIEW_TEXT_EXTENSIONS),
+        "upload_inline_extensions": list(DEFAULT_UPLOAD_INLINE_EXTENSIONS),
         "password_min_length": 8,
         "password_min_uppercase": 1,
         "password_min_lowercase": 1,

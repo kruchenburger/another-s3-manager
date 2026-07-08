@@ -1208,7 +1208,8 @@ async def get_config(
             "max_client_load": max_client_load,
             "presigned_url_default_ttl": presigned_url_default_ttl,
             "presigned_url_max_ttl": presigned_url_max_ttl,
-            "auto_inline_extensions": config.get("auto_inline_extensions", []),
+            "preview_text_extensions": config.get("preview_text_extensions", []),
+            "upload_inline_extensions": config.get("upload_inline_extensions", []),
             "data_dir": str(get_data_dir()),  # Return current DATA_DIR value (read-only)
             "is_read_only": not is_config_writable(),
             "password_min_length": config.get("password_min_length", 0),
@@ -1243,7 +1244,8 @@ async def get_config(
             "max_client_load": max_client_load,
             "presigned_url_default_ttl": presigned_url_default_ttl,
             "presigned_url_max_ttl": presigned_url_max_ttl,
-            "auto_inline_extensions": config.get("auto_inline_extensions", []),
+            "preview_text_extensions": config.get("preview_text_extensions", []),
+            "upload_inline_extensions": config.get("upload_inline_extensions", []),
         }
 
     # Filter roles and sanitize
@@ -1262,7 +1264,8 @@ async def get_config(
         "max_client_load": max_client_load,
         "presigned_url_default_ttl": presigned_url_default_ttl,
         "presigned_url_max_ttl": presigned_url_max_ttl,
-        "auto_inline_extensions": config.get("auto_inline_extensions", []),
+        "preview_text_extensions": config.get("preview_text_extensions", []),
+        "upload_inline_extensions": config.get("upload_inline_extensions", []),
     }
 
 
@@ -1404,33 +1407,24 @@ async def update_config(
                 detail="presigned_url_default_ttl cannot exceed presigned_url_max_ttl",
             )
 
-        # Handle auto_inline_extensions - if provided, validate and use it; otherwise preserve existing
-        if "auto_inline_extensions" in config:
-            # Validate auto_inline_extensions (must be a list of strings)
-            if not isinstance(config["auto_inline_extensions"], list):
-                raise HTTPException(status_code=400, detail="auto_inline_extensions must be a list")
-            # Validate that all items are strings
-            for ext in config["auto_inline_extensions"]:
-                if not isinstance(ext, str):
-                    raise HTTPException(status_code=400, detail="auto_inline_extensions must contain only strings")
-            # Normalize extensions: remove leading dots and convert to lowercase
-            config["auto_inline_extensions"] = [
-                ext.lstrip(".").lower() for ext in config["auto_inline_extensions"] if ext.strip()
-            ]
-        else:
-            # Preserve auto_inline_extensions from current config if exists, otherwise use default
-            current_config = load_config(force_reload=False)
-            if "auto_inline_extensions" in current_config:
-                config["auto_inline_extensions"] = current_config["auto_inline_extensions"]
+        # Extension lists — validate (list of strings) when provided, preserve
+        # when omitted. Two independent keys since the 1.0.3 split:
+        #   preview_text_extensions → text-preview in the UI
+        #   upload_inline_extensions → Content-Disposition: inline on upload
+        current_config = load_config(force_reload=False)
+        for ext_field in ("preview_text_extensions", "upload_inline_extensions"):
+            if ext_field in config:
+                if not isinstance(config[ext_field], list):
+                    raise HTTPException(status_code=400, detail=f"{ext_field} must be a list")
+                for ext in config[ext_field]:
+                    if not isinstance(ext, str):
+                        raise HTTPException(status_code=400, detail=f"{ext_field} must contain only strings")
+                # Normalize: strip leading dots, lowercase, drop blanks.
+                config[ext_field] = [ext.lstrip(".").lower() for ext in config[ext_field] if ext.strip()]
+            elif ext_field in current_config:
+                config[ext_field] = current_config[ext_field]
             else:
-                config["auto_inline_extensions"] = []
-
-        # Preserve the one-time auto-inline seed marker across saves — the frontend
-        # never sends it, so without this it would be dropped and _migrate_config
-        # would re-seed defaults on next startup, undoing an admin's intentional
-        # clear of the list.
-        if load_config(force_reload=False).get("_auto_inline_seeded"):
-            config["_auto_inline_seeded"] = True
+                config[ext_field] = []
 
         # Password policy fields: validate range when provided, preserve when omitted.
         for field in (
@@ -1819,7 +1813,7 @@ async def upload_file(
 ):
     """Upload a file to S3 bucket - delegates the put to s3_client.put_object_for_role.
 
-    The route keeps streaming/size-limit enforcement and the auto_inline_extensions
+    The route keeps streaming/size-limit enforcement and the upload_inline_extensions
     content-disposition logic. The helper does role validation, bucket-access
     validation, and metric accounting."""
     try:
@@ -1886,13 +1880,16 @@ async def upload_file(
         content = content_buffer.getvalue()
         content_buffer.close()
 
-        # Check if file extension should have Content-Disposition: inline
-        auto_inline_extensions = config.get("auto_inline_extensions", [])
+        # Check if file extension should have Content-Disposition: inline so it
+        # opens in the browser (instead of downloading) when served via CDN /
+        # presigned URL. Driven by upload_inline_extensions (split from the old
+        # auto_inline_extensions in 1.0.3 — preview is a separate concern now).
+        upload_inline_extensions = config.get("upload_inline_extensions", [])
         content_disposition: Optional[str] = None
-        if auto_inline_extensions:
+        if upload_inline_extensions:
             # Get file extension from key (path)
             file_ext = Path(key).suffix.lstrip(".").lower()
-            if file_ext in auto_inline_extensions:
+            if file_ext in upload_inline_extensions:
                 content_disposition = "inline"
 
         # The helper increments s3_bytes_uploaded_total internally - do NOT also

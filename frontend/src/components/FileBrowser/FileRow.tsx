@@ -53,7 +53,7 @@ export function FileRow({
   const { data: config } = useConfig();
   const canPreview =
     !file.is_directory &&
-    getPreviewType(file.name, config?.auto_inline_extensions ?? []) !== null;
+    getPreviewType(file.name, config?.preview_text_extensions ?? []) !== null;
   // Stagger only the first screenful; later / lazy-revealed rows appear instantly.
   const animateIn = index < STAGGER_ROW_LIMIT;
   // Zebra striping by ABSOLUTE row index (not Mantine's nth-child `striped`):

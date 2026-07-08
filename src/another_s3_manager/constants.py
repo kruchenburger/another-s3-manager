@@ -104,10 +104,17 @@ PRESIGNED_URL_MIN_TTL = 60  # reject links shorter than 1 minute
 # warning that the link may die when the role's session expires.
 PRESIGNED_STS_WARNING_THRESHOLD = 3600  # 1 hour
 
-# Text extensions seeded into config.auto_inline_extensions for new/legacy
-# configs. The /v2 preview UI treats this list as the single source of truth for
-# which files preview inline as text — it is admin-editable (add / remove / clear).
-DEFAULT_AUTO_INLINE_EXTENSIONS = ["txt", "md", "json", "yaml", "yml", "log", "csv"]
+# Text extensions seeded into config.preview_text_extensions for new/legacy
+# configs. Controls which TEXT files preview inline in the web UI — admin-editable
+# (add / remove / clear). Media (image/video/pdf) always previews regardless.
+DEFAULT_PREVIEW_TEXT_EXTENSIONS = ["txt", "md", "json", "yaml", "yml", "log", "csv"]
+
+# Extensions seeded into config.upload_inline_extensions. Files with these
+# extensions get Content-Disposition: inline set on the S3 object at upload time,
+# so they open in the browser (instead of downloading) when served directly via a
+# CDN or presigned URL. svg is intentionally excluded — inline svg from a trusted
+# origin is an XSS vector (same rationale as the presigned charset override).
+DEFAULT_UPLOAD_INLINE_EXTENSIONS = ["pdf", "png", "jpg", "jpeg", "gif", "webp"]
 
 # S3 settings
 S3_USE_SSL = True
