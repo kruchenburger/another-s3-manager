@@ -1516,3 +1516,52 @@ def test_role_uses_temporary_credentials(mocker):
     assert s3_client.role_uses_temporary_credentials("key-role") is False
     assert s3_client.role_uses_temporary_credentials("compat-role") is False
     assert s3_client.role_uses_temporary_credentials("nope") is False
+
+
+# ---------------------------------------------------------------------------
+# copy_object_for_role / get_object_metadata_for_role (v1.0.2 MCP tools)
+# ---------------------------------------------------------------------------
+
+_ADMIN = {"username": "admin", "is_admin": True, "allowed_roles": []}
+
+
+def test_copy_object_for_role_copies_body(moto_s3):
+    from another_s3_manager.s3_client import copy_object_for_role
+
+    moto_s3.create_bucket(Bucket="copybkt")
+    moto_s3.put_object(Bucket="copybkt", Key="src.txt", Body=b"hello")
+
+    copy_object_for_role(None, "copybkt", "src.txt", "copybkt", "dst.txt", _ADMIN)
+
+    assert moto_s3.get_object(Bucket="copybkt", Key="dst.txt")["Body"].read() == b"hello"
+    # Copy (not move) — source is still there.
+    assert moto_s3.get_object(Bucket="copybkt", Key="src.txt")["Body"].read() == b"hello"
+
+
+def test_copy_object_for_role_missing_source_raises(moto_s3):
+    from another_s3_manager.s3_client import copy_object_for_role
+
+    moto_s3.create_bucket(Bucket="cp2")
+    with pytest.raises(FileNotFoundError):
+        copy_object_for_role(None, "cp2", "nope.txt", "cp2", "x.txt", _ADMIN)
+
+
+def test_get_object_metadata_for_role_returns_fields(moto_s3):
+    from another_s3_manager.s3_client import get_object_metadata_for_role
+
+    moto_s3.create_bucket(Bucket="metabkt")
+    moto_s3.put_object(Bucket="metabkt", Key="a.txt", Body=b"12345", ContentType="text/plain")
+
+    meta = get_object_metadata_for_role(None, "metabkt", "a.txt", _ADMIN)
+    assert meta["size"] == 5
+    assert meta["content_type"] == "text/plain"
+    assert meta["last_modified"] is not None
+    assert meta["etag"]
+
+
+def test_get_object_metadata_for_role_missing_raises(moto_s3):
+    from another_s3_manager.s3_client import get_object_metadata_for_role
+
+    moto_s3.create_bucket(Bucket="md2")
+    with pytest.raises(FileNotFoundError):
+        get_object_metadata_for_role(None, "md2", "nope.txt", _ADMIN)

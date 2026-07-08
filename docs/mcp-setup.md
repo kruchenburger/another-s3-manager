@@ -32,20 +32,31 @@ There are two layers:
 
 Either being on blocks all write operations.
 
-### Tools (v1)
+### Tools
 
-| Tool                                              | Purpose                                  |
-| ------------------------------------------------- | ---------------------------------------- |
-| `list_roles`                                      | List role names accessible to your token |
-| `list_buckets(role)`                              | List buckets in a given role             |
-| `list_files(role, bucket, path)`                  | List files at a path in a bucket         |
-| `read_file(role, bucket, path, force_text=false)` | Read a text file                         |
-| `upload_file(role, bucket, path, content_base64)` | Upload (write tool)                      |
-| `delete_file(role, bucket, path)`                 | Delete (write tool)                      |
+| Tool                                                                                         | Purpose                                                                         |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `list_roles`                                                                                 | List role names accessible to your token                                        |
+| `list_buckets(role)`                                                                         | List buckets in a given role                                                    |
+| `list_files(role, bucket, path)`                                                             | List files at a path in a bucket                                                |
+| `get_object_metadata(role, bucket, path)`                                                    | Size, last-modified, content-type, etag — no download                           |
+| `read_file(role, bucket, path, force_text=false)`                                            | Read a text file                                                                |
+| `presigned_url(role, bucket, path, expires_in=3600)`                                         | Time-limited download URL (works for binary too)                                |
+| `upload_file(role, bucket, path, content_base64)`                                            | Upload (write tool)                                                             |
+| `copy_object(role, source_bucket, source_path, dest_bucket, dest_path, delete_source=false)` | Server-side copy within a role; `delete_source=true` moves/renames (write tool) |
+| `delete_file(role, bucket, path)`                                                            | Delete (write tool)                                                             |
 
 `read_file` returns text content. Binary files error with `BINARY_CONTENT`
 unless `force_text=true` is passed (in which case undecoded bytes become
-`�` replacement chars).
+`�` replacement chars) — for binary files, prefer `presigned_url` to hand out
+a download link instead.
+
+Write tools (`upload_file`, `copy_object`, `delete_file`) are blocked for
+read-only tokens and when `mcp_disable_writes` is set; `delete_file` and
+`copy_object` with `delete_source=true` are additionally blocked when
+`disable_deletion` is set. `copy_object` copies within one role's credentials
+only (both buckets must be in the role's allowed_buckets) — cross-role /
+cross-provider copy is not supported.
 
 ## Claude Desktop
 

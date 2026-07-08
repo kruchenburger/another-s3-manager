@@ -199,12 +199,17 @@ See [`docs/testing-backends.md`](docs/testing-backends.md) for the MinIO vs mini
 
 ## IAM Policy
 
-Minimum permissions needed:
+Minimum permissions for full functionality:
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::YOUR-BUCKET"
+    },
     {
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
@@ -213,6 +218,15 @@ Minimum permissions needed:
   ]
 }
 ```
+
+What each action powers:
+
+- `s3:ListBucket` (on the bucket ARN) — browsing files.
+- `s3:GetObject` — download / preview, object metadata, presigned share links, and the **source** of a copy/move.
+- `s3:PutObject` — upload, and the **destination** of a copy/move.
+- `s3:DeleteObject` — delete, and the source-removal half of a move/rename.
+
+For a **read-only** deployment (or read-only MCP tokens), `s3:ListBucket` + `s3:GetObject` alone are enough.
 
 Add `s3:ListAllMyBuckets` on `*` if you don't want to manually specify allowed buckets per role.
 

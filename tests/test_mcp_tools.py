@@ -685,3 +685,225 @@ async def test_mcp_list_files_typed_config_error_forwards_s3_config_error(alice_
 
     assert exc_info.value.code == "S3_CONFIG_ERROR"
     assert exc_info.value.details.get("boto_code") == "InvalidRegion"
+
+
+# ---------------------------------------------------------------------------
+# copy_object / get_object_metadata / presigned_url (v1.0.2 additions)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_copy_object_happy_path(alice_user, tool_registry):
+    """RW token -> server-side copy; returns moved=False and does not delete."""
+    _, plaintext = alice_user
+    with (
+        patch("another_s3_manager.s3_client.copy_object_for_role", return_value=None) as copy_mock,
+        patch("another_s3_manager.s3_client.delete_object_for_role") as del_mock,
+    ):
+        result = await _call(
+            tool_registry,
+            "copy_object",
+            _fake_request(plaintext),
+            role="Default",
+            source_bucket="b",
+            source_path="a.txt",
+            dest_bucket="b",
+            dest_path="copy.txt",
+        )
+    assert result["ok"] is True
+    assert result["moved"] is False
+    copy_mock.assert_called_once()
+    del_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_copy_object_move_deletes_source(alice_user, tool_registry):
+    """delete_source=True -> copy then delete source; moved=True."""
+    _, plaintext = alice_user
+    with (
+        patch("another_s3_manager.s3_client.copy_object_for_role", return_value=None) as copy_mock,
+        patch("another_s3_manager.s3_client.delete_object_for_role", return_value={"count": 1}) as del_mock,
+    ):
+        result = await _call(
+            tool_registry,
+            "copy_object",
+            _fake_request(plaintext),
+            role="Default",
+            source_bucket="b",
+            source_path="a.txt",
+            dest_bucket="b",
+            dest_path="b.txt",
+            delete_source=True,
+        )
+    assert result["moved"] is True
+    copy_mock.assert_called_once()
+    del_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_copy_object_read_only_token(alice_readonly, tool_registry):
+    """Read-only token -> READ_ONLY_TOKEN, no S3 call."""
+    _, plaintext = alice_readonly
+    with patch("another_s3_manager.s3_client.copy_object_for_role") as copy_mock:
+        with pytest.raises(McpError) as exc_info:
+            await _call(
+                tool_registry,
+                "copy_object",
+                _fake_request(plaintext),
+                role="Default",
+                source_bucket="b",
+                source_path="a.txt",
+                dest_bucket="b",
+                dest_path="c.txt",
+            )
+    assert exc_info.value.code == "READ_ONLY_TOKEN"
+    copy_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_copy_object_move_blocked_when_deletion_disabled(alice_user, tool_registry, monkeypatch):
+    """delete_source=True while disable_deletion=True -> DELETION_DISABLED, no copy."""
+    _, plaintext = alice_user
+    import another_s3_manager.config as config_mod
+
+    original_load = config_mod.load_config
+
+    def _no_delete(force_reload=False):
+        return {**original_load(force_reload=force_reload), "disable_deletion": True}
+
+    monkeypatch.setattr("another_s3_manager.mcp_server._config_module.load_config", _no_delete)
+    with patch("another_s3_manager.s3_client.copy_object_for_role") as copy_mock:
+        with pytest.raises(McpError) as exc_info:
+            await _call(
+                tool_registry,
+                "copy_object",
+                _fake_request(plaintext),
+                role="Default",
+                source_bucket="b",
+                source_path="a.txt",
+                dest_bucket="b",
+                dest_path="c.txt",
+                delete_source=True,
+            )
+    assert exc_info.value.code == "DELETION_DISABLED"
+    copy_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_copy_object_bucket_not_allowed(alice_user, tool_registry):
+    """PermissionError mentioning bucket -> BUCKET_NOT_ALLOWED."""
+    _, plaintext = alice_user
+    with patch(
+        "another_s3_manager.s3_client.copy_object_for_role",
+        side_effect=PermissionError("bucket 'secret' not in allowed_buckets for role 'Default'"),
+    ):
+        with pytest.raises(McpError) as exc_info:
+            await _call(
+                tool_registry,
+                "copy_object",
+                _fake_request(plaintext),
+                role="Default",
+                source_bucket="b",
+                source_path="a.txt",
+                dest_bucket="secret",
+                dest_path="c.txt",
+            )
+    assert exc_info.value.code == "BUCKET_NOT_ALLOWED"
+
+
+@pytest.mark.asyncio
+async def test_get_object_metadata_happy_path(alice_user, tool_registry):
+    """Returns metadata dict merged with bucket/path."""
+    _, plaintext = alice_user
+    meta = {
+        "size": 123,
+        "last_modified": "2026-07-08T00:00:00+00:00",
+        "content_type": "text/plain",
+        "etag": "abc",
+    }
+    with patch("another_s3_manager.s3_client.get_object_metadata_for_role", return_value=meta):
+        result = await _call(
+            tool_registry,
+            "get_object_metadata",
+            _fake_request(plaintext),
+            role="Default",
+            bucket="b",
+            path="a.txt",
+        )
+    assert result["size"] == 123
+    assert result["content_type"] == "text/plain"
+    assert result["bucket"] == "b" and result["path"] == "a.txt"
+
+
+@pytest.mark.asyncio
+async def test_get_object_metadata_not_found(alice_user, tool_registry):
+    """Missing object -> FILE_NOT_FOUND."""
+    _, plaintext = alice_user
+    with patch(
+        "another_s3_manager.s3_client.get_object_metadata_for_role",
+        side_effect=FileNotFoundError("Object not found in bucket"),
+    ):
+        with pytest.raises(McpError) as exc_info:
+            await _call(
+                tool_registry,
+                "get_object_metadata",
+                _fake_request(plaintext),
+                role="Default",
+                bucket="b",
+                path="a.txt",
+            )
+    assert exc_info.value.code == "FILE_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_presigned_url_happy_path(alice_user, tool_registry):
+    """Returns the signed URL and the granted expires_in."""
+    _, plaintext = alice_user
+    with patch(
+        "another_s3_manager.s3_client.generate_presigned_url_for_role",
+        return_value="https://example.com/signed",
+    ):
+        result = await _call(
+            tool_registry,
+            "presigned_url",
+            _fake_request(plaintext),
+            role="Default",
+            bucket="b",
+            path="a.txt",
+        )
+    assert result["url"] == "https://example.com/signed"
+    assert result["expires_in"] == 3600
+    assert "expires_at" in result
+
+
+@pytest.mark.asyncio
+async def test_presigned_url_clamps_to_max_ttl(alice_user, tool_registry, monkeypatch):
+    """expires_in above presigned_url_max_ttl is clamped to the ceiling."""
+    _, plaintext = alice_user
+    import another_s3_manager.config as config_mod
+
+    original_load = config_mod.load_config
+
+    def _capped(force_reload=False):
+        return {**original_load(force_reload=force_reload), "presigned_url_max_ttl": 3600}
+
+    monkeypatch.setattr("another_s3_manager.mcp_server._config_module.load_config", _capped)
+
+    captured = {}
+
+    def _fake_presign(role, bucket, path, user, expires_in=3600):
+        captured["expires_in"] = expires_in
+        return "https://example.com/x"
+
+    with patch("another_s3_manager.s3_client.generate_presigned_url_for_role", side_effect=_fake_presign):
+        result = await _call(
+            tool_registry,
+            "presigned_url",
+            _fake_request(plaintext),
+            role="Default",
+            bucket="b",
+            path="a.txt",
+            expires_in=999999,
+        )
+    assert captured["expires_in"] == 3600
+    assert result["expires_in"] == 3600
