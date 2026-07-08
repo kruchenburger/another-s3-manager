@@ -77,7 +77,7 @@ ALLOW_PATTERNS=(
   # E2E — pagination spec + the shared mc seed script gains a pagination/ block.
   # The plan originally proposed an @aws-sdk/client-s3 TS seed fixture, but the
   # project seeds MinIO via `mc` (scripts/ci/seed-minio.sh, run by both CI and
-  # docker-compose.minio.yml). Extending that script is idiomatic and avoids a
+  # docker/docker-compose.minio.yml). Extending that script is idiomatic and avoids a
   # new aws-sdk dependency just for tests.
   '^frontend/tests/e2e/file-pagination\.spec\.ts$'
   '^scripts/ci/seed-minio\.sh$'

@@ -32,10 +32,10 @@ jobs:
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
-      - name: Lint Dockerfile.release
+      - name: Lint docker/Dockerfile.release
         uses: hadolint/hadolint-action@v3.1.0
         with:
-          dockerfile: Dockerfile.release
+          dockerfile: docker/Dockerfile.release
 
   test-backend:
     runs-on: ubuntu-latest
@@ -86,7 +86,7 @@ jobs:
         # GHA service containers can't override CMD, so we run MinIO via docker run
         # to control `server /data --console-address`. `--network host` is Linux-only
         # (we run on ubuntu-latest); local devs spin up the same fixture via
-        # `docker compose -f docker-compose.minio.yml up` (which uses a bridge network).
+        # `docker compose -f docker/docker-compose.minio.yml up` (which uses a bridge network).
         run: |
           docker run -d --name minio --network host \
             -e MINIO_ROOT_USER=minioadmin \
@@ -108,7 +108,7 @@ jobs:
         # `minio/mc` image entrypoint is `mc` itself — without --entrypoint sh
         # the trailing `sh /seed.sh` would be passed to mc as args ("mc sh /seed.sh")
         # and the shell script would never run. The compose sidecar avoids this
-        # via `entrypoint: ["/bin/sh", "/seed.sh"]` in docker-compose.minio.yml.
+        # via `entrypoint: ["/bin/sh", "/seed.sh"]` in docker/docker-compose.minio.yml.
         run: |
           docker run --rm --network host \
             --entrypoint /bin/sh \
@@ -249,7 +249,7 @@ jobs:
       - name: Start ministack
         # ministack is a local AWS emulator (S3 + IAM + STS) on :4566. Pinned by
         # digest (never :latest — supply chain risk).
-        # Bump together with the matching reference in docker-compose.ministack.yml.
+        # Bump together with the matching reference in docker/docker-compose.ministack.yml.
         run: |
           docker run -d --name ministack -p 4566:4566 \
             -e MINISTACK_ACCOUNT_ID=000000000000 \

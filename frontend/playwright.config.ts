@@ -9,7 +9,7 @@ import { defineConfig, devices } from "@playwright/test";
  * - E2E_MINIO_BUCKET      Bucket name with seeded fixtures (default 'e2e-test')
  *
  * Locally:
- *   docker compose -f docker-compose.yml -f docker-compose.minio.yml up --build -d
+ *   docker compose -f docker-compose.yml -f docker/docker-compose.minio.yml up --build -d
  *   # add a MinIO-e2e role to data/config.json (or via the admin UI):
  *   # {"name":"MinIO-e2e","type":"s3_compatible","access_key_id":"minioadmin",
  *   #  "secret_access_key":"minioadmin","endpoint_url":"http://minio:9000",
@@ -39,6 +39,6 @@ export default defineConfig({
     // mobile project disabled for Phase 3b — re-enable in Phase 7 with mobile-specific specs
   ],
   // No webServer: backend must be started before Playwright runs.
-  // Locally: `docker compose -f docker-compose.yml -f docker-compose.minio.yml up`.
+  // Locally: `docker compose -f docker-compose.yml -f docker/docker-compose.minio.yml up`.
   // CI (.github/workflows/ci.yml `e2e` job): backend started via `nohup uv run ... &`.
 });

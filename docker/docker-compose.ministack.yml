@@ -1,7 +1,7 @@
 # Test-only overlay: a local AWS emulator (S3 + IAM + STS) so the app's
 # assume_role / credentials / IAM paths can be exercised without real AWS.
-# Mirrors docker-compose.minio.yml. Bring up with:
-#   docker compose -f docker-compose.yml -f docker-compose.ministack.yml up
+# Mirrors docker/docker-compose.minio.yml. Bring up with:
+#   docker compose -f docker-compose.yml -f docker/docker-compose.ministack.yml up
 services:
   ministack:
     # Pinned by digest per docker.md "never :latest — supply chain risk".

@@ -128,7 +128,7 @@ locally, start an extra MinIO sidecar alongside the app:
 
 ```bash
 # Bring up app + MinIO + auto-seeded e2e-test bucket
-docker compose -f docker-compose.yml -f docker-compose.minio.yml up --build -d
+docker compose -f docker-compose.yml -f docker/docker-compose.minio.yml up --build -d
 
 # One-time: register the MinIO-e2e role in data/config.json (or via the admin UI)
 docker compose exec -T app python -c "
