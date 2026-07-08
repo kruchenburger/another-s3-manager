@@ -90,15 +90,24 @@ def _migrate_config() -> bool:
         )
 
         legacy = _config_cache.get("auto_inline_extensions")
+        legacy_list = list(legacy) if isinstance(legacy, list) else None
         # Preserve the current preview behavior verbatim; fall back to the text
         # defaults for fresh installs / configs that never had the key.
         _config_cache["preview_text_extensions"] = (
-            list(legacy) if isinstance(legacy, list) else list(DEFAULT_PREVIEW_TEXT_EXTENSIONS)
+            legacy_list if legacy_list is not None else list(DEFAULT_PREVIEW_TEXT_EXTENSIONS)
         )
-        # Seed the upload-inline set (pdf + browser-renderable images) so PDFs
-        # open in the browser out of the box — restores the pre-split behavior.
+        # Upload-inline: preserve every extension the legacy list already made
+        # inline (zero regression for admins who customized it) AND union in the
+        # pdf+images defaults, so browser-open PDFs are restored even when the
+        # legacy list was the text-only re-seed. Fresh installs get just the
+        # defaults.
         if "upload_inline_extensions" not in _config_cache:
-            _config_cache["upload_inline_extensions"] = list(DEFAULT_UPLOAD_INLINE_EXTENSIONS)
+            if legacy_list is not None:
+                _config_cache["upload_inline_extensions"] = legacy_list + [
+                    e for e in DEFAULT_UPLOAD_INLINE_EXTENSIONS if e not in legacy_list
+                ]
+            else:
+                _config_cache["upload_inline_extensions"] = list(DEFAULT_UPLOAD_INLINE_EXTENSIONS)
         # Drop the obsolete legacy keys so config.json stops carrying them.
         _config_cache.pop("auto_inline_extensions", None)
         _config_cache.pop("_auto_inline_seeded", None)
