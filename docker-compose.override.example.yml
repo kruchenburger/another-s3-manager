@@ -1,0 +1,31 @@
+# Per-developer overrides for `docker compose up`.
+#
+# Docker Compose auto-loads a file named `docker-compose.override.yml` (if present)
+# on top of `docker-compose.yml` — no `-f` flag needed. This file is a template:
+#
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#
+# then edit your copy. `docker-compose.override.yml` is gitignored, so your local
+# tweaks never end up in a commit. Everything below is commented out — uncomment
+# only what you need.
+services:
+  app:
+    # --- Mount your host AWS config so `profile` / `assume_role` roles work ---
+    # Uncomment the line for your OS. Read-only is enough; the app only reads it.
+    # volumes:
+    #   - ${HOME}/.aws:/home/app/.aws:ro          # Linux / macOS
+    #   - ${USERPROFILE}/.aws:/home/app/.aws:ro   # Windows (Docker Desktop)
+
+    # --- Point at a specific AWS profile / region for profile-typed roles ---
+    # environment:
+    #   - AWS_PROFILE=my-sso-profile
+    #   - AWS_REGION=eu-central-1
+
+    # --- Change the published port (host side) without touching .env ---
+    # ports:
+    #   - "9000:8080"
+
+    # --- Ship the dev theme switcher into the build (visual smoke-testing) ---
+    # build:
+    #   args:
+    #     VITE_SHOW_THEME_SWITCHER: "1"

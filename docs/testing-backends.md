@@ -18,7 +18,7 @@ S3 clients use each role's `endpoint_url` from config.
 ### Run locally
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.ministack.yml up -d ministack
+docker compose -f docker-compose.yml -f docker/docker-compose.ministack.yml up -d ministack
 JWT_SECRET_KEY=x uv run python scripts/ci/seed_ministack.py \
   --config-out data/config.json \
   --aws-credentials-out data/aws-credentials   # writes config + the profile role's AWS credentials file

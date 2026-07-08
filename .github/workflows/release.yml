@@ -3,7 +3,7 @@ name: Release
 # Tag flow: no re-tests and no full rebuild. Every main commit was already
 # tested and published as ghcr :<short-sha> by ci.yml; this workflow promotes
 # that exact image to :X.Y.Z + :latest (stamping the real APP_VERSION via a
-# metadata-only layer, see Dockerfile.release) and creates the GitHub Release.
+# metadata-only layer, see docker/Dockerfile.release) and creates the GitHub Release.
 #
 # Consequence: only tag commits that went through a main build — tagging
 # anything else fails fast in the "source image" check below.
@@ -45,13 +45,13 @@ jobs:
             || { echo "::error::No ghcr :${{ steps.vars.outputs.sha_tag }} image — tag a commit that was built on main (ci.yml build job) first."; exit 1; }
 
       - name: Promote tested image to release tags
-        # Dockerfile.release is FROM the tested :<short-sha> image and only
+        # docker/Dockerfile.release is FROM the tested :<short-sha> image and only
         # sets ENV APP_VERSION — file-system layers stay byte-identical to
         # what CI tested; buildx resolves each platform from the manifest
         # list, so multi-arch is preserved. Takes seconds, not minutes.
         uses: docker/build-push-action@v6
         with:
-          file: Dockerfile.release
+          file: docker/Dockerfile.release
           push: true
           platforms: linux/amd64,linux/arm64
           # :latest only for stable releases — an -rc prerelease tag must not
