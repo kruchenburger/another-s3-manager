@@ -1322,6 +1322,41 @@ def head_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str,
     return execute_with_s3_retry(validated_role, "head", do_head)
 
 
+def get_object_metadata_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Return object metadata (size, last_modified, content_type, etag) via HEAD.
+
+    Unlike head_object_for_role (which returns just the size for the read_file
+    pipeline), this returns the full metadata dict for the MCP get_object_metadata
+    tool so an agent can inspect a file without downloading it.
+
+    Raises PermissionError on role/bucket access violation.
+    Raises FileNotFoundError if the object does not exist.
+    """
+    from botocore.exceptions import ClientError as _ClientError
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_head(s3_client):
+        try:
+            resp = s3_client.head_object(Bucket=bucket, Key=path)
+        except _ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+            if error_code in {"404", "NoSuchKey"}:
+                raise FileNotFoundError(f"Object '{path}' not found in bucket '{bucket}'") from e
+            raise
+        last_modified = resp.get("LastModified")
+        return {
+            "size": resp.get("ContentLength", 0),
+            "last_modified": last_modified.isoformat() if last_modified is not None else None,
+            "content_type": resp.get("ContentType"),
+            "etag": (resp.get("ETag") or "").strip('"') or None,
+        }
+
+    return execute_with_s3_retry(validated_role, "head", do_head)
+
+
 def read_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> bytes:
     """
     Download and return the full body of an object in `bucket` at `path`.
@@ -1585,6 +1620,50 @@ def put_object_for_role(
         )
 
     execute_with_s3_retry(validated_role, "put", do_put)
+
+
+def copy_object_for_role(
+    role: str,
+    source_bucket: str,
+    source_path: str,
+    dest_bucket: str,
+    dest_path: str,
+    user_dict: Dict[str, Any],
+) -> None:
+    """
+    Server-side copy of an object within a single role's credentials.
+
+    Both source and destination buckets must be accessible to `role` (present in
+    its allowed_buckets when that list is configured). Uses S3 CopyObject, so the
+    body is copied by the storage backend without downloading — but only within
+    ONE credential set (same role). Cross-role / cross-provider copy would need
+    download+upload and is intentionally not supported here.
+
+    Raises PermissionError on role/bucket access violation.
+    Raises FileNotFoundError if the source object does not exist.
+    """
+    from botocore.exceptions import ClientError as _ClientError
+
+    # Validate BOTH buckets — a role scoped to specific allowed_buckets must be
+    # allowed to write the destination, not just read the source.
+    _validate_bucket_access(role, source_bucket, user_dict)
+    _validate_bucket_access(role, dest_bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_copy(s3_client):
+        try:
+            s3_client.copy_object(
+                Bucket=dest_bucket,
+                Key=dest_path,
+                CopySource={"Bucket": source_bucket, "Key": source_path},
+            )
+        except _ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+            if error_code in {"404", "NoSuchKey"}:
+                raise FileNotFoundError(f"Source object '{source_path}' not found in bucket '{source_bucket}'") from e
+            raise
+
+    execute_with_s3_retry(validated_role, "put", do_copy)
 
 
 def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> dict:

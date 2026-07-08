@@ -12,6 +12,7 @@ import logging
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -102,7 +103,7 @@ class McpError(Exception):
 # ---------------------------------------------------------------------------
 
 # Tools that perform write operations — used by assert_write_allowed.
-WRITE_TOOLS = {"upload_file", "delete_file"}
+WRITE_TOOLS = {"upload_file", "delete_file", "copy_object"}
 
 
 def assert_write_allowed(token: Any, tool_name: str, config: dict) -> None:
@@ -651,7 +652,9 @@ async def list_files(
 # ------------------------------------------------------------------
 @mcp.tool()
 async def upload_file(role: str, bucket: str, path: str, content_base64: str) -> dict:
-    """Upload a file to a bucket. Content must be base64-encoded."""
+    """Upload a file to a bucket (WRITE operation — creates or overwrites the
+    object at `path`). Content must be base64-encoded. Blocked for read-only
+    tokens and when the server disables MCP writes."""
     error_code = "none"
     start = time.perf_counter()
     try:
@@ -719,7 +722,10 @@ async def upload_file(role: str, bucket: str, path: str, content_base64: str) ->
 # ------------------------------------------------------------------
 @mcp.tool()
 async def delete_file(role: str, bucket: str, path: str) -> dict:
-    """Delete a file from a bucket."""
+    """Delete a file from a bucket (WRITE / DESTRUCTIVE operation — the object is
+    permanently removed; a `path` ending in "/" deletes the whole folder
+    recursively). Blocked for read-only tokens, when the server disables MCP
+    writes, and when deletion is disabled server-wide."""
     error_code = "none"
     start = time.perf_counter()
     try:
@@ -823,7 +829,13 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
                 raise McpError(
                     "BINARY_CONTENT",
                     f"File appears binary (size {size}, ext .{ext}). Use force_text=true if you know better.",
-                    {"bucket": bucket, "path": path, "size": size, "ext": ext, "hint": "force_text=true"},
+                    {
+                        "bucket": bucket,
+                        "path": path,
+                        "size": size,
+                        "ext": ext,
+                        "hint": "Use force_text=true to decode anyway, or the presigned_url tool for a download link",
+                    },
                 )
             elif kind == "text:extension":
                 decision = "extension"
@@ -837,7 +849,13 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
                     raise McpError(
                         "BINARY_CONTENT",
                         f"File appears binary (size {size}). Use force_text=true if you know better.",
-                        {"bucket": bucket, "path": path, "size": size, "ext": ext, "hint": "force_text=true"},
+                        {
+                            "bucket": bucket,
+                            "path": path,
+                            "size": size,
+                            "ext": ext,
+                            "hint": "Use force_text=true to decode anyway, or the presigned_url tool for a download link",
+                        },
                     )
 
         raw = _s3_client.read_object_for_role(role, bucket, path, user)
@@ -856,7 +874,12 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
                 raise McpError(
                     "BINARY_CONTENT",
                     f"File could not be decoded as UTF-8 (size {size}). Use force_text=true.",
-                    {"bucket": bucket, "path": path, "size": size, "hint": "force_text=true"},
+                    {
+                        "bucket": bucket,
+                        "path": path,
+                        "size": size,
+                        "hint": "Use force_text=true to decode anyway, or the presigned_url tool for a download link",
+                    },
                 )
 
         logger.info(
@@ -917,6 +940,244 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
     finally:
         mcp_tool_calls_total.labels(tool="read_file", error_code=error_code).inc()
         mcp_tool_duration_seconds.labels(tool="read_file").observe(time.perf_counter() - start_t)
+
+
+# ------------------------------------------------------------------
+# copy_object — server-side copy (optionally move/rename) within a role.
+# WRITE TOOL: gated by assert_write_allowed; delete_source also needs deletion.
+# ------------------------------------------------------------------
+@mcp.tool()
+async def copy_object(
+    role: str,
+    source_bucket: str,
+    source_path: str,
+    dest_bucket: str,
+    dest_path: str,
+    delete_source: bool = False,
+) -> dict:
+    """Copy an object to a new location (WRITE operation).
+
+    Server-side copy within one role's credentials — source and destination
+    buckets must both be accessible to `role`. Set delete_source=true to MOVE
+    (or rename) instead of copy: the source is deleted after a successful copy,
+    which additionally requires deletion to be enabled server-wide. Blocked for
+    read-only tokens and when the server disables MCP writes.
+    """
+    error_code = "none"
+    start = time.perf_counter()
+    try:
+        token, user = await authenticate_mcp_request(_get_current_request())
+        config = _config_module.load_config(force_reload=False)
+        assert_write_allowed(token, "copy_object", config)
+        if delete_source and config.get("disable_deletion", False):
+            raise McpError(
+                "DELETION_DISABLED",
+                "Deletion is disabled in server config (delete_source requires it)",
+                {"tool": "copy_object"},
+            )
+        try:
+            _s3_client.copy_object_for_role(role, source_bucket, source_path, dest_bucket, dest_path, user)
+            if delete_source:
+                _s3_client.delete_object_for_role(role, source_bucket, source_path, user)
+        except FileNotFoundError as e:
+            raise McpError("FILE_NOT_FOUND", str(e), {"bucket": source_bucket, "path": source_path})
+        except PermissionError as e:
+            if "bucket" in str(e).lower():
+                raise McpError(
+                    "BUCKET_NOT_ALLOWED",
+                    str(e),
+                    {"source_bucket": source_bucket, "dest_bucket": dest_bucket},
+                )
+            raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
+        logger.info(
+            "mcp.copy_object",
+            extra={
+                "user": user["username"],
+                "role": role,
+                "source_bucket": source_bucket,
+                "source_path": source_path,
+                "dest_bucket": dest_bucket,
+                "dest_path": dest_path,
+                "moved": delete_source,
+            },
+        )
+        return _observe_response_size(
+            "copy_object",
+            token,
+            {
+                "ok": True,
+                "source_bucket": source_bucket,
+                "source_path": source_path,
+                "dest_bucket": dest_bucket,
+                "dest_path": dest_path,
+                "moved": delete_source,
+            },
+        )
+    except McpError as e:
+        error_code = e.code
+        raise
+    except S3AccessDeniedError as e:
+        error_code = "S3_ACCESS_DENIED"
+        logger.warning("mcp.copy_object.access_denied", extra={"boto_code": e.code})
+        raise McpError("S3_ACCESS_DENIED", str(e), {"boto_code": e.code})
+    except S3NotFoundError as e:
+        error_code = "S3_NOT_FOUND"
+        logger.warning("mcp.copy_object.not_found", extra={"boto_code": e.code})
+        raise McpError("S3_NOT_FOUND", str(e), {"boto_code": e.code})
+    except S3ConfigError as e:
+        error_code = "S3_CONFIG_ERROR"
+        logger.warning("mcp.copy_object.config_error", extra={"boto_code": e.code})
+        raise McpError("S3_CONFIG_ERROR", str(e), {"boto_code": e.code})
+    except S3NetworkError as e:
+        error_code = "S3_NETWORK_ERROR"
+        logger.warning("mcp.copy_object.network_error", extra={"boto_code": e.code})
+        raise McpError("S3_NETWORK_ERROR", str(e), {"boto_code": e.code})
+    except CredentialsExpiredError as e:
+        error_code = "CREDENTIALS_EXPIRED"
+        logger.warning("mcp.copy_object.credentials_expired", extra={"boto_code": e.code})
+        raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
+    except S3OperationError as e:
+        error_code = "S3_OPERATION_ERROR"
+        logger.warning("mcp.copy_object.s3_operation_error", extra={"boto_code": e.code})
+        raise McpError("S3_OPERATION_ERROR", str(e), {"boto_code": e.code})
+    except Exception:
+        error_code = "INTERNAL_ERROR"
+        logger.exception("mcp.copy_object.error")
+        raise McpError("INTERNAL_ERROR", "Internal server error")
+    finally:
+        mcp_tool_calls_total.labels(tool="copy_object", error_code=error_code).inc()
+        mcp_tool_duration_seconds.labels(tool="copy_object").observe(time.perf_counter() - start)
+
+
+# ------------------------------------------------------------------
+# get_object_metadata — HEAD an object; no download. Read-only.
+# ------------------------------------------------------------------
+@mcp.tool()
+async def get_object_metadata(role: str, bucket: str, path: str) -> dict:
+    """Return object metadata (size, last_modified, content_type, etag) without
+    downloading it. Read-only — useful to inspect a file before read_file or
+    before handing out a presigned_url."""
+    error_code = "none"
+    start = time.perf_counter()
+    try:
+        token, user = await authenticate_mcp_request(_get_current_request())
+        try:
+            meta = _s3_client.get_object_metadata_for_role(role, bucket, path, user)
+        except FileNotFoundError:
+            raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
+        except PermissionError as e:
+            if "bucket" in str(e).lower():
+                raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
+            raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
+        logger.info(
+            "mcp.get_object_metadata",
+            extra={"user": user["username"], "role": role, "bucket": bucket, "path": path},
+        )
+        return _observe_response_size("get_object_metadata", token, {"bucket": bucket, "path": path, **meta})
+    except McpError as e:
+        error_code = e.code
+        raise
+    except S3AccessDeniedError as e:
+        error_code = "S3_ACCESS_DENIED"
+        logger.warning("mcp.get_object_metadata.access_denied", extra={"boto_code": e.code})
+        raise McpError("S3_ACCESS_DENIED", str(e), {"boto_code": e.code})
+    except S3NotFoundError as e:
+        error_code = "S3_NOT_FOUND"
+        logger.warning("mcp.get_object_metadata.not_found", extra={"boto_code": e.code})
+        raise McpError("S3_NOT_FOUND", str(e), {"boto_code": e.code})
+    except S3ConfigError as e:
+        error_code = "S3_CONFIG_ERROR"
+        logger.warning("mcp.get_object_metadata.config_error", extra={"boto_code": e.code})
+        raise McpError("S3_CONFIG_ERROR", str(e), {"boto_code": e.code})
+    except S3NetworkError as e:
+        error_code = "S3_NETWORK_ERROR"
+        logger.warning("mcp.get_object_metadata.network_error", extra={"boto_code": e.code})
+        raise McpError("S3_NETWORK_ERROR", str(e), {"boto_code": e.code})
+    except CredentialsExpiredError as e:
+        error_code = "CREDENTIALS_EXPIRED"
+        logger.warning("mcp.get_object_metadata.credentials_expired", extra={"boto_code": e.code})
+        raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
+    except S3OperationError as e:
+        error_code = "S3_OPERATION_ERROR"
+        logger.warning("mcp.get_object_metadata.s3_operation_error", extra={"boto_code": e.code})
+        raise McpError("S3_OPERATION_ERROR", str(e), {"boto_code": e.code})
+    except Exception:
+        error_code = "INTERNAL_ERROR"
+        logger.exception("mcp.get_object_metadata.error")
+        raise McpError("INTERNAL_ERROR", "Internal server error")
+    finally:
+        mcp_tool_calls_total.labels(tool="get_object_metadata", error_code=error_code).inc()
+        mcp_tool_duration_seconds.labels(tool="get_object_metadata").observe(time.perf_counter() - start)
+
+
+# ------------------------------------------------------------------
+# presigned_url — time-limited GET URL for an object. Read-only.
+# ------------------------------------------------------------------
+@mcp.tool()
+async def presigned_url(role: str, bucket: str, path: str, expires_in: int = 3600) -> dict:
+    """Generate a time-limited download URL for an object (read-only).
+
+    Anyone holding the URL can fetch the object until it expires — hand it to a
+    user instead of returning raw file bytes (works for binary files too).
+    `expires_in` (seconds) is clamped to [60, presigned_url_max_ttl] from server
+    config (default max 7 days)."""
+    error_code = "none"
+    start = time.perf_counter()
+    try:
+        token, user = await authenticate_mcp_request(_get_current_request())
+        config = _config_module.load_config(force_reload=False)
+        max_ttl = int(config.get("presigned_url_max_ttl", 604800))
+        clamped = max(60, min(int(expires_in), max_ttl))
+        try:
+            url = _s3_client.generate_presigned_url_for_role(role, bucket, path, user, expires_in=clamped)
+        except PermissionError as e:
+            if "bucket" in str(e).lower():
+                raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
+            raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
+        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=clamped)).isoformat()
+        logger.info(
+            "mcp.presigned_url",
+            extra={"user": user["username"], "role": role, "bucket": bucket, "path": path, "expires_in": clamped},
+        )
+        return _observe_response_size(
+            "presigned_url",
+            token,
+            {"url": url, "expires_in": clamped, "expires_at": expires_at, "bucket": bucket, "path": path},
+        )
+    except McpError as e:
+        error_code = e.code
+        raise
+    except S3AccessDeniedError as e:
+        error_code = "S3_ACCESS_DENIED"
+        logger.warning("mcp.presigned_url.access_denied", extra={"boto_code": e.code})
+        raise McpError("S3_ACCESS_DENIED", str(e), {"boto_code": e.code})
+    except S3NotFoundError as e:
+        error_code = "S3_NOT_FOUND"
+        logger.warning("mcp.presigned_url.not_found", extra={"boto_code": e.code})
+        raise McpError("S3_NOT_FOUND", str(e), {"boto_code": e.code})
+    except S3ConfigError as e:
+        error_code = "S3_CONFIG_ERROR"
+        logger.warning("mcp.presigned_url.config_error", extra={"boto_code": e.code})
+        raise McpError("S3_CONFIG_ERROR", str(e), {"boto_code": e.code})
+    except S3NetworkError as e:
+        error_code = "S3_NETWORK_ERROR"
+        logger.warning("mcp.presigned_url.network_error", extra={"boto_code": e.code})
+        raise McpError("S3_NETWORK_ERROR", str(e), {"boto_code": e.code})
+    except CredentialsExpiredError as e:
+        error_code = "CREDENTIALS_EXPIRED"
+        logger.warning("mcp.presigned_url.credentials_expired", extra={"boto_code": e.code})
+        raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
+    except S3OperationError as e:
+        error_code = "S3_OPERATION_ERROR"
+        logger.warning("mcp.presigned_url.s3_operation_error", extra={"boto_code": e.code})
+        raise McpError("S3_OPERATION_ERROR", str(e), {"boto_code": e.code})
+    except Exception:
+        error_code = "INTERNAL_ERROR"
+        logger.exception("mcp.presigned_url.error")
+        raise McpError("INTERNAL_ERROR", "Internal server error")
+    finally:
+        mcp_tool_calls_total.labels(tool="presigned_url", error_code=error_code).inc()
+        mcp_tool_duration_seconds.labels(tool="presigned_url").observe(time.perf_counter() - start)
 
 
 # ---------------------------------------------------------------------------
