@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-07-08
+
+### Changed
+
+- The single "Inline preview extensions" setting is split into two independent
+  settings, because it controlled two unrelated things: `preview_text_extensions`
+  (which text files preview inline in the UI) and `upload_inline_extensions`
+  (which uploads get `Content-Disposition: inline` so they open in the browser
+  when served via a CDN or presigned link). Existing configs are migrated
+  automatically: the preview list is preserved as-is, and the upload-inline list
+  keeps every extension that was inline before while gaining sensible defaults
+  (pdf + common images) — so PDFs open in the browser out of the box again
+  without losing any customization. Settings now shows both fields with clear
+  labels.
+
 ## [1.0.2] - 2026-07-08
 
 ### Added
