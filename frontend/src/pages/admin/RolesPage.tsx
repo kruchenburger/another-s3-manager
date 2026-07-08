@@ -227,13 +227,17 @@ export function RolesPage() {
                   </Table.Td>
                   <Table.Td>
                     {(r.allowed_buckets?.length ?? 0) === 0 ? (
-                      <Tooltip label="This role has no buckets configured — users with only this role will see an empty bucket list.">
+                      <Tooltip
+                        multiline
+                        w={280}
+                        label="No bucket restriction set — this role lists every bucket its credentials can access (requires the s3:ListAllMyBuckets permission). Add buckets to limit it to specific ones."
+                      >
                         <Badge
                           color="orange"
                           variant="filled"
                           leftSection={<AlertTriangle size={12} />}
                         >
-                          No buckets
+                          Any bucket
                         </Badge>
                       </Tooltip>
                     ) : (
