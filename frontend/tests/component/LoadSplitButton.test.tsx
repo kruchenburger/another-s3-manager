@@ -57,4 +57,25 @@ describe("LoadSplitButton", () => {
     // while loading, so the menu can't be opened to reach the item — the reachable
     // guards (primary + chevron) are what a user can actually hit.
   });
+
+  it("collapses to a spinner + Stop button while a Load all drain runs", async () => {
+    const user = userEvent.setup();
+    const onStopLoadAll = vi.fn();
+    render(
+      <MantineProvider>
+        <LoadSplitButton
+          onLoadMore={vi.fn()}
+          onLoadAll={vi.fn()}
+          loading={false}
+          loadingAll={true}
+          onStopLoadAll={onStopLoadAll}
+        />
+      </MantineProvider>,
+    );
+    // Load more / chevron are gone; only the spinner + Stop remain.
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    const stop = screen.getByRole("button", { name: /stop/i });
+    await user.click(stop);
+    expect(onStopLoadAll).toHaveBeenCalledTimes(1);
+  });
 });

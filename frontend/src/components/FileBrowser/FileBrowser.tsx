@@ -85,6 +85,8 @@ export function FileBrowser() {
     truncated,
     loadMore,
     loadAll,
+    loadingAll,
+    stopLoadAll,
     isFetching,
     isFetchingNextPage,
     isFetchNextPageError,
@@ -788,6 +790,8 @@ export function FileBrowser() {
                 }),
               )
             }
+            loadingAll={loadingAll}
+            onStopLoadAll={stopLoadAll}
           />
           <input
             type="file"

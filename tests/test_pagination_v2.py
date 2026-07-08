@@ -298,14 +298,16 @@ def test_client_load_continuation_appends_next_chunk(moto_s3):
     assert page2["next_token"] is not None
 
 
-def test_client_load_folder_heavy_is_bounded_and_terminates(moto_s3):
-    """A level with many sub-folders and NO files returns a bounded chunk.
+def test_client_load_folder_heavy_paginates_and_terminates(moto_s3):
+    """A level with many sub-folders and NO files returns a bounded chunk AND
+    paginates the folders across chunks (Load more / lazy scroll).
 
     Regression: previously the file loop counted only files toward
-    max_client_load, so a folder dominated by sub-folders (real case: 600k
+    max_client_load, so a folder dominated by sub-folders (real case: 800k
     sub-folders, zero files) paginated the entire keyspace hunting for files
-    that don't exist, hanging the request. Directories now count toward the
-    budget, so the chunk is bounded and the file loop never runs.
+    that don't exist, hanging the request — and even the bounded first fix
+    returned no continuation token, so Load more did nothing. Directories now
+    count toward the budget and paginate like files.
     """
     _seed(
         moto_s3,
@@ -313,21 +315,37 @@ def test_client_load_folder_heavy_is_bounded_and_terminates(moto_s3):
         files=[],
         directories=[f"d{i:04d}" for i in range(400)],
     )
+    user = {"username": "admin", "is_admin": True, "allowed_roles": []}
 
-    result = list_objects_client_load_for_role(
+    page1 = list_objects_client_load_for_role(
         role=None,
         bucket="folder-heavy",
         path="",
-        user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
+        user_dict=user,
         max_client_load=300,
     )
 
     # Folders count toward the budget: capped at exactly max_client_load.
-    assert len(result["directories"]) == 300
-    assert [d["name"] for d in result["directories"]] == [f"d{i:04d}" for i in range(300)]
-    assert result["files"] == []
-    # More sub-folders exist beyond this chunk → truncated indicator.
-    assert result["truncated"] is True
+    assert len(page1["directories"]) == 300
+    assert [d["name"] for d in page1["directories"]] == [f"d{i:04d}" for i in range(300)]
+    assert page1["files"] == []
+    # More sub-folders exist → truncated AND a usable continuation token.
+    assert page1["truncated"] is True
+    assert page1["next_token"]
+
+    # Load more: the continuation returns the remaining folders and finishes.
+    page2 = list_objects_client_load_for_role(
+        role=None,
+        bucket="folder-heavy",
+        path="",
+        user_dict=user,
+        max_client_load=300,
+        continuation_token=page1["next_token"],
+    )
+    assert [d["name"] for d in page2["directories"]] == [f"d{i:04d}" for i in range(300, 400)]
+    assert page2["files"] == []
+    assert page2["truncated"] is False
+    assert page2["next_token"] is None
 
 
 def test_client_load_folder_heavy_makes_few_s3_calls(monkeypatch):
@@ -365,12 +383,13 @@ def test_client_load_folder_heavy_makes_few_s3_calls(monkeypatch):
         max_client_load=300,
     )
 
-    # Only the directory-discovery call runs; the file loop is skipped because
-    # sub-folders already filled the budget.
+    # A single ListObjectsV2 call fills the budget with sub-folders; the walk
+    # stops there instead of grinding the keyspace.
     assert calls["n"] == 1
     assert len(result["directories"]) == 300
     assert result["files"] == []
     assert result["truncated"] is True
+    assert result["next_token"] == "tok"
 
 
 def test_config_has_max_client_load_default(monkeypatch, tmp_path):
