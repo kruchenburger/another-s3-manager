@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-07-08
+
+### Fixed
+
+- Browsing a folder with a very large number of sub-folders no longer hangs.
+  Folders now count toward the load budget and paginate (Load more / Load all
+  / lazy scroll) exactly like files, so a level made entirely of sub-folders
+  behaves like one made of files. A long "Load all" is now stoppable and
+  aborts automatically when you leave the folder.
+- `assume_role` roles no longer fail with "You must specify a region" in
+  containers without a shared AWS config: the STS client (and the assumed-role
+  S3 client) now honor the role's `region` field and the `AWS_REGION` env var.
+
 ## [1.0.0] - 2026-07-04
 
 ### Added
@@ -72,9 +85,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `assume_role` roles no longer fail with "You must specify a region" in
-  containers without a shared AWS config: the STS client (and the assumed-role
-  S3 client) now honor the role's `region` field and the `AWS_REGION` env var.
 - Admin edits to roles apply without a container restart — the S3 client and
   boto3 credential caches are flushed on config save, and config changes apply
   live in open browser tabs.
