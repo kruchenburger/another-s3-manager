@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { LoginPage } from "@/pages/LoginPage/LoginPage";
 import { GITHUB_URL } from "@/constants/links";
 
@@ -105,5 +105,46 @@ describe("LoginPage parity additions", () => {
   it("uses fallback app name when appInfo is not yet loaded", () => {
     renderLogin();
     expect(screen.getByText(/another s3 manager/i)).toBeInTheDocument();
+  });
+
+  // ---- expired-session redirect-loop guard ----
+
+  function renderWithRoutes() {
+    return render(
+      <MantineProvider>
+        <MemoryRouter initialEntries={[{ pathname: "/login", state: { from: "/r/foo" } }]}>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/r/foo" element={<div>APP PAGE</div>} />
+            <Route path="/" element={<div>HOME PAGE</div>} />
+          </Routes>
+        </MemoryRouter>
+      </MantineProvider>,
+    );
+  }
+
+  it("bounces to the origin route when the session is valid (isSuccess)", async () => {
+    useMeMock.mockReturnValue({ data: { username: "admin" }, isSuccess: true });
+    renderWithRoutes();
+    // Valid session → navigate to state.from (/r/foo); login form gone.
+    await waitFor(() => expect(screen.getByText("APP PAGE")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+  });
+
+  it("does NOT redirect when a stale me lingers but the session errored (no loop)", async () => {
+    // Expired session: /api/me keeps last-good data while the refetch 401s.
+    // isSuccess=false must keep us on /login instead of bouncing back into the
+    // app (which would ping-pong AuthGuard <-> LoginPage forever).
+    useMeMock.mockReturnValue({
+      data: { username: "admin" },
+      isSuccess: false,
+      isError: true,
+    });
+    renderWithRoutes();
+    // Give the effect a tick; the login form must remain and no navigation.
+    await Promise.resolve();
+    expect(screen.getByRole("button", { name: "Login" })).toBeInTheDocument();
+    expect(screen.queryByText("APP PAGE")).not.toBeInTheDocument();
+    expect(screen.queryByText("HOME PAGE")).not.toBeInTheDocument();
   });
 });

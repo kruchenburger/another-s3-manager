@@ -29,7 +29,7 @@ interface LocationState {
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { data: me } = useMe();
+  const { data: me, isSuccess: meIsValid } = useMe();
   const { data: appInfo } = useAppInfo();
   const login = useLogin();
 
@@ -44,12 +44,21 @@ export function LoginPage() {
   });
 
   // If already authenticated (e.g. user navigated back to /login), bounce to home.
+  //
+  // Gate on isSuccess, NOT just `me` being truthy: when a session expires, the
+  // /api/me query keeps its last-good `data` while a background refetch (fired by
+  // refetchOnWindowFocus when the user returns to the tab) errors with 401. At
+  // that moment AuthGuard sees the error and redirects here, but `me` is still
+  // the stale object — bouncing on `me` alone would send the user straight back
+  // to the app, which redirects here again: a tight redirect loop that flickers
+  // the address bar and freezes the page. isSuccess is false while the query is
+  // in that errored state, so we stay on /login and let the user re-auth.
   useEffect(() => {
-    if (me) {
+    if (me && meIsValid) {
       const from = (location.state as LocationState | null)?.from ?? "/";
       navigate(from, { replace: true });
     }
-  }, [me, location.state, navigate]);
+  }, [me, meIsValid, location.state, navigate]);
 
   const handleSubmit = form.onSubmit((values) => {
     login.mutate(values, {
