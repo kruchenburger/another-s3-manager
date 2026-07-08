@@ -155,16 +155,16 @@ describe("RolesPage", () => {
     await waitFor(() => expect(screen.getByText(/couldn't load roles/i)).toBeInTheDocument());
   });
 
-  it("renders amber Badge for 0-bucket role and dimmed text for >0 buckets", async () => {
+  it("renders amber Badge for unrestricted role and dimmed text for >0 buckets", async () => {
     vi.mocked(getConfig).mockResolvedValue(baseConfig);
     renderPage();
 
     await waitFor(() => expect(screen.getByText("Default")).toBeInTheDocument());
 
-    // 0-bucket row: text lives inside a Mantine Badge (root element has class
-    // matching /mantine-Badge-root/). The dimmed Text variant uses a <p> with
-    // a different className family, so this distinguishes the two paths.
-    const zeroBadge = screen.getByText("No buckets");
+    // Unrestricted (0-bucket) row: text lives inside a Mantine Badge (root
+    // element has class matching /mantine-Badge-root/). The dimmed Text variant
+    // uses a <p> with a different className family, distinguishing the two.
+    const zeroBadge = screen.getByText("Any bucket");
     expect(zeroBadge.closest("[class*='mantine-Badge-root']")).not.toBeNull();
 
     // 2-bucket row: text is a plain dimmed Text — should NOT be inside a Badge.
