@@ -16,7 +16,7 @@ interface PreviewModalProps {
 
 export function PreviewModal({ opened, onClose, filename, url, size }: PreviewModalProps) {
   const { data: config } = useConfig();
-  const type = getPreviewType(filename, config?.auto_inline_extensions ?? []);
+  const type = getPreviewType(filename, config?.preview_text_extensions ?? []);
 
   return (
     <Modal opened={opened} onClose={onClose} title={filename} size="xl" centered>

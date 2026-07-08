@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
 
-// Mock useConfig so we can control auto_inline_extensions per test.
+// Mock useConfig so we can control preview_text_extensions per test.
 vi.mock("@/hooks/useConfig", () => ({
   useConfig: vi.fn(),
 }));
@@ -36,7 +36,7 @@ const mockUseConfig = vi.mocked(useConfig);
 
 function renderModal(filename: string, autoInlineExts: string[]) {
   mockUseConfig.mockReturnValue({
-    data: { auto_inline_extensions: autoInlineExts } as never,
+    data: { preview_text_extensions: autoInlineExts } as never,
   } as never);
 
   return render(
@@ -52,8 +52,8 @@ function renderModal(filename: string, autoInlineExts: string[]) {
   );
 }
 
-describe("PreviewModal — type routing via auto_inline_extensions", () => {
-  it(".ts with auto_inline_extensions=['ts'] renders text preview", () => {
+describe("PreviewModal — type routing via preview_text_extensions", () => {
+  it(".ts with preview_text_extensions=['ts'] renders text preview", () => {
     renderModal("script.ts", ["ts"]);
     expect(screen.getByTestId("text-preview")).toBeInTheDocument();
     expect(screen.queryByTestId("image-preview")).not.toBeInTheDocument();
@@ -75,7 +75,7 @@ describe("PreviewModal — type routing via auto_inline_extensions", () => {
     expect(screen.getByTestId("text-preview")).toBeInTheDocument();
   });
 
-  it(".png with auto_inline_extensions=['ts'] renders image preview (media always wins)", () => {
+  it(".png with preview_text_extensions=['ts'] renders image preview (media always wins)", () => {
     renderModal("photo.png", ["ts"]);
     expect(screen.getByTestId("image-preview")).toBeInTheDocument();
     expect(screen.queryByTestId("text-preview")).not.toBeInTheDocument();

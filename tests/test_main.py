@@ -667,6 +667,39 @@ def test_upload_file(app_client, moto_s3):
     assert stored["ContentType"] == "text/plain"
 
 
+def test_upload_sets_inline_disposition_for_configured_extension(app_client, moto_s3):
+    """An extension in upload_inline_extensions gets Content-Disposition: inline
+    on the stored object (so it opens in the browser via CDN/presigned)."""
+    import another_s3_manager.config as config_module
+
+    cfg = config_module.load_config(force_reload=True)
+    cfg["upload_inline_extensions"] = ["pdf"]
+    config_module.save_config(cfg)
+
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="inline-bucket")
+
+    # .pdf → inline
+    app_client.post(
+        "/api/buckets/inline-bucket/upload",
+        data={"key": "doc.pdf"},
+        files={"file": ("doc.pdf", b"%PDF-1.4", "application/pdf")},
+        headers=headers,
+    )
+    pdf = moto_s3.get_object(Bucket="inline-bucket", Key="doc.pdf")
+    assert pdf.get("ContentDisposition") == "inline"
+
+    # .txt → NOT inline (not in the list)
+    app_client.post(
+        "/api/buckets/inline-bucket/upload",
+        data={"key": "note.txt"},
+        files={"file": ("note.txt", b"hi", "text/plain")},
+        headers=headers,
+    )
+    txt = moto_s3.get_object(Bucket="inline-bucket", Key="note.txt")
+    assert txt.get("ContentDisposition") in (None, "")
+
+
 def test_upload_increments_bytes_metric_once(app_client, moto_s3):
     """Regression: the route used to manually increment s3_bytes_uploaded_total
     AFTER calling the helper, which itself increments the metric internally.
@@ -2209,16 +2242,17 @@ def test_get_user_for_download_does_not_swallow_db_errors(monkeypatch):
         get_user_for_download(token=token, request=None)
 
 
-def test_get_config_exposes_auto_inline_extensions_for_non_admin(app_client):
-    """A non-admin /api/config response includes auto_inline_extensions.
+def test_get_config_exposes_extension_lists_for_non_admin(app_client):
+    """A non-admin /api/config response includes both extension lists.
 
-    /v2 FileRow/FileCard/PreviewModal read this list via useConfig to decide
-    which files are previewable. Before the fix it was only in the admin dict.
+    /v2 FileRow/FileCard/PreviewModal read preview_text_extensions via useConfig
+    to decide which text files are previewable.
     """
     import another_s3_manager.config as config_module
 
     cfg = config_module.load_config(force_reload=True)
-    cfg["auto_inline_extensions"] = ["ts", "tsx"]
+    cfg["preview_text_extensions"] = ["ts", "tsx"]
+    cfg["upload_inline_extensions"] = ["pdf"]
     config_module.save_config(cfg)
 
     # Non-admin user with no allowed roles (exercises the no-allowed-roles return dict).
@@ -2227,7 +2261,8 @@ def test_get_config_exposes_auto_inline_extensions_for_non_admin(app_client):
     assert login_response.status_code == status.HTTP_200_OK
     response_no_roles = app_client.get("/api/config")
     assert response_no_roles.status_code == 200
-    assert response_no_roles.json()["auto_inline_extensions"] == ["ts", "tsx"]
+    assert response_no_roles.json()["preview_text_extensions"] == ["ts", "tsx"]
+    assert response_no_roles.json()["upload_inline_extensions"] == ["pdf"]
 
     # Non-admin user with an allowed role (exercises the regular-user return dict).
     create_user("roler", is_admin=False, allowed_roles=["Default"])
@@ -2235,31 +2270,31 @@ def test_get_config_exposes_auto_inline_extensions_for_non_admin(app_client):
     assert login_response2.status_code == status.HTTP_200_OK
     response_with_roles = app_client.get("/api/config")
     assert response_with_roles.status_code == 200
-    assert response_with_roles.json()["auto_inline_extensions"] == ["ts", "tsx"]
+    assert response_with_roles.json()["preview_text_extensions"] == ["ts", "tsx"]
 
 
-def test_clearing_inline_preview_list_persists_across_reload(app_client):
-    """End-to-end: admin clears the inline-preview list to [] via POST /api/config;
-    the one-time seed marker must survive the save so a subsequent reload (a
-    restart) does NOT re-seed the defaults — the empty list sticks."""
+def test_clearing_extension_lists_persists_across_reload(app_client):
+    """End-to-end: admin clears both extension lists to [] via POST /api/config;
+    the empty lists must stick across a reload (no re-seed) — key presence is the
+    migrated marker now."""
     import another_s3_manager.config as config_module
 
-    # Start from a seeded config (defaults present, marker set).
     seeded = config_module.load_config(force_reload=True)
-    assert seeded.get("_auto_inline_seeded") is True
-    assert seeded["auto_inline_extensions"]  # defaults were seeded in
+    assert seeded["preview_text_extensions"]  # defaults seeded in
+    assert seeded["upload_inline_extensions"]
 
     _, headers = login(app_client)
-    # The frontend sends the writable fields (not the internal seed marker).
     resp = app_client.post(
         "/api/config",
-        json={"roles": seeded.get("roles", []), "auto_inline_extensions": []},
+        json={
+            "roles": seeded.get("roles", []),
+            "preview_text_extensions": [],
+            "upload_inline_extensions": [],
+        },
         headers=headers,
     )
     assert resp.status_code == 200, resp.json()
 
-    # Reload as if the app restarted: the cleared list must stick (no re-seed),
-    # and the marker must still be present (preserved through update_config).
     reloaded = config_module.load_config(force_reload=True)
-    assert reloaded["auto_inline_extensions"] == []
-    assert reloaded.get("_auto_inline_seeded") is True
+    assert reloaded["preview_text_extensions"] == []
+    assert reloaded["upload_inline_extensions"] == []

@@ -40,10 +40,16 @@ export function SettingsGeneralTab({ form, readOnly }: SettingsGeneralTabProps) 
         {...form.getInputProps("max_file_size_mb")}
       />
       <TagsInput
-        label="Inline preview extensions"
-        description="Files with these extensions preview inline. Pre-filled with sensible text defaults — add, remove, or clear them all to disable text preview entirely. Images, video and PDF always preview regardless."
+        label="Inline preview extensions (text)"
+        description="Text files with these extensions preview inline in the UI. Pre-filled with sensible text defaults — add, remove, or clear them all to disable text preview entirely. Images, video and PDF always preview regardless."
         disabled={readOnly}
-        {...form.getInputProps("auto_inline_extensions")}
+        {...form.getInputProps("preview_text_extensions")}
+      />
+      <TagsInput
+        label="Open in browser on upload"
+        description="Files with these extensions get Content-Disposition: inline set when uploaded, so they open in the browser (instead of downloading) when served via a CDN or presigned link. Applies to new uploads only. Defaults to pdf + common images."
+        disabled={readOnly}
+        {...form.getInputProps("upload_inline_extensions")}
       />
       <Text fw={600} size="sm" mt="sm">
         Presigned URLs

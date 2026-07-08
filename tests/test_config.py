@@ -51,10 +51,33 @@ def test_migrate_config_adds_missing_fields(tmp_path):
     assert "max_file_size" in data
 
 
-def test_migrate_config_seeds_auto_inline_defaults(tmp_path):
-    """A legacy config (no auto_inline field, no seed marker) gets the text
-    defaults seeded once, with the marker set so it never re-seeds."""
-    from another_s3_manager.constants import DEFAULT_AUTO_INLINE_EXTENSIONS
+def test_migrate_config_splits_legacy_auto_inline(tmp_path):
+    """A legacy config with auto_inline_extensions splits into the two new keys:
+    preview_text_extensions inherits the legacy list; upload_inline_extensions is
+    seeded with the pdf+images default; the legacy keys are dropped."""
+    from another_s3_manager.constants import DEFAULT_UPLOAD_INLINE_EXTENSIONS
+
+    config = reload_config()
+    config.CONFIG_FILE = Path(os.environ["S3_FILE_MANAGER_CONFIG"])
+    config.CONFIG_FILE.write_text(
+        json.dumps({"roles": [], "auto_inline_extensions": ["txt", "md"], "_auto_inline_seeded": True})
+    )
+    config._config_cache = {}
+    config._config_mtime = 0
+
+    data = config.load_config(force_reload=True)
+    assert data["preview_text_extensions"] == ["txt", "md"]
+    assert data["upload_inline_extensions"] == list(DEFAULT_UPLOAD_INLINE_EXTENSIONS)
+    assert "auto_inline_extensions" not in data
+    assert "_auto_inline_seeded" not in data
+
+
+def test_migrate_config_fresh_seeds_both_defaults(tmp_path):
+    """A config with neither key gets both text-preview and upload-inline defaults."""
+    from another_s3_manager.constants import (
+        DEFAULT_PREVIEW_TEXT_EXTENSIONS,
+        DEFAULT_UPLOAD_INLINE_EXTENSIONS,
+    )
 
     config = reload_config()
     config.CONFIG_FILE = Path(os.environ["S3_FILE_MANAGER_CONFIG"])
@@ -63,21 +86,23 @@ def test_migrate_config_seeds_auto_inline_defaults(tmp_path):
     config._config_mtime = 0
 
     data = config.load_config(force_reload=True)
-    assert data["auto_inline_extensions"] == list(DEFAULT_AUTO_INLINE_EXTENSIONS)
-    assert data["_auto_inline_seeded"] is True
+    assert data["preview_text_extensions"] == list(DEFAULT_PREVIEW_TEXT_EXTENSIONS)
+    assert data["upload_inline_extensions"] == list(DEFAULT_UPLOAD_INLINE_EXTENSIONS)
 
 
-def test_migrate_config_does_not_reseed_a_cleared_list(tmp_path):
-    """Once seeded, an admin's intentional clear to [] must persist — migration
-    must NOT re-seed defaults over it."""
+def test_migrate_config_does_not_reseed_cleared_lists(tmp_path):
+    """Once migrated (keys present), admin's intentional clears to [] persist."""
     config = reload_config()
     config.CONFIG_FILE = Path(os.environ["S3_FILE_MANAGER_CONFIG"])
-    config.CONFIG_FILE.write_text(json.dumps({"roles": [], "auto_inline_extensions": [], "_auto_inline_seeded": True}))
+    config.CONFIG_FILE.write_text(
+        json.dumps({"roles": [], "preview_text_extensions": [], "upload_inline_extensions": []})
+    )
     config._config_cache = {}
     config._config_mtime = 0
 
     data = config.load_config(force_reload=True)
-    assert data["auto_inline_extensions"] == []
+    assert data["preview_text_extensions"] == []
+    assert data["upload_inline_extensions"] == []
 
 
 def test_load_config_tolerates_stale_items_per_page(tmp_path):

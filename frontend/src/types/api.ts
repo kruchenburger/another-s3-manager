@@ -150,7 +150,10 @@ export interface AppConfig {
   presigned_url_default_ttl: number;
   presigned_url_max_ttl: number;
   disable_deletion: boolean;
-  auto_inline_extensions?: string[];
+  // Which text files preview inline in the UI (media/pdf always preview).
+  preview_text_extensions?: string[];
+  // Which uploads get Content-Disposition: inline (open in browser via CDN).
+  upload_inline_extensions?: string[];
   data_dir?: string;
   is_read_only?: boolean;
   current_role?: string;

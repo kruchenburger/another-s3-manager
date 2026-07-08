@@ -69,7 +69,7 @@ export function FileCard({
   const { data: config } = useConfig();
   const canPreview =
     !file.is_directory &&
-    getPreviewType(file.name, config?.auto_inline_extensions ?? []) !== null;
+    getPreviewType(file.name, config?.preview_text_extensions ?? []) !== null;
   const kind = file.is_directory ? "other" : categorizePreview(file.name);
   const fullPath = joinPath(path, file.name);
   const enabled = !file.is_directory && (kind === "image" || kind === "video");
