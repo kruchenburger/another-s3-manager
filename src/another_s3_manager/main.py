@@ -45,6 +45,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
 import another_s3_manager.config as config_module
+from another_s3_manager.api_tokens import count_active_tokens
 from another_s3_manager.auth import (
     check_ban,
     create_access_token,
@@ -77,6 +78,7 @@ from another_s3_manager.metrics import (
     http_request_duration_seconds,
     http_requests_in_flight,
     http_requests_total,
+    mcp_active_tokens,
     upload_rejected_total,
 )
 from another_s3_manager.s3_client import (
@@ -277,9 +279,10 @@ def _check_metrics_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
-# Scrape-time callback: load_bans() already filters to active bans, so the
-# gauge is always live without a background updater or hooks in ban/unban paths.
+# Scrape-time callbacks. Computing at scrape time (rather than hooking every
+# mutation) means the gauge can never drift out of sync with the database.
 auth_bans_active.set_function(lambda: float(len(load_bans())))
+mcp_active_tokens.set_function(lambda: float(count_active_tokens()))
 
 
 @app.get("/metrics")

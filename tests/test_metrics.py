@@ -421,3 +421,54 @@ def test_reads_refused_counter_labels():
         before = _sample("as3m_mcp_reads_refused_total", labels)
         mcp_reads_refused_total.labels(**labels).inc()
         assert _sample("as3m_mcp_reads_refused_total", labels) == before + 1
+
+
+# ---------------------------------------------------------------------------
+# MCP token gauge + churn counters (Task 12)
+# ---------------------------------------------------------------------------
+
+
+def test_active_tokens_gauge_reflects_the_database(app_client):
+    """Regression: the gauge was defined, documented, exported — and always 0."""
+    from another_s3_manager.api_tokens import create_token, revoke_token
+
+    _seed_user("gaugeuser", "pw12345678")
+    from another_s3_manager.database import session_scope
+    from another_s3_manager.models import User
+
+    with session_scope() as s:
+        uid = s.query(User).filter_by(username="gaugeuser").one().id
+
+    app_client.get("/metrics")  # a scrape is what triggers set_function
+    baseline = _sample("as3m_mcp_active_tokens", {})
+
+    token, _ = create_token(user_id=uid, name="t1", is_read_only=True, max_read_bytes=1024)
+    app_client.get("/metrics")
+    assert _sample("as3m_mcp_active_tokens", {}) == baseline + 1
+
+    revoke_token(token.id, by_user_id=uid, by_is_admin=False)
+    app_client.get("/metrics")
+    assert _sample("as3m_mcp_active_tokens", {}) == baseline
+
+
+def test_token_issue_and_revoke_counters(app_client):
+    from another_s3_manager.api_tokens import create_token, revoke_token
+    from another_s3_manager.database import session_scope
+    from another_s3_manager.models import User
+
+    _seed_user("churnuser", "pw12345678")
+    with session_scope() as s:
+        uid = s.query(User).filter_by(username="churnuser").one().id
+
+    issued = _sample("as3m_mcp_tokens_issued_total", {})
+    revoked = _sample("as3m_mcp_tokens_revoked_total", {})
+
+    token, _ = create_token(user_id=uid, name="t2", is_read_only=False, max_read_bytes=1024)
+    assert _sample("as3m_mcp_tokens_issued_total", {}) == issued + 1
+
+    revoke_token(token.id, by_user_id=uid, by_is_admin=False)
+    assert _sample("as3m_mcp_tokens_revoked_total", {}) == revoked + 1
+
+    # Revoking twice must not double-count: the second call is a no-op.
+    revoke_token(token.id, by_user_id=uid, by_is_admin=False)
+    assert _sample("as3m_mcp_tokens_revoked_total", {}) == revoked + 1

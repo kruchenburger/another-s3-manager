@@ -168,6 +168,18 @@ mcp_active_tokens = Gauge(
     "Active (non-revoked) API tokens",
     registry=REGISTRY,
 )
+# The companions to mcp_active_tokens. A Gauge cannot be rate()d, so the gauge
+# alone cannot answer "how many tokens issued/revoked this hour" — churn.
+mcp_tokens_issued_total = Counter(
+    "as3m_mcp_tokens_issued_total",
+    "MCP tokens created",
+    registry=REGISTRY,
+)
+mcp_tokens_revoked_total = Counter(
+    "as3m_mcp_tokens_revoked_total",
+    "MCP tokens revoked",
+    registry=REGISTRY,
+)
 # The observable proof that the MCP safety model actually fires: read-only
 # tokens, the deletion kill-switch, and the per-token read cap.
 mcp_writes_denied_total = Counter(
