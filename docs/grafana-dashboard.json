@@ -404,7 +404,7 @@
         {
           "refId": "G",
           "datasource": "${DS}",
-          "expr": "sum by (bucket, operation) (increase(as3m_s3_objects_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", bucket=~\"$bucket\"}[$__rate_interval]))",
+          "expr": "round(sum by (bucket, operation) (increase(as3m_s3_objects_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", bucket=~\"$bucket\"}[$__rate_interval])))",
           "legendFormat": "{{bucket}} · {{operation}}"
         }
       ]
@@ -584,7 +584,7 @@
             {
               "refId": "K",
               "datasource": "${DS}",
-              "expr": "sum by (operation) (increase(as3m_s3_operations_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\"}[$__rate_interval]))",
+              "expr": "round(sum by (operation) (increase(as3m_s3_operations_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\"}[$__rate_interval])))",
               "legendFormat": "{{operation}}"
             }
           ]
@@ -632,7 +632,7 @@
             {
               "refId": "L",
               "datasource": "${DS}",
-              "expr": "sum by (error_code) (increase(as3m_s3_operations_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", error_code!=\"none\"}[$__rate_interval]))",
+              "expr": "round(sum by (error_code) (increase(as3m_s3_operations_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", error_code!=\"none\"}[$__rate_interval])))",
               "legendFormat": "{{error_code}}"
             }
           ]
@@ -728,7 +728,7 @@
             {
               "refId": "N",
               "datasource": "${DS}",
-              "expr": "sum by (reason) (increase(as3m_s3_retries_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval]))",
+              "expr": "round(sum by (reason) (increase(as3m_s3_retries_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
               "legendFormat": "{{reason}}"
             }
           ]
@@ -776,13 +776,13 @@
             {
               "refId": "O",
               "datasource": "${DS}",
-              "expr": "sum(increase(as3m_sts_assume_role_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", result=\"error\"}[$__rate_interval]))",
+              "expr": "round(sum(increase(as3m_sts_assume_role_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", result=\"error\"}[$__rate_interval])))",
               "legendFormat": "assume-role errors"
             },
             {
               "refId": "P",
               "datasource": "${DS}",
-              "expr": "sum(increase(as3m_credentials_refreshed_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", result=\"error\"}[$__rate_interval]))",
+              "expr": "round(sum(increase(as3m_credentials_refreshed_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", result=\"error\"}[$__rate_interval])))",
               "legendFormat": "refresh errors"
             }
           ]
@@ -844,7 +844,7 @@
             {
               "refId": "Q",
               "datasource": "${DS}",
-              "expr": "sum by (result) (increase(as3m_auth_logins_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval]))",
+              "expr": "round(sum by (result) (increase(as3m_auth_logins_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
               "legendFormat": "{{result}}"
             }
           ]
@@ -946,7 +946,7 @@
             {
               "refId": "T",
               "datasource": "${DS}",
-              "expr": "sum by (reason) (increase(as3m_upload_rejected_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval]))",
+              "expr": "round(sum by (reason) (increase(as3m_upload_rejected_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
               "legendFormat": "{{reason}}"
             }
           ]
@@ -994,7 +994,7 @@
             {
               "refId": "U",
               "datasource": "${DS}",
-              "expr": "sum by (bucket) (increase(as3m_presigned_urls_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", bucket=~\"$bucket\"}[$__rate_interval]))",
+              "expr": "round(sum by (bucket) (increase(as3m_presigned_urls_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", bucket=~\"$bucket\"}[$__rate_interval])))",
               "legendFormat": "{{bucket}}"
             }
           ]
@@ -1088,7 +1088,7 @@
             {
               "refId": "V",
               "datasource": "${DS}",
-              "expr": "sum by (tool) (increase(as3m_mcp_tool_calls_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval]))",
+              "expr": "round(sum by (tool) (increase(as3m_mcp_tool_calls_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
               "legendFormat": "{{tool}}"
             }
           ]
@@ -1136,7 +1136,7 @@
             {
               "refId": "W",
               "datasource": "${DS}",
-              "expr": "sum by (tool, error_code) (increase(as3m_mcp_tool_calls_total{job=\"$job\", instance=~\"$instance\", error_code!=\"none\"}[$__rate_interval]))",
+              "expr": "round(sum by (tool, error_code) (increase(as3m_mcp_tool_calls_total{job=\"$job\", instance=~\"$instance\", error_code!=\"none\"}[$__rate_interval])))",
               "legendFormat": "{{tool}} / {{error_code}}"
             }
           ]
@@ -1184,13 +1184,13 @@
             {
               "refId": "X",
               "datasource": "${DS}",
-              "expr": "sum by (reason) (increase(as3m_mcp_writes_denied_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval]))",
+              "expr": "round(sum by (reason) (increase(as3m_mcp_writes_denied_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
               "legendFormat": "denied: {{reason}}"
             },
             {
               "refId": "Y",
               "datasource": "${DS}",
-              "expr": "sum by (reason) (increase(as3m_mcp_reads_refused_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval]))",
+              "expr": "round(sum by (reason) (increase(as3m_mcp_reads_refused_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
               "legendFormat": "refused: {{reason}}"
             }
           ]
@@ -1536,7 +1536,7 @@
             {
               "refId": "G",
               "datasource": "${DS}",
-              "expr": "sum by (operation) (increase(as3m_db_errors_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval]))",
+              "expr": "round(sum by (operation) (increase(as3m_db_errors_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
               "legendFormat": "{{operation}}"
             }
           ]
