@@ -1628,7 +1628,7 @@ def put_object_for_role(
     Upload `content` to `bucket`/`path` using `role`.
 
     Raises PermissionError on role/bucket access violation.
-    Increments the s3_bytes_total metric (direction="upload") on success.
+    Increments s3_bytes_total (direction="upload") and s3_objects_total (operation="upload") on success.
     """
     from another_s3_manager.metrics import s3_bytes_total, s3_objects_total, safe_role_label
 

@@ -158,6 +158,10 @@ def test_every_app_metric_is_namespaced(app_client):
     for old in OLD_NAMES:
         # A bare old name at the start of a line is the exposition format's
         # own series/HELP/TYPE prefix. `as3m_<old>` must not trigger this.
+        # Histograms emit sample lines with _bucket/_count/_sum suffixes that
+        # never match the bare old name, but this test catches failed histogram
+        # renames via the # HELP / # TYPE lines, which prometheus_client emits
+        # with the bare metric name for every registered family.
         for line in body.splitlines():
             payload = line.removeprefix("# HELP ").removeprefix("# TYPE ")
             assert not payload.startswith(old + " "), f"{old} is still exported unprefixed"
