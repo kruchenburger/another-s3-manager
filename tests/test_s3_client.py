@@ -1072,16 +1072,16 @@ def test_iter_object_for_role_missing_raises_filenotfound(moto_s3):
 
 
 def test_iter_object_for_role_increments_metric(moto_s3):
-    """B1: s3_bytes_downloaded_total increments exactly once with ContentLength,
-    BEFORE the body iterator is consumed."""
+    """B1: s3_bytes_total (direction="download") increments exactly once with
+    ContentLength, BEFORE the body iterator is consumed."""
     moto_s3.create_bucket(Bucket="metric-b")
     moto_s3.put_object(Bucket="metric-b", Key="m.bin", Body=b"a" * 50)
 
-    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+    from another_s3_manager.metrics import s3_bytes_total, safe_role_label
     from another_s3_manager.s3_client import iter_object_for_role
 
-    labels = {"role": safe_role_label("unknown"), "bucket": "metric-b"}
-    before = s3_bytes_downloaded_total.labels(**labels)._value.get()
+    labels = {"role": safe_role_label("unknown"), "bucket": "metric-b", "direction": "download"}
+    before = s3_bytes_total.labels(**labels)._value.get()
 
     metadata, body_iter = iter_object_for_role(
         None,
@@ -1091,13 +1091,13 @@ def test_iter_object_for_role_increments_metric(moto_s3):
     )
 
     # Metric already incremented before iterator consumption
-    mid = s3_bytes_downloaded_total.labels(**labels)._value.get()
+    mid = s3_bytes_total.labels(**labels)._value.get()
     assert mid - before == 50, "metric must increment at metadata-fetch time"
 
     # consume iterator to exhaust the stream
     list(body_iter)
 
-    after = s3_bytes_downloaded_total.labels(**labels)._value.get()
+    after = s3_bytes_total.labels(**labels)._value.get()
     assert after - before == 50, "metric must increment exactly once per download"
     assert metadata["content_length"] == 50
 

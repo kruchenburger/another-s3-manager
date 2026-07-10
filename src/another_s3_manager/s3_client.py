@@ -1364,11 +1364,11 @@ def read_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str,
 
     Raises PermissionError on role/bucket access violation.
     Raises FileNotFoundError if the object does not exist.
-    Increments the s3_bytes_downloaded_total metric.
+    Increments the s3_bytes_total metric with direction="download".
     """
     from botocore.exceptions import ClientError as _ClientError
 
-    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+    from another_s3_manager.metrics import s3_bytes_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
@@ -1377,9 +1377,9 @@ def read_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str,
         try:
             response = s3_client.get_object(Bucket=bucket, Key=path)
             body: bytes = response["Body"].read()
-            s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
-                len(body)
-            )
+            s3_bytes_total.labels(
+                role=safe_role_label(validated_role or "unknown"), bucket=bucket, direction="download"
+            ).inc(len(body))
             return body
         except _ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
@@ -1404,17 +1404,17 @@ def iter_object_for_role(
         {"content_length": int, "content_type": str}
 
     and ``body_iterator`` lazily yields ``bytes`` chunks of at most
-    ``chunk_size`` bytes. Increments ``s3_bytes_downloaded_total`` exactly
-    once with the full ``content_length`` BEFORE the body starts flowing,
-    so the metric reflects the requested object size even if the client
-    disconnects mid-stream (mirrors ``read_object_for_role``).
+    ``chunk_size`` bytes. Increments ``s3_bytes_total`` (direction="download")
+    exactly once with the full ``content_length`` BEFORE the body starts
+    flowing, so the metric reflects the requested object size even if the
+    client disconnects mid-stream (mirrors ``read_object_for_role``).
 
     Raises ``PermissionError`` on role/bucket access violation.
     Raises ``FileNotFoundError`` if the object does not exist.
     """
     from botocore.exceptions import ClientError as _ClientError
 
-    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+    from another_s3_manager.metrics import s3_bytes_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
@@ -1434,9 +1434,9 @@ def iter_object_for_role(
     content_type = response.get("ContentType", "application/octet-stream")
 
     if content_length:
-        s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
-            content_length
-        )
+        s3_bytes_total.labels(
+            role=safe_role_label(validated_role or "unknown"), bucket=bucket, direction="download"
+        ).inc(content_length)
 
     def body_iter() -> Iterator[bytes]:
         body = response["Body"]
@@ -1466,11 +1466,11 @@ def read_object_range_for_role(
     Uses boto3 Range parameter: bytes=start-end (inclusive).
     Raises PermissionError on role/bucket access violation.
     Raises FileNotFoundError if the object does not exist.
-    Increments the s3_bytes_downloaded_total metric for the returned slice size.
+    Increments the s3_bytes_total metric (direction="download") for the returned slice size.
     """
     from botocore.exceptions import ClientError as _ClientError
 
-    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+    from another_s3_manager.metrics import s3_bytes_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
@@ -1479,9 +1479,9 @@ def read_object_range_for_role(
         try:
             response = s3_client.get_object(Bucket=bucket, Key=path, Range=f"bytes={start}-{end}")
             body: bytes = response["Body"].read()
-            s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
-                len(body)
-            )
+            s3_bytes_total.labels(
+                role=safe_role_label(validated_role or "unknown"), bucket=bucket, direction="download"
+            ).inc(len(body))
             return body
         except _ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
@@ -1599,9 +1599,9 @@ def put_object_for_role(
     Upload `content` to `bucket`/`path` using `role`.
 
     Raises PermissionError on role/bucket access violation.
-    Increments the s3_bytes_uploaded_total metric on success.
+    Increments the s3_bytes_total metric (direction="upload") on success.
     """
-    from another_s3_manager.metrics import s3_bytes_uploaded_total, safe_role_label
+    from another_s3_manager.metrics import s3_bytes_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
@@ -1616,7 +1616,7 @@ def put_object_for_role(
         if content_disposition:
             put_params["ContentDisposition"] = content_disposition
         s3_client.put_object(**put_params)
-        s3_bytes_uploaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
+        s3_bytes_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket, direction="upload").inc(
             len(content)
         )
 

@@ -74,16 +74,10 @@ s3_operation_duration_seconds = Histogram(
     ["operation"],
     registry=REGISTRY,
 )
-s3_bytes_uploaded_total = Counter(
-    "as3m_s3_bytes_uploaded_total",
-    "Bytes uploaded to S3",
-    ["role", "bucket"],
-    registry=REGISTRY,
-)
-s3_bytes_downloaded_total = Counter(
-    "as3m_s3_bytes_downloaded_total",
-    "Bytes downloaded from S3",
-    ["role", "bucket"],
+s3_bytes_total = Counter(
+    "as3m_s3_bytes_total",
+    "Bytes transferred to/from S3",
+    ["role", "bucket", "direction"],  # direction: upload | download
     registry=REGISTRY,
 )
 

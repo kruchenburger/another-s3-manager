@@ -171,3 +171,19 @@ def test_s3_operations_failure_is_labelled_by_cause(monkeypatch):
     with pytest.raises(S3AccessDeniedError):
         sc.execute_with_s3_retry("r1", "get", lambda _c: None)
     assert _sample("as3m_s3_operations_total", labels) == before + 1
+
+
+def test_bytes_counter_has_direction_label():
+    from another_s3_manager.metrics import s3_bytes_total
+
+    s3_bytes_total.labels(role="r1", bucket="b1", direction="upload").inc(10)
+    s3_bytes_total.labels(role="r1", bucket="b1", direction="download").inc(4)
+    assert _sample("as3m_s3_bytes_total", {"role": "r1", "bucket": "b1", "direction": "upload"}) >= 10
+    assert _sample("as3m_s3_bytes_total", {"role": "r1", "bucket": "b1", "direction": "download"}) >= 4
+
+
+def test_old_byte_counters_are_gone():
+    from another_s3_manager import metrics
+
+    assert not hasattr(metrics, "s3_bytes_uploaded_total")
+    assert not hasattr(metrics, "s3_bytes_downloaded_total")

@@ -1892,8 +1892,8 @@ async def upload_file(
             if file_ext in upload_inline_extensions:
                 content_disposition = "inline"
 
-        # The helper increments s3_bytes_uploaded_total internally - do NOT also
-        # increment it here, doing so would double-count.
+        # The helper increments s3_bytes_total (direction="upload") internally -
+        # do NOT also increment it here, doing so would double-count.
         put_object_for_role(
             role,
             bucket_name,
@@ -2046,9 +2046,10 @@ async def download_file(
             raise HTTPException(status_code=400, detail=str(e))
 
         # Stream the object via the helper. The helper increments the
-        # s3_bytes_downloaded_total metric exactly once at metadata-fetch time
-        # and returns a lazy iterator — MUST NOT be materialized to bytes here
-        # so 100MB downloads don't get buffered in process memory.
+        # s3_bytes_total metric (direction="download") exactly once at
+        # metadata-fetch time and returns a lazy iterator — MUST NOT be
+        # materialized to bytes here so 100MB downloads don't get buffered
+        # in process memory.
         metadata, body_iter = iter_object_for_role(role, bucket_name, path, current_user)
         filename = path.split("/")[-1]
 
