@@ -1,6 +1,7 @@
 """Tests for Prometheus metrics endpoint and registry definitions."""
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -530,7 +531,7 @@ def test_no_dead_metrics():
 
     import another_s3_manager.metrics as metrics_module
 
-    src = __import__("pathlib").Path(metrics_module.__file__).parent
+    src = Path(metrics_module.__file__).parent
     other_sources = "\n".join(p.read_text(encoding="utf-8") for p in src.rglob("*.py") if p.name != "metrics.py")
 
     declared = {
