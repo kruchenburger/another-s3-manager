@@ -174,9 +174,17 @@ def test_no_hardcoded_rate_window():
     assert not offenders, f"exprs with a hardcoded range window (use $__rate_interval): {offenders}"
 
 
-def test_rate_functions_use_rate_interval():
-    offenders = [e for e in _exprs(_load()) if _RATE_FAMILY.search(e) and "$__rate_interval" not in e]
-    assert not offenders, f"rate()/increase() without $__rate_interval: {offenders}"
+def test_rate_functions_use_a_dynamic_window():
+    """rate()/increase() must use a Grafana-computed window, never a hardcoded one.
+
+    `$__rate_interval` for continuous rates; `$__interval` (the bar step) for the
+    count panels, whose per-step windows tile without overlap so the legend Total
+    telescopes to the true count and stays stable across time ranges.
+    """
+    offenders = [
+        e for e in _exprs(_load()) if _RATE_FAMILY.search(e) and "$__rate_interval" not in e and "$__interval" not in e
+    ]
+    assert not offenders, f"rate()/increase() without $__rate_interval or $__interval: {offenders}"
 
 
 def test_histogram_quantile_sums_over_le():

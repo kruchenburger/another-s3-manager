@@ -52,7 +52,7 @@
         "label": "Role",
         "type": "query",
         "datasource": "${DS}",
-        "query": "label_values(as3m_s3_objects_total, role)",
+        "query": "label_values(as3m_s3_operations_total, role)",
         "refresh": 2,
         "sort": 1,
         "includeAll": true,
@@ -94,7 +94,7 @@
       "id": 2,
       "type": "stat",
       "title": "Version",
-      "description": "The running app version (from the APP_VERSION / build tag). Watch it flip after a deploy.",
+      "description": "The running application version. Changes after a deploy.",
       "datasource": "${DS}",
       "transparent": true,
       "gridPos": {
@@ -133,7 +133,7 @@
       "id": 3,
       "type": "stat",
       "title": "Uptime",
-      "description": "Time since the process started. A reset to near-zero means the app restarted. Linux only (process_* reads /proc).",
+      "description": "Time since the app started; drops to zero on a restart. Linux only.",
       "datasource": "${DS}",
       "transparent": true,
       "gridPos": {
@@ -144,7 +144,11 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "dtdurations"
+          "unit": "dtdurations",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
         },
         "overrides": []
       },
@@ -155,7 +159,7 @@
           "values": false
         },
         "textMode": "value",
-        "colorMode": "none",
+        "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto"
       },
@@ -171,7 +175,7 @@
       "id": 4,
       "type": "stat",
       "title": "In-flight requests",
-      "description": "Requests currently being served. Sustained growth means the app is falling behind — e.g. a long 'Load all' or a bulk delete.",
+      "description": "Requests being handled right now.",
       "datasource": "${DS}",
       "transparent": true,
       "gridPos": {
@@ -182,7 +186,11 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
         },
         "overrides": []
       },
@@ -193,7 +201,7 @@
           "values": false
         },
         "textMode": "value",
-        "colorMode": "none",
+        "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto"
       },
@@ -209,11 +217,11 @@
       "id": 5,
       "type": "timeseries",
       "title": "Request rate",
-      "description": "HTTP requests served per second. Overall load; a drop to zero means traffic stopped or the scrape target is down.",
+      "description": "HTTP requests per second — overall load.",
       "datasource": "${DS}",
       "transparent": true,
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 12,
         "x": 12,
         "y": 1
@@ -257,7 +265,7 @@
       "id": 6,
       "type": "timeseries",
       "title": "5xx error rate",
-      "description": "Fraction of requests answered with a 5xx. This is server-side failure; sustained non-zero needs a look at the logs.",
+      "description": "Share of requests failing with a server error. Sustained non-zero needs a look.",
       "datasource": "${DS}",
       "transparent": true,
       "gridPos": {
@@ -305,7 +313,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "Request latency p95",
-      "description": "95th-percentile request duration. Summed over le first, so the quantile is correct across route templates.",
+      "description": "95% of requests finish faster than this; a rising line means things are slowing down.",
       "datasource": "${DS}",
       "transparent": true,
       "gridPos": {
@@ -365,7 +373,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Objects added / deleted",
-      "description": "Objects uploaded and deleted per second. Counts real objects: deleting a folder of 5,000 objects registers 5,000, not one API call.",
+      "description": "Objects uploaded and deleted over time. A folder delete counts every object inside it.",
       "datasource": "${DS}",
       "transparent": true,
       "gridPos": {
@@ -393,7 +401,7 @@
         "legend": {
           "displayMode": "table",
           "placement": "bottom",
-          "calcs": ["min", "max", "mean", "lastNotNull", "sum"]
+          "calcs": ["max", "lastNotNull", "sum"]
         },
         "tooltip": {
           "mode": "multi",
@@ -404,16 +412,17 @@
         {
           "refId": "G",
           "datasource": "${DS}",
-          "expr": "round(sum by (bucket, operation) (increase(as3m_s3_objects_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", bucket=~\"$bucket\"}[$__rate_interval])))",
+          "expr": "round(sum by (bucket, operation) (increase(as3m_s3_objects_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", bucket=~\"$bucket\"}[$__interval])))",
           "legendFormat": "{{bucket}} · {{operation}}"
         }
-      ]
+      ],
+      "interval": "1m"
     },
     {
       "id": 10,
       "type": "timeseries",
       "title": "Throughput",
-      "description": "Bytes uploaded and downloaded per second, broken out by bucket (server-side copies move no bytes through the app, so they don't appear here).",
+      "description": "Bytes uploaded and downloaded per second, by bucket.",
       "datasource": "${DS}",
       "transparent": true,
       "gridPos": {
@@ -461,7 +470,7 @@
       "id": 11,
       "type": "stat",
       "title": "Objects processed (total)",
-      "description": "Cumulative objects uploaded/deleted/copied since start (honors the Role/Bucket filters). Delete counts can slightly under-count on a credential-expiry retry — see docs.",
+      "description": "Total objects uploaded, deleted, and copied.",
       "datasource": "${DS}",
       "transparent": true,
       "gridPos": {
@@ -472,7 +481,11 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
         },
         "overrides": []
       },
@@ -483,7 +496,7 @@
           "values": false
         },
         "textMode": "value",
-        "colorMode": "none",
+        "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto"
       },
@@ -499,8 +512,8 @@
     {
       "id": 12,
       "type": "table",
-      "title": "Top buckets by object activity",
-      "description": "Busiest buckets by objects/sec right now. Useful for spotting which bucket a spike is coming from.",
+      "title": "Top buckets by objects processed",
+      "description": "Buckets with the most object activity.",
       "datasource": "${DS}",
       "transparent": true,
       "gridPos": {
@@ -522,7 +535,7 @@
         {
           "refId": "J",
           "datasource": "${DS}",
-          "expr": "topk(10, sum by (bucket) (rate(as3m_s3_objects_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", bucket=~\"$bucket\"}[$__rate_interval])))",
+          "expr": "topk(10, sum by (bucket) (as3m_s3_objects_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", bucket=~\"$bucket\"}))",
           "legendFormat": "{{bucket}}",
           "instant": true,
           "format": "table"
@@ -545,7 +558,7 @@
           "id": 13,
           "type": "timeseries",
           "title": "Operations by type",
-          "description": "S3 API calls per second by kind (list/get/put/delete/head). This counts calls, not objects.",
+          "description": "S3 operations over time by type: list, get, put, delete, head.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -573,7 +586,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull", "sum"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -584,16 +597,17 @@
             {
               "refId": "K",
               "datasource": "${DS}",
-              "expr": "round(sum by (operation) (increase(as3m_s3_operations_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\"}[$__rate_interval])))",
+              "expr": "round(sum by (operation) (increase(as3m_s3_operations_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\"}[$__interval])))",
               "legendFormat": "{{operation}}"
             }
-          ]
+          ],
+          "interval": "1m"
         },
         {
           "id": 14,
           "type": "timeseries",
           "title": "Errors by cause",
-          "description": "Failed S3 calls per second by cause. `access_denied` usually means a role's IAM policy changed; `throttled` means S3 is rate-limiting you.",
+          "description": "Failed S3 operations by cause. access_denied = permissions changed; throttled = S3 is rate-limiting you.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -621,7 +635,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull", "sum"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -632,16 +646,17 @@
             {
               "refId": "L",
               "datasource": "${DS}",
-              "expr": "round(sum by (error_code) (increase(as3m_s3_operations_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", error_code!=\"none\"}[$__rate_interval])))",
+              "expr": "round(sum by (error_code) (increase(as3m_s3_operations_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", error_code!=\"none\"}[$__interval])))",
               "legendFormat": "{{error_code}}"
             }
-          ]
+          ],
+          "interval": "1m"
         },
         {
           "id": 15,
           "type": "timeseries",
           "title": "Operation latency p95",
-          "description": "95th-percentile S3 operation duration by kind. A rising put/list p95 is often the first sign of a slow or throttling backend.",
+          "description": "95% of S3 operations finish faster than this, by type.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -689,7 +704,7 @@
           "id": 16,
           "type": "timeseries",
           "title": "Credential-expiry retries",
-          "description": "Transparent retries after expired credentials, per second. A steady non-zero rate points at a too-short STS session TTL.",
+          "description": "Retries after credentials expired mid-request. A steady rate means the session lifetime is too short.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -717,7 +732,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull", "sum"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -728,16 +743,17 @@
             {
               "refId": "N",
               "datasource": "${DS}",
-              "expr": "round(sum by (reason) (increase(as3m_s3_retries_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
+              "expr": "round(sum by (reason) (increase(as3m_s3_retries_total{job=\"$job\", instance=~\"$instance\"}[$__interval])))",
               "legendFormat": "{{reason}}"
             }
-          ]
+          ],
+          "interval": "1m"
         },
         {
           "id": 17,
           "type": "timeseries",
           "title": "STS assume-role & refresh failures",
-          "description": "Failed AssumeRole and credential-refresh calls per second. Silent before this dashboard existed; a spike here explains sudden AccessDenied errors.",
+          "description": "Failed role-assume and credential-refresh calls; a spike explains sudden access-denied errors.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -765,7 +781,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull", "sum"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -776,21 +792,22 @@
             {
               "refId": "O",
               "datasource": "${DS}",
-              "expr": "round(sum(increase(as3m_sts_assume_role_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", result=\"error\"}[$__rate_interval])))",
+              "expr": "round(sum(increase(as3m_sts_assume_role_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", result=\"error\"}[$__interval])))",
               "legendFormat": "assume-role errors"
             },
             {
               "refId": "P",
               "datasource": "${DS}",
-              "expr": "round(sum(increase(as3m_credentials_refreshed_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", result=\"error\"}[$__rate_interval])))",
+              "expr": "round(sum(increase(as3m_credentials_refreshed_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", result=\"error\"}[$__interval])))",
               "legendFormat": "refresh errors"
             }
-          ]
+          ],
+          "interval": "1m"
         }
       ]
     },
     {
-      "id": 24,
+      "id": 25,
       "type": "row",
       "title": "Auth & security",
       "collapsed": true,
@@ -805,7 +822,7 @@
           "id": 19,
           "type": "timeseries",
           "title": "Login outcomes",
-          "description": "Logins per second by outcome. Unknown usernames count as `invalid_password`, so this panel cannot be used to enumerate accounts.",
+          "description": "Login attempts by outcome: success, invalid password, or banned.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -833,7 +850,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull", "sum"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -844,21 +861,22 @@
             {
               "refId": "Q",
               "datasource": "${DS}",
-              "expr": "round(sum by (result) (increase(as3m_auth_logins_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
+              "expr": "round(sum by (result) (increase(as3m_auth_logins_total{job=\"$job\", instance=~\"$instance\"}[$__interval])))",
               "legendFormat": "{{result}}"
             }
-          ]
+          ],
+          "interval": "1m"
         },
         {
           "id": 20,
           "type": "timeseries",
-          "title": "Bans: rate & active",
-          "description": "Bans issued per second (a brute-force signal) and how many are currently in force. Admins are exempt from banning by design.",
+          "title": "Bans issued",
+          "description": "Bans issued after repeated failed logins — a brute-force signal. Admins are exempt.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
             "h": 8,
-            "w": 12,
+            "w": 8,
             "x": 12,
             "y": 18
           },
@@ -867,8 +885,8 @@
               "unit": "short",
               "min": 0,
               "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 12,
+                "drawStyle": "bars",
+                "fillOpacity": 60,
                 "showPoints": "never",
                 "stacking": {
                   "mode": "none"
@@ -881,7 +899,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -892,22 +910,60 @@
             {
               "refId": "R",
               "datasource": "${DS}",
-              "expr": "sum(rate(as3m_auth_bans_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval]))",
-              "legendFormat": "bans/s"
+              "expr": "round(sum(increase(as3m_auth_bans_total{job=\"$job\", instance=~\"$instance\"}[$__interval])))",
+              "legendFormat": "bans"
+            }
+          ],
+          "interval": "1m"
+        },
+        {
+          "id": 21,
+          "type": "stat",
+          "title": "Active bans",
+          "description": "Usernames currently banned.",
+          "datasource": "${DS}",
+          "transparent": true,
+          "gridPos": {
+            "h": 8,
+            "w": 4,
+            "x": 20,
+            "y": 18
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "green"
+              }
             },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": ["lastNotNull"],
+              "fields": "",
+              "values": false
+            },
+            "textMode": "value",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
             {
               "refId": "S",
               "datasource": "${DS}",
               "expr": "sum(as3m_auth_bans_active{job=\"$job\", instance=~\"$instance\"})",
-              "legendFormat": "active bans"
+              "legendFormat": "active"
             }
           ]
         },
         {
-          "id": 21,
+          "id": 22,
           "type": "timeseries",
           "title": "Upload rejections",
-          "description": "Uploads refused before reaching S3, by reason. A steady `size_limit` rate means the max upload size is set too low for your users.",
+          "description": "Uploads the server refused, e.g. over the size limit. The web UI blocks oversize files before sending, so this mostly reflects API and MCP uploads.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -935,7 +991,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull", "sum"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -946,16 +1002,17 @@
             {
               "refId": "T",
               "datasource": "${DS}",
-              "expr": "round(sum by (reason) (increase(as3m_upload_rejected_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
+              "expr": "round(sum by (reason) (increase(as3m_upload_rejected_total{job=\"$job\", instance=~\"$instance\"}[$__interval])))",
               "legendFormat": "{{reason}}"
             }
-          ]
+          ],
+          "interval": "1m"
         },
         {
-          "id": 22,
+          "id": 23,
           "type": "timeseries",
           "title": "Presigned URLs issued",
-          "description": "Shareable presigned links minted per second. A sudden burst of long-lived links is worth a security glance.",
+          "description": "Shareable download links issued, by bucket.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -983,7 +1040,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull", "sum"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -994,16 +1051,17 @@
             {
               "refId": "U",
               "datasource": "${DS}",
-              "expr": "round(sum by (bucket) (increase(as3m_presigned_urls_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", bucket=~\"$bucket\"}[$__rate_interval])))",
+              "expr": "round(sum by (bucket) (increase(as3m_presigned_urls_total{job=\"$job\", instance=~\"$instance\", role=~\"$role\", bucket=~\"$bucket\"}[$__interval])))",
               "legendFormat": "{{bucket}}"
             }
-          ]
+          ],
+          "interval": "1m"
         },
         {
-          "id": 23,
+          "id": 24,
           "type": "heatmap",
           "title": "Presigned URL TTLs granted",
-          "description": "Distribution of the lifetime granted to presigned links. A cluster at the 7-day ceiling means people are minting long-lived links.",
+          "description": "How long the issued links stay valid; a cluster at the top means long-lived links.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -1034,7 +1092,7 @@
       ]
     },
     {
-      "id": 30,
+      "id": 32,
       "type": "row",
       "title": "MCP (AI agents)",
       "collapsed": true,
@@ -1046,10 +1104,10 @@
       },
       "panels": [
         {
-          "id": 25,
+          "id": 26,
           "type": "timeseries",
           "title": "Tool calls",
-          "description": "MCP tool invocations per second by tool. This is AI-agent activity against your storage.",
+          "description": "MCP tool calls by tool — AI-agent activity against your storage.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -1077,7 +1135,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull", "sum"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -1088,16 +1146,17 @@
             {
               "refId": "V",
               "datasource": "${DS}",
-              "expr": "round(sum by (tool) (increase(as3m_mcp_tool_calls_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
+              "expr": "round(sum by (tool) (increase(as3m_mcp_tool_calls_total{job=\"$job\", instance=~\"$instance\"}[$__interval])))",
               "legendFormat": "{{tool}}"
             }
-          ]
+          ],
+          "interval": "1m"
         },
         {
-          "id": 26,
+          "id": 27,
           "type": "timeseries",
           "title": "Tool errors",
-          "description": "Failed MCP tool calls per second by tool and cause. Rising errors here mean agents are hitting permission or not-found walls.",
+          "description": "Failed MCP tool calls by tool and cause.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -1125,7 +1184,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull", "sum"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -1136,16 +1195,17 @@
             {
               "refId": "W",
               "datasource": "${DS}",
-              "expr": "round(sum by (tool, error_code) (increase(as3m_mcp_tool_calls_total{job=\"$job\", instance=~\"$instance\", error_code!=\"none\"}[$__rate_interval])))",
+              "expr": "round(sum by (tool, error_code) (increase(as3m_mcp_tool_calls_total{job=\"$job\", instance=~\"$instance\", error_code!=\"none\"}[$__interval])))",
               "legendFormat": "{{tool}} / {{error_code}}"
             }
-          ]
+          ],
+          "interval": "1m"
         },
         {
-          "id": 27,
+          "id": 28,
           "type": "timeseries",
           "title": "Safety guards firing",
-          "description": "Write attempts blocked by a read-only token or the deletion kill-switch, and reads refused for exceeding max_read_bytes or for being binary. Proof the MCP guards work.",
+          "description": "MCP writes blocked (read-only token or deletion disabled) and reads refused (too large or binary).",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -1173,7 +1233,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull", "sum"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -1184,28 +1244,72 @@
             {
               "refId": "X",
               "datasource": "${DS}",
-              "expr": "round(sum by (reason) (increase(as3m_mcp_writes_denied_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
+              "expr": "round(sum by (reason) (increase(as3m_mcp_writes_denied_total{job=\"$job\", instance=~\"$instance\"}[$__interval])))",
               "legendFormat": "denied: {{reason}}"
             },
             {
               "refId": "Y",
               "datasource": "${DS}",
-              "expr": "round(sum by (reason) (increase(as3m_mcp_reads_refused_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
+              "expr": "round(sum by (reason) (increase(as3m_mcp_reads_refused_total{job=\"$job\", instance=~\"$instance\"}[$__interval])))",
               "legendFormat": "refused: {{reason}}"
             }
-          ]
+          ],
+          "interval": "1m"
         },
         {
-          "id": 28,
-          "type": "timeseries",
-          "title": "Active tokens & churn",
-          "description": "MCP tokens currently valid, plus issue/revoke rate. A revoke spike may signal a credential-rotation event.",
+          "id": 29,
+          "type": "stat",
+          "title": "Active MCP tokens",
+          "description": "MCP tokens currently valid.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
             "h": 8,
-            "w": 12,
+            "w": 4,
             "x": 12,
+            "y": 27
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "green"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": ["lastNotNull"],
+              "fields": "",
+              "values": false
+            },
+            "textMode": "value",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "Z",
+              "datasource": "${DS}",
+              "expr": "sum(as3m_mcp_active_tokens{job=\"$job\", instance=~\"$instance\"})",
+              "legendFormat": "active"
+            }
+          ]
+        },
+        {
+          "id": 30,
+          "type": "timeseries",
+          "title": "Token churn",
+          "description": "MCP tokens issued and revoked; a revoke burst may mean a credential rotation.",
+          "datasource": "${DS}",
+          "transparent": true,
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
             "y": 27
           },
           "fieldConfig": {
@@ -1213,8 +1317,8 @@
               "unit": "short",
               "min": 0,
               "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 12,
+                "drawStyle": "bars",
+                "fillOpacity": 60,
                 "showPoints": "never",
                 "stacking": {
                   "mode": "none"
@@ -1227,7 +1331,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -1236,30 +1340,25 @@
           },
           "targets": [
             {
-              "refId": "Z",
-              "datasource": "${DS}",
-              "expr": "sum(as3m_mcp_active_tokens{job=\"$job\", instance=~\"$instance\"})",
-              "legendFormat": "active"
-            },
-            {
               "refId": "A",
               "datasource": "${DS}",
-              "expr": "sum(rate(as3m_mcp_tokens_issued_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval]))",
-              "legendFormat": "issued/s"
+              "expr": "round(sum(increase(as3m_mcp_tokens_issued_total{job=\"$job\", instance=~\"$instance\"}[$__interval])))",
+              "legendFormat": "issued"
             },
             {
               "refId": "B",
               "datasource": "${DS}",
-              "expr": "sum(rate(as3m_mcp_tokens_revoked_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval]))",
-              "legendFormat": "revoked/s"
+              "expr": "round(sum(increase(as3m_mcp_tokens_revoked_total{job=\"$job\", instance=~\"$instance\"}[$__interval])))",
+              "legendFormat": "revoked"
             }
-          ]
+          ],
+          "interval": "1m"
         },
         {
-          "id": 29,
+          "id": 31,
           "type": "heatmap",
           "title": "Tool response sizes",
-          "description": "Distribution of MCP tool JSON response sizes — a rough proxy for how much context each call feeds an agent (~4 bytes/token).",
+          "description": "How large MCP tool responses are — roughly how much context each call feeds an agent.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -1290,7 +1389,7 @@
       ]
     },
     {
-      "id": 36,
+      "id": 38,
       "type": "row",
       "title": "Runtime",
       "collapsed": true,
@@ -1302,10 +1401,10 @@
       },
       "panels": [
         {
-          "id": 31,
+          "id": 33,
           "type": "timeseries",
           "title": "CPU",
-          "description": "CPU seconds burned per second (≈ cores in use). Linux only — process_* reads /proc and is absent on other platforms.",
+          "description": "CPU cores in use — 1.0 = one full core, 0.5 = half. Linux only.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -1345,15 +1444,15 @@
               "refId": "C",
               "datasource": "${DS}",
               "expr": "rate(process_cpu_seconds_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])",
-              "legendFormat": "cpu"
+              "legendFormat": "{{instance}}"
             }
           ]
         },
         {
-          "id": 32,
+          "id": 34,
           "type": "timeseries",
           "title": "Resident memory",
-          "description": "Process resident set size. A steady climb that never plateaus is the classic leak shape. Linux only.",
+          "description": "Memory the app is using. A steady climb that never levels off suggests a leak. Linux only.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -1393,15 +1492,15 @@
               "refId": "D",
               "datasource": "${DS}",
               "expr": "process_resident_memory_bytes{job=\"$job\", instance=~\"$instance\"}",
-              "legendFormat": "rss"
+              "legendFormat": "{{instance}}"
             }
           ]
         },
         {
-          "id": 33,
+          "id": 35,
           "type": "timeseries",
           "title": "Open file descriptors",
-          "description": "Open FDs. Approaching the OS limit causes 'too many open files' errors. Linux only.",
+          "description": "Open file descriptors; nearing the OS limit causes 'too many open files'. Linux only.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -1441,15 +1540,15 @@
               "refId": "E",
               "datasource": "${DS}",
               "expr": "process_open_fds{job=\"$job\", instance=~\"$instance\"}",
-              "legendFormat": "fds"
+              "legendFormat": "{{instance}}"
             }
           ]
         },
         {
-          "id": 34,
+          "id": 36,
           "type": "timeseries",
           "title": "DB query latency p95",
-          "description": "95th-percentile SQLite query duration by statement type. A rising p95 usually means the data dir's disk is slow.",
+          "description": "95% of database queries finish faster than this, by type.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -1494,10 +1593,10 @@
           ]
         },
         {
-          "id": 35,
+          "id": 37,
           "type": "timeseries",
           "title": "DB errors",
-          "description": "Failed SQLAlchemy statements per second by type. Non-zero here means the app is struggling to read/write its own state.",
+          "description": "Failed database statements by type; non-zero means the app can't read/write its own state.",
           "datasource": "${DS}",
           "transparent": true,
           "gridPos": {
@@ -1525,7 +1624,7 @@
             "legend": {
               "displayMode": "table",
               "placement": "bottom",
-              "calcs": ["min", "max", "mean", "lastNotNull", "sum"]
+              "calcs": ["max", "lastNotNull", "sum"]
             },
             "tooltip": {
               "mode": "multi",
@@ -1536,10 +1635,11 @@
             {
               "refId": "G",
               "datasource": "${DS}",
-              "expr": "round(sum by (operation) (increase(as3m_db_errors_total{job=\"$job\", instance=~\"$instance\"}[$__rate_interval])))",
+              "expr": "round(sum by (operation) (increase(as3m_db_errors_total{job=\"$job\", instance=~\"$instance\"}[$__interval])))",
               "legendFormat": "{{operation}}"
             }
-          ]
+          ],
+          "interval": "1m"
         }
       ]
     }
