@@ -1,0 +1,13 @@
+# Auto-provision the Prometheus datasource so the bundled Grafana works with
+# zero clicks. The dashboard itself uses a `${DS}` template variable (not this
+# datasource's UID) so it stays portable when imported into someone else's
+# Grafana — this provisioning is only for our local stack.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

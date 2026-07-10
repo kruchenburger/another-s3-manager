@@ -1,0 +1,13 @@
+# Scrape config for the bundled local observability stack
+# (docker/docker-compose.observability.yml). Reaches the app by its compose
+# service name over the shared network. /metrics is open in the dev stack
+# (no METRICS_PASSWORD), so no basic_auth here.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: another-s3-manager
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["app:8080"]

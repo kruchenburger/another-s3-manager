@@ -1,0 +1,14 @@
+# Load JSON dashboards from a directory and re-read them periodically, so
+# hand-edits to docs/grafana-dashboard.json (mounted into the path below)
+# show up on a browser refresh — this is the authoring loop. The dashboard
+# file is the source of truth; the Grafana UI is for looking, not editing.
+apiVersion: 1
+
+providers:
+  - name: as3m
+    type: file
+    updateIntervalSeconds: 10
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

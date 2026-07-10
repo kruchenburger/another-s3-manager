@@ -1,0 +1,39 @@
+# Local observability stack — Prometheus + Grafana, pre-wired to scrape the app
+# and auto-load the bundled dashboard. Overlay on the base compose:
+#
+#   docker compose -f docker-compose.yml -f docker/docker-compose.observability.yml up --build
+#
+# then open http://localhost:3000 (anonymous admin, no login). Prometheus is on
+# :9090. This is a dev/self-host convenience — it never enters the app image and
+# never runs in CI.
+#
+# Relative volume paths resolve from the project directory (the base
+# docker-compose.yml's dir = repo root), because that file is the first `-f`.
+services:
+  prometheus:
+    # Pinned per docker.md "Never use :latest — supply chain risk".
+    image: prom/prometheus:v3.1.0
+    container_name: another-s3-manager-prometheus
+    volumes:
+      - ./docker/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${PROM_PORT:-9090}:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.0
+    container_name: another-s3-manager-grafana
+    environment:
+      # Anonymous admin so "one command" needs no login for local use.
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_USERS_DEFAULT_THEME=light
+    volumes:
+      - ./docker/observability/provisioning:/etc/grafana/provisioning:ro
+      - ./docs/grafana-dashboard.json:/var/lib/grafana/dashboards/as3m.json:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
