@@ -96,6 +96,39 @@ def test_auth_banned_login_metric_and_active_bans_gauge(app_client):
     assert "as3m_auth_bans_active 1.0" in body  # fresh per-test DB → exactly one active ban
 
 
+def test_ban_increments_the_counter(monkeypatch):
+    import another_s3_manager.auth as auth
+    import another_s3_manager.users as users
+
+    before = _sample("as3m_auth_bans_total", {})
+
+    saved: dict = {}
+    monkeypatch.setattr(users, "load_bans", lambda: {})
+    monkeypatch.setattr(users, "save_bans", lambda bans: saved.update(bans))
+
+    _seed_user("victim", "pw12345678")  # non-admin, so the ban path is reachable
+    for _ in range(3):
+        auth.record_login_attempt("victim", success=False)
+
+    assert "victim" in saved
+    assert _sample("as3m_auth_bans_total", {}) == before + 1
+
+
+def test_admin_is_never_banned_and_never_counted(monkeypatch):
+    """Admins are exempt by design (DoS protection on the predictable name)."""
+    import another_s3_manager.auth as auth
+    import another_s3_manager.users as users
+
+    before = _sample("as3m_auth_bans_total", {})
+    monkeypatch.setattr(users, "load_bans", lambda: {})
+    monkeypatch.setattr(users, "save_bans", lambda bans: None)
+
+    for _ in range(5):
+        auth.record_login_attempt("admin", success=False)
+
+    assert _sample("as3m_auth_bans_total", {}) == before
+
+
 OLD_NAMES = [
     "http_requests_total",
     "http_request_duration_seconds",

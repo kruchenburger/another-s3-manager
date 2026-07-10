@@ -70,6 +70,13 @@ auth_bans_active = Gauge(
     "Active bans (banned_until > now)",
     registry=REGISTRY,
 )
+# The companion to auth_bans_active. A Gauge cannot be rate()d, so the gauge
+# alone cannot answer "how many bans this hour" — which is the brute-force signal.
+auth_bans_total = Counter(
+    "as3m_auth_bans_total",
+    "Bans issued after repeated failed logins",
+    registry=REGISTRY,
+)
 
 # --- S3 ops ---
 s3_operations_total = Counter(
