@@ -118,8 +118,9 @@ s3_objects_total = Counter(
     registry=REGISTRY,
 )
 # Only `credentials_expired` is emitted today: our loop retries solely on an
-# expired-credential error. Botocore's own throttle retries happen below us and
-# are invisible — never invent a `throttled` reason here.
+# expired-credential error, on BOTH of its retry branches (client acquisition and
+# the operation itself). Botocore's own throttle retries happen below us and are
+# invisible — never invent a `throttled` reason here.
 s3_retries_total = Counter(
     "as3m_s3_retries_total",
     "Transparent S3 retries performed by the app",

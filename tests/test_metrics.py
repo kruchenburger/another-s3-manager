@@ -270,11 +270,8 @@ def test_upload_and_copy_count_one_object_each():
         assert _sample("as3m_s3_objects_total", labels) == before + 1
 
 
-def test_expired_credentials_retry_is_counted(monkeypatch):
-    """`_execute_with_retry_inner` calls `get_s3_client(role_name)` (s3_client.py:675).
-
-    First call raises an expired-credential error, second succeeds — exactly one retry.
-    """
+def test_expired_credentials_retry_is_counted_on_client_acquisition(monkeypatch):
+    """Branch A: get_s3_client() raises expired creds, the retry succeeds — counted once."""
     import another_s3_manager.s3_client as sc
 
     labels = {"reason": "credentials_expired"}
@@ -293,6 +290,36 @@ def test_expired_credentials_retry_is_counted(monkeypatch):
 
     assert sc._execute_with_retry_inner("r1", lambda _client: "ok") == "ok"
     assert attempts["n"] == 2
+    assert _sample("as3m_s3_retries_total", labels) == before + 1
+
+
+def test_expired_credentials_retry_is_counted_on_operation(monkeypatch):
+    """Branch B: the client is fine but the S3 OPERATION raises expired creds.
+
+    `_execute_with_retry_inner` has a second retry branch for a mid-operation
+    expiry — it clears caches and re-runs the callback. That branch must also
+    increment the counter, or credential churn during operations is invisible.
+    """
+    import another_s3_manager.s3_client as sc
+
+    labels = {"reason": "credentials_expired"}
+    before = _sample("as3m_s3_retries_total", labels)
+
+    monkeypatch.setattr(sc, "get_s3_client", lambda _role_name: object())
+    monkeypatch.setattr(sc, "_is_expired_credentials_error", lambda _e: True)
+    monkeypatch.setattr(sc, "invalidate_s3_client", lambda _role_name: None)
+    monkeypatch.setattr(sc, "_clear_boto3_cached_credentials", lambda: None)
+
+    calls = {"n": 0}
+
+    def _callback(_client):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("ExpiredToken")  # operation fails on expired creds
+        return "ok"
+
+    assert sc._execute_with_retry_inner("r1", _callback) == "ok"
+    assert calls["n"] == 2  # a real retry happened
     assert _sample("as3m_s3_retries_total", labels) == before + 1
 
 

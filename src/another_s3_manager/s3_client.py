@@ -749,6 +749,12 @@ def _execute_with_retry_inner(role_name: Optional[str], callback: Callable[[AnyT
             )
 
             if attempts == 0 and is_expired:
+                from another_s3_manager.metrics import s3_retries_total
+
+                # Same expired-credential retry as the get_s3_client() branch above,
+                # but triggered by the operation itself. Count it too, or the metric
+                # under-reports credential churn.
+                s3_retries_total.labels(reason="credentials_expired").inc()
                 logger.info(
                     "Invalidating cached client for role '%s' due to expired credentials; "
                     "forcing eks-pod-identity refresh",

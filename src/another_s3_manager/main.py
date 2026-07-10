@@ -283,7 +283,8 @@ def _check_metrics_auth(request: Request) -> None:
 
 
 # Scrape-time callbacks. Computing at scrape time (rather than hooking every
-# mutation) means the gauge can never drift out of sync with the database.
+# mutation) means the gauge can never drift out of sync with its source of truth
+# (the database, or config.json for roles_gauge).
 auth_bans_active.set_function(lambda: float(len(load_bans())))
 mcp_active_tokens.set_function(lambda: float(count_active_tokens()))
 users_gauge.set_function(lambda: float(count_users()))
