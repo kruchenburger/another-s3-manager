@@ -168,6 +168,21 @@ mcp_active_tokens = Gauge(
     "Active (non-revoked) API tokens",
     registry=REGISTRY,
 )
+# The observable proof that the MCP safety model actually fires: read-only
+# tokens, the deletion kill-switch, and the per-token read cap.
+mcp_writes_denied_total = Counter(
+    "as3m_mcp_writes_denied_total",
+    "MCP write attempts blocked by a guard",
+    ["tool", "reason"],  # writes_disabled | read_only_token | deletion_disabled
+    registry=REGISTRY,
+)
+# NOT "truncated": read_file refuses outright, it never clips a file.
+mcp_reads_refused_total = Counter(
+    "as3m_mcp_reads_refused_total",
+    "MCP read_file calls refused by a guard",
+    ["tool", "reason"],  # file_too_large | binary_content
+    registry=REGISTRY,
+)
 
 # --- STS / credential lifecycle ---
 sts_assume_role_total = Counter(

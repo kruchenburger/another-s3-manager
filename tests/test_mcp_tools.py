@@ -790,6 +790,44 @@ async def test_copy_object_move_blocked_when_deletion_disabled(alice_user, tool_
 
 
 @pytest.mark.asyncio
+async def test_copy_object_move_blocked_when_deletion_disabled_is_counted(alice_user, tool_registry, monkeypatch):
+    """copy_object's own deletion guard (outside assert_write_allowed) must still
+    increment mcp_writes_denied_total{tool="copy_object", reason="deletion_disabled"}.
+    """
+    from another_s3_manager.metrics import REGISTRY
+
+    def _sample(name: str, labels: dict) -> float:
+        return REGISTRY.get_sample_value(name, labels) or 0.0
+
+    _, plaintext = alice_user
+    import another_s3_manager.config as config_mod
+
+    original_load = config_mod.load_config
+
+    def _no_delete(force_reload=False):
+        return {**original_load(force_reload=force_reload), "disable_deletion": True}
+
+    monkeypatch.setattr("another_s3_manager.mcp_server._config_module.load_config", _no_delete)
+    labels = {"tool": "copy_object", "reason": "deletion_disabled"}
+    before = _sample("as3m_mcp_writes_denied_total", labels)
+    with patch("another_s3_manager.s3_client.copy_object_for_role"):
+        with pytest.raises(McpError) as exc_info:
+            await _call(
+                tool_registry,
+                "copy_object",
+                _fake_request(plaintext),
+                role="Default",
+                source_bucket="b",
+                source_path="a.txt",
+                dest_bucket="b",
+                dest_path="c.txt",
+                delete_source=True,
+            )
+    assert exc_info.value.code == "DELETION_DISABLED"
+    assert _sample("as3m_mcp_writes_denied_total", labels) == before + 1
+
+
+@pytest.mark.asyncio
 async def test_copy_object_bucket_not_allowed(alice_user, tool_registry):
     """PermissionError mentioning bucket -> BUCKET_NOT_ALLOWED."""
     _, plaintext = alice_user

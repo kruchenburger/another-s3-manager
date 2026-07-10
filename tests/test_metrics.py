@@ -4,6 +4,8 @@ import os
 
 import pytest
 
+from another_s3_manager.mcp_server import McpError, assert_write_allowed
+
 
 def test_metrics_endpoint_returns_prometheus_text(app_client):
     resp = app_client.get("/metrics")
@@ -374,3 +376,48 @@ def test_oversize_upload_is_counted_as_size_limit(app_client, monkeypatch):
 
     assert resp.status_code == 400
     assert _sample("as3m_upload_rejected_total", labels) == before + 1
+
+
+# ---------------------------------------------------------------------------
+# MCP guard metrics — writes denied, reads refused (Task 11)
+# ---------------------------------------------------------------------------
+
+
+class _Tok:
+    """Minimal stub for assert_write_allowed's token parameter."""
+
+    def __init__(self, read_only=False):
+        self.is_read_only = read_only
+
+
+@pytest.mark.parametrize(
+    ("token", "config", "tool", "reason"),
+    [
+        (_Tok(), {"mcp_disable_writes": True}, "upload_file", "writes_disabled"),
+        (_Tok(read_only=True), {}, "upload_file", "read_only_token"),
+        (_Tok(), {"disable_deletion": True}, "delete_file", "deletion_disabled"),
+    ],
+)
+def test_denied_write_is_counted_with_its_reason(token, config, tool, reason):
+    labels = {"tool": tool, "reason": reason}
+    before = _sample("as3m_mcp_writes_denied_total", labels)
+    with pytest.raises(McpError):
+        assert_write_allowed(token, tool, config)
+    assert _sample("as3m_mcp_writes_denied_total", labels) == before + 1
+
+
+def test_allowed_write_counts_nothing():
+    labels = {"tool": "upload_file", "reason": "read_only_token"}
+    before = _sample("as3m_mcp_writes_denied_total", labels)
+    assert_write_allowed(_Tok(), "upload_file", {})
+    assert _sample("as3m_mcp_writes_denied_total", labels) == before
+
+
+def test_reads_refused_counter_labels():
+    from another_s3_manager.metrics import mcp_reads_refused_total
+
+    for reason in ("file_too_large", "binary_content"):
+        labels = {"tool": "read_file", "reason": reason}
+        before = _sample("as3m_mcp_reads_refused_total", labels)
+        mcp_reads_refused_total.labels(**labels).inc()
+        assert _sample("as3m_mcp_reads_refused_total", labels) == before + 1
