@@ -79,9 +79,9 @@ from another_s3_manager.metrics import (
     http_requests_in_flight,
     http_requests_total,
     mcp_active_tokens,
-    roles_total,
+    roles_gauge,
     upload_rejected_total,
-    users_total,
+    users_gauge,
 )
 from another_s3_manager.s3_client import (
     clear_s3_clients_cache,
@@ -286,8 +286,8 @@ def _check_metrics_auth(request: Request) -> None:
 # mutation) means the gauge can never drift out of sync with the database.
 auth_bans_active.set_function(lambda: float(len(load_bans())))
 mcp_active_tokens.set_function(lambda: float(count_active_tokens()))
-users_total.set_function(lambda: float(count_users()))
-roles_total.set_function(lambda: float(len(load_config(force_reload=False).get("roles", []))))
+users_gauge.set_function(lambda: float(count_users()))
+roles_gauge.set_function(lambda: float(len(load_config(force_reload=False).get("roles", []))))
 
 
 @app.get("/metrics")

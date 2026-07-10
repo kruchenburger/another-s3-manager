@@ -483,7 +483,7 @@ def test_token_issue_and_revoke_counters(app_client):
 def test_users_and_roles_gauges(app_client, monkeypatch):
     _seed_user("gaugecount", "pw12345678")
     app_client.get("/metrics")
-    assert _sample("as3m_users_total", {}) >= 1
+    assert _sample("as3m_users", {}) >= 1
 
     from another_s3_manager import main as main_module
 
@@ -491,7 +491,7 @@ def test_users_and_roles_gauges(app_client, monkeypatch):
         main_module, "load_config", lambda force_reload=False: {"roles": [{"name": "a"}, {"name": "b"}]}
     )
     app_client.get("/metrics")
-    assert _sample("as3m_roles_total", {}) == 2.0
+    assert _sample("as3m_roles", {}) == 2.0
 
 
 def test_db_error_is_counted():

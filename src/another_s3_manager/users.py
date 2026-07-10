@@ -70,7 +70,7 @@ def load_users() -> Dict[str, Any]:
 
 
 def count_users() -> int:
-    """Number of registered users. Used by the as3m_users_total gauge."""
+    """Number of registered users. Used by the as3m_users gauge."""
     with session_scope() as session:
         return session.execute(select(func.count(User.id))).scalar_one()
 

@@ -244,8 +244,12 @@ db_errors_total = Counter(
 )
 
 # --- Overview gauges ---
-users_total = Gauge("as3m_users_total", "Registered users", registry=REGISTRY)
-roles_total = Gauge("as3m_roles_total", "Configured S3 roles", registry=REGISTRY)
+# The Python variable names have _gauge suffix to avoid colliding with the users module
+# (imported in main.py). The exported metric names deliberately omit _total because these
+# are gauges (point-in-time snapshots), not counters (cumulative values). Prometheus reserves
+# _total for counters; promtool flags any non-counter carrying it.
+users_gauge = Gauge("as3m_users", "Registered users", registry=REGISTRY)
+roles_gauge = Gauge("as3m_roles", "Configured S3 roles", registry=REGISTRY)
 
 # Populate static app info at module load time (env vars are stable after startup)
 app_info.info(
