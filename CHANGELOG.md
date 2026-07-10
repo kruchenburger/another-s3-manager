@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Runtime metrics under their standard names: `process_cpu_seconds_total`,
   `process_resident_memory_bytes`, `process_open_fds`,
   `process_start_time_seconds` (Linux only) and `python_info`.
+- A ready-made **Grafana dashboard** (`docs/grafana-dashboard.json`) over the
+  whole metric set — Overview, Storage, S3 health, Auth & security, MCP, and
+  Runtime rows, each panel described. It imports into any Grafana via a
+  datasource variable (no hardwired UID). Plus a one-command local
+  Prometheus + Grafana stack (`docker/docker-compose.observability.yml`) that
+  scrapes the app and auto-loads the dashboard — see `docs/observability.md`.
 
 ### Fixed
 

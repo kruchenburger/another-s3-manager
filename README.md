@@ -45,7 +45,7 @@ For a `docker compose` setup see [`docker-compose.example.yml`](docker-compose.e
 - **Server-side search** — prefix search inside folders too large to load client-side
 - **User management** — per-role and per-bucket access, configurable password policy, forced first-login password change
 - **MCP server** — AI agents (Claude Desktop, Cursor) browse the same storage with the same permissions
-- **Observability** — Prometheus `/metrics`, optional structured JSON logs (see [docs/observability.md](docs/observability.md))
+- **Observability** — Prometheus `/metrics` with a ready-made Grafana dashboard, optional structured JSON logs (see [docs/observability.md](docs/observability.md))
 - **Security** — JWT in an httpOnly cookie, bcrypt passwords, CSRF protection, per-username ban after failed logins
 - **Dark / light theme**
 

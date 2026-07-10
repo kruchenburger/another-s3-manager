@@ -131,6 +131,38 @@ you alert on them:
   true current token count, read the `as3m_mcp_active_tokens` gauge — these two
   are for churn _rate_, not an exact ledger.
 
+## Grafana dashboard
+
+A ready-made dashboard covering the whole metric set lives at
+[`docs/grafana-dashboard.json`](grafana-dashboard.json) — six rows (Overview,
+Storage activity, S3 health, Auth & security, MCP, Runtime) with a short
+description on every panel.
+
+**Import it** into your Grafana: Dashboards → New → Import → upload the JSON (or
+paste it). It uses a `Data source` template variable, so on import — and via the
+dropdown at the top — you pick which Prometheus it queries; nothing is hardwired,
+so it drops cleanly into an existing Grafana alongside your other dashboards.
+
+**Or run the bundled stack** (Prometheus + Grafana, pre-wired to scrape the app
+and auto-load the dashboard) for a zero-setup look:
+
+```bash
+docker compose -f docker-compose.yml -f docker/docker-compose.observability.yml up --build
+```
+
+Then open <http://localhost:3000> (anonymous admin, no login); Prometheus is on
+`:9090`. Override ports with `GRAFANA_PORT` / `PROM_PORT` if they're taken. This
+stack is a dev/self-host convenience — it never enters the app image or CI.
+
+The dashboard file is the source of truth: edit `docs/grafana-dashboard.json` by
+hand, never by exporting from the Grafana UI (an export bakes in a concrete
+datasource UID and breaks portability). A pytest suite
+(`tests/test_grafana_dashboard.py`) enforces the invariants — transparent panels,
+per-panel descriptions, `${DS}` everywhere, `$__rate_interval`, and that every
+metric a panel queries actually exists. An opt-in live smoke (bring the stack up,
+then `E2E_GRAFANA=1 uv run pytest tests/test_grafana_dashboard.py -k live`)
+confirms Grafana loads it end-to-end.
+
 ## Upgrading from v1.0.x
 
 Every application metric was renamed under an `as3m_` namespace, and three
