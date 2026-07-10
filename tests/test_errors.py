@@ -199,6 +199,11 @@ def _client_error_minimal(code: str, status: int = 500):
         ("ExpiredToken", 401, CredentialsExpiredError),
         ("InvalidRegion", 400, S3ConfigError),
         ("SomethingWeird", 500, S3OperationError),
+        # Pin precedence: specific error codes win over the generic 503 catch-all
+        ("AccessDenied", 503, S3AccessDeniedError),
+        ("NoSuchBucket", 503, S3NotFoundError),
+        ("ExpiredToken", 503, CredentialsExpiredError),
+        ("InvalidRegion", 503, S3ConfigError),
     ],
 )
 def test_classify_boto_error_throttling(code, status, expected_cls):

@@ -115,6 +115,12 @@ def classify_boto_error(error: BaseException) -> S3OperationError:
     botocore-side errors (EndpointConnectionError etc) which don't carry
     response dicts.
 
+    Classifies by bucket in order: expired tokens, access denied, not found,
+    config errors, then throttling (code in _THROTTLED_CODES or HTTP 503).
+    The specific-code buckets are checked before the generic 503 catch-all,
+    ensuring that e.g. an AccessDenied response with HTTP 503 still classifies
+    as S3AccessDeniedError, not S3ThrottledError.
+
     For an unknown error code or a non-boto exception, returns a base
     `S3OperationError` with `code="Unknown"` and `http_status=500`.
     """
