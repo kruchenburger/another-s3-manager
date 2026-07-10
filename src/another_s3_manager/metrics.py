@@ -62,7 +62,10 @@ auth_bans_active = Gauge(
 s3_operations_total = Counter(
     "as3m_s3_operations_total",
     "S3 operations executed",
-    ["role", "operation", "result"],  # operation: list|get|put|delete|head; result: ok|error
+    # operation: list|get|put|delete|head
+    # error_code: none (success) | access_denied | not_found | credentials_expired
+    #             | network_error | config_error | throttled | other
+    ["role", "operation", "error_code"],
     registry=REGISTRY,
 )
 s3_operation_duration_seconds = Histogram(

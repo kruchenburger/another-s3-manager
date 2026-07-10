@@ -655,17 +655,17 @@ def test_execute_with_s3_retry_clears_cache_on_expired_creds(mocker):
 
 
 def test_execute_with_s3_retry_increments_operations_counter(monkeypatch):
-    """Verify s3_operations_total{operation=head, result=ok} increments after a successful call."""
+    """Verify s3_operations_total{operation=head, error_code=none} increments after a successful call."""
     import another_s3_manager.s3_client as s3_client_mod
     from another_s3_manager import metrics
 
-    def count(role: str, op: str, result: str) -> float:
+    def count(role: str, op: str, error_code: str) -> float:
         for sample in metrics.s3_operations_total.collect()[0].samples:
             if (
                 sample.name.endswith("_total")
                 and sample.labels.get("role") == role
                 and sample.labels.get("operation") == op
-                and sample.labels.get("result") == result
+                and sample.labels.get("error_code") == error_code
             ):
                 return sample.value
         return 0.0
@@ -679,26 +679,26 @@ def test_execute_with_s3_retry_increments_operations_counter(monkeypatch):
 
     monkeypatch.setattr(s3_client_mod, "get_s3_client", lambda _name=None: _FakeClient())
 
-    before = count(unique_role, "head", "ok")
+    before = count(unique_role, "head", "none")
     s3_client_mod.execute_with_s3_retry(unique_role, "head", lambda c: c.head_object())
-    after = count(unique_role, "head", "ok")
+    after = count(unique_role, "head", "none")
     assert after == before + 1
 
 
 def test_execute_with_s3_retry_increments_error_counter_on_failure(monkeypatch):
-    """Verify s3_operations_total{operation=head, result=error} increments when callback raises."""
+    """Verify s3_operations_total{operation=head, error_code=other} increments when callback raises."""
     import pytest
 
     import another_s3_manager.s3_client as s3_client_mod
     from another_s3_manager import metrics
 
-    def count(role: str, op: str, result: str) -> float:
+    def count(role: str, op: str, error_code: str) -> float:
         for sample in metrics.s3_operations_total.collect()[0].samples:
             if (
                 sample.name.endswith("_total")
                 and sample.labels.get("role") == role
                 and sample.labels.get("operation") == op
-                and sample.labels.get("result") == result
+                and sample.labels.get("error_code") == error_code
             ):
                 return sample.value
         return 0.0
@@ -712,10 +712,10 @@ def test_execute_with_s3_retry_increments_error_counter_on_failure(monkeypatch):
 
     monkeypatch.setattr(s3_client_mod, "get_s3_client", lambda _name=None: _BadClient())
 
-    before = count(unique_role, "head", "error")
+    before = count(unique_role, "head", "other")
     with pytest.raises(RuntimeError):
         s3_client_mod.execute_with_s3_retry(unique_role, "head", lambda c: c.head_object())
-    after = count(unique_role, "head", "error")
+    after = count(unique_role, "head", "other")
     assert after == before + 1
 
 

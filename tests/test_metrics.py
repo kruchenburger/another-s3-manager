@@ -144,3 +144,30 @@ def test_process_collector_registered(app_client):
     body = app_client.get("/metrics").text
     assert "process_cpu_seconds_total" in body
     assert "process_resident_memory_bytes" in body
+
+
+def test_s3_operations_success_is_labelled_none(monkeypatch):
+    from another_s3_manager import s3_client as sc
+
+    monkeypatch.setattr(sc, "_execute_with_retry_inner", lambda _role, _cb: "ok")
+
+    labels = {"role": "r1", "operation": "list", "error_code": "none"}
+    before = _sample("as3m_s3_operations_total", labels)
+    assert sc.execute_with_s3_retry("r1", "list", lambda _client: "ok") == "ok"
+    assert _sample("as3m_s3_operations_total", labels) == before + 1
+
+
+def test_s3_operations_failure_is_labelled_by_cause(monkeypatch):
+    from another_s3_manager import s3_client as sc
+    from another_s3_manager.errors import S3AccessDeniedError
+
+    def _boom(_role, _callback):
+        raise S3AccessDeniedError("AccessDenied", "nope")
+
+    monkeypatch.setattr(sc, "_execute_with_retry_inner", _boom)
+
+    labels = {"role": "r1", "operation": "get", "error_code": "access_denied"}
+    before = _sample("as3m_s3_operations_total", labels)
+    with pytest.raises(S3AccessDeniedError):
+        sc.execute_with_s3_retry("r1", "get", lambda _c: None)
+    assert _sample("as3m_s3_operations_total", labels) == before + 1

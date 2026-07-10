@@ -769,6 +769,7 @@ def execute_with_s3_retry(role_name: Optional[str], operation: str, callback: Ca
     Raises:
         Exception: Re-raises the original exception if retry is not possible.
     """
+    from another_s3_manager.errors import error_code_label
     from another_s3_manager.metrics import (
         s3_operation_duration_seconds,
         s3_operations_total,
@@ -779,10 +780,12 @@ def execute_with_s3_retry(role_name: Optional[str], operation: str, callback: Ca
     start = time.perf_counter()
     try:
         result = _execute_with_retry_inner(role_name, callback)
-        s3_operations_total.labels(role=role_lbl, operation=operation, result="ok").inc()
+        s3_operations_total.labels(role=role_lbl, operation=operation, error_code="none").inc()
         return result
-    except Exception:
-        s3_operations_total.labels(role=role_lbl, operation=operation, result="error").inc()
+    except Exception as exc:
+        s3_operations_total.labels(
+            role=role_lbl, operation=operation, error_code=error_code_label(exc)
+        ).inc()
         raise
     finally:
         s3_operation_duration_seconds.labels(operation=operation).observe(time.perf_counter() - start)
