@@ -508,3 +508,37 @@ def test_db_error_is_counted():
             s.execute(text("SELECT * FROM table_that_does_not_exist"))
 
     assert _sample("as3m_db_errors_total", labels) == before + 1
+
+
+# ---------------------------------------------------------------------------
+# Structural guard: every declared metric must be used (Task 14)
+# ---------------------------------------------------------------------------
+
+_ALLOWED_WITHOUT_CALL_SITE = {
+    # Populated by prometheus_client itself at definition time.
+    "app_info",
+}
+
+
+def test_no_dead_metrics():
+    """Every declared metric must be referenced somewhere in src/, or be allowlisted.
+
+    Regression guard: `mcp_active_tokens` shipped in v1.0.0 defined, documented
+    and exported — and never once written to. It always read 0.
+    """
+    from prometheus_client.metrics import MetricWrapperBase
+
+    import another_s3_manager.metrics as metrics_module
+
+    src = __import__("pathlib").Path(metrics_module.__file__).parent
+    other_sources = "\n".join(p.read_text(encoding="utf-8") for p in src.rglob("*.py") if p.name != "metrics.py")
+
+    declared = {
+        name
+        for name, obj in vars(metrics_module).items()
+        if isinstance(obj, MetricWrapperBase) and not name.startswith("_")
+    }
+    assert declared, "sanity: no metrics discovered"
+
+    dead = sorted(name for name in declared if name not in _ALLOWED_WITHOUT_CALL_SITE and name not in other_sources)
+    assert not dead, f"Declared but never used: {dead}"
