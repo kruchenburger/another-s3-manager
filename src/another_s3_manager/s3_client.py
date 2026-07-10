@@ -1603,7 +1603,16 @@ def generate_presigned_url_for_role(
             ExpiresIn=expires_in,
         )
 
-    return execute_with_s3_retry(validated_role, "get", do_presign)
+    from another_s3_manager.metrics import (
+        presigned_url_ttl_seconds,
+        presigned_urls_total,
+        safe_role_label,
+    )
+
+    url = execute_with_s3_retry(validated_role, "get", do_presign)
+    presigned_urls_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc()
+    presigned_url_ttl_seconds.observe(expires_in)
+    return url
 
 
 def put_object_for_role(

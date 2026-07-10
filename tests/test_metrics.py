@@ -268,3 +268,21 @@ def test_sts_and_refresh_counters_exist_and_label_result():
             before = _sample(name, labels)
             metric.labels(**labels).inc()
             assert _sample(name, labels) == before + 1
+
+
+def test_presigned_url_generation_is_counted(monkeypatch):
+    import another_s3_manager.s3_client as sc
+
+    labels = {"role": "r1", "bucket": "b1"}
+    before = _sample("as3m_presigned_urls_total", labels)
+    ttl_before = _sample("as3m_presigned_url_ttl_seconds_count", {})
+
+    monkeypatch.setattr(sc, "_validate_bucket_access", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "validate_role_access", lambda role, _u: role)
+    monkeypatch.setattr(sc, "execute_with_s3_retry", lambda _r, _op, cb: "https://signed")
+
+    url = sc.generate_presigned_url_for_role("r1", "b1", "k.txt", {"username": "u"}, expires_in=900)
+
+    assert url == "https://signed"
+    assert _sample("as3m_presigned_urls_total", labels) == before + 1
+    assert _sample("as3m_presigned_url_ttl_seconds_count", {}) == ttl_before + 1

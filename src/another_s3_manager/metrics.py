@@ -163,6 +163,22 @@ credentials_refreshed_total = Counter(
     registry=REGISTRY,
 )
 
+# --- Presigned URLs ---
+presigned_urls_total = Counter(
+    "as3m_presigned_urls_total",
+    "Presigned GET URLs issued",
+    ["role", "bucket"],
+    registry=REGISTRY,
+)
+# Unlabeled on purpose: role × bucket × buckets would multiply for no benefit.
+# Boundaries mirror the TTL choices the UI offers (1m, 5m, 15m, 1h, 6h, 1d, 7d).
+presigned_url_ttl_seconds = Histogram(
+    "as3m_presigned_url_ttl_seconds",
+    "Lifetime granted to issued presigned URLs",
+    buckets=(60, 300, 900, 3600, 21600, 86400, 604800),
+    registry=REGISTRY,
+)
+
 # --- App health ---
 # Info("as3m_app", ...) exports the series `as3m_app_info`.
 app_info = Info("as3m_app", "Application info", registry=REGISTRY)
