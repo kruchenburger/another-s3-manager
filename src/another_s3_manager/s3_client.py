@@ -679,6 +679,9 @@ def _execute_with_retry_inner(role_name: Optional[str], callback: Callable[[AnyT
 
             if is_expired and attempts == 0:
                 # First attempt failed with expired credentials, clear cache and retry
+                from another_s3_manager.metrics import s3_retries_total
+
+                s3_retries_total.labels(reason="credentials_expired").inc()
                 logger.warning(
                     f"Failed to get S3 client for role '{role_name}' (expired credentials detected), "
                     f"clearing cache and retrying",

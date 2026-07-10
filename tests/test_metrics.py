@@ -228,3 +228,29 @@ def test_upload_and_copy_count_one_object_each():
         before = _sample("as3m_s3_objects_total", labels)
         s3_objects_total.labels(**labels).inc()
         assert _sample("as3m_s3_objects_total", labels) == before + 1
+
+
+def test_expired_credentials_retry_is_counted(monkeypatch):
+    """`_execute_with_retry_inner` calls `get_s3_client(role_name)` (s3_client.py:675).
+
+    First call raises an expired-credential error, second succeeds — exactly one retry.
+    """
+    import another_s3_manager.s3_client as sc
+
+    labels = {"reason": "credentials_expired"}
+    before = _sample("as3m_s3_retries_total", labels)
+
+    attempts = {"n": 0}
+
+    def _get_client(_role_name):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("ExpiredToken")
+        return object()
+
+    monkeypatch.setattr(sc, "get_s3_client", _get_client)
+    monkeypatch.setattr(sc, "_is_expired_credentials_error", lambda _e: True)
+
+    assert sc._execute_with_retry_inner("r1", lambda _client: "ok") == "ok"
+    assert attempts["n"] == 2
+    assert _sample("as3m_s3_retries_total", labels) == before + 1

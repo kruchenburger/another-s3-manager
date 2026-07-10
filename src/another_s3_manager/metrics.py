@@ -89,6 +89,15 @@ s3_objects_total = Counter(
     ["role", "bucket", "operation"],  # operation: upload | delete | copy
     registry=REGISTRY,
 )
+# Only `credentials_expired` is emitted today: our loop retries solely on an
+# expired-credential error. Botocore's own throttle retries happen below us and
+# are invisible — never invent a `throttled` reason here.
+s3_retries_total = Counter(
+    "as3m_s3_retries_total",
+    "Transparent S3 retries performed by the app",
+    ["reason"],  # credentials_expired
+    registry=REGISTRY,
+)
 
 # --- MCP-specific (Task 11 wires these) ---
 mcp_tool_calls_total = Counter(
