@@ -111,6 +111,26 @@ no-op outside Linux (e.g. running the app on Windows or macOS during local
 dev exports no `process_*` series). `python_info` comes from
 `PlatformCollector` and works everywhere.
 
+### Accuracy caveats
+
+Most metrics are exact — they increment only after the operation they measure
+succeeds, and the state gauges (`as3m_auth_bans_active`, `as3m_mcp_active_tokens`,
+`as3m_users`, `as3m_roles`) are recomputed from the database at every scrape, so
+they cannot drift. Two counters have a documented edge case worth knowing before
+you alert on them:
+
+- **`as3m_s3_objects_total{operation="delete"}` can under-count.** A folder
+  delete removes keys in 1000-key batches and adds the total only after the last
+  batch. If credentials expire mid-delete, the operation transparently retries
+  and re-lists — the already-deleted keys are gone, so only the survivors are
+  counted. Treat cumulative delete totals as a lower bound. Uploads, copies, and
+  single-object deletes are exact.
+- **`as3m_mcp_tokens_issued_total` / `as3m_mcp_tokens_revoked_total` can
+  over-count by 1.** They increment inside the DB transaction, just before it
+  commits; a rare commit failure rolls back the row but not the counter. For the
+  true current token count, read the `as3m_mcp_active_tokens` gauge — these two
+  are for churn _rate_, not an exact ledger.
+
 ## Upgrading from v1.0.x
 
 Every application metric was renamed under an `as3m_` namespace, and three

@@ -103,6 +103,14 @@ s3_bytes_total = Counter(
 # Objects, NOT API calls. `s3_operations_total{operation="delete"}` counts
 # delete_objects batches (S3 caps multi-delete at 1000 keys per call), so a
 # folder of 5000 objects registers 5 there and 5000 here.
+#
+# ACCURACY CAVEAT (operation="delete"): exact on the happy path, but can
+# UNDER-count in one rare case. A folder delete lists every key, deletes them in
+# 1000-key batches, and increments by the total only after the last batch. If
+# credentials expire mid-delete, `execute_with_s3_retry` re-runs the whole
+# callback: the already-deleted keys are gone from the fresh listing, so only the
+# survivors are counted. Objects deleted before the retry are lost from the tally.
+# Treat cumulative delete totals as a lower bound, not an exact ledger.
 s3_objects_total = Counter(
     "as3m_s3_objects_total",
     "S3 objects added, removed, or copied",
@@ -170,6 +178,13 @@ mcp_active_tokens = Gauge(
 )
 # The companions to mcp_active_tokens. A Gauge cannot be rate()d, so the gauge
 # alone cannot answer "how many tokens issued/revoked this hour" — churn.
+#
+# ACCURACY CAVEAT: both are incremented inside the DB transaction, just before it
+# commits. If the commit then fails, the row is rolled back but the counter is
+# not — so a failed create/revoke can OVER-count by 1. Commit failures are rare
+# (local SQLite), and the always-correct current count lives in the
+# mcp_active_tokens gauge, which is recomputed from the DB at every scrape. Use
+# these two for churn rate, the gauge for the true count.
 mcp_tokens_issued_total = Counter(
     "as3m_mcp_tokens_issued_total",
     "MCP tokens created",
