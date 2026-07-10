@@ -246,7 +246,15 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                     "sts", region_name=region, use_ssl=use_ssl, verify=verify_ssl, config=boto_config
                 )
 
-                assumed_role = sts_client.assume_role(RoleArn=role_arn, RoleSessionName="s3-file-manager-session")
+                from another_s3_manager.metrics import credentials_refreshed_total, safe_role_label
+
+                _role_lbl = safe_role_label(role.get("name") or "unknown")
+                try:
+                    assumed_role = sts_client.assume_role(RoleArn=role_arn, RoleSessionName="s3-file-manager-session")
+                except Exception:
+                    credentials_refreshed_total.labels(role=_role_lbl, result="error").inc()
+                    raise
+                credentials_refreshed_total.labels(role=_role_lbl, result="ok").inc()
                 creds = assumed_role["Credentials"]
 
                 # Get expiration time - keep as string for RefreshableCredentials
@@ -284,7 +292,16 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                 )
 
                 logger.info(f"Attempting to assume role: {role_arn}")
-                assumed_role = sts_client.assume_role(RoleArn=role_arn, RoleSessionName="s3-file-manager-session")
+
+                from another_s3_manager.metrics import safe_role_label, sts_assume_role_total
+
+                _role_lbl = safe_role_label(role.get("name") or "unknown")
+                try:
+                    assumed_role = sts_client.assume_role(RoleArn=role_arn, RoleSessionName="s3-file-manager-session")
+                except Exception:
+                    sts_assume_role_total.labels(role=_role_lbl, result="error").inc()
+                    raise
+                sts_assume_role_total.labels(role=_role_lbl, result="ok").inc()
                 initial_credentials = assumed_role["Credentials"]
 
                 # Get expiration time - keep as string for RefreshableCredentials

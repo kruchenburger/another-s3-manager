@@ -149,6 +149,20 @@ mcp_active_tokens = Gauge(
     registry=REGISTRY,
 )
 
+# --- STS / credential lifecycle ---
+sts_assume_role_total = Counter(
+    "as3m_sts_assume_role_total",
+    "STS AssumeRole calls made when first building a client for a role",
+    ["role", "result"],  # result: ok | error
+    registry=REGISTRY,
+)
+credentials_refreshed_total = Counter(
+    "as3m_credentials_refreshed_total",
+    "Assumed-role credential refreshes triggered by botocore",
+    ["role", "result"],  # result: ok | error
+    registry=REGISTRY,
+)
+
 # --- App health ---
 # Info("as3m_app", ...) exports the series `as3m_app_info`.
 app_info = Info("as3m_app", "Application info", registry=REGISTRY)

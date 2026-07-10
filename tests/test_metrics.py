@@ -254,3 +254,17 @@ def test_expired_credentials_retry_is_counted(monkeypatch):
     assert sc._execute_with_retry_inner("r1", lambda _client: "ok") == "ok"
     assert attempts["n"] == 2
     assert _sample("as3m_s3_retries_total", labels) == before + 1
+
+
+def test_sts_and_refresh_counters_exist_and_label_result():
+    from another_s3_manager.metrics import credentials_refreshed_total, sts_assume_role_total
+
+    for metric, name in (
+        (sts_assume_role_total, "as3m_sts_assume_role_total"),
+        (credentials_refreshed_total, "as3m_credentials_refreshed_total"),
+    ):
+        for result in ("ok", "error"):
+            labels = {"role": "r1", "result": result}
+            before = _sample(name, labels)
+            metric.labels(**labels).inc()
+            assert _sample(name, labels) == before + 1
