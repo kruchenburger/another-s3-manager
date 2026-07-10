@@ -286,3 +286,58 @@ def test_presigned_url_generation_is_counted(monkeypatch):
     assert url == "https://signed"
     assert _sample("as3m_presigned_urls_total", labels) == before + 1
     assert _sample("as3m_presigned_url_ttl_seconds_count", {}) == ttl_before + 1
+
+
+def test_in_flight_gauge_returns_to_zero_after_request(app_client):
+    app_client.get("/api/me")
+    assert _sample("as3m_http_requests_in_flight", {}) == 0.0
+
+
+def test_in_flight_gauge_returns_to_zero_after_exception():
+    """The middleware's try/finally must decrement the gauge even when
+    call_next raises unhandled — no HTTPException, no global handler to
+    catch it. Exercises `_http_metrics` directly (call_next is the hook the
+    middleware itself receives from Starlette, so faking it here tests real
+    production code, not an internal implementation detail) rather than
+    routing through the app, since a route registered after the SPA
+    catch-all route would be unreachable (see main.py's route-ordering
+    invariant) and any route caught internally wouldn't let the exception
+    escape call_next at all.
+    """
+    import asyncio
+
+    from another_s3_manager import main as main_module
+
+    async def _raising_call_next(_request):
+        raise RuntimeError("boom")
+
+    before = _sample("as3m_http_requests_in_flight", {})
+    with pytest.raises(RuntimeError):
+        asyncio.run(main_module._http_metrics(object(), _raising_call_next))
+    assert _sample("as3m_http_requests_in_flight", {}) == before
+
+
+def test_oversize_upload_is_counted_as_size_limit(app_client, monkeypatch):
+    """A 400 for exceeding max_file_size must be observable, not an anonymous 4xx."""
+    from another_s3_manager import main as main_module
+    from tests.test_main import login
+
+    login(app_client)
+    csrf = app_client.get("/api/me").json()["csrf_token"]
+
+    monkeypatch.setattr(main_module, "load_config", lambda force_reload=False: {"max_file_size": 10})
+    labels = {"reason": "size_limit"}
+    before = _sample("as3m_upload_rejected_total", labels)
+
+    # NOTE: bucket name must satisfy S3's 3-63 char rule (sanitize_bucket_name)
+    # or the request 400s on bucket validation before ever reaching the
+    # size-limit check, undermining what this test is meant to exercise.
+    resp = app_client.post(
+        "/api/buckets/bkt1/upload",
+        files={"file": ("big.bin", b"x" * 100, "application/octet-stream")},
+        data={"key": "big.bin", "role": "r1"},
+        headers={"X-CSRF-Token": csrf},
+    )
+
+    assert resp.status_code == 400
+    assert _sample("as3m_upload_rejected_total", labels) == before + 1

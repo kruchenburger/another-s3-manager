@@ -44,6 +44,19 @@ http_request_duration_seconds = Histogram(
     ["method", "path_template"],
     registry=REGISTRY,
 )
+http_requests_in_flight = Gauge(
+    "as3m_http_requests_in_flight",
+    "HTTP requests currently being served",
+    registry=REGISTRY,
+)
+# `deletion_disabled` and `invalid_path` are reserved reasons for future PRs —
+# do NOT wire them here without also emitting them from the route.
+upload_rejected_total = Counter(
+    "as3m_upload_rejected_total",
+    "Uploads refused before reaching S3",
+    ["reason"],  # size_limit
+    registry=REGISTRY,
+)
 
 # --- Auth ---
 auth_logins_total = Counter(

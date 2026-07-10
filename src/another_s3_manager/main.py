@@ -75,7 +75,9 @@ from another_s3_manager.metrics import (
     auth_bans_active,
     auth_logins_total,
     http_request_duration_seconds,
+    http_requests_in_flight,
     http_requests_total,
+    upload_rejected_total,
 )
 from another_s3_manager.s3_client import (
     clear_s3_clients_cache,
@@ -215,7 +217,13 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.middleware("http")
 async def _http_metrics(request: Request, call_next):
     start = time.perf_counter()
-    response = await call_next(request)
+    http_requests_in_flight.inc()
+    try:
+        response = await call_next(request)
+    finally:
+        # Decrement even if call_next raised, so an unhandled exception
+        # never leaks the gauge upward.
+        http_requests_in_flight.dec()
     duration = time.perf_counter() - start
     # path_template — bounded cardinality. Falls back to actual path on no-route 404.
     route = request.scope.get("route")
@@ -1844,6 +1852,7 @@ async def upload_file(
                 pass
 
         if file_size and file_size > max_file_size:
+            upload_rejected_total.labels(reason="size_limit").inc()
             size_mb = max_file_size / (1024 * 1024)
             raise HTTPException(status_code=400, detail=f"File size exceeds maximum allowed size of {size_mb}MB")
 
@@ -1869,6 +1878,7 @@ async def upload_file(
 
             # Check size limit during streaming (fail fast)
             if total_read > max_file_size:
+                upload_rejected_total.labels(reason="size_limit").inc()
                 size_mb = max_file_size / (1024 * 1024)
                 raise HTTPException(status_code=400, detail=f"File size exceeds maximum allowed size of {size_mb}MB")
 
