@@ -28,7 +28,7 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_AUTH_DISABLE_LOGIN_FORM=true
-      - GF_USERS_DEFAULT_THEME=light
+      - GF_USERS_DEFAULT_THEME=dark
     volumes:
       - ./docker/observability/provisioning:/etc/grafana/provisioning:ro
       - ./docs/grafana-dashboard.json:/var/lib/grafana/dashboards/as3m.json:ro
