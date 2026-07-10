@@ -783,9 +783,7 @@ def execute_with_s3_retry(role_name: Optional[str], operation: str, callback: Ca
         s3_operations_total.labels(role=role_lbl, operation=operation, error_code="none").inc()
         return result
     except Exception as exc:
-        s3_operations_total.labels(
-            role=role_lbl, operation=operation, error_code=error_code_label(exc)
-        ).inc()
+        s3_operations_total.labels(role=role_lbl, operation=operation, error_code=error_code_label(exc)).inc()
         raise
     finally:
         s3_operation_duration_seconds.labels(operation=operation).observe(time.perf_counter() - start)
