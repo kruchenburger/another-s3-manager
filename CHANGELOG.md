@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking (metrics):** every application metric is now namespaced under
+  `as3m_` (for example `http_requests_total` → `as3m_http_requests_total`), so
+  the app no longer collides with other services in a shared Prometheus. Three
+  metrics also changed shape: `s3_operations_total`'s uninformative
+  `result="ok|error"` label is replaced by `error_code`, which names the actual
+  cause (`access_denied`, `throttled`, `credentials_expired`, …); the separate
+  `s3_bytes_uploaded_total` / `s3_bytes_downloaded_total` counters are collapsed
+  into `as3m_s3_bytes_total{direction}`; and `app_db_query_duration_seconds`
+  drops its redundant `app_` prefix. The `/metrics` endpoint is the only
+  affected surface — the HTTP API is unchanged. See "Upgrading from v1.0.x" in
+  `docs/observability.md` for the full old → new table.
+
+### Added
+
+- Object-level accounting: `as3m_s3_objects_total{operation}` counts objects
+  uploaded, deleted, and copied. Unlike the operations counter, deleting a
+  folder of 5,000 objects registers 5,000 — not the handful of batched API
+  calls it took.
+- Visibility into credential handling: `as3m_sts_assume_role_total` and
+  `as3m_credentials_refreshed_total` surface `assume_role` and refresh failures,
+  which were previously silent until a user reported a broken bucket listing.
+- Counters to complement the state gauges, so brute-force and token churn can be
+  graphed as rates: `as3m_auth_bans_total`, `as3m_mcp_tokens_issued_total`,
+  `as3m_mcp_tokens_revoked_total`.
+- Proof that the MCP guards fire: `as3m_mcp_writes_denied_total{reason}` and
+  `as3m_mcp_reads_refused_total{reason}`.
+- `as3m_presigned_urls_total` and `as3m_presigned_url_ttl_seconds`,
+  `as3m_upload_rejected_total{reason}`, `as3m_http_requests_in_flight`,
+  `as3m_s3_retries_total`, `as3m_users`, `as3m_roles`,
+  `as3m_db_errors_total{operation}`.
+- Runtime metrics under their standard names: `process_cpu_seconds_total`,
+  `process_resident_memory_bytes`, `process_open_fds`,
+  `process_start_time_seconds` (Linux only) and `python_info`.
+
+### Fixed
+
+- `mcp_active_tokens` always reported `0`. It was defined, documented and
+  exported, but nothing ever wrote to it. It now reports the number of
+  non-revoked MCP tokens.
+- S3 throttling (`SlowDown`, `RequestLimitExceeded`, HTTP 503) is now classified
+  as its own error rather than being lumped in with unknown failures.
+
 ## [1.0.3] - 2026-07-08
 
 ### Changed
@@ -219,7 +265,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CSRF protection
 - Login attempt rate limiting
 
-[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/kruchenburger/another-s3-manager/compare/v1.0.2...v1.0.3
+[1.0.2]: https://github.com/kruchenburger/another-s3-manager/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/kruchenburger/another-s3-manager/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/kruchenburger/another-s3-manager/compare/v0.1.2...v1.0.0
 [0.1.2]: https://github.com/kruchenburger/another-s3-manager/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/kruchenburger/another-s3-manager/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/kruchenburger/another-s3-manager/releases/tag/v0.1.0
