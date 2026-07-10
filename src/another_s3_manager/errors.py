@@ -61,6 +61,12 @@ class CredentialsExpiredError(S3OperationError):
     default_http_status: ClassVar[int] = 401
 
 
+class S3ThrottledError(S3OperationError):
+    """S3 is rate-limiting us — SlowDown / RequestLimitExceeded / 503."""
+
+    default_http_status: ClassVar[int] = 503
+
+
 # ----- Classifier ------------------------------------------------------------
 
 # Boto error codes that map to S3ConfigError (admin needs to fix the role).
@@ -87,6 +93,17 @@ _EXPIRED_CODES = {
     "ExpiredTokenException",
     "TokenRefreshRequired",
     "RequestExpired",
+}
+
+# Codes that mean "slow down, you're being rate-limited".
+_THROTTLED_CODES = {
+    "SlowDown",
+    "RequestLimitExceeded",
+    "Throttling",
+    "ThrottlingException",
+    "TooManyRequestsException",
+    "ServiceUnavailable",
+    "503",
 }
 
 
@@ -141,9 +158,40 @@ def classify_boto_error(error: BaseException) -> S3OperationError:
             return S3NotFoundError(code, message)
         if code in _CONFIG_ERROR_CODES:
             return S3ConfigError(code, message)
+        # A 503 is throttling even when the code is unfamiliar (S3-compatible
+        # providers invent their own). Check the code set first so a 400
+        # `Throttling` is still caught.
+        if code in _THROTTLED_CODES or http_status == 503:
+            return S3ThrottledError(code, message)
 
         # Unknown code: keep the boto status if it's a real HTTP code, else 500.
         return S3OperationError(code, message, http_status=http_status if http_status >= 400 else 500)
 
     # Arbitrary Exception — last resort.
     return S3OperationError("Unknown", str(error) or repr(error))
+
+
+# ----- Metric label taxonomy -------------------------------------------------
+
+# Exact-type lookup, not isinstance: every entry is a direct subclass of
+# S3OperationError, so an unmapped subclass correctly falls through to "other"
+# rather than silently inheriting a parent's label.
+_METRIC_LABEL_BY_TYPE: dict[type, str] = {
+    S3AccessDeniedError: "access_denied",
+    S3NotFoundError: "not_found",
+    CredentialsExpiredError: "credentials_expired",
+    S3NetworkError: "network_error",
+    S3ConfigError: "config_error",
+    S3ThrottledError: "throttled",
+}
+
+
+def error_code_label(error: BaseException) -> str:
+    """Map any exception to a bounded `error_code` metric label.
+
+    The returned value is one of a fixed set — never a raw boto code, whose
+    cardinality is unbounded. `"none"` is NOT produced here; it is the success
+    path's label.
+    """
+    typed = classify_boto_error(error)
+    return _METRIC_LABEL_BY_TYPE.get(type(typed), "other")
