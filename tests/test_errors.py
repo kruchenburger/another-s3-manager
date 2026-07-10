@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from botocore.exceptions import (
     ClientError,
     ConnectTimeoutError,
@@ -15,7 +16,9 @@ from another_s3_manager.errors import (
     S3NetworkError,
     S3NotFoundError,
     S3OperationError,
+    S3ThrottledError,
     classify_boto_error,
+    error_code_label,
 )
 
 
@@ -169,3 +172,61 @@ def test_classify_arbitrary_exception_falls_back():
     assert isinstance(out, S3OperationError)
     assert out.code == "Unknown"
     assert "totally unexpected" in str(out)
+
+
+def _client_error_minimal(code: str, status: int = 500):
+    """Minimal stand-in for botocore ClientError: only `.response` is read."""
+
+    class _E(Exception):
+        response = {
+            "Error": {"Code": code, "Message": code},
+            "ResponseMetadata": {"HTTPStatusCode": status},
+        }
+
+    return _E()
+
+
+@pytest.mark.parametrize(
+    ("code", "status", "expected_cls"),
+    [
+        ("SlowDown", 503, S3ThrottledError),
+        ("RequestLimitExceeded", 503, S3ThrottledError),
+        ("Throttling", 400, S3ThrottledError),
+        ("ServiceUnavailable", 503, S3ThrottledError),
+        ("SomethingWeird", 503, S3ThrottledError),  # unknown code, but 503 => throttled
+        ("AccessDenied", 403, S3AccessDeniedError),
+        ("NoSuchBucket", 404, S3NotFoundError),
+        ("ExpiredToken", 401, CredentialsExpiredError),
+        ("InvalidRegion", 400, S3ConfigError),
+        ("SomethingWeird", 500, S3OperationError),
+        # Pin precedence: specific error codes win over the generic 503 catch-all
+        ("AccessDenied", 503, S3AccessDeniedError),
+        ("NoSuchBucket", 503, S3NotFoundError),
+        ("ExpiredToken", 503, CredentialsExpiredError),
+        ("InvalidRegion", 503, S3ConfigError),
+    ],
+)
+def test_classify_boto_error_throttling(code, status, expected_cls):
+    assert type(classify_boto_error(_client_error_minimal(code, status))) is expected_cls
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (S3AccessDeniedError("AccessDenied", "x"), "access_denied"),
+        (S3NotFoundError("NoSuchKey", "x"), "not_found"),
+        (CredentialsExpiredError("ExpiredToken", "x"), "credentials_expired"),
+        (S3NetworkError("ConnectTimeoutError", "x"), "network_error"),
+        (S3ConfigError("InvalidRegion", "x"), "config_error"),
+        (S3ThrottledError("SlowDown", "x"), "throttled"),
+        (S3OperationError("Unknown", "x"), "other"),
+        (RuntimeError("not a boto error"), "other"),
+    ],
+)
+def test_error_code_label(exc, expected):
+    assert error_code_label(exc) == expected
+
+
+def test_error_code_label_never_returns_none_sentinel():
+    """`none` is reserved for the success path; a failure must never produce it."""
+    assert error_code_label(RuntimeError("boom")) != "none"

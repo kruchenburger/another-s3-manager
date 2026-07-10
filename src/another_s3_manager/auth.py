@@ -248,4 +248,7 @@ def record_login_attempt(username: str, success: bool) -> None:
                 "reason": "Too many failed login attempts",
             }
             save_bans(bans)
+            from another_s3_manager.metrics import auth_bans_total
+
+            auth_bans_total.inc()
             logger.warning("User %s banned until %s", username, datetime.fromtimestamp(banned_until))

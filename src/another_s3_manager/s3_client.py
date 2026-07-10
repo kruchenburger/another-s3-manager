@@ -246,7 +246,15 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                     "sts", region_name=region, use_ssl=use_ssl, verify=verify_ssl, config=boto_config
                 )
 
-                assumed_role = sts_client.assume_role(RoleArn=role_arn, RoleSessionName="s3-file-manager-session")
+                from another_s3_manager.metrics import credentials_refreshed_total, safe_role_label
+
+                _role_lbl = safe_role_label(role.get("name") or "unknown")
+                try:
+                    assumed_role = sts_client.assume_role(RoleArn=role_arn, RoleSessionName="s3-file-manager-session")
+                except Exception:
+                    credentials_refreshed_total.labels(role=_role_lbl, result="error").inc()
+                    raise
+                credentials_refreshed_total.labels(role=_role_lbl, result="ok").inc()
                 creds = assumed_role["Credentials"]
 
                 # Get expiration time - keep as string for RefreshableCredentials
@@ -284,7 +292,16 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                 )
 
                 logger.info(f"Attempting to assume role: {role_arn}")
-                assumed_role = sts_client.assume_role(RoleArn=role_arn, RoleSessionName="s3-file-manager-session")
+
+                from another_s3_manager.metrics import safe_role_label, sts_assume_role_total
+
+                _role_lbl = safe_role_label(role.get("name") or "unknown")
+                try:
+                    assumed_role = sts_client.assume_role(RoleArn=role_arn, RoleSessionName="s3-file-manager-session")
+                except Exception:
+                    sts_assume_role_total.labels(role=_role_lbl, result="error").inc()
+                    raise
+                sts_assume_role_total.labels(role=_role_lbl, result="ok").inc()
                 initial_credentials = assumed_role["Credentials"]
 
                 # Get expiration time - keep as string for RefreshableCredentials
@@ -679,6 +696,9 @@ def _execute_with_retry_inner(role_name: Optional[str], callback: Callable[[AnyT
 
             if is_expired and attempts == 0:
                 # First attempt failed with expired credentials, clear cache and retry
+                from another_s3_manager.metrics import s3_retries_total
+
+                s3_retries_total.labels(reason="credentials_expired").inc()
                 logger.warning(
                     f"Failed to get S3 client for role '{role_name}' (expired credentials detected), "
                     f"clearing cache and retrying",
@@ -729,6 +749,12 @@ def _execute_with_retry_inner(role_name: Optional[str], callback: Callable[[AnyT
             )
 
             if attempts == 0 and is_expired:
+                from another_s3_manager.metrics import s3_retries_total
+
+                # Same expired-credential retry as the get_s3_client() branch above,
+                # but triggered by the operation itself. Count it too, or the metric
+                # under-reports credential churn.
+                s3_retries_total.labels(reason="credentials_expired").inc()
                 logger.info(
                     "Invalidating cached client for role '%s' due to expired credentials; "
                     "forcing eks-pod-identity refresh",
@@ -769,6 +795,7 @@ def execute_with_s3_retry(role_name: Optional[str], operation: str, callback: Ca
     Raises:
         Exception: Re-raises the original exception if retry is not possible.
     """
+    from another_s3_manager.errors import error_code_label
     from another_s3_manager.metrics import (
         s3_operation_duration_seconds,
         s3_operations_total,
@@ -779,10 +806,10 @@ def execute_with_s3_retry(role_name: Optional[str], operation: str, callback: Ca
     start = time.perf_counter()
     try:
         result = _execute_with_retry_inner(role_name, callback)
-        s3_operations_total.labels(role=role_lbl, operation=operation, result="ok").inc()
+        s3_operations_total.labels(role=role_lbl, operation=operation, error_code="none").inc()
         return result
-    except Exception:
-        s3_operations_total.labels(role=role_lbl, operation=operation, result="error").inc()
+    except Exception as exc:
+        s3_operations_total.labels(role=role_lbl, operation=operation, error_code=error_code_label(exc)).inc()
         raise
     finally:
         s3_operation_duration_seconds.labels(operation=operation).observe(time.perf_counter() - start)
@@ -1363,11 +1390,11 @@ def read_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str,
 
     Raises PermissionError on role/bucket access violation.
     Raises FileNotFoundError if the object does not exist.
-    Increments the s3_bytes_downloaded_total metric.
+    Increments the s3_bytes_total metric with direction="download".
     """
     from botocore.exceptions import ClientError as _ClientError
 
-    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+    from another_s3_manager.metrics import s3_bytes_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
@@ -1376,9 +1403,9 @@ def read_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str,
         try:
             response = s3_client.get_object(Bucket=bucket, Key=path)
             body: bytes = response["Body"].read()
-            s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
-                len(body)
-            )
+            s3_bytes_total.labels(
+                role=safe_role_label(validated_role or "unknown"), bucket=bucket, direction="download"
+            ).inc(len(body))
             return body
         except _ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
@@ -1403,17 +1430,17 @@ def iter_object_for_role(
         {"content_length": int, "content_type": str}
 
     and ``body_iterator`` lazily yields ``bytes`` chunks of at most
-    ``chunk_size`` bytes. Increments ``s3_bytes_downloaded_total`` exactly
-    once with the full ``content_length`` BEFORE the body starts flowing,
-    so the metric reflects the requested object size even if the client
-    disconnects mid-stream (mirrors ``read_object_for_role``).
+    ``chunk_size`` bytes. Increments ``s3_bytes_total`` (direction="download")
+    exactly once with the full ``content_length`` BEFORE the body starts
+    flowing, so the metric reflects the requested object size even if the
+    client disconnects mid-stream (mirrors ``read_object_for_role``).
 
     Raises ``PermissionError`` on role/bucket access violation.
     Raises ``FileNotFoundError`` if the object does not exist.
     """
     from botocore.exceptions import ClientError as _ClientError
 
-    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+    from another_s3_manager.metrics import s3_bytes_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
@@ -1433,9 +1460,9 @@ def iter_object_for_role(
     content_type = response.get("ContentType", "application/octet-stream")
 
     if content_length:
-        s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
-            content_length
-        )
+        s3_bytes_total.labels(
+            role=safe_role_label(validated_role or "unknown"), bucket=bucket, direction="download"
+        ).inc(content_length)
 
     def body_iter() -> Iterator[bytes]:
         body = response["Body"]
@@ -1465,11 +1492,11 @@ def read_object_range_for_role(
     Uses boto3 Range parameter: bytes=start-end (inclusive).
     Raises PermissionError on role/bucket access violation.
     Raises FileNotFoundError if the object does not exist.
-    Increments the s3_bytes_downloaded_total metric for the returned slice size.
+    Increments the s3_bytes_total metric (direction="download") for the returned slice size.
     """
     from botocore.exceptions import ClientError as _ClientError
 
-    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+    from another_s3_manager.metrics import s3_bytes_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
@@ -1478,9 +1505,9 @@ def read_object_range_for_role(
         try:
             response = s3_client.get_object(Bucket=bucket, Key=path, Range=f"bytes={start}-{end}")
             body: bytes = response["Body"].read()
-            s3_bytes_downloaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
-                len(body)
-            )
+            s3_bytes_total.labels(
+                role=safe_role_label(validated_role or "unknown"), bucket=bucket, direction="download"
+            ).inc(len(body))
             return body
         except _ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
@@ -1582,7 +1609,16 @@ def generate_presigned_url_for_role(
             ExpiresIn=expires_in,
         )
 
-    return execute_with_s3_retry(validated_role, "get", do_presign)
+    from another_s3_manager.metrics import (
+        presigned_url_ttl_seconds,
+        presigned_urls_total,
+        safe_role_label,
+    )
+
+    url = execute_with_s3_retry(validated_role, "get", do_presign)
+    presigned_urls_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc()
+    presigned_url_ttl_seconds.observe(expires_in)
+    return url
 
 
 def put_object_for_role(
@@ -1598,9 +1634,9 @@ def put_object_for_role(
     Upload `content` to `bucket`/`path` using `role`.
 
     Raises PermissionError on role/bucket access violation.
-    Increments the s3_bytes_uploaded_total metric on success.
+    Increments s3_bytes_total (direction="upload") and s3_objects_total (operation="upload") on success.
     """
-    from another_s3_manager.metrics import s3_bytes_uploaded_total, safe_role_label
+    from another_s3_manager.metrics import s3_bytes_total, s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
@@ -1615,9 +1651,12 @@ def put_object_for_role(
         if content_disposition:
             put_params["ContentDisposition"] = content_disposition
         s3_client.put_object(**put_params)
-        s3_bytes_uploaded_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket).inc(
+        s3_bytes_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket, direction="upload").inc(
             len(content)
         )
+        s3_objects_total.labels(
+            role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="upload"
+        ).inc()
 
     execute_with_s3_retry(validated_role, "put", do_put)
 
@@ -1644,6 +1683,8 @@ def copy_object_for_role(
     """
     from botocore.exceptions import ClientError as _ClientError
 
+    from another_s3_manager.metrics import s3_objects_total, safe_role_label
+
     # Validate BOTH buckets — a role scoped to specific allowed_buckets must be
     # allowed to write the destination, not just read the source.
     _validate_bucket_access(role, source_bucket, user_dict)
@@ -1657,6 +1698,11 @@ def copy_object_for_role(
                 Key=dest_path,
                 CopySource={"Bucket": source_bucket, "Key": source_path},
             )
+            s3_objects_total.labels(
+                role=safe_role_label(validated_role or "unknown"),
+                bucket=dest_bucket,  # the copy lands in the destination
+                operation="copy",
+            ).inc()
         except _ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
             if error_code in {"404", "NoSuchKey"}:
@@ -1676,6 +1722,8 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
     Returns {"message": ..., "count": N}.
     """
     from botocore.exceptions import ClientError as _ClientError
+
+    from another_s3_manager.metrics import s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
@@ -1712,6 +1760,10 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
 
         if deleted_count == 0:
             raise FileNotFoundError(f"File or directory '{path}' not found")
+
+        s3_objects_total.labels(
+            role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="delete"
+        ).inc(deleted_count)
 
         return {"message": f"Successfully deleted {deleted_count} object(s)", "count": deleted_count}
 

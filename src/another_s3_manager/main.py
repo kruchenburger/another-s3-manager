@@ -45,6 +45,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
 import another_s3_manager.config as config_module
+from another_s3_manager.api_tokens import count_active_tokens
 from another_s3_manager.auth import (
     check_ban,
     create_access_token,
@@ -75,7 +76,12 @@ from another_s3_manager.metrics import (
     auth_bans_active,
     auth_logins_total,
     http_request_duration_seconds,
+    http_requests_in_flight,
     http_requests_total,
+    mcp_active_tokens,
+    roles_gauge,
+    upload_rejected_total,
+    users_gauge,
 )
 from another_s3_manager.s3_client import (
     clear_s3_clients_cache,
@@ -92,6 +98,7 @@ from another_s3_manager.s3_client import (
     generate_presigned_url_for_role as s3_generate_presigned_url_for_role,
 )
 from another_s3_manager.users import (
+    count_users,
     get_users_for_admin,
     load_bans,
     load_users,
@@ -215,7 +222,13 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.middleware("http")
 async def _http_metrics(request: Request, call_next):
     start = time.perf_counter()
-    response = await call_next(request)
+    http_requests_in_flight.inc()
+    try:
+        response = await call_next(request)
+    finally:
+        # Decrement even if call_next raised, so an unhandled exception
+        # never leaks the gauge upward.
+        http_requests_in_flight.dec()
     duration = time.perf_counter() - start
     # path_template — bounded cardinality. Falls back to actual path on no-route 404.
     route = request.scope.get("route")
@@ -269,9 +282,13 @@ def _check_metrics_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
-# Scrape-time callback: load_bans() already filters to active bans, so the
-# gauge is always live without a background updater or hooks in ban/unban paths.
+# Scrape-time callbacks. Computing at scrape time (rather than hooking every
+# mutation) means the gauge can never drift out of sync with its source of truth
+# (the database, or config.json for roles_gauge).
 auth_bans_active.set_function(lambda: float(len(load_bans())))
+mcp_active_tokens.set_function(lambda: float(count_active_tokens()))
+users_gauge.set_function(lambda: float(count_users()))
+roles_gauge.set_function(lambda: float(len(load_config(force_reload=False).get("roles", []))))
 
 
 @app.get("/metrics")
@@ -1844,6 +1861,7 @@ async def upload_file(
                 pass
 
         if file_size and file_size > max_file_size:
+            upload_rejected_total.labels(reason="size_limit").inc()
             size_mb = max_file_size / (1024 * 1024)
             raise HTTPException(status_code=400, detail=f"File size exceeds maximum allowed size of {size_mb}MB")
 
@@ -1869,6 +1887,7 @@ async def upload_file(
 
             # Check size limit during streaming (fail fast)
             if total_read > max_file_size:
+                upload_rejected_total.labels(reason="size_limit").inc()
                 size_mb = max_file_size / (1024 * 1024)
                 raise HTTPException(status_code=400, detail=f"File size exceeds maximum allowed size of {size_mb}MB")
 
@@ -1892,8 +1911,8 @@ async def upload_file(
             if file_ext in upload_inline_extensions:
                 content_disposition = "inline"
 
-        # The helper increments s3_bytes_uploaded_total internally - do NOT also
-        # increment it here, doing so would double-count.
+        # The helper increments s3_bytes_total (direction="upload") internally -
+        # do NOT also increment it here, doing so would double-count.
         put_object_for_role(
             role,
             bucket_name,
@@ -2046,9 +2065,10 @@ async def download_file(
             raise HTTPException(status_code=400, detail=str(e))
 
         # Stream the object via the helper. The helper increments the
-        # s3_bytes_downloaded_total metric exactly once at metadata-fetch time
-        # and returns a lazy iterator — MUST NOT be materialized to bytes here
-        # so 100MB downloads don't get buffered in process memory.
+        # s3_bytes_total metric (direction="download") exactly once at
+        # metadata-fetch time and returns a lazy iterator — MUST NOT be
+        # materialized to bytes here so 100MB downloads don't get buffered
+        # in process memory.
         metadata, body_iter = iter_object_for_role(role, bucket_name, path, current_user)
         filename = path.split("/")[-1]
 

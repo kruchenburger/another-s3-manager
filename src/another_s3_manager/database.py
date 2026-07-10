@@ -30,9 +30,16 @@ _SessionLocal: Optional[sessionmaker[Session]] = None
 _init_lock = threading.Lock()
 
 
+def _statement_op(statement: Optional[str]) -> str:
+    """Classify a SQL statement by its leading verb, shared by the duration
+    and error listeners so both use the same SELECT|INSERT|UPDATE|DELETE|OTHER vocabulary."""
+    op = statement.lstrip().split(" ", 1)[0].upper() if statement else "OTHER"
+    return op if op in ("SELECT", "INSERT", "UPDATE", "DELETE") else "OTHER"
+
+
 def _register_query_metrics(engine: Engine) -> None:
-    """Emit app_db_query_duration_seconds for every SQLAlchemy query."""
-    from another_s3_manager.metrics import app_db_query_duration_seconds
+    """Emit as3m_db_query_duration_seconds and as3m_db_errors_total for every SQLAlchemy query."""
+    from another_s3_manager.metrics import db_errors_total, db_query_duration_seconds
 
     @event.listens_for(engine, "before_cursor_execute")
     def _q_start(conn, cursor, statement, parameters, context, executemany):  # noqa: ARG001
@@ -42,10 +49,19 @@ def _register_query_metrics(engine: Engine) -> None:
     def _q_end(conn, cursor, statement, parameters, context, executemany):  # noqa: ARG001
         start = conn.info.pop("_q_start", time.perf_counter())
         duration = time.perf_counter() - start
-        op = statement.lstrip().split(" ", 1)[0].upper() if statement else "OTHER"
-        if op not in ("SELECT", "INSERT", "UPDATE", "DELETE"):
-            op = "OTHER"
-        app_db_query_duration_seconds.labels(operation=op).observe(duration)
+        db_query_duration_seconds.labels(operation=_statement_op(statement)).observe(duration)
+
+    # NOTE: as of SQLAlchemy 2.0 this event lives on DialectEvents (moved from
+    # ConnectionEvents), but registration still targets the Engine — see
+    # DialectEvents.handle_error's own docstring ("The event remains
+    # registered by using the Engine as the event target"). Verified against
+    # the installed sqlalchemy==2.0.49. This listener is observation-only: it
+    # never raises, swallows, or returns a replacement exception, so
+    # session_scope()'s error handling is untouched.
+    @event.listens_for(engine, "handle_error")
+    def _q_error(exception_context):  # noqa: ARG001
+        statement = getattr(exception_context, "statement", None)
+        db_errors_total.labels(operation=_statement_op(statement)).inc()
 
 
 def get_engine() -> Engine:

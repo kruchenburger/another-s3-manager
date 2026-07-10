@@ -73,6 +73,10 @@ def create_token(
         session.flush()
         # Detach from session so caller can read attributes after commit
         session.expunge(token)
+
+        from another_s3_manager.metrics import mcp_tokens_issued_total
+
+        mcp_tokens_issued_total.inc()
         return token, plaintext
 
 
@@ -131,6 +135,10 @@ def revoke_token(token_id: int, by_user_id: int, by_is_admin: bool) -> None:
             raise PermissionError("Only the token owner or an admin can revoke")
         if token.revoked_at is None:
             token.revoked_at = _utcnow()
+
+            from another_s3_manager.metrics import mcp_tokens_revoked_total
+
+            mcp_tokens_revoked_total.inc()
 
 
 def update_token(
@@ -227,3 +235,9 @@ def count_active_tokens_for_user(user_id: int) -> int:
         return session.execute(
             select(func.count(ApiToken.id)).where(and_(ApiToken.user_id == user_id, ApiToken.revoked_at.is_(None)))
         ).scalar_one()
+
+
+def count_active_tokens() -> int:
+    """Global count of non-revoked tokens. Used by the as3m_mcp_active_tokens gauge."""
+    with session_scope() as session:
+        return session.execute(select(func.count(ApiToken.id)).where(ApiToken.revoked_at.is_(None))).scalar_one()

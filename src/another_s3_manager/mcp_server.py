@@ -32,8 +32,10 @@ from another_s3_manager.errors import (
 from another_s3_manager.metrics import (
     mcp_auth_failures_total,
     mcp_bytes_read_total,
+    mcp_reads_refused_total,
     mcp_tool_calls_total,
     mcp_tool_duration_seconds,
+    mcp_writes_denied_total,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,18 +117,21 @@ def assert_write_allowed(token: Any, tool_name: str, config: dict) -> None:
     3. delete_file blocked when server-level deletion is disabled.
     """
     if config.get("mcp_disable_writes", False):
+        mcp_writes_denied_total.labels(tool=tool_name, reason="writes_disabled").inc()
         raise McpError(
             "READ_ONLY_SERVER",
             "Server config disables MCP writes",
             {"tool": tool_name},
         )
     if token.is_read_only:
+        mcp_writes_denied_total.labels(tool=tool_name, reason="read_only_token").inc()
         raise McpError(
             "READ_ONLY_TOKEN",
             "This token is read-only",
             {"tool": tool_name},
         )
     if tool_name == "delete_file" and config.get("disable_deletion", False):
+        mcp_writes_denied_total.labels(tool=tool_name, reason="deletion_disabled").inc()
         raise McpError(
             "DELETION_DISABLED",
             "Deletion is disabled in server config",
@@ -814,6 +819,7 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
             raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
 
         if size > effective_max:
+            mcp_reads_refused_total.labels(tool="read_file", reason="file_too_large").inc()
             raise McpError(
                 "FILE_TOO_LARGE",
                 f"File size {size} exceeds limit {effective_max}",
@@ -826,6 +832,7 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
         else:
             kind, ext = _classify_text(path, config)
             if kind == "binary:known":
+                mcp_reads_refused_total.labels(tool="read_file", reason="binary_content").inc()
                 raise McpError(
                     "BINARY_CONTENT",
                     f"File appears binary (size {size}, ext .{ext}). Use force_text=true if you know better.",
@@ -846,6 +853,7 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
                 if _is_likely_text_sample(sample):
                     decision = "sniffed"
                 else:
+                    mcp_reads_refused_total.labels(tool="read_file", reason="binary_content").inc()
                     raise McpError(
                         "BINARY_CONTENT",
                         f"File appears binary (size {size}). Use force_text=true if you know better.",
@@ -871,6 +879,7 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
             try:
                 content = raw.decode("utf-8")
             except UnicodeDecodeError:
+                mcp_reads_refused_total.labels(tool="read_file", reason="binary_content").inc()
                 raise McpError(
                     "BINARY_CONTENT",
                     f"File could not be decoded as UTF-8 (size {size}). Use force_text=true.",
@@ -970,6 +979,10 @@ async def copy_object(
         config = _config_module.load_config(force_reload=False)
         assert_write_allowed(token, "copy_object", config)
         if delete_source and config.get("disable_deletion", False):
+            # This guard lives outside assert_write_allowed (it's conditional on
+            # delete_source, not just the tool name), but it's still a write
+            # denial for the same reason and must be counted identically.
+            mcp_writes_denied_total.labels(tool="copy_object", reason="deletion_disabled").inc()
             raise McpError(
                 "DELETION_DISABLED",
                 "Deletion is disabled in server config (delete_source requires it)",

@@ -701,16 +701,17 @@ def test_upload_sets_inline_disposition_for_configured_extension(app_client, mot
 
 
 def test_upload_increments_bytes_metric_once(app_client, moto_s3):
-    """Regression: the route used to manually increment s3_bytes_uploaded_total
-    AFTER calling the helper, which itself increments the metric internally.
-    That double-counted the bytes. After this refactor only the helper bumps
-    the metric — the route's manual increment was removed."""
-    from another_s3_manager.metrics import s3_bytes_uploaded_total
+    """Regression: the route used to manually increment s3_bytes_total
+    (direction="upload") AFTER calling the helper, which itself increments
+    the metric internally. That double-counted the bytes. After this
+    refactor only the helper bumps the metric — the route's manual
+    increment was removed."""
+    from another_s3_manager.metrics import s3_bytes_total
 
     _, headers = login(app_client)
     moto_s3.create_bucket(Bucket="metric-bucket")
-    labels = {"role": "Default", "bucket": "metric-bucket"}
-    before = s3_bytes_uploaded_total.labels(**labels)._value.get()
+    labels = {"role": "Default", "bucket": "metric-bucket", "direction": "upload"}
+    before = s3_bytes_total.labels(**labels)._value.get()
 
     payload = b"a" * 100
     response = app_client.post(
@@ -721,7 +722,7 @@ def test_upload_increments_bytes_metric_once(app_client, moto_s3):
     )
     assert response.status_code == status.HTTP_200_OK
 
-    after = s3_bytes_uploaded_total.labels(**labels)._value.get()
+    after = s3_bytes_total.labels(**labels)._value.get()
     assert after - before == 100, f"metric must increment once, got {after - before}"
 
 

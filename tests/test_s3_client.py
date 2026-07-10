@@ -517,6 +517,73 @@ def test_assume_role_refreshes_via_refreshable_credentials(mocker):
     assert sts.assume_role.call_count == 2
 
 
+def test_assume_role_metrics_attribute_initial_and_refresh_to_separate_counters(mocker):
+    """Pin per-call-site metric attribution.
+
+    Both the initial assume and the refresh callback call `sts.assume_role`, so
+    `test_assume_role_refreshes_via_refreshable_credentials` (call_count == 2) would
+    still pass even if the two `.inc()` calls were swapped between call sites. This
+    test reads `as3m_sts_assume_role_total` and `as3m_credentials_refreshed_total`
+    separately before/after each phase to catch exactly that swap.
+    """
+    from another_s3_manager import s3_client
+    from another_s3_manager.metrics import REGISTRY
+
+    def sample(name: str, labels: dict) -> float:
+        return REGISTRY.get_sample_value(name, labels) or 0.0
+
+    first = {
+        "AccessKeyId": "AKIA1",
+        "SecretAccessKey": "s1",
+        "SessionToken": "t1",
+        "Expiration": "2000-01-01T00:00:00Z",  # already past → next access forces a refresh
+    }
+    second = {
+        "AccessKeyId": "AKIA2",
+        "SecretAccessKey": "s2",
+        "SessionToken": "t2",
+        "Expiration": "2999-01-01T00:00:00Z",
+    }
+    sts = mocker.Mock()
+    sts.assume_role.side_effect = [{"Credentials": first}, {"Credentials": second}]
+    mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+
+    captured = {}
+
+    def capture(self, *a, **k):
+        captured["session"] = self
+        return mocker.Mock()
+
+    mocker.patch.object(s3_client.BotocoreSession, "create_client", capture)
+
+    role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
+    assume_labels = {"role": "r", "result": "ok"}
+    refresh_labels = {"role": "r", "result": "ok"}
+
+    assume_before = sample("as3m_sts_assume_role_total", assume_labels)
+    refresh_before = sample("as3m_credentials_refreshed_total", refresh_labels)
+
+    s3_client._create_s3_client_from_role(role)
+
+    assume_after_initial = sample("as3m_sts_assume_role_total", assume_labels)
+    refresh_after_initial = sample("as3m_credentials_refreshed_total", refresh_labels)
+
+    # Only the initial-assume counter moves; the refresh counter must stay untouched.
+    assert assume_after_initial - assume_before == 1
+    assert refresh_after_initial - refresh_before == 0
+
+    # Drive the RefreshableCredentials refresh callback, same as the sibling test above.
+    frozen = captured["session"]._credentials.get_frozen_credentials()
+    assert frozen.access_key == "AKIA2"  # refreshed via a second assume_role
+
+    assume_after_refresh = sample("as3m_sts_assume_role_total", assume_labels)
+    refresh_after_refresh = sample("as3m_credentials_refreshed_total", refresh_labels)
+
+    # Only the refresh counter moves this time; the initial-assume counter must not move again.
+    assert refresh_after_refresh - refresh_after_initial == 1
+    assert assume_after_refresh - assume_after_initial == 0
+
+
 def test_assume_role_sts_region_falls_back_to_aws_region_env(mocker, monkeypatch):
     """The STS client gets its region from AWS_REGION when the role has none.
 
@@ -655,17 +722,17 @@ def test_execute_with_s3_retry_clears_cache_on_expired_creds(mocker):
 
 
 def test_execute_with_s3_retry_increments_operations_counter(monkeypatch):
-    """Verify s3_operations_total{operation=head, result=ok} increments after a successful call."""
+    """Verify s3_operations_total{operation=head, error_code=none} increments after a successful call."""
     import another_s3_manager.s3_client as s3_client_mod
     from another_s3_manager import metrics
 
-    def count(role: str, op: str, result: str) -> float:
+    def count(role: str, op: str, error_code: str) -> float:
         for sample in metrics.s3_operations_total.collect()[0].samples:
             if (
                 sample.name.endswith("_total")
                 and sample.labels.get("role") == role
                 and sample.labels.get("operation") == op
-                and sample.labels.get("result") == result
+                and sample.labels.get("error_code") == error_code
             ):
                 return sample.value
         return 0.0
@@ -679,26 +746,26 @@ def test_execute_with_s3_retry_increments_operations_counter(monkeypatch):
 
     monkeypatch.setattr(s3_client_mod, "get_s3_client", lambda _name=None: _FakeClient())
 
-    before = count(unique_role, "head", "ok")
+    before = count(unique_role, "head", "none")
     s3_client_mod.execute_with_s3_retry(unique_role, "head", lambda c: c.head_object())
-    after = count(unique_role, "head", "ok")
+    after = count(unique_role, "head", "none")
     assert after == before + 1
 
 
 def test_execute_with_s3_retry_increments_error_counter_on_failure(monkeypatch):
-    """Verify s3_operations_total{operation=head, result=error} increments when callback raises."""
+    """Verify s3_operations_total{operation=head, error_code=other} increments when callback raises."""
     import pytest
 
     import another_s3_manager.s3_client as s3_client_mod
     from another_s3_manager import metrics
 
-    def count(role: str, op: str, result: str) -> float:
+    def count(role: str, op: str, error_code: str) -> float:
         for sample in metrics.s3_operations_total.collect()[0].samples:
             if (
                 sample.name.endswith("_total")
                 and sample.labels.get("role") == role
                 and sample.labels.get("operation") == op
-                and sample.labels.get("result") == result
+                and sample.labels.get("error_code") == error_code
             ):
                 return sample.value
         return 0.0
@@ -712,10 +779,10 @@ def test_execute_with_s3_retry_increments_error_counter_on_failure(monkeypatch):
 
     monkeypatch.setattr(s3_client_mod, "get_s3_client", lambda _name=None: _BadClient())
 
-    before = count(unique_role, "head", "error")
+    before = count(unique_role, "head", "other")
     with pytest.raises(RuntimeError):
         s3_client_mod.execute_with_s3_retry(unique_role, "head", lambda c: c.head_object())
-    after = count(unique_role, "head", "error")
+    after = count(unique_role, "head", "other")
     assert after == before + 1
 
 
@@ -1072,16 +1139,16 @@ def test_iter_object_for_role_missing_raises_filenotfound(moto_s3):
 
 
 def test_iter_object_for_role_increments_metric(moto_s3):
-    """B1: s3_bytes_downloaded_total increments exactly once with ContentLength,
-    BEFORE the body iterator is consumed."""
+    """B1: s3_bytes_total (direction="download") increments exactly once with
+    ContentLength, BEFORE the body iterator is consumed."""
     moto_s3.create_bucket(Bucket="metric-b")
     moto_s3.put_object(Bucket="metric-b", Key="m.bin", Body=b"a" * 50)
 
-    from another_s3_manager.metrics import s3_bytes_downloaded_total, safe_role_label
+    from another_s3_manager.metrics import s3_bytes_total, safe_role_label
     from another_s3_manager.s3_client import iter_object_for_role
 
-    labels = {"role": safe_role_label("unknown"), "bucket": "metric-b"}
-    before = s3_bytes_downloaded_total.labels(**labels)._value.get()
+    labels = {"role": safe_role_label("unknown"), "bucket": "metric-b", "direction": "download"}
+    before = s3_bytes_total.labels(**labels)._value.get()
 
     metadata, body_iter = iter_object_for_role(
         None,
@@ -1091,13 +1158,13 @@ def test_iter_object_for_role_increments_metric(moto_s3):
     )
 
     # Metric already incremented before iterator consumption
-    mid = s3_bytes_downloaded_total.labels(**labels)._value.get()
+    mid = s3_bytes_total.labels(**labels)._value.get()
     assert mid - before == 50, "metric must increment at metadata-fetch time"
 
     # consume iterator to exhaust the stream
     list(body_iter)
 
-    after = s3_bytes_downloaded_total.labels(**labels)._value.get()
+    after = s3_bytes_total.labels(**labels)._value.get()
     assert after - before == 50, "metric must increment exactly once per download"
     assert metadata["content_length"] == 50
 

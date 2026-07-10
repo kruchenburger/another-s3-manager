@@ -103,7 +103,7 @@ def test_db_query_metric_records_select():
     from another_s3_manager.models import User
 
     def count(op: str) -> float:
-        for sample in metrics.app_db_query_duration_seconds.collect()[0].samples:
+        for sample in metrics.db_query_duration_seconds.collect()[0].samples:
             if sample.name.endswith("_count") and sample.labels.get("operation") == op:
                 return sample.value
         return 0.0
