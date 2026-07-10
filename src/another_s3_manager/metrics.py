@@ -12,19 +12,34 @@ Cardinality discipline:
 
 import os
 
-from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, Info
+from prometheus_client import (
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    Info,
+    PlatformCollector,
+    ProcessCollector,
+)
 
 REGISTRY = CollectorRegistry(auto_describe=True)
 
+# Runtime metrics. Standard, UNPREFIXED names on purpose: `process_*` and
+# `python_info` are a Prometheus-wide contract that every off-the-shelf alert
+# and dashboard already knows. The `as3m_` rule governs metrics we author.
+# ProcessCollector is a no-op off Linux (it reads /proc).
+ProcessCollector(registry=REGISTRY)
+PlatformCollector(registry=REGISTRY)
+
 # --- HTTP / API ---
 http_requests_total = Counter(
-    "http_requests_total",
+    "as3m_http_requests_total",
     "Total HTTP requests",
     ["method", "path_template", "status_code"],
     registry=REGISTRY,
 )
 http_request_duration_seconds = Histogram(
-    "http_request_duration_seconds",
+    "as3m_http_request_duration_seconds",
     "HTTP request duration",
     ["method", "path_template"],
     registry=REGISTRY,
@@ -32,38 +47,38 @@ http_request_duration_seconds = Histogram(
 
 # --- Auth ---
 auth_logins_total = Counter(
-    "auth_logins_total",
+    "as3m_auth_logins_total",
     "Login attempts by result",
     ["result"],  # success | invalid_password | banned
     registry=REGISTRY,
 )
 auth_bans_active = Gauge(
-    "auth_bans_active",
+    "as3m_auth_bans_active",
     "Active bans (banned_until > now)",
     registry=REGISTRY,
 )
 
 # --- S3 ops ---
 s3_operations_total = Counter(
-    "s3_operations_total",
+    "as3m_s3_operations_total",
     "S3 operations executed",
     ["role", "operation", "result"],  # operation: list|get|put|delete|head; result: ok|error
     registry=REGISTRY,
 )
 s3_operation_duration_seconds = Histogram(
-    "s3_operation_duration_seconds",
+    "as3m_s3_operation_duration_seconds",
     "S3 operation duration",
     ["operation"],
     registry=REGISTRY,
 )
 s3_bytes_uploaded_total = Counter(
-    "s3_bytes_uploaded_total",
+    "as3m_s3_bytes_uploaded_total",
     "Bytes uploaded to S3",
     ["role", "bucket"],
     registry=REGISTRY,
 )
 s3_bytes_downloaded_total = Counter(
-    "s3_bytes_downloaded_total",
+    "as3m_s3_bytes_downloaded_total",
     "Bytes downloaded from S3",
     ["role", "bucket"],
     registry=REGISTRY,
@@ -71,19 +86,19 @@ s3_bytes_downloaded_total = Counter(
 
 # --- MCP-specific (Task 11 wires these) ---
 mcp_tool_calls_total = Counter(
-    "mcp_tool_calls_total",
+    "as3m_mcp_tool_calls_total",
     "MCP tool calls",
     ["tool", "error_code"],  # error_code="none" on success
     registry=REGISTRY,
 )
 mcp_tool_duration_seconds = Histogram(
-    "mcp_tool_duration_seconds",
+    "as3m_mcp_tool_duration_seconds",
     "MCP tool call duration",
     ["tool"],
     registry=REGISTRY,
 )
 mcp_bytes_read_total = Counter(
-    "mcp_bytes_read_total",
+    "as3m_mcp_bytes_read_total",
     "Bytes returned from read_file",
     ["bucket"],
     registry=REGISTRY,
@@ -98,7 +113,7 @@ mcp_bytes_read_total = Counter(
 # Per-token call accounting is still available via mcp_tool_calls_total which
 # is keyed by tool+error_code (low cardinality regardless of churn).
 mcp_tool_response_bytes = Histogram(
-    "mcp_tool_response_bytes",
+    "as3m_mcp_tool_response_bytes",
     "Size in bytes of the JSON response returned by an MCP tool call",
     ["tool"],
     # Buckets sized for typical LLM-context consumption: <100 bytes (empty
@@ -108,21 +123,23 @@ mcp_tool_response_bytes = Histogram(
     registry=REGISTRY,
 )
 mcp_auth_failures_total = Counter(
-    "mcp_auth_failures_total",
+    "as3m_mcp_auth_failures_total",
     "MCP authentication failures",
     ["reason"],  # invalid_token | revoked | malformed
     registry=REGISTRY,
 )
 mcp_active_tokens = Gauge(
-    "mcp_active_tokens",
+    "as3m_mcp_active_tokens",
     "Active (non-revoked) API tokens",
     registry=REGISTRY,
 )
 
 # --- App health ---
-app_info = Info("app", "Application info", registry=REGISTRY)
-app_db_query_duration_seconds = Histogram(
-    "app_db_query_duration_seconds",
+# Info("as3m_app", ...) exports the series `as3m_app_info`.
+app_info = Info("as3m_app", "Application info", registry=REGISTRY)
+# `app_` was redundant once everything carries `as3m_`. The Python name changes too.
+db_query_duration_seconds = Histogram(
+    "as3m_db_query_duration_seconds",
     "SQLAlchemy query duration by op",
     ["operation"],  # SELECT | INSERT | UPDATE | DELETE | OTHER
     registry=REGISTRY,

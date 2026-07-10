@@ -1,5 +1,9 @@
 """Tests for Prometheus metrics endpoint and registry definitions."""
 
+import os
+
+import pytest
+
 
 def test_metrics_endpoint_returns_prometheus_text(app_client):
     resp = app_client.get("/metrics")
@@ -7,7 +11,7 @@ def test_metrics_endpoint_returns_prometheus_text(app_client):
     assert resp.headers["content-type"].startswith("text/plain")
     body = resp.text
     # Should contain at least one of our defined metrics
-    assert "http_requests_total" in body or "app_info" in body
+    assert "as3m_http_requests_total" in body
 
 
 def test_metrics_endpoint_open_when_password_unset(app_client, monkeypatch):
@@ -37,7 +41,7 @@ def test_http_request_counter_uses_path_template_not_concrete_url(app_client):
 
 def test_app_info_metric_present(app_client):
     resp = app_client.get("/metrics")
-    assert "app_info" in resp.text
+    assert "as3m_app_info" in resp.text
 
 
 def _seed_user(username: str, password: str) -> None:
@@ -57,25 +61,25 @@ def _sample(name: str, labels: dict) -> float:
 
 def test_auth_login_metrics_count_success_and_failure(app_client):
     """auth_logins_total must increment on both login outcomes (was defined but unwired)."""
-    ok_before = _sample("auth_logins_total", {"result": "success"})
-    bad_before = _sample("auth_logins_total", {"result": "invalid_password"})
+    ok_before = _sample("as3m_auth_logins_total", {"result": "success"})
+    bad_before = _sample("as3m_auth_logins_total", {"result": "invalid_password"})
 
     resp = app_client.post("/api/login", data={"username": "admin", "password": "nope"})
     assert resp.status_code == 401
     resp = app_client.post("/api/login", data={"username": "admin", "password": "admin123"})
     assert resp.status_code == 200
 
-    assert _sample("auth_logins_total", {"result": "success"}) == ok_before + 1
-    assert _sample("auth_logins_total", {"result": "invalid_password"}) == bad_before + 1
+    assert _sample("as3m_auth_logins_total", {"result": "success"}) == ok_before + 1
+    assert _sample("as3m_auth_logins_total", {"result": "invalid_password"}) == bad_before + 1
 
     body = app_client.get("/metrics").text
-    assert 'auth_logins_total{result="success"}' in body
+    assert 'as3m_auth_logins_total{result="success"}' in body
 
 
 def test_auth_banned_login_metric_and_active_bans_gauge(app_client):
     """A login attempt against a banned account counts as result=banned, and
     auth_bans_active reports the live number of active bans at scrape time."""
-    banned_before = _sample("auth_logins_total", {"result": "banned"})
+    banned_before = _sample("as3m_auth_logins_total", {"result": "banned"})
 
     _seed_user("metrics_bob", "Sup3rSecret1")
     for _ in range(3):
@@ -86,7 +90,57 @@ def test_auth_banned_login_metric_and_active_bans_gauge(app_client):
     resp = app_client.post("/api/login", data={"username": "metrics_bob", "password": "Sup3rSecret1"})
     assert resp.status_code == 403
 
-    assert _sample("auth_logins_total", {"result": "banned"}) == banned_before + 1
+    assert _sample("as3m_auth_logins_total", {"result": "banned"}) == banned_before + 1
 
     body = app_client.get("/metrics").text
-    assert "auth_bans_active 1.0" in body  # fresh per-test DB → exactly one active ban
+    assert "as3m_auth_bans_active 1.0" in body  # fresh per-test DB → exactly one active ban
+
+
+OLD_NAMES = [
+    "http_requests_total",
+    "http_request_duration_seconds",
+    "auth_logins_total",
+    "auth_bans_active",
+    "s3_operations_total",
+    "s3_operation_duration_seconds",
+    "s3_bytes_uploaded_total",
+    "s3_bytes_downloaded_total",
+    "mcp_tool_calls_total",
+    "mcp_tool_duration_seconds",
+    "mcp_bytes_read_total",
+    "mcp_tool_response_bytes",
+    "mcp_auth_failures_total",
+    "mcp_active_tokens",
+    "app_info",
+    "app_db_query_duration_seconds",
+]
+
+
+def test_every_app_metric_is_namespaced(app_client):
+    """No metric we own may be exported under its old, unprefixed name."""
+    body = app_client.get("/metrics").text
+    for old in OLD_NAMES:
+        # A bare old name at the start of a line is the exposition format's
+        # own series/HELP/TYPE prefix. `as3m_<old>` must not trigger this.
+        for line in body.splitlines():
+            payload = line.removeprefix("# HELP ").removeprefix("# TYPE ")
+            assert not payload.startswith(old + " "), f"{old} is still exported unprefixed"
+            assert not payload.startswith(old + "{"), f"{old} is still exported unprefixed"
+
+
+def test_namespaced_names_are_present(app_client):
+    body = app_client.get("/metrics").text
+    assert "as3m_http_requests_total" in body
+    assert "as3m_app_info" in body
+    assert "as3m_db_query_duration_seconds" in body
+
+
+def test_platform_collector_registered(app_client):
+    assert "python_info" in app_client.get("/metrics").text
+
+
+@pytest.mark.skipif(not os.path.exists("/proc"), reason="ProcessCollector only exports on Linux")
+def test_process_collector_registered(app_client):
+    body = app_client.get("/metrics").text
+    assert "process_cpu_seconds_total" in body
+    assert "process_resident_memory_bytes" in body

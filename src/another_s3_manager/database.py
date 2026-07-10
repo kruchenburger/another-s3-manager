@@ -31,8 +31,8 @@ _init_lock = threading.Lock()
 
 
 def _register_query_metrics(engine: Engine) -> None:
-    """Emit app_db_query_duration_seconds for every SQLAlchemy query."""
-    from another_s3_manager.metrics import app_db_query_duration_seconds
+    """Emit as3m_db_query_duration_seconds for every SQLAlchemy query."""
+    from another_s3_manager.metrics import db_query_duration_seconds
 
     @event.listens_for(engine, "before_cursor_execute")
     def _q_start(conn, cursor, statement, parameters, context, executemany):  # noqa: ARG001
@@ -45,7 +45,7 @@ def _register_query_metrics(engine: Engine) -> None:
         op = statement.lstrip().split(" ", 1)[0].upper() if statement else "OTHER"
         if op not in ("SELECT", "INSERT", "UPDATE", "DELETE"):
             op = "OTHER"
-        app_db_query_duration_seconds.labels(operation=op).observe(duration)
+        db_query_duration_seconds.labels(operation=op).observe(duration)
 
 
 def get_engine() -> Engine:
