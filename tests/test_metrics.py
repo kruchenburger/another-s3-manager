@@ -472,3 +472,39 @@ def test_token_issue_and_revoke_counters(app_client):
     # Revoking twice must not double-count: the second call is a no-op.
     revoke_token(token.id, by_user_id=uid, by_is_admin=False)
     assert _sample("as3m_mcp_tokens_revoked_total", {}) == revoked + 1
+
+
+# ---------------------------------------------------------------------------
+# Users/roles gauges + DB error counter (Task 13)
+# ---------------------------------------------------------------------------
+
+
+def test_users_and_roles_gauges(app_client, monkeypatch):
+    _seed_user("gaugecount", "pw12345678")
+    app_client.get("/metrics")
+    assert _sample("as3m_users_total", {}) >= 1
+
+    from another_s3_manager import main as main_module
+
+    monkeypatch.setattr(
+        main_module, "load_config", lambda force_reload=False: {"roles": [{"name": "a"}, {"name": "b"}]}
+    )
+    app_client.get("/metrics")
+    assert _sample("as3m_roles_total", {}) == 2.0
+
+
+def test_db_error_is_counted():
+    """A failing statement is still classified by its verb: a bad SELECT is a SELECT."""
+    from sqlalchemy import text
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from another_s3_manager.database import session_scope
+
+    labels = {"operation": "SELECT"}
+    before = _sample("as3m_db_errors_total", labels)
+
+    with pytest.raises(SQLAlchemyError):
+        with session_scope() as s:
+            s.execute(text("SELECT * FROM table_that_does_not_exist"))
+
+    assert _sample("as3m_db_errors_total", labels) == before + 1

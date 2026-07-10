@@ -236,6 +236,16 @@ db_query_duration_seconds = Histogram(
     ["operation"],  # SELECT | INSERT | UPDATE | DELETE | OTHER
     registry=REGISTRY,
 )
+db_errors_total = Counter(
+    "as3m_db_errors_total",
+    "Failed SQLAlchemy statements",
+    ["operation"],  # SELECT | INSERT | UPDATE | DELETE | OTHER
+    registry=REGISTRY,
+)
+
+# --- Overview gauges ---
+users_total = Gauge("as3m_users_total", "Registered users", registry=REGISTRY)
+roles_total = Gauge("as3m_roles_total", "Configured S3 roles", registry=REGISTRY)
 
 # Populate static app info at module load time (env vars are stable after startup)
 app_info.info(

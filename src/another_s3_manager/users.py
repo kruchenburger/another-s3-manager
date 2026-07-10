@@ -10,7 +10,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from another_s3_manager.database import session_scope
@@ -67,6 +67,12 @@ def load_users() -> Dict[str, Any]:
             # Race: someone else seeded between our check and now — re-fetch
             users = session.execute(select(User).options(selectinload(User.roles))).scalars().all()
         return {"users": [_user_to_dict(u) for u in users]}
+
+
+def count_users() -> int:
+    """Number of registered users. Used by the as3m_users_total gauge."""
+    with session_scope() as session:
+        return session.execute(select(func.count(User.id))).scalar_one()
 
 
 def _reconcile_default_role(current: Optional[str], new_roles: List[str]) -> Optional[str]:
