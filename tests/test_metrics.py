@@ -187,3 +187,44 @@ def test_old_byte_counters_are_gone():
 
     assert not hasattr(metrics, "s3_bytes_uploaded_total")
     assert not hasattr(metrics, "s3_bytes_downloaded_total")
+
+
+def test_folder_delete_counts_every_object_not_every_api_call(monkeypatch):
+    """Deleting a prefix of N keys must add N, not the number of delete_objects batches."""
+    import another_s3_manager.s3_client as sc
+
+    labels = {"role": "r1", "bucket": "b1", "operation": "delete"}
+    before = _sample("as3m_s3_objects_total", labels)
+
+    # 2,500 keys => 3 batched delete_objects calls, but 2,500 objects.
+    keys = [{"Key": f"folder/{i}"} for i in range(2500)]
+
+    class _FakeClient:
+        def get_paginator(self, _name):
+            class _P:
+                def paginate(self, **_kw):
+                    return [{"Contents": keys}]
+
+            return _P()
+
+        def delete_objects(self, **_kw):
+            return {}
+
+    monkeypatch.setattr(sc, "_validate_bucket_access", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "validate_role_access", lambda role, _u: role)
+    monkeypatch.setattr(sc, "execute_with_s3_retry", lambda _r, _op, cb: cb(_FakeClient()))
+
+    result = sc.delete_object_for_role("r1", "b1", "folder/", {"username": "u"})
+
+    assert result["count"] == 2500
+    assert _sample("as3m_s3_objects_total", labels) == before + 2500
+
+
+def test_upload_and_copy_count_one_object_each():
+    from another_s3_manager.metrics import s3_objects_total
+
+    for op in ("upload", "copy"):
+        labels = {"role": "r1", "bucket": "b1", "operation": op}
+        before = _sample("as3m_s3_objects_total", labels)
+        s3_objects_total.labels(**labels).inc()
+        assert _sample("as3m_s3_objects_total", labels) == before + 1

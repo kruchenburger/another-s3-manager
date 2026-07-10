@@ -1601,7 +1601,7 @@ def put_object_for_role(
     Raises PermissionError on role/bucket access violation.
     Increments the s3_bytes_total metric (direction="upload") on success.
     """
-    from another_s3_manager.metrics import s3_bytes_total, safe_role_label
+    from another_s3_manager.metrics import s3_bytes_total, s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
@@ -1619,6 +1619,9 @@ def put_object_for_role(
         s3_bytes_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket, direction="upload").inc(
             len(content)
         )
+        s3_objects_total.labels(
+            role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="upload"
+        ).inc()
 
     execute_with_s3_retry(validated_role, "put", do_put)
 
@@ -1645,6 +1648,8 @@ def copy_object_for_role(
     """
     from botocore.exceptions import ClientError as _ClientError
 
+    from another_s3_manager.metrics import s3_objects_total, safe_role_label
+
     # Validate BOTH buckets — a role scoped to specific allowed_buckets must be
     # allowed to write the destination, not just read the source.
     _validate_bucket_access(role, source_bucket, user_dict)
@@ -1658,6 +1663,11 @@ def copy_object_for_role(
                 Key=dest_path,
                 CopySource={"Bucket": source_bucket, "Key": source_path},
             )
+            s3_objects_total.labels(
+                role=safe_role_label(validated_role or "unknown"),
+                bucket=dest_bucket,  # the copy lands in the destination
+                operation="copy",
+            ).inc()
         except _ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
             if error_code in {"404", "NoSuchKey"}:
@@ -1677,6 +1687,8 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
     Returns {"message": ..., "count": N}.
     """
     from botocore.exceptions import ClientError as _ClientError
+
+    from another_s3_manager.metrics import s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
@@ -1713,6 +1725,10 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
 
         if deleted_count == 0:
             raise FileNotFoundError(f"File or directory '{path}' not found")
+
+        s3_objects_total.labels(
+            role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="delete"
+        ).inc(deleted_count)
 
         return {"message": f"Successfully deleted {deleted_count} object(s)", "count": deleted_count}
 

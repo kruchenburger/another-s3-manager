@@ -80,6 +80,15 @@ s3_bytes_total = Counter(
     ["role", "bucket", "direction"],  # direction: upload | download
     registry=REGISTRY,
 )
+# Objects, NOT API calls. `s3_operations_total{operation="delete"}` counts
+# delete_objects batches (S3 caps multi-delete at 1000 keys per call), so a
+# folder of 5000 objects registers 5 there and 5000 here.
+s3_objects_total = Counter(
+    "as3m_s3_objects_total",
+    "S3 objects added, removed, or copied",
+    ["role", "bucket", "operation"],  # operation: upload | delete | copy
+    registry=REGISTRY,
+)
 
 # --- MCP-specific (Task 11 wires these) ---
 mcp_tool_calls_total = Counter(
