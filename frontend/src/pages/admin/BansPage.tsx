@@ -31,7 +31,7 @@ export function BansPage() {
     return (
       <EmptyState
         title="No bans currently active"
-        description="After 3 failed login attempts a user is banned for 1 hour. Admins are exempt."
+        description="After 3 failed sign-in attempts a user is banned for 1 hour. Admins are exempt."
       />
     );
   }
@@ -47,7 +47,7 @@ export function BansPage() {
   return (
     <Stack gap="md">
       <Title order={2}>Bans</Title>
-      <Text c="dimmed">Users banned after repeated failed logins.</Text>
+      <Text c="dimmed">Users banned after repeated failed sign-in attempts.</Text>
       <Table highlightOnHover striped="even">
         <Table.Thead>
           <Table.Tr>

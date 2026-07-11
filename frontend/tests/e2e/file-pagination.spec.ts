@@ -14,7 +14,7 @@ async function login(page: Page): Promise<void> {
   await page.goto("/login");
   await page.getByLabel("Username").fill(ADMIN_USER);
   await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: "Login" }).click();
+  await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByLabel("User menu")).toBeVisible({ timeout: 15_000 });
 }
 

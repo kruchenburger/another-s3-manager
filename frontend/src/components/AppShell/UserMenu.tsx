@@ -20,7 +20,7 @@ export function UserMenu() {
       onError: () =>
         notifications.show({
           color: "red",
-          title: "Logout failed",
+          title: "Couldn't sign out",
           message:
             "Please close the tab manually — your session may still be active on the server.",
           autoClose: false,
@@ -70,7 +70,7 @@ export function UserMenu() {
           leftSection={<LogOut size={14} />}
           onClick={handleLogout}
         >
-          Logout
+          Sign out
         </Menu.Item>
       </Menu.Dropdown>
     </Menu>

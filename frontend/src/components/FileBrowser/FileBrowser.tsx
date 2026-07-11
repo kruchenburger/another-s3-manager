@@ -233,7 +233,7 @@ export function FileBrowser() {
         ttlSeconds,
       );
       await navigator.clipboard.writeText(url);
-      const base = `${name} — anyone with this link can download it until ${formatTimeOfDay(expires_at)} (expires in ${formatDuration(expires_in)}). No login needed.`;
+      const base = `${name} — anyone with this link can download it until ${formatTimeOfDay(expires_at)} (expires in ${formatDuration(expires_in)}). No sign-in needed.`;
       showToast({
         color: warning ? "yellow" : "green",
         title: "Presigned URL copied",
@@ -273,7 +273,7 @@ export function FileBrowser() {
       const first = responses[0];
       const warning = responses.find((r) => r.warning)?.warning;
       const base = first
-        ? `Anyone with these links can download until ${formatTimeOfDay(first.expires_at)} (expires in ${formatDuration(first.expires_in)}). No login needed.`
+        ? `Anyone with these links can download until ${formatTimeOfDay(first.expires_at)} (expires in ${formatDuration(first.expires_in)}). No sign-in needed.`
         : "Links copied.";
       showToast({
         color: warning ? "yellow" : "green",

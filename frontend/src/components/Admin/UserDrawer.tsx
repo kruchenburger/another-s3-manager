@@ -185,7 +185,7 @@ export function UserDrawer({
               )}
               <Checkbox
                 mt={4}
-                label="Require password change on next login"
+                label="Require password change on next sign-in"
                 description="If unchecked, the user can keep this password. Recommended for service accounts or pre-shared credentials."
                 {...form.getInputProps("must_change_password", {
                   type: "checkbox",

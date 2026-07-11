@@ -76,7 +76,7 @@ export function ApiTokensPage() {
             <Text size="sm" c="dimmed">
               Use these tokens to authorize AI agents (Claude Desktop, Cursor, etc.) at the{" "}
               <Text span ff="monospace">/mcp</Text> endpoint. They do <strong>not</strong>{" "}
-              grant access to the web API — that uses your login cookie.
+              grant access to the web API — that uses your session cookie.
             </Text>
             {data && (
               <Text size="sm" c="dimmed">
