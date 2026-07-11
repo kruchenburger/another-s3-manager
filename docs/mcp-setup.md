@@ -110,7 +110,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 async with streamablehttp_client(
-    "https://your-app.example.com/mcp",
+    "https://your-app.example.com/mcp/",
     headers={"Authorization": "Bearer as3m_YOUR_TOKEN_HERE"},
 ) as (read, write, _):
     async with ClientSession(read, write) as session:
@@ -147,6 +147,9 @@ The file's extension or content sniff suggests it's binary. Either:
 The file exceeds the smaller of (per-token cap, server-level
 `mcp_global_max_read_bytes`). Either:
 
+- Use the `presigned_url` tool to hand out a time-limited download link and
+  fetch the file directly — this bypasses the read cap and works for binary
+  files too (the same escape hatch `read_file` suggests on `BINARY_CONTENT`)
 - Make a new token with a higher `max_read_bytes` (admin can raise the
   per-token cap up to 10 MB)
 - Use a non-MCP download path (web UI, direct S3 client) for large files
@@ -174,5 +177,5 @@ Set in `data/config.json` or via the admin Settings page:
 | `mcp_text_extensions`       | `[]`               | Per-deployment extension to the built-in text-extension whitelist for `read_file`. |
 | `mcp_global_max_read_bytes` | `10485760` (10 MB) | Server-level cap on `read_file` size. Cannot exceed 10 MB hard ceiling.            |
 
-MCP tool calls are covered by Prometheus metrics (`mcp_tool_calls_total`,
-`mcp_tool_response_bytes`, etc.) — see [observability.md](observability.md).
+MCP tool calls are covered by Prometheus metrics (`as3m_mcp_tool_calls_total`,
+`as3m_mcp_tool_response_bytes`, etc.) — see [observability.md](observability.md).
