@@ -38,6 +38,13 @@ export interface UploadFileOptions {
    *  leave the network buffer; for files smaller than ~1MB this can fire
    *  zero or one times. */
   onProgress?: (percent: number) => void;
+  /** Called once the request body has been fully sent to the server but the
+   *  response hasn't come back yet. For a large upload the server then spools
+   *  the body to a temp file and streams it to S3 (managed multipart) before
+   *  replying `200` — a gap of tens of seconds on multi-GB files during which
+   *  the progress bar would otherwise sit frozen at 100%. Consumers use this to
+   *  switch the UI into a "Finalizing on server…" state. */
+  onFinalizing?: () => void;
   /** AbortSignal — when triggered, the in-flight upload is cancelled and
    *  the promise rejects with `new DOMException("...", "AbortError")`. */
   signal?: AbortSignal;
@@ -81,14 +88,29 @@ export function uploadFile(
     if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
     xhr.setRequestHeader("Accept", "application/json");
 
-    if (options.onProgress) {
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable && event.total > 0) {
-          const percent = Math.round((event.loaded / event.total) * 100);
-          options.onProgress!(percent);
-        }
-      };
-    }
+    // Fire onFinalizing exactly once when the body is fully sent. Two triggers
+    // for robustness: the last progress event (loaded >= total) and
+    // `upload.onload`. `upload.onload` is the canonical "body sent" signal, but
+    // browsers vary on whether it fires promptly (or at all) after the final
+    // progress event — so we also enter the finalize phase the moment progress
+    // reaches 100%. Guarded so it only notifies once. After this point the
+    // server is spooling the body + streaming to S3 (managed multipart) before
+    // it replies `200` (`xhr.onload`, later) — a long gap on multi-GB files.
+    let finalizingNotified = false;
+    const notifyFinalizing = () => {
+      if (finalizingNotified) return;
+      finalizingNotified = true;
+      options.onFinalizing?.();
+    };
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        const percent = Math.round((event.loaded / event.total) * 100);
+        options.onProgress?.(percent);
+        if (event.loaded >= event.total) notifyFinalizing();
+      }
+    };
+    xhr.upload.onload = () => notifyFinalizing();
 
     // Centralised cleanup so we never leak the abort listener on the (often
     // batch-shared) AbortSignal. Every terminal handler (`onload`, `onerror`,

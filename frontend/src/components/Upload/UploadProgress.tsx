@@ -10,7 +10,11 @@ import { X } from "lucide-react";
 
 export interface UploadProgressItem {
   name: string;
-  status: "pending" | "uploading" | "done" | "error" | "cancelled";
+  /** "finalizing" = the body is fully sent (100%) and the server is spooling
+   *  it to a temp file + streaming to S3 (managed multipart) before replying —
+   *  a tens-of-seconds gap on multi-GB files. Rendered as "Finalizing on
+   *  server…" so the bar doesn't look frozen at 100%. */
+  status: "pending" | "uploading" | "finalizing" | "done" | "error" | "cancelled";
   error?: string;
   /** 0..100 percent of THIS file's body uploaded. Only meaningful while
    *  status === "uploading". Defaults to 0 until the browser fires the first
@@ -20,11 +24,16 @@ export interface UploadProgressItem {
 
 interface UploadProgressProps {
   items: UploadProgressItem[];
-  /** When supplied, a small "X" button renders next to the progress bar and
-   *  invokes this callback. The callback should abort the in-flight upload
-   *  and stop the loop from starting the next file. Omit to hide the button
-   *  (e.g. in the final-summary state where there's nothing to cancel). */
+  /** Abort the in-flight upload and stop the loop. Wired to the "X" button
+   *  while a file is still transferring (status "uploading"). Omit to hide the
+   *  button (e.g. the final-summary state where there's nothing to cancel). */
   onCancel?: () => void;
+  /** Dismiss the toast WITHOUT aborting. Wired to the "X" button once the file
+   *  is "finalizing": the body is already on the server, so cancelling can't
+   *  stop the S3 write anymore (it would only desync the UI into "cancelled"
+   *  while the file actually lands). Closing just hides the toast; the upload
+   *  finishes on the server in the background. */
+  onDismiss?: () => void;
 }
 
 /**
@@ -49,28 +58,41 @@ interface UploadProgressProps {
  * during a long batch; clicking it aborts the in-flight XHR via the consumer's
  * AbortController and stops subsequent files in the loop from starting.
  */
-export function UploadProgress({ items, onCancel }: UploadProgressProps) {
+export function UploadProgress({ items, onCancel, onDismiss }: UploadProgressProps) {
   const total = items.length;
   const done = items.filter((i) => i.status === "done").length;
   const errors = items.filter((i) => i.status === "error").length;
   const cancelled = items.filter((i) => i.status === "cancelled").length;
   const settled = done + errors + cancelled;
 
-  // At most one file uploads at a time (the loop awaits each), so .find() is
-  // unambiguous. Returns undefined when the batch is fully settled, or while
-  // the loop is between files (e.g. resolving onSuccess of file N before
-  // starting N+1).
-  const current = items.find((i) => i.status === "uploading");
-  const currentPercent = current?.progress ?? 0;
+  // At most one file is active at a time (the loop awaits each), so .find() is
+  // unambiguous. The active file is either mid-transfer ("uploading") or fully
+  // sent and being finalized on the server ("finalizing"). Returns undefined
+  // when the batch is fully settled, or while the loop is between files.
+  const active = items.find(
+    (i) => i.status === "uploading" || i.status === "finalizing",
+  );
+  const isFinalizing = active?.status === "finalizing";
+  // A finalizing file has already sent 100% of its bytes, so it counts as a
+  // full unit toward the batch bar (not a fraction).
+  const activePercent = isFinalizing ? 100 : (active?.progress ?? 0);
 
   // Fractional batch percent. Counting the in-flight file's partial progress
   // (e.g. 50%) as 0.5 of a completed file makes the bar move continuously
   // rather than jumping at each file boundary. Use 0..1 fractions then * 100.
-  // For a single-file batch this naturally collapses to currentPercent.
-  const fractionalSettled = settled + (current ? currentPercent / 100 : 0);
+  // For a single-file batch this naturally collapses to activePercent.
+  const fractionalSettled = settled + (active ? activePercent / 100 : 0);
   const batchPercent = total === 0 ? 0 : (fractionalSettled / total) * 100;
 
   const isSingle = total === 1;
+  // The "X" only becomes a plain "close" (dismiss) for a SINGLE-file batch —
+  // there's nothing left to summarize once its body is on the server. In a
+  // multi-file batch other files are still queued; dismissing hides the shared
+  // batch toast, and because the loop keeps running, every later toast update
+  // (progress AND the final summary) would silently no-op — the user would
+  // lose all visibility into the rest of the queue. So keep the X wired to the
+  // batch-level cancel while other files remain, even during a finalize.
+  const canDismiss = isFinalizing && isSingle;
 
   return (
     <Stack gap={6}>
@@ -84,14 +106,22 @@ export function UploadProgress({ items, onCancel }: UploadProgressProps) {
               {settled}/{total} {errors > 0 && `(${errors} failed)`}
             </Text>
           )}
-          {onCancel && (
-            <Tooltip label="Cancel upload" withArrow>
+          {/* While transferring, the "X" cancels (aborts). For a single-file
+              batch that has reached finalizing, the body is already on the
+              server so it becomes a plain "close" (dismiss) that hides the
+              toast and lets the upload finish in the background. In a
+              multi-file batch it stays wired to cancel (see canDismiss). */}
+          {(canDismiss ? onDismiss : onCancel) && (
+            <Tooltip
+              label={canDismiss ? "Close — the upload finishes on the server" : "Cancel upload"}
+              withArrow
+            >
               <ActionIcon
                 variant="subtle"
                 color="gray"
                 size="sm"
-                onClick={onCancel}
-                aria-label="Cancel upload"
+                onClick={canDismiss ? onDismiss : onCancel}
+                aria-label={canDismiss ? "Close upload notification" : "Cancel upload"}
               >
                 <X size={14} />
               </ActionIcon>
@@ -107,28 +137,42 @@ export function UploadProgress({ items, onCancel }: UploadProgressProps) {
       <Progress
         value={batchPercent}
         color={errors > 0 ? "yellow" : undefined}
+        // Animated stripes during the server-side finalize phase so a bar
+        // parked at 100% reads as "still working", not "hung".
+        animated={isFinalizing}
       />
-      {current && !isSingle && (
-        // For multi-file batches, show the current filename below the bar so
-        // the user knows which file is being uploaded. Skip for single-file
-        // batches — the headline already says "Uploading 1 file" and adding
-        // the filename would just be visual noise.
+      {active && !isSingle && (
+        // For multi-file batches, show the active filename below the bar so
+        // the user knows which file is in flight. During the finalize phase,
+        // say so rather than just naming the file.
         <Text size="xs" c="dimmed" truncate>
-          {current.name}
+          {isFinalizing ? `Finalizing ${active.name} on server…` : active.name}
         </Text>
       )}
-      {current && isSingle && (
+      {active && isSingle && (
         // For single-file batches, the bar IS the file's progress (per the
-        // formula above), so we still want to show the filename + the byte
-        // percent under it for the user to see *which* file and *how far*.
+        // formula above). Show the filename + byte percent while transferring;
+        // once the body is fully sent and the server is streaming to S3, swap
+        // to "Finalizing on server…" and drop the percent (it's parked at 100).
         <Group justify="space-between" wrap="nowrap" gap="xs">
           <Text size="xs" c="dimmed" truncate style={{ flex: 1, minWidth: 0 }}>
-            {current.name}
+            {isFinalizing ? "Finalizing on server…" : active.name}
           </Text>
-          <Text size="xs" c="dimmed">
-            {Math.round(currentPercent)}%
-          </Text>
+          {!isFinalizing && (
+            <Text size="xs" c="dimmed">
+              {Math.round(activePercent)}%
+            </Text>
+          )}
         </Group>
+      )}
+      {canDismiss && (
+        // Reassure the user they don't have to sit and watch — the body is on
+        // the server now, so it finishes even if they close this or leave.
+        // Only for single-file batches: in a multi-file batch closing would
+        // hide the queue's progress + summary, so we don't invite it there.
+        <Text size="xs" c="dimmed">
+          Safe to close — the upload will finish on the server.
+        </Text>
       )}
     </Stack>
   );

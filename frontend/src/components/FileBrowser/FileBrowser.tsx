@@ -528,6 +528,11 @@ export function FileBrowser() {
       // signal.aborted=true so the loop bails before starting the next file.
       const controller = new AbortController();
       const cancel = () => controller.abort();
+      // Hide the toast WITHOUT aborting — wired to the "X" once a file is
+      // finalizing (body already on the server). Aborting then would only
+      // desync the UI; the server finishes the S3 write regardless, so we just
+      // close the toast and let it complete in the background.
+      const dismiss = () => notifications.hide(notifId);
 
       // Hold the latest snapshot so the cancel button can show a sensible
       // final-state toast (otherwise the toast keeps re-rendering with stale
@@ -537,14 +542,14 @@ export function FileBrowser() {
       const renderToast = () => {
         notifications.update({
           id: notifId,
-          message: <UploadProgress items={updated} onCancel={cancel} />,
+          message: <UploadProgress items={updated} onCancel={cancel} onDismiss={dismiss} />,
           autoClose: false,
           withCloseButton: false,
         });
       };
 
       const notifId = notifications.show({
-        message: <UploadProgress items={items} onCancel={cancel} />,
+        message: <UploadProgress items={items} onCancel={cancel} onDismiss={dismiss} />,
         autoClose: false,
         withCloseButton: false,
       });
@@ -608,6 +613,15 @@ export function FileBrowser() {
               // otherwise trigger a Mantine notifications re-render.
               if (updated[i].progress === percent) return;
               updated[i] = { ...updated[i], progress: percent };
+              renderToast();
+            },
+            onFinalizing: () => {
+              // Body fully sent; the server is now spooling the body to a temp
+              // file and streaming it to S3 (managed multipart) before it
+              // replies. On a multi-GB file that's tens of seconds during which
+              // the bar would sit frozen at 100% — switch to a "Finalizing…"
+              // state so the user sees the server is still working, not hung.
+              updated[i] = { ...updated[i], status: "finalizing", progress: 100 };
               renderToast();
             },
           });
