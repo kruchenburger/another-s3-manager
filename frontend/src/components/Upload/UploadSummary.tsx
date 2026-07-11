@@ -124,18 +124,27 @@ export function UploadSummary({ items, autoCloseMs }: UploadSummaryProps) {
             // scrollbar so it doesn't dominate the panel.
             className={classes.scrollArea}
           >
-            <List size="xs" spacing={2} withPadding>
+            <List size="xs" spacing={6} withPadding>
               {failed.map((item) => (
                 <List.Item key={item.name}>
-                  <Text size="xs" component="span" fw={500}>
-                    {item.name}
-                  </Text>
-                  {item.error && (
-                    <Text size="xs" component="span" c="dimmed">
-                      {" — "}
-                      {item.error}
+                  {/* Filename and error on separate lines — the error (which
+                      limit was hit) is the useful part and must never be
+                      pushed off by a long wrapping filename again (this alone
+                      fixes the reported bug, regardless of the filename's own
+                      overflow behavior). The filename ellipsizes to a single
+                      line via `truncate`; title carries the full name on
+                      hover, and the full name stays in the DOM text for
+                      screen readers. */}
+                  <Stack gap={2}>
+                    <Text size="xs" fw={500} truncate title={item.name} className={classes.filename}>
+                      {item.name}
                     </Text>
-                  )}
+                    {item.error && (
+                      <Text size="xs" c="dimmed">
+                        {item.error}
+                      </Text>
+                    )}
+                  </Stack>
                 </List.Item>
               ))}
             </List>

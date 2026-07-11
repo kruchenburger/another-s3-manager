@@ -43,8 +43,43 @@ describe("UploadSummary", () => {
     );
     expect(screen.getByText(/2\/3 files uploaded — 1 failed/)).toBeInTheDocument();
     // The failed-files spoiler is open by default when failed.length ≤ 3.
-    expect(screen.getByText("huge.zip")).toBeInTheDocument();
+    // The filename ellipsizes to one line via Mantine `truncate`; the full
+    // name is carried on the `title` attribute (hover tooltip), so we assert
+    // via getByTitle.
+    expect(screen.getByTitle("huge.zip")).toBeInTheDocument();
     expect(screen.getByText(/419 MB, limit is 100 MB/)).toBeInTheDocument();
+  });
+
+  it("keeps the full filename and the full error visible (not clipped) for a long filename", () => {
+    const longName =
+      "MediaTek-MT7920-MT7921-MT7922-and-MT7925-Wi-Fi-UWD_5153K_WIN64_5.5.0.3236_A12.EXE";
+    const fullError = "File is 41.9 MB, limit is 1.0 MB";
+    render(
+      <MantineProvider>
+        <UploadSummary
+          items={[{ name: longName, status: "error", error: fullError }]}
+        />
+      </MantineProvider>,
+    );
+
+    // The filename ellipsizes visually via CSS `truncate`, but the DOM text
+    // node still holds the FULL name (truncation is overflow-only), so the
+    // extension is reachable by both getByTitle (hover tooltip) and screen
+    // readers reading textContent.
+    const filenameRow = screen.getByTitle(longName);
+    expect(filenameRow).toBeInTheDocument();
+    expect(filenameRow).toHaveTextContent(longName);
+
+    // The error is never split/truncated — the full string, including the
+    // trailing unit ("MB"), must be present in the DOM.
+    const errorNode = screen.getByText(fullError);
+    expect(errorNode).toBeInTheDocument();
+
+    // Filename and error render as separate elements/lines, not one inline
+    // run of text — the error can no longer be pushed off by a wrapping name.
+    expect(errorNode).not.toBe(filenameRow);
+    expect(filenameRow.contains(errorNode)).toBe(false);
+    expect(errorNode.contains(filenameRow)).toBe(false);
   });
 
   it("collapses the failed list into a Spoiler when > 3 failed", async () => {
@@ -74,8 +109,10 @@ describe("UploadSummary", () => {
     const toggle = screen.getByText(/show 5 failed files/i);
     expect(toggle).toBeInTheDocument();
     await userEvent.click(toggle);
-    // After expand, the first failed name is now in view.
-    expect(screen.getByText("bad-0.bin")).toBeInTheDocument();
+    // After expand, the first failed name is now in view. Asserted via
+    // `title` (see note above) — the filename ellipsizes via `truncate` and
+    // carries its full name on the title attribute.
+    expect(screen.getByTitle("bad-0.bin")).toBeInTheDocument();
   });
 
   it("shows a 'cancelled' headline when the user aborted the batch with no errors", () => {
