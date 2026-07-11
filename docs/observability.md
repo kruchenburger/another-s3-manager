@@ -39,12 +39,12 @@ file path.
 
 ### HTTP
 
-| Metric                               | Type      | Labels                                   | Notes                                             |
-| ------------------------------------ | --------- | ---------------------------------------- | ------------------------------------------------- |
-| `as3m_http_requests_total`           | Counter   | `method`, `path_template`, `status_code` | Route pattern, not raw URL                        |
-| `as3m_http_request_duration_seconds` | Histogram | `method`, `path_template`                |                                                   |
-| `as3m_http_requests_in_flight`       | Gauge     | —                                        | HTTP requests currently being served              |
-| `as3m_upload_rejected_total`         | Counter   | `reason`                                 | Uploads refused before reaching S3 (`size_limit`) |
+| Metric                               | Type      | Labels                                   | Notes                                                                                                                                                                                                                                                               |
+| ------------------------------------ | --------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `as3m_http_requests_total`           | Counter   | `method`, `path_template`, `status_code` | Route pattern, not raw URL                                                                                                                                                                                                                                          |
+| `as3m_http_request_duration_seconds` | Histogram | `method`, `path_template`                |                                                                                                                                                                                                                                                                     |
+| `as3m_http_requests_in_flight`       | Gauge     | —                                        | HTTP requests currently being served                                                                                                                                                                                                                                |
+| `as3m_upload_rejected_total`         | Counter   | `reason`                                 | Uploads refused before reaching S3 (`size_limit`). Emitted by both the upload body-guard middleware (declared `Content-Length` over the limit) and the handler's spooled-size check. `411` protocol rejects (missing `Content-Length`) are deliberately not counted |
 
 ### Auth
 

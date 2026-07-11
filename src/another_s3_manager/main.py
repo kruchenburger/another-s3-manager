@@ -209,6 +209,11 @@ app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION, lifespan=lifespan)
 # For production deployments expecting public exposure, put the app behind
 # Cloudflare Access / WAF (or any reverse proxy with auth) — that is the right
 # layer for IP-level rate limiting and DoS protection.
+#
+# Distinct from rate limiting: SINGLE-REQUEST resource exhaustion (one
+# unauthenticated request streaming an unbounded body to the temp dir) is
+# handled in-app by _upload_body_guard below, because no reverse-proxy body
+# cap is guaranteed to exist on a bare `docker compose` deployment.
 
 
 def resolve_max_file_size() -> int:
