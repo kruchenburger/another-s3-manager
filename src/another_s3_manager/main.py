@@ -211,6 +211,20 @@ app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION, lifespan=lifespan)
 # layer for IP-level rate limiting and DoS protection.
 
 
+def resolve_max_file_size() -> int:
+    """Resolve the upload size limit in bytes — the single source of truth.
+
+    Precedence: admin-editable config `max_file_size` → `MAX_FILE_SIZE` env
+    var → 100 MB default. Shared by the upload body-guard middleware and the
+    upload route handler so the two enforcement points can never drift.
+    """
+    config = load_config(force_reload=False)
+    max_file_size = config.get("max_file_size")
+    if max_file_size is None:
+        return int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
+    return int(max_file_size)
+
+
 # Exception handler to ensure all errors return JSON
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -1841,13 +1855,10 @@ async def upload_file(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        # Get max_file_size from config (with fallback to env var)
+        # config is still needed below for upload_inline_extensions; the size
+        # limit itself comes from the shared resolver.
         config = load_config(force_reload=False)
-        max_file_size = config.get("max_file_size")
-        if max_file_size is None:
-            max_file_size = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
-        else:
-            max_file_size = int(max_file_size)
+        max_file_size = resolve_max_file_size()
 
         # Check file size if available (some clients provide Content-Length)
         # If not available, we'll check during streaming
