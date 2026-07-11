@@ -1,5 +1,6 @@
 import { NumberInput, Stack, Switch, TagsInput, Text } from "@mantine/core";
 import type { UseFormReturnType } from "@mantine/form";
+import { FieldLabelWithHelp } from "@/components/FieldLabelWithHelp/FieldLabelWithHelp";
 import type { SettingsFormValues } from "./SettingsPage";
 
 interface SettingsMcpTabProps {
@@ -28,8 +29,13 @@ export function SettingsMcpTab({ form, readOnly }: SettingsMcpTabProps) {
         {...form.getInputProps("mcp_disable_writes", { type: "checkbox" })}
       />
       <NumberInput
-        label="Global max read bytes (MB)"
-        description="Server-wide cap on read_file response size. Applied as min(token cap, this). Hard ceiling: 10 MB."
+        label={
+          <FieldLabelWithHelp
+            label="Global max read bytes (MB)"
+            help="Server-wide cap on read_file response size. Applied as min(token cap, this). Hard ceiling: 10 MB."
+          />
+        }
+        description="Hard ceiling: 10 MB."
         min={0.001}
         max={10}
         step={0.5}
@@ -38,8 +44,13 @@ export function SettingsMcpTab({ form, readOnly }: SettingsMcpTabProps) {
         {...form.getInputProps("mcp_global_max_read_bytes_mb")}
       />
       <TagsInput
-        label="Additional text extensions for read_file"
-        description="Per-deployment whitelist extensions beyond built-in defaults (e.g. mdx, rst, adoc)."
+        label={
+          <FieldLabelWithHelp
+            label="Additional text extensions for read_file"
+            help="Per-deployment whitelist extensions beyond built-in defaults (e.g. mdx, rst, adoc)."
+          />
+        }
+        description="e.g. mdx, rst, adoc"
         placeholder="Add extension and press Enter"
         disabled={readOnly}
         {...form.getInputProps("mcp_text_extensions")}

@@ -1,5 +1,6 @@
 import { NumberInput, Select, Stack, Switch, TagsInput, Text } from "@mantine/core";
 import type { UseFormReturnType } from "@mantine/form";
+import { FieldLabelWithHelp } from "@/components/FieldLabelWithHelp/FieldLabelWithHelp";
 import { ttlSelectDataUpTo, withConfiguredValue } from "@/utils/ttlPresets";
 import type { SettingsFormValues } from "./SettingsPage";
 
@@ -12,8 +13,13 @@ export function SettingsGeneralTab({ form, readOnly }: SettingsGeneralTabProps) 
   return (
     <Stack gap="md" maw={520} mt="md">
       <NumberInput
-        label="Max client load"
-        description="Objects loaded into the browser before 'Load more' appears. Larger folders paginate on the server beyond this. Default 10000."
+        label={
+          <FieldLabelWithHelp
+            label="Max client load"
+            help="Objects loaded into the browser before 'Load more' appears. Larger folders paginate on the server beyond this. Default 10000."
+          />
+        }
+        description="Default 10000."
         min={1}
         max={200000}
         step={1000}
@@ -21,8 +27,13 @@ export function SettingsGeneralTab({ form, readOnly }: SettingsGeneralTabProps) 
         {...form.getInputProps("max_client_load")}
       />
       <Switch
-        label="Disable deletion"
-        description="When on, S3 file/folder delete operations return 403 server-side. Admin actions (deleting users, removing bans, deleting roles) are NOT affected."
+        label={
+          <FieldLabelWithHelp
+            label="Disable deletion"
+            help="When on, S3 file/folder delete operations return 403 server-side. Admin actions (deleting users, removing bans, deleting roles) are NOT affected."
+          />
+        }
+        description="Blocks S3 file/folder deletes; admin actions unaffected."
         disabled={readOnly}
         {...form.getInputProps("disable_deletion", { type: "checkbox" })}
       />
@@ -40,14 +51,24 @@ export function SettingsGeneralTab({ form, readOnly }: SettingsGeneralTabProps) 
         {...form.getInputProps("max_file_size_mb")}
       />
       <TagsInput
-        label="Inline preview extensions (text)"
-        description="Text files with these extensions preview inline in the UI. Pre-filled with sensible text defaults — add, remove, or clear them all to disable text preview entirely. Images, video and PDF always preview regardless."
+        label={
+          <FieldLabelWithHelp
+            label="Inline preview extensions (text)"
+            help="Text files with these extensions preview inline in the UI. Pre-filled with sensible text defaults — add, remove, or clear them all to disable text preview entirely. Images, video and PDF always preview regardless."
+          />
+        }
+        description="Pre-filled with sensible text defaults."
         disabled={readOnly}
         {...form.getInputProps("preview_text_extensions")}
       />
       <TagsInput
-        label="Open in browser on upload"
-        description="Files with these extensions get Content-Disposition: inline set when uploaded, so they open in the browser (instead of downloading) when served via a CDN or presigned link. Applies to new uploads only. Defaults to pdf + common images."
+        label={
+          <FieldLabelWithHelp
+            label="Open in browser on upload"
+            help="Files with these extensions get Content-Disposition: inline set when uploaded, so they open in the browser (instead of downloading) when served via a CDN or presigned link. Applies to new uploads only. Defaults to pdf + common images."
+          />
+        }
+        description="Defaults to pdf + common images."
         disabled={readOnly}
         {...form.getInputProps("upload_inline_extensions")}
       />
@@ -68,8 +89,13 @@ export function SettingsGeneralTab({ form, readOnly }: SettingsGeneralTabProps) 
         disabled={readOnly}
       />
       <Select
-        label="Maximum link validity"
-        description="Upper bound for per-link overrides. Ceiling is 7 days (AWS SigV4). Roles using temporary credentials (assume_role / profile) may expire sooner regardless."
+        label={
+          <FieldLabelWithHelp
+            label="Maximum link validity"
+            help="Upper bound for per-link overrides. Ceiling is 7 days (AWS SigV4). Roles using temporary credentials (assume_role / profile) may expire sooner regardless."
+          />
+        }
+        description="Ceiling: 7 days (AWS SigV4 limit)."
         data={withConfiguredValue(ttlSelectDataUpTo(604800), form.values.presigned_url_max_ttl)}
         value={String(form.values.presigned_url_max_ttl)}
         onChange={(v) => {

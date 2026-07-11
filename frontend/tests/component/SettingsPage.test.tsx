@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -88,9 +89,9 @@ describe("SettingsPage", () => {
     renderPage();
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Max client load")).toBeInTheDocument(),
+      expect(screen.getByLabelText("Max client load", { selector: "input" })).toBeInTheDocument(),
     );
-    expect(screen.getByLabelText("Max client load")).toHaveValue("10000");
+    expect(screen.getByLabelText("Max client load", { selector: "input" })).toHaveValue("10000");
     // Mantine Switch components have role="switch"; addressed by accessible name.
     expect(
       screen.getByRole("switch", { name: /disable deletion/i }),
@@ -128,7 +129,7 @@ describe("SettingsPage", () => {
     });
     renderPage();
     await waitFor(() =>
-      expect(screen.getByLabelText("Max client load")).toBeDisabled(),
+      expect(screen.getByLabelText("Max client load", { selector: "input" })).toBeDisabled(),
     );
     expect(
       screen.getByRole("switch", { name: /disable deletion/i }),
@@ -148,7 +149,7 @@ describe("SettingsPage", () => {
     // Save is disabled until something is dirty (matches standard form UX).
     // Bump max_client_load to enable Save without changing the MB field —
     // that lets us verify the byte-precision-preserved path on max_file_size.
-    fireEvent.change(screen.getByLabelText("Max client load"), {
+    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
       target: { value: "300" },
     });
     clickSaveSettings();
@@ -175,7 +176,7 @@ describe("SettingsPage", () => {
     // untouched — that's what this test is verifying. max_client_load lives
     // in the General tab too, but its dirty state only affects that one
     // field; max_file_size_mb stays clean and triggers the byte-preserve path.
-    fireEvent.change(screen.getByLabelText("Max client load"), {
+    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
       target: { value: "300" },
     });
     clickSaveSettings();
@@ -204,7 +205,7 @@ describe("SettingsPage", () => {
     renderPage();
     await waitForSaveButton();
     // Dirty any field so Save is enabled
-    fireEvent.change(screen.getByLabelText("Max client load"), {
+    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
       target: { value: "300" },
     });
     clickSaveSettings();
@@ -265,7 +266,7 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("tab", { name: /mcp/i })).toBeInTheDocument();
 
     // General is the default tab — its fields are reachable by label.
-    expect(screen.getByLabelText("Max client load")).toBeInTheDocument();
+    expect(screen.getByLabelText("Max client load", { selector: "input" })).toBeInTheDocument();
     // Security and MCP tab panels are also mounted (keepMounted) so RTL
     // can find their fields by label even without clicking the tab. Mantine 9
     // mounts inactive keepMounted panels on a deferred tick (not the first
@@ -289,7 +290,7 @@ describe("SettingsPage", () => {
     expect(saveButton()).toBeDisabled();
 
     // Dirty a field → Save activates
-    fireEvent.change(screen.getByLabelText("Max client load"), {
+    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
       target: { value: "500" },
     });
     expect(saveButton()).not.toBeDisabled();
@@ -307,11 +308,11 @@ describe("SettingsPage", () => {
     renderPage();
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Max client load")).toBeInTheDocument(),
+      expect(screen.getByLabelText("Max client load", { selector: "input" })).toBeInTheDocument(),
     );
 
     // Edit a General field
-    fireEvent.change(screen.getByLabelText("Max client load"), {
+    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
       target: { value: "500" },
     });
     // Edit a Security field (no tab switch needed — keepMounted exposes it)
@@ -344,7 +345,7 @@ describe("SettingsPage", () => {
 
     await waitForSaveButton();
     // Dirty a field so Save is enabled
-    fireEvent.change(screen.getByLabelText("Max client load"), {
+    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
       target: { value: "300" },
     });
     // First click — should trigger one mutation
@@ -374,14 +375,14 @@ describe("SettingsPage", () => {
     const { rerender } = renderPage();
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Max client load")).toBeInTheDocument(),
+      expect(screen.getByLabelText("Max client load", { selector: "input" })).toBeInTheDocument(),
     );
 
     // User starts editing
-    fireEvent.change(screen.getByLabelText("Max client load"), {
+    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
       target: { value: "750" },
     });
-    expect(screen.getByLabelText("Max client load")).toHaveValue("750");
+    expect(screen.getByLabelText("Max client load", { selector: "input" })).toHaveValue("750");
 
     // Simulate a background refetch by re-resolving getConfig with a fresh
     // object — same payload, new reference. The component re-renders;
@@ -409,7 +410,7 @@ describe("SettingsPage", () => {
     );
     // After "refetch", the user's typed value must still be 750 — NOT 200.
     // (This is the dirty-guard contract: while form.isDirty(), do not repopulate.)
-    expect(screen.getByLabelText("Max client load")).toHaveValue("750");
+    expect(screen.getByLabelText("Max client load", { selector: "input" })).toHaveValue("750");
   });
 
   it("shows an inline error on Max client load when value exceeds the 200000 cap", async () => {
@@ -419,7 +420,7 @@ describe("SettingsPage", () => {
     await waitForSaveButton();
 
     // Push value over the 200000 cap
-    fireEvent.change(screen.getByLabelText("Max client load"), {
+    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
       target: { value: "500000" },
     });
 
@@ -452,7 +453,7 @@ describe("SettingsPage", () => {
     await waitForSaveButton();
 
     // Initial edit + click Save
-    fireEvent.change(screen.getByLabelText("Max client load"), {
+    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
       target: { value: "300" },
     });
     clickSaveSettings();
@@ -463,7 +464,7 @@ describe("SettingsPage", () => {
     // baseline on save success and silently lost (button goes disabled,
     // current value stays in the input but isDirty() returns false). The
     // fix uses form.getValues() so the live value stays dirty.
-    fireEvent.change(screen.getByLabelText("Max client load"), {
+    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
       target: { value: "400" },
     });
 
@@ -478,7 +479,82 @@ describe("SettingsPage", () => {
 
     // The value the user typed last must still be visible — not snapped
     // back to anything else.
-    expect(screen.getByLabelText("Max client load")).toHaveValue("400");
+    expect(screen.getByLabelText("Max client load", { selector: "input" })).toHaveValue("400");
+  });
+});
+
+// -------------------------------------------------------------------------
+// Regression tests for the description-collapse + info-popover redesign
+// (fields with a long description now show a one-line description plus a
+// click-to-open "i" chip carrying the full original copy).
+// -------------------------------------------------------------------------
+describe("Settings — field info chips", () => {
+  beforeEach(() => {
+    vi.mocked(getConfig).mockReset();
+    vi.mocked(saveConfig).mockReset();
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+  });
+
+  it("shows a short one-line description plus an info chip for Max client load, and reveals the full text on click", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText("Max client load", { selector: "input" }),
+      ).toBeInTheDocument(),
+    );
+
+    // Short description is always visible.
+    expect(screen.getByText("Default 10000.")).toBeInTheDocument();
+    // Full explanation is not shown until the chip is opened.
+    expect(
+      screen.queryByText(/larger folders paginate on the server/i),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /more about max client load/i }),
+    );
+
+    expect(
+      await screen.findByText(/larger folders paginate on the server/i),
+    ).toBeInTheDocument();
+    // Short description keeps rendering alongside the opened popover.
+    expect(screen.getByText("Default 10000.")).toBeInTheDocument();
+  });
+
+  it("does not toggle Disable deletion when its info chip is clicked", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("switch", { name: /disable deletion/i }),
+      ).toBeInTheDocument(),
+    );
+
+    const toggle = screen.getByRole("switch", { name: /disable deletion/i });
+    expect(toggle).not.toBeChecked();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /more about disable deletion/i }),
+    );
+
+    expect(
+      await screen.findByText(/admin actions.*are not affected/i),
+    ).toBeInTheDocument();
+    expect(toggle).not.toBeChecked();
+  });
+
+  it("leaves already-short descriptions (e.g. Enable lazy loading) without an info chip", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("switch", { name: /enable lazy loading/i }),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText("Pagination on file lists for large buckets."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /more about enable lazy loading/i }),
+    ).not.toBeInTheDocument();
   });
 });
 
