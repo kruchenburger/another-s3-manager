@@ -36,3 +36,15 @@
 .scrollArea::-webkit-scrollbar-thumb:hover {
   background-color: var(--mantine-color-gray-4);
 }
+
+/* The failed filename ellipsizes to one line (Mantine `truncate` adds
+   overflow/text-overflow/white-space: nowrap) instead of wrapping across
+   2-3 lines and shoving the error (the useful "size vs limit" part)
+   off-screen. Its width is bounded by the fixed-width notification, which
+   propagates a definite width down through the List/Stack ancestors;
+   max-width: 100% (with min-width: 0 as a defensive floor) keeps a long
+   name from pushing past that so `truncate`'s ellipsis applies. */
+.filename {
+  min-width: 0;
+  max-width: 100%;
+}
