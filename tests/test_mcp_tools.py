@@ -256,6 +256,36 @@ async def test_upload_file_happy_path(alice_user, tool_registry):
 
 
 @pytest.mark.asyncio
+async def test_upload_file_still_uses_put_object_for_role(alice_user, tool_registry):
+    """G4 regression lock: the web upload route moved to the streaming
+    upload_fileobj_for_role, but the MCP tool must keep calling the
+    bytes-based put_object_for_role with its UNCHANGED positional signature
+    (role, bucket, path, content, user). If this test breaks, someone
+    changed a contract the MCP path depends on."""
+    uid, plaintext = alice_user
+    content = b"mcp still uses bytes"
+    encoded = base64.b64encode(content).decode()
+    with patch("another_s3_manager.s3_client.put_object_for_role", return_value=None) as spy:
+        result = await _call(
+            tool_registry,
+            "upload_file",
+            _fake_request(plaintext),
+            role="Default",
+            bucket="my-bucket",
+            path="lock.txt",
+            content_base64=encoded,
+        )
+    spy.assert_called_once()
+    args, _ = spy.call_args
+    assert args[0] == "Default"
+    assert args[1] == "my-bucket"
+    assert args[2] == "lock.txt"
+    assert args[3] == content  # decoded bytes, NOT a fileobj
+    assert args[4]["username"] == "alice_tools"
+    assert result == {"ok": True, "bucket": "my-bucket", "path": "lock.txt", "size": len(content)}
+
+
+@pytest.mark.asyncio
 async def test_upload_file_read_only_token(alice_readonly, tool_registry):
     """Read-only token → McpError(READ_ONLY_TOKEN)."""
     uid, plaintext = alice_readonly
