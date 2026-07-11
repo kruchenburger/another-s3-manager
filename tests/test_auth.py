@@ -475,6 +475,70 @@ def test_get_current_user_401_when_cookie_invalid():
     assert exc.value.status_code == 401
 
 
+def test_has_valid_session_true_for_valid_cookie(valid_jwt_token):
+    """A well-formed, unexpired JWT with a `sub` claim -> True. This mirrors
+    get_current_user's happy path but WITHOUT touching load_users()."""
+    auth = reload_auth()
+    request = _make_request_with_cookie(valid_jwt_token)
+    assert auth.has_valid_session(request) is True
+
+
+def test_has_valid_session_false_when_cookie_missing():
+    """No access_token cookie -> False."""
+    auth = reload_auth()
+    request = _make_request_with_cookie(None)
+    assert auth.has_valid_session(request) is False
+
+
+def test_has_valid_session_false_for_garbage_token():
+    """Undecodable/malformed token -> False."""
+    auth = reload_auth()
+    request = _make_request_with_cookie("not-a-jwt")
+    assert auth.has_valid_session(request) is False
+
+
+def test_has_valid_session_false_for_expired_token(monkeypatch):
+    """Expired JWT -> False. jose raises ExpiredSignatureError (a JWTError
+    subclass) on decode, which must be treated the same as any other
+    undecodable token."""
+    monkeypatch.setenv("JWT_SECRET_KEY", "secret")
+    auth = reload_auth()
+    expired_token = jwt.encode(
+        {"sub": "user", "exp": int(time.time()) - 60},
+        "secret",
+        algorithm="HS256",
+    )
+    request = _make_request_with_cookie(expired_token)
+    assert auth.has_valid_session(request) is False
+
+
+def test_has_valid_session_false_when_sub_missing(monkeypatch):
+    """Valid signature and not expired, but no `sub` claim -> False."""
+    monkeypatch.setenv("JWT_SECRET_KEY", "secret")
+    auth = reload_auth()
+    token = jwt.encode(
+        {"csrf_token": "tok", "exp": int(time.time()) + 60},
+        "secret",
+        algorithm="HS256",
+    )
+    request = _make_request_with_cookie(token)
+    assert auth.has_valid_session(request) is False
+
+
+def test_has_valid_session_never_touches_load_users(monkeypatch, valid_jwt_token):
+    """The whole point of has_valid_session is to be DB-free — assert it never
+    calls load_users(), unlike get_current_user."""
+    import another_s3_manager.users as users_module
+
+    def _boom():
+        raise AssertionError("has_valid_session must not call load_users()")
+
+    monkeypatch.setattr(users_module, "load_users", _boom)
+    auth = reload_auth()
+    request = _make_request_with_cookie(valid_jwt_token)
+    assert auth.has_valid_session(request) is True
+
+
 def test_verify_password_warn_logs_when_hash_is_corrupt(caplog):
     """If both bcrypt AND pbkdf2_sha256 raise on a corrupted hash, we still
     return False (correct UX — user gets 'wrong password'), but we WARN-log

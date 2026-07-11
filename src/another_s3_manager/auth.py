@@ -101,6 +101,38 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
     return encoded_jwt
 
 
+def _decode_session_payload(request: Request) -> Optional[Dict[str, Any]]:
+    """Read the `access_token` cookie and decode it as a JWT session payload.
+
+    Returns None if the cookie is missing, or if decoding fails for any
+    reason (bad signature, malformed token, expired `exp` claim — jose raises
+    `JWTError`/`ExpiredSignatureError` for all of these). Pure JWT decode,
+    no DB access. Shared by `has_valid_session` (cheap, DB-free check) and
+    `get_current_user` (authoritative check) so the two can never drift on
+    secret/algorithm/expiry handling.
+    """
+    token = request.cookies.get("access_token")
+    if not token:
+        return None
+    try:
+        return jwt.decode(token, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        return None
+
+
+def has_valid_session(request: Request) -> bool:
+    """Cheap, DB-free check that the request carries a valid, unexpired JWT
+    session cookie. Used by the upload body-guard to reject unauthenticated
+    uploads BEFORE the body is read, WITHOUT the synchronous load_users() DB
+    query that get_current_user does (which must not run on the event loop).
+    A valid JWT whose user was since deleted still passes here; the handler's
+    Depends(get_current_user) does the authoritative user lookup and rejects
+    it — that is an authenticated actor, not an unauthenticated DoS vector.
+    """
+    payload = _decode_session_payload(request)
+    return payload is not None and payload.get("sub") is not None
+
+
 def get_current_user(request: Request) -> Dict[str, Any]:
     """Get current authenticated user from JWT token in httpOnly cookie."""
     # Import here to avoid circular dependency
@@ -113,15 +145,14 @@ def get_current_user(request: Request) -> Dict[str, Any]:
             detail="Not authenticated",
         )
 
-    try:
-        payload = jwt.decode(token, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
-        username: Optional[str] = payload.get("sub")
-        if username is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials",
-            )
-    except JWTError:
+    payload = _decode_session_payload(request)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    username: Optional[str] = payload.get("sub")
+    if username is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",

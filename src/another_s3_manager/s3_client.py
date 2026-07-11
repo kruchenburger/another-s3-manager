@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any, Callable, Dict, Iterator, Optional, Tuple, TypeVar
+from typing import Any, BinaryIO, Callable, Dict, Iterator, Optional, Tuple, TypeVar
 from typing import Any as AnyType
 
 import boto3
@@ -1653,6 +1653,56 @@ def put_object_for_role(
         s3_client.put_object(**put_params)
         s3_bytes_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket, direction="upload").inc(
             len(content)
+        )
+        s3_objects_total.labels(
+            role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="upload"
+        ).inc()
+
+    execute_with_s3_retry(validated_role, "put", do_put)
+
+
+def upload_fileobj_for_role(
+    role: str,
+    bucket: str,
+    path: str,
+    fileobj: BinaryIO,
+    user_dict: Dict[str, Any],
+    content_type: str = "application/octet-stream",
+    content_disposition: Optional[str] = None,
+    size: Optional[int] = None,
+) -> None:
+    """
+    Stream `fileobj` to `bucket`/`path` using `role` via boto3's managed
+    transfer (upload_fileobj): no full-body copy in RAM and automatic
+    multipart above the transfer threshold, which lifts put_object's 5 GB
+    single-request ceiling to the S3 5 TB object maximum.
+
+    Used by the web upload route with the multipart parser's spooled temp
+    file. The MCP upload path stays on put_object_for_role (bytes) — do not
+    merge the two: their signatures are separate contracts.
+
+    `size` is used only for s3_bytes_total accounting (the caller knows the
+    exact spooled size); pass None to skip byte accounting.
+
+    Raises PermissionError on role/bucket access violation.
+    Increments s3_bytes_total (direction="upload") and s3_objects_total
+    (operation="upload") exactly once, on success.
+    """
+    from another_s3_manager.metrics import s3_bytes_total, s3_objects_total, safe_role_label
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_put(s3_client):
+        # execute_with_s3_retry may invoke this callback a SECOND time after a
+        # credential refresh — rewind first, or the retry uploads 0 bytes.
+        fileobj.seek(0)
+        extra_args: Dict[str, Any] = {"ContentType": content_type}
+        if content_disposition:
+            extra_args["ContentDisposition"] = content_disposition
+        s3_client.upload_fileobj(fileobj, bucket, path, ExtraArgs=extra_args)
+        s3_bytes_total.labels(role=safe_role_label(validated_role or "unknown"), bucket=bucket, direction="upload").inc(
+            size or 0
         )
         s3_objects_total.labels(
             role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="upload"

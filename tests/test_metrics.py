@@ -385,7 +385,13 @@ def test_in_flight_gauge_returns_to_zero_after_exception():
 
 
 def test_oversize_upload_is_counted_as_size_limit(app_client, monkeypatch):
-    """A 400 for exceeding max_file_size must be observable, not an anonymous 4xx."""
+    """A 413 for exceeding max_file_size must be observable, not an anonymous 4xx.
+
+    The upload body-guard middleware now intercepts oversize declared
+    Content-Length before the handler runs (413, was a handler-level 400) --
+    it increments the same as3m_upload_rejected_total{reason=size_limit}
+    counter the handler used to, so the metric assertion is unchanged.
+    """
     from another_s3_manager import main as main_module
     from tests.test_main import login
 
@@ -406,7 +412,7 @@ def test_oversize_upload_is_counted_as_size_limit(app_client, monkeypatch):
         headers={"X-CSRF-Token": csrf},
     )
 
-    assert resp.status_code == 400
+    assert resp.status_code == 413
     assert _sample("as3m_upload_rejected_total", labels) == before + 1
 
 

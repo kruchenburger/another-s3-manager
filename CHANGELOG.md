@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Critical: unauthenticated upload DoS closed.** `POST /api/buckets/{bucket}/upload`
+  used to receive and spool the entire request body to disk _before_
+  authentication ran — a single unauthenticated request could fill the
+  server's disk. A new upload body-guard middleware now rejects requests
+  before the body is read: `401` (no/invalid session), `411 Length Required`
+  (missing `Content-Length` — chunked-transfer bypass closed), `413`
+  (`Content-Length` above the configured `max_file_size`).
+
+### Fixed
+
+- Web uploads now truly stream. The upload route buffered the whole file in
+  memory and then copied it (peak RSS ≈ 2× file size); it now hands the
+  spooled body to boto3's managed-multipart `upload_fileobj`, which also
+  lifts the previous 5 GB `put_object` ceiling — uploads are bounded only by
+  `max_file_size`. Uploads that under-report `Content-Length` are rejected
+  with `413` on the true spooled size (defense-in-depth). The MCP
+  `upload_file` tool is unchanged (base64 → bytes; its 5 GB ceiling remains
+  and stays documented).
+
 ### Changed
 
 - **Breaking (metrics):** every application metric is now namespaced under

@@ -1245,6 +1245,140 @@ def test_put_object_for_role_denied_bucket(mocker):
         mod.put_object_for_role("RoleA", "bad", "key", b"", _make_user(allowed_roles=["RoleA"]))
 
 
+# --- upload_fileobj_for_role (streaming web-upload helper) ---
+
+
+def test_upload_fileobj_for_role_streams_with_extra_args(mocker):
+    """Calls boto3's managed-multipart upload_fileobj with the fileobj itself
+    (never bytes) and carries ContentType + ContentDisposition via ExtraArgs."""
+    import io
+
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    fileobj = io.BytesIO(b"stream me")
+    mod.upload_fileobj_for_role(
+        "RoleA",
+        "bucket",
+        "key.txt",
+        fileobj,
+        _make_user(allowed_roles=["RoleA"]),
+        content_type="text/plain",
+        content_disposition="inline",
+        size=9,
+    )
+
+    fake_client.upload_fileobj.assert_called_once()
+    args, kwargs = fake_client.upload_fileobj.call_args
+    assert args[0] is fileobj
+    assert args[1] == "bucket"
+    assert args[2] == "key.txt"
+    assert kwargs["ExtraArgs"] == {"ContentType": "text/plain", "ContentDisposition": "inline"}
+
+
+def test_upload_fileobj_for_role_omits_disposition_when_unset(mocker):
+    """No content_disposition → ExtraArgs carries only ContentType (matching
+    put_object_for_role's conditional ContentDisposition)."""
+    import io
+
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    mod.upload_fileobj_for_role(
+        "RoleA", "bucket", "k.bin", io.BytesIO(b"x"), _make_user(allowed_roles=["RoleA"]), size=1
+    )
+
+    _, kwargs = fake_client.upload_fileobj.call_args
+    assert kwargs["ExtraArgs"] == {"ContentType": "application/octet-stream"}
+
+
+def test_upload_fileobj_for_role_increments_metrics_once(mocker):
+    """s3_bytes_total(direction=upload) += size and s3_objects_total(operation=upload) += 1,
+    exactly once, inside the helper (the route must never also increment them)."""
+    import io
+
+    import another_s3_manager.s3_client as mod
+    from another_s3_manager.metrics import s3_bytes_total, s3_objects_total
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    bytes_labels = {"role": "RoleA", "bucket": "metric-b", "direction": "upload"}
+    objects_labels = {"role": "RoleA", "bucket": "metric-b", "operation": "upload"}
+    bytes_before = s3_bytes_total.labels(**bytes_labels)._value.get()
+    objects_before = s3_objects_total.labels(**objects_labels)._value.get()
+
+    mod.upload_fileobj_for_role(
+        "RoleA", "metric-b", "k.bin", io.BytesIO(b"x" * 42), _make_user(allowed_roles=["RoleA"]), size=42
+    )
+
+    assert s3_bytes_total.labels(**bytes_labels)._value.get() - bytes_before == 42
+    assert s3_objects_total.labels(**objects_labels)._value.get() - objects_before == 1
+
+
+def test_upload_fileobj_for_role_reseeks_on_retry(mocker):
+    """execute_with_s3_retry re-invokes the callback once after a credential
+    refresh (s3_client._execute_with_retry_inner). The helper must seek(0)
+    INSIDE the callback — without it, the retry uploads 0 bytes because the
+    first attempt already consumed the fileobj."""
+    import io
+
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+    mocker.patch.object(mod, "_is_expired_credentials_error", return_value=True)
+    mocker.patch.object(mod, "invalidate_s3_client")
+    mocker.patch.object(mod, "_clear_boto3_cached_credentials")
+
+    payload = b"full payload"
+    fileobj = io.BytesIO(payload)
+    uploads = []
+
+    def fake_upload_fileobj(fobj, bucket, key, ExtraArgs=None):
+        uploads.append(fobj.read())
+        if len(uploads) == 1:
+            raise RuntimeError("Token expired")
+
+    fake_client.upload_fileobj.side_effect = fake_upload_fileobj
+
+    mod.upload_fileobj_for_role(
+        "RoleA", "bucket", "k.bin", fileobj, _make_user(allowed_roles=["RoleA"]), size=len(payload)
+    )
+
+    assert uploads == [payload, payload], "second invocation must re-read the FULL payload from offset 0"
+
+
+def test_upload_fileobj_for_role_permission_denied():
+    """Same PermissionError contract as put_object_for_role."""
+    import io
+
+    import another_s3_manager.s3_client as mod
+
+    with pytest.raises(PermissionError):
+        mod.upload_fileobj_for_role("RoleX", "bucket", "key", io.BytesIO(b""), _make_user(allowed_roles=["RoleA"]))
+
+
 # --- delete_object_for_role ---
 
 

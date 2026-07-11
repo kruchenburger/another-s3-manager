@@ -82,6 +82,22 @@ Configure roles through the web UI (**Admin console → Roles**; global settings
 
 Role types: `default`, `profile`, `assume_role`, `credentials`. Any role can include `endpoint_url`, `use_ssl`, `verify_ssl`, `path_style` for S3-compatible services.
 
+### Upload limits
+
+The maximum upload size is the admin-editable `max_file_size` config field
+(Settings → General), falling back to the `MAX_FILE_SIZE` env var (default
+100 MB). Uploads are guarded **before the request body is read**:
+
+| Status | Meaning                                                     |
+| ------ | ----------------------------------------------------------- |
+| `401`  | No or invalid session — the body is never received          |
+| `411`  | Missing `Content-Length` (chunked uploads are not accepted) |
+| `413`  | Declared or actual size exceeds `max_file_size`             |
+
+Uploads stream to S3 via managed multipart, so files larger than 5 GB are
+supported up to `max_file_size` (S3's per-object maximum is 5 TB). The MCP
+`upload_file` tool uses a separate base64 path and keeps a 5 GB ceiling.
+
 ## Environment Variables
 
 | Variable                          | Description                                                                      | Default              |
