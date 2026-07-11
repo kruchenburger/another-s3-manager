@@ -115,7 +115,7 @@ export function BulkActionBar({
               </Text>
               <Button.Group>
                 <Tooltip
-                  label="Copy shareable links (expire after the configured default; no login required)"
+                  label="Copy shareable links (expire after the configured default; no sign-in needed)"
                   withArrow
                   multiline
                   w={260}

@@ -56,7 +56,7 @@ export function ResetPasswordModal({
         <Stack gap="md">
           <Alert color="yellow">
             This will overwrite the user&apos;s password — they will need the
-            new value to log in.
+            new value to sign in.
           </Alert>
           <Stack gap={4}>
             <PasswordInput
@@ -82,7 +82,7 @@ export function ResetPasswordModal({
             )}
             <Checkbox
               mt={4}
-              label="Require password change on next login"
+              label="Require password change on next sign-in"
               description="If unchecked, the user can keep this password."
               {...form.getInputProps("must_change_password", {
                 type: "checkbox",

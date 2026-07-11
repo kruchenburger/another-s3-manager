@@ -128,7 +128,7 @@ describe("LoginPage parity additions", () => {
     renderWithRoutes();
     // Valid session → navigate to state.from (/r/foo); login form gone.
     await waitFor(() => expect(screen.getByText("APP PAGE")).toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
   });
 
   it("does NOT redirect when a stale me lingers but the session errored (no loop)", async () => {
@@ -143,7 +143,7 @@ describe("LoginPage parity additions", () => {
     renderWithRoutes();
     // Give the effect a tick; the login form must remain and no navigation.
     await Promise.resolve();
-    expect(screen.getByRole("button", { name: "Login" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
     expect(screen.queryByText("APP PAGE")).not.toBeInTheDocument();
     expect(screen.queryByText("HOME PAGE")).not.toBeInTheDocument();
   });

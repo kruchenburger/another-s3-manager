@@ -34,7 +34,7 @@ export async function loginAsAdmin(page: Page): Promise<void> {
   // button whose aria-label also contains "password", so a substring getByLabel
   // match resolves to 2 elements. Anchor to the input's exact "Password" label.
   await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: "Login" }).click();
+  await page.getByRole("button", { name: "Sign in" }).click();
   // Successful login lands on /, which HomePage immediately auto-redirects
   // to /r/<role>/... for any user with roles (default_role or first role).
   // Asserting the transient / URL is a race the warm local backend loses —

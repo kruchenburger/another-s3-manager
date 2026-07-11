@@ -13,7 +13,7 @@ export function DefaultRolePicker() {
   if (!me || me.allowed_roles.length < 2) return null;
 
   return (
-    <Tooltip label="Default role on login" position="bottom" withArrow>
+    <Tooltip label="Default role on sign-in" position="bottom" withArrow>
       <Select
         size="sm"
         w={180}

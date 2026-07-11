@@ -44,7 +44,7 @@ describe("UserMenu logout", () => {
     });
     renderMenu();
     fireEvent.click(screen.getByRole("button", { name: /user menu/i }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: /logout/i }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /sign out/i }));
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/login", { replace: true }));
   });
 
@@ -54,11 +54,11 @@ describe("UserMenu logout", () => {
     });
     renderMenu();
     fireEvent.click(screen.getByRole("button", { name: /user menu/i }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: /logout/i }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /sign out/i }));
     // Mantine renders notification title and message in separate DOM nodes,
     // so we assert each independently.
     await waitFor(() =>
-      expect(screen.getByText(/logout failed/i)).toBeInTheDocument(),
+      expect(screen.getByText(/couldn't sign out/i)).toBeInTheDocument(),
     );
     expect(screen.getByText(/close the tab manually/i)).toBeInTheDocument();
     expect(navigateMock).not.toHaveBeenCalled();

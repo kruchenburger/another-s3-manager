@@ -55,7 +55,7 @@ async function login(page: Page): Promise<void> {
   await page.goto("/login");
   await page.getByLabel("Username").fill(ADMIN_USER);
   await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: "Login" }).click();
+  await page.getByRole("button", { name: "Sign in" }).click();
   // AppShell rendered → auth cookie set + router moved past /login. We don't
   // assert a specific URL: with admin-accessible roles, HomePage redirects to
   // the default role/bucket, so the landing URL is intentionally not /.

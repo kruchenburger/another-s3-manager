@@ -97,9 +97,7 @@ export function LoginPage() {
             {/* Subtle variant matches the mockup — the login card already
                 has plenty of weight from the brand stack at the top, so a
                 solid-blue CTA fights for attention. `subtle` reads as the
-                primary affordance without becoming the focal point.
-                Label kept as "Login" so existing e2e fixtures still
-                match the button via getByRole(name: "Login"). */}
+                primary affordance without becoming the focal point. */}
             <Button
               type="submit"
               fullWidth
@@ -107,7 +105,7 @@ export function LoginPage() {
               variant="subtle"
               mt="xs"
             >
-              Login
+              Sign in
             </Button>
           </Stack>
         </form>

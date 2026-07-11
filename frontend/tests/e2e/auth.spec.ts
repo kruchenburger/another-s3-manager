@@ -9,7 +9,7 @@ test("login and logout flow", async ({ page }) => {
   // Fill and submit login form
   await page.getByLabel("Username").fill(ADMIN_USER);
   await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASS);
-  await page.getByRole("button", { name: "Login" }).click();
+  await page.getByRole("button", { name: "Sign in" }).click();
 
   // Login succeeded: we left /login and the authenticated shell mounted.
   // Don't assert the exact URL — HomePage auto-redirects any user with roles
@@ -20,7 +20,7 @@ test("login and logout flow", async ({ page }) => {
 
   // Open user menu and logout
   await page.getByLabel("User menu").click();
-  await page.getByRole("menuitem", { name: /Logout/i }).click();
+  await page.getByRole("menuitem", { name: /Sign out/i }).click();
 
   // Back at login
   await expect(page).toHaveURL(/\/login/);
@@ -30,7 +30,7 @@ test("invalid credentials show error", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Username").fill(ADMIN_USER);
   await page.getByLabel("Password", { exact: true }).fill("wrong-password");
-  await page.getByRole("button", { name: "Login" }).click();
+  await page.getByRole("button", { name: "Sign in" }).click();
 
   // Stay on login, see alert
   await expect(page).toHaveURL(/\/login/);
