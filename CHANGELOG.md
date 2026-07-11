@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-11
+
 ### Security
 
 - **Critical: unauthenticated upload DoS closed.** `POST /api/buckets/{bucket}/upload`
@@ -69,6 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   datasource variable (no hardwired UID). Plus a one-command local
   Prometheus + Grafana stack (`docker/docker-compose.observability.yml`) that
   scrapes the app and auto-loads the dashboard — see `docs/observability.md`.
+- Admin **Settings** fields now show a concise one-line description plus a
+  click-to-open info popover (the "i" chip) for the full explanation, instead
+  of long inline paragraphs of grey text.
 
 ### Fixed
 
@@ -77,6 +82,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-revoked MCP tokens.
 - S3 throttling (`SlowDown`, `RequestLimitExceeded`, HTTP 503) is now classified
   as its own error rather than being lumped in with unknown failures.
+- Grafana dashboard count-panel Totals are now exact on fresh / low-volume
+  counters: fixed-enum counter series are pre-seeded to `0` at startup, so
+  `increase()` has a baseline and counts the very first event instead of
+  missing it.
+- The bulk-upload failure toast no longer clips the useful part on long
+  filenames — the filename ellipsizes to one line (full name on hover) and the
+  size/limit reason renders on its own line.
+- Large uploads no longer look stuck at 100%. Once the file is fully sent, the
+  progress toast shows **"Finalizing on server…"** with an animated bar while
+  the server streams the body to S3, instead of a frozen 100%. During that
+  phase a single-file upload can be closed safely ("Safe to close — the upload
+  will finish on the server"); it completes in the background.
 
 ## [1.0.3] - 2026-07-08
 
