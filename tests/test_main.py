@@ -727,6 +727,8 @@ def test_upload_increments_bytes_metric_once(app_client, moto_s3):
 
 
 def test_upload_file_too_large(app_client, mocker):
+    """Oversize declared Content-Length is refused by the body-guard middleware
+    with 413 (was a handler-level 400 before the guard existed)."""
     import another_s3_manager.config as config_module
 
     config_data = config_module.load_config(force_reload=True)
@@ -739,7 +741,7 @@ def test_upload_file_too_large(app_client, mocker):
         files={"file": ("file.txt", io.BytesIO(b"toolarge"), "text/plain")},
         headers=headers,
     )
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
 
 
 def test_download_file(app_client, moto_s3):

@@ -225,6 +225,68 @@ def resolve_max_file_size() -> int:
     return int(max_file_size)
 
 
+# Upload body-guard — MUST stay registered BEFORE _http_metrics in module
+# order. Starlette's add_middleware() prepends, so the LAST-registered
+# middleware is outermost; registering the guard first keeps _http_metrics
+# wrapped AROUND it, and a guard-rejected request (401/411/413) is still
+# counted in as3m_http_requests_total. Routing never runs for guard-rejected
+# requests, so _http_metrics' path_template label falls back to the concrete
+# path (same posture as its existing no-route-404 fallback).
+@app.middleware("http")
+async def _upload_body_guard(request: Request, call_next):
+    """Reject unauth / length-less / oversize uploads BEFORE the body is read.
+
+    FastAPI parses the multipart body — Starlette spools each part to a
+    SpooledTemporaryFile (disk above 1 MB) — to satisfy the route's
+    `File(...)` parameter BEFORE dependencies like get_current_user run.
+    Without this guard, an unauthenticated multi-GB POST fills the temp dir
+    and only then receives its 401. Returning here without calling call_next
+    means the request body is never read from the socket.
+
+    CSRF is deliberately NOT checked here: a CSRF failure requires an
+    already-valid session (not an unauthenticated-DoS vector), and such a
+    client's body is already bounded by the Content-Length check below.
+    """
+    path = request.url.path
+    if request.method == "POST" and path.startswith("/api/buckets/") and path.endswith("/upload"):
+        # 1. Auth-gate. get_current_user short-circuits on the missing-token
+        #    branch before any load_users() I/O, so the unauth path is cheap.
+        #    Convert HTTPException to a response HERE — exceptions raised in
+        #    middleware bypass the app-level exception handlers.
+        try:
+            get_current_user(request)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+        # 2. Strict Content-Length requirement (411) — closes the
+        #    chunked-transfer bypass. Browsers' XHR/fetch and `curl -T`
+        #    always send Content-Length. Malformed values count as missing.
+        #    Deliberately NOT counted in upload_rejected_total: protocol
+        #    error, not a business reject (spec decision 2026-07-11).
+        content_length = request.headers.get("content-length")
+        try:
+            declared_size = int(content_length) if content_length is not None else None
+        except ValueError:
+            declared_size = None
+        if declared_size is None:
+            return JSONResponse(
+                status_code=411,
+                content={"detail": "Content-Length header is required for uploads"},
+            )
+
+        # 3. Bound the declared size (413). The handler re-checks the true
+        #    spooled size as defense-in-depth against under-reported values.
+        max_file_size = resolve_max_file_size()
+        if declared_size > max_file_size:
+            upload_rejected_total.labels(reason="size_limit").inc()
+            size_mb = max_file_size / (1024 * 1024)
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"File size exceeds maximum allowed size of {size_mb}MB"},
+            )
+    return await call_next(request)
+
+
 # Exception handler to ensure all errors return JSON
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
