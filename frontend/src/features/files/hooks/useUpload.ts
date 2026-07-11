@@ -11,6 +11,9 @@ interface UploadVariables {
   currentPath: string;
   /** Called periodically with 0..100 percent of the current file's body uploaded. */
   onProgress?: (percent: number) => void;
+  /** Called once the body is fully sent but the server is still finalizing
+   *  (spool + stream to S3) — lets the caller show a "Finalizing…" state. */
+  onFinalizing?: () => void;
   /** AbortSignal — when triggered, the in-flight upload is cancelled. */
   signal?: AbortSignal;
   /**
@@ -26,8 +29,8 @@ interface UploadVariables {
 export function useUpload() {
   const qc = useQueryClient();
   return useMutation<void, Error, UploadVariables>({
-    mutationFn: ({ bucket, role, key, file, onProgress, signal }) =>
-      uploadFile(bucket, role, key, file, { onProgress, signal }),
+    mutationFn: ({ bucket, role, key, file, onProgress, onFinalizing, signal }) =>
+      uploadFile(bucket, role, key, file, { onProgress, onFinalizing, signal }),
     onSuccess: (_, { bucket, role, currentPath, skipInvalidation }) => {
       if (skipInvalidation) return;
       qc.invalidateQueries({ queryKey: filesQueryKey(bucket, role, currentPath) });
