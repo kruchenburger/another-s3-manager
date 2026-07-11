@@ -580,3 +580,140 @@ def test_no_dead_metrics():
 
     dead = sorted(name for name in declared if name not in _ALLOWED_WITHOUT_CALL_SITE and name not in other_sources)
     assert not dead, f"Declared but never used: {dead}"
+
+
+# ---------------------------------------------------------------------------
+# Zero-series seeding for exact dashboard Totals (Task 15)
+# ---------------------------------------------------------------------------
+
+
+def test_seed_zero_series_pre_creates_fixed_enum_series(monkeypatch):
+    """`_seed_zero_series()` must materialize every fixed-enum label combo at 0
+    BEFORE any real `.inc()` happens.
+
+    Why this matters: a labeled Counter only creates its per-label-combination
+    series on the first `.inc()` -- it is born non-zero, with no earlier `0`
+    sample. `increase()`/`rate()` need two samples to compute a delta, so the
+    very first real increment of a brand-new series is invisible to Grafana.
+    Pre-creating the series at 0 via `.labels(...)` (without incrementing)
+    fixes this.
+
+    This test swaps in throwaway Counter objects bound to a private registry
+    (via monkeypatch, auto-restored after the test) for the specific series it
+    asserts on. `metrics.REGISTRY` is a process-wide singleton that many other
+    test files' logins/uploads/etc. increment over the course of a full suite
+    run (e.g. test_main.py already drives a real login and a real oversize
+    upload before this file even runs) -- asserting `== 0.0` against that
+    shared, already-dirtied registry would be order-dependent and flaky.
+    `_seed_zero_series()` itself is defined in `metrics.py`, so it resolves
+    `upload_rejected_total` etc. via that module's own globals at call time --
+    monkeypatching the module attribute is enough to redirect it to the
+    scratch objects below.
+    """
+    from prometheus_client import CollectorRegistry, Counter
+
+    from another_s3_manager import metrics
+
+    scratch = CollectorRegistry()
+    fresh_upload_rejected = Counter("as3m_upload_rejected_total", "t", ["reason"], registry=scratch)
+    fresh_auth_logins = Counter("as3m_auth_logins_total", "t", ["result"], registry=scratch)
+    fresh_db_errors = Counter("as3m_db_errors_total", "t", ["operation"], registry=scratch)
+    fresh_s3_retries = Counter("as3m_s3_retries_total", "t", ["reason"], registry=scratch)
+    fresh_mcp_tool_calls = Counter("as3m_mcp_tool_calls_total", "t", ["tool", "error_code"], registry=scratch)
+
+    monkeypatch.setattr(metrics, "upload_rejected_total", fresh_upload_rejected)
+    monkeypatch.setattr(metrics, "auth_logins_total", fresh_auth_logins)
+    monkeypatch.setattr(metrics, "db_errors_total", fresh_db_errors)
+    monkeypatch.setattr(metrics, "s3_retries_total", fresh_s3_retries)
+    monkeypatch.setattr(metrics, "mcp_tool_calls_total", fresh_mcp_tool_calls)
+
+    # RED proof: nothing has touched the scratch registry yet -- every sample
+    # is None, not 0.0. (Confirmed failing pre-implementation: AttributeError,
+    # `_seed_zero_series` didn't exist; after adding it as a no-op it still
+    # failed here because these samples were still None.)
+    assert scratch.get_sample_value("as3m_upload_rejected_total", {"reason": "size_limit"}) is None
+    assert scratch.get_sample_value("as3m_auth_logins_total", {"result": "success"}) is None
+    assert scratch.get_sample_value("as3m_db_errors_total", {"operation": "SELECT"}) is None
+    assert scratch.get_sample_value("as3m_s3_retries_total", {"reason": "credentials_expired"}) is None
+    assert scratch.get_sample_value("as3m_mcp_tool_calls_total", {"tool": "list_roles", "error_code": "none"}) is None
+
+    metrics._seed_zero_series()
+
+    assert scratch.get_sample_value("as3m_upload_rejected_total", {"reason": "size_limit"}) == 0.0
+    assert scratch.get_sample_value("as3m_auth_logins_total", {"result": "success"}) == 0.0
+    assert scratch.get_sample_value("as3m_auth_logins_total", {"result": "invalid_password"}) == 0.0
+    assert scratch.get_sample_value("as3m_auth_logins_total", {"result": "banned"}) == 0.0
+    assert scratch.get_sample_value("as3m_db_errors_total", {"operation": "SELECT"}) == 0.0
+    assert scratch.get_sample_value("as3m_db_errors_total", {"operation": "OTHER"}) == 0.0
+    assert scratch.get_sample_value("as3m_s3_retries_total", {"reason": "credentials_expired"}) == 0.0
+    assert scratch.get_sample_value("as3m_mcp_tool_calls_total", {"tool": "list_roles", "error_code": "none"}) == 0.0
+    assert (
+        scratch.get_sample_value(
+            "as3m_mcp_tool_calls_total", {"tool": "presigned_url", "error_code": "S3_ACCESS_DENIED"}
+        )
+        == 0.0
+    )
+
+
+def test_seed_zero_series_does_not_seed_dynamic_role_or_bucket_labels():
+    """role/bucket come from admin-editable config or arbitrary bucket names --
+    they cannot be enumerated at import time, so counters carrying them
+    (s3_bytes_total, s3_objects_total, presigned_urls_total, and also
+    s3_operations_total/sts_assume_role_total/credentials_refreshed_total,
+    which carry `role` alongside their otherwise-fixed enums) must NOT have a
+    guessed value pre-created. Runs against the real, shared REGISTRY: an
+    arbitrary made-up label value is guaranteed to be untouched by any other
+    test, so no monkeypatch/scratch registry is needed here.
+    """
+    from another_s3_manager.metrics import REGISTRY, _seed_zero_series
+
+    _seed_zero_series()
+
+    assert (
+        REGISTRY.get_sample_value(
+            "as3m_s3_bytes_total",
+            {"role": "zzz-unused-role-15", "bucket": "zzz-unused-bucket-15", "direction": "upload"},
+        )
+        is None
+    )
+    assert (
+        REGISTRY.get_sample_value(
+            "as3m_s3_operations_total",
+            {"role": "zzz-unused-role-15", "operation": "list", "error_code": "none"},
+        )
+        is None
+    )
+    assert (
+        REGISTRY.get_sample_value(
+            "as3m_sts_assume_role_total",
+            {"role": "zzz-unused-role-15", "result": "ok"},
+        )
+        is None
+    )
+
+
+def test_seed_zero_series_covers_mcp_guard_counters():
+    """Sanity coverage for the remaining MCP guard counters _seed_zero_series
+    seeds (mcp_auth_failures_total, mcp_writes_denied_total,
+    mcp_reads_refused_total). Uses `is not None` rather than `== 0.0` because
+    these are asserted against the real, shared REGISTRY, which other test
+    files may have already incremented by the time this test runs -- the
+    point here is proving the series exists (was pre-created), not its exact
+    value; the exact-0.0 behavior is already proven in isolation above.
+    """
+    from another_s3_manager.metrics import REGISTRY, _seed_zero_series
+
+    _seed_zero_series()
+
+    assert REGISTRY.get_sample_value("as3m_mcp_auth_failures_total", {"reason": "malformed"}) is not None
+    assert REGISTRY.get_sample_value("as3m_mcp_auth_failures_total", {"reason": "invalid_token"}) is not None
+    assert (
+        REGISTRY.get_sample_value(
+            "as3m_mcp_writes_denied_total", {"tool": "delete_file", "reason": "deletion_disabled"}
+        )
+        is not None
+    )
+    assert (
+        REGISTRY.get_sample_value("as3m_mcp_reads_refused_total", {"tool": "read_file", "reason": "file_too_large"})
+        is not None
+    )

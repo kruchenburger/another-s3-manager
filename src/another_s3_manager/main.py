@@ -74,6 +74,7 @@ from another_s3_manager.constants import (
 from another_s3_manager.errors import S3OperationError
 from another_s3_manager.metrics import (
     REGISTRY,
+    _seed_zero_series,
     auth_bans_active,
     auth_logins_total,
     http_request_duration_seconds,
@@ -404,6 +405,13 @@ auth_bans_active.set_function(lambda: float(len(load_bans())))
 mcp_active_tokens.set_function(lambda: float(count_active_tokens()))
 users_gauge.set_function(lambda: float(count_users()))
 roles_gauge.set_function(lambda: float(len(load_config(force_reload=False).get("roles", []))))
+
+# Pre-create fixed-enum counter series at 0 so the very first real increment
+# is visible to Grafana's increase()/rate() panels (see metrics.py's
+# _seed_zero_series docstring). Module-level, like the callbacks above, so it
+# runs exactly once per process at import time -- doesn't depend on the ASGI
+# server actually entering the `lifespan` async context manager.
+_seed_zero_series()
 
 
 @app.get("/metrics")
