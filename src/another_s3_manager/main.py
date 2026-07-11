@@ -53,6 +53,7 @@ from another_s3_manager.auth import (
     get_current_admin_user,
     get_current_user,
     get_jwt_secret_key,
+    has_valid_session,
     hash_password,
     record_login_attempt,
     verify_csrf_token,
@@ -248,6 +249,14 @@ async def _upload_body_guard(request: Request, call_next):
     and only then receives its 401. Returning here without calling call_next
     means the request body is never read from the socket.
 
+    The auth-gate below uses has_valid_session (a cheap, DB-free JWT decode),
+    NOT get_current_user, because this is a bare synchronous call inside an
+    `async def` middleware: get_current_user runs load_users() (a blocking
+    SQLAlchemy query) and calling it here would block the event loop thread
+    on every upload request. The authoritative, DB-backed check still runs
+    in the handler via Depends(get_current_user) — this guard only rejects
+    the cheap, unauthenticated case before the body is read.
+
     CSRF is deliberately NOT checked here: a CSRF failure requires an
     already-valid session (not an unauthenticated-DoS vector), and such a
     client's body is already bounded by the Content-Length check below.
@@ -266,14 +275,12 @@ async def _upload_body_guard(request: Request, call_next):
         # the route decorator's path exactly: @app.post("/api/buckets/{bucket_name}/upload").
         request.scope["upload_guard_path_template"] = "/api/buckets/{bucket_name}/upload"
 
-        # 1. Auth-gate. get_current_user short-circuits on the missing-token
-        #    branch before any load_users() I/O, so the unauth path is cheap.
-        #    Convert HTTPException to a response HERE — exceptions raised in
-        #    middleware bypass the app-level exception handlers.
-        try:
-            get_current_user(request)
-        except HTTPException as exc:
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        # 1. Auth-gate. has_valid_session is a pure JWT decode (no DB query),
+        #    so it's safe to call synchronously off the event loop. It cannot
+        #    raise HTTPException, so this returns the response directly
+        #    rather than the try/except HTTPException pattern used elsewhere.
+        if not has_valid_session(request):
+            return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
 
         # 2. Strict Content-Length requirement (411) — closes the
         #    chunked-transfer bypass. Browsers' XHR/fetch and `curl -T`

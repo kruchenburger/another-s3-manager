@@ -121,7 +121,7 @@ def test_negative_content_length_rejected_with_411(mocker):
     call_next, with auth stubbed out so the test isolates the Content-Length
     branch on an otherwise-authenticated request."""
     main = reload_main()
-    mocker.patch("another_s3_manager.main.get_current_user", return_value={"username": "admin"})
+    mocker.patch("another_s3_manager.main.has_valid_session", return_value=True)
 
     async def _call_next(_request):
         raise AssertionError("call_next must not run for a negative Content-Length")
