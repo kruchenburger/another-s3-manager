@@ -726,6 +726,80 @@ def test_upload_increments_bytes_metric_once(app_client, moto_s3):
     assert after - before == 100, f"metric must increment once, got {after - before}"
 
 
+def test_upload_routes_through_streaming_helper(app_client, mocker):
+    """The happy path calls upload_fileobj_for_role (streaming) with the
+    spooled FILE OBJECT and exact size — NOT the bytes-based
+    put_object_for_role (which stays MCP-only)."""
+    _, headers = login(app_client)
+    stream_spy = mocker.patch("another_s3_manager.main.upload_fileobj_for_role", return_value=None)
+    legacy_spy = mocker.patch("another_s3_manager.s3_client.put_object_for_role")
+
+    payload = b"stream body"
+    response = app_client.post(
+        "/api/buckets/stream-bucket/upload",
+        data={"key": "s.txt", "role": "Default"},
+        files={"file": ("s.txt", payload, "text/plain")},
+        headers=headers,
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    legacy_spy.assert_not_called()
+    stream_spy.assert_called_once()
+    args, kwargs = stream_spy.call_args
+    assert args[0] == "Default"  # role
+    assert args[1] == "stream-bucket"  # bucket
+    assert args[2] == "s.txt"  # key
+    assert not isinstance(args[3], (bytes, bytearray)) and hasattr(args[3], "read")  # fileobj
+    assert args[4]["username"] == "admin"  # user dict
+    assert kwargs["content_type"] == "text/plain"
+    assert kwargs["content_disposition"] is None
+    assert kwargs["size"] == len(payload)
+
+
+async def test_upload_handler_rejects_oversize_spooled_body():
+    """Defense-in-depth (G2): a client that under-reports Content-Length slips
+    past the middleware guard; the handler must 413 on the TRUE spooled size
+    and bump upload_rejected_total. Calls the handler directly because real
+    multipart cannot under-report (Content-Length >= file bytes), so this
+    branch is unreachable through TestClient."""
+    import importlib
+
+    from fastapi import UploadFile
+    from starlette.datastructures import Headers
+
+    import another_s3_manager.config as config_module
+    import another_s3_manager.main as main
+    from another_s3_manager.metrics import upload_rejected_total
+
+    importlib.reload(main)
+    cfg = config_module.load_config(force_reload=True)
+    cfg["max_file_size"] = 1024
+    config_module.save_config(cfg)
+
+    payload = b"x" * 2048
+    upload = UploadFile(
+        file=io.BytesIO(payload),
+        size=len(payload),
+        filename="big.bin",
+        headers=Headers({"content-type": "application/octet-stream"}),
+    )
+    before = upload_rejected_total.labels(reason="size_limit")._value.get()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await main.upload_file(
+            request=None,
+            bucket_name="bucket",
+            file=upload,
+            key="big.bin",
+            role=None,
+            current_user={"username": "admin", "is_admin": True, "allowed_roles": []},
+            csrf_verified=True,
+        )
+
+    assert exc_info.value.status_code == 413
+    assert upload_rejected_total.labels(reason="size_limit")._value.get() - before == 1
+
+
 def test_upload_file_too_large(app_client, mocker):
     """Oversize declared Content-Length is refused by the body-guard middleware
     with 413 (was a handler-level 400 before the guard existed)."""
@@ -1030,7 +1104,7 @@ def test_upload_file_handles_exception(app_client, mocker):
     """B2: helper raises ValueError (e.g. assume_role failure) -> route returns 400."""
     _, headers = login(app_client)
     mocker.patch(
-        "another_s3_manager.main.put_object_for_role",
+        "another_s3_manager.main.upload_fileobj_for_role",
         side_effect=ValueError("boom"),
     )
     response = app_client.post(
@@ -2120,11 +2194,11 @@ def test_list_files_generic_exception_logs_and_returns_500(app_client, mocker, c
 
 
 def test_upload_typed_s3_error_returns_mapped_status_with_dict_detail(app_client, mocker):
-    """put_object_for_role raises S3AccessDeniedError → 403 with structured detail."""
+    """upload_fileobj_for_role raises S3AccessDeniedError → 403 with structured detail."""
     from another_s3_manager.errors import S3AccessDeniedError
 
     mocker.patch(
-        "another_s3_manager.main.put_object_for_role",
+        "another_s3_manager.main.upload_fileobj_for_role",
         side_effect=S3AccessDeniedError("AccessDenied", "scoped token rejected"),
     )
     _, headers = login(app_client)
@@ -2142,7 +2216,7 @@ def test_upload_typed_s3_error_returns_mapped_status_with_dict_detail(app_client
 def test_upload_generic_exception_returns_structured_500(app_client, mocker):
     """A non-typed RuntimeError from the helper hits the structured INTERNAL fallback."""
     mocker.patch(
-        "another_s3_manager.main.put_object_for_role",
+        "another_s3_manager.main.upload_fileobj_for_role",
         side_effect=RuntimeError("kaboom"),
     )
     _, headers = login(app_client)

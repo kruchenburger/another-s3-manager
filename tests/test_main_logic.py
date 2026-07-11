@@ -28,6 +28,11 @@ class SimpleUploadFile:
         self.filename = filename
         self.content_type = content_type
         self.size = None
+        # Real Starlette UploadFile exposes the underlying sync
+        # SpooledTemporaryFile as `.file`. The rewritten upload_file handler
+        # (Task 4) falls back to `file.file.seek()/.tell()` when `.size` is
+        # None, so this stub must duck-type that too.
+        self.file = self._buffer
 
     async def read(self, n: int = -1) -> bytes:
         if n == -1:
@@ -590,33 +595,14 @@ async def test_list_files_invalid_path(monkeypatch, reload_main):
 
 
 @pytest.mark.asyncio
-async def test_upload_file_rejects_by_header(monkeypatch, reload_main):
-    main = reload_main
-
-    monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
-    monkeypatch.setattr(main, "sanitize_path", lambda key: key)
-
-    helper_called = {"value": False}
-
-    def fake_put(*args, **kwargs):
-        helper_called["value"] = True
-
-    monkeypatch.setattr(main, "put_object_for_role", fake_put)
-    patch_load_config(monkeypatch, main, {"max_file_size": 10})
-
-    request = SimpleNamespace(headers={"content-length": "20"})
-    upload = SimpleUploadFile(b"0123456789")
-
-    with pytest.raises(HTTPException) as exc:
-        await main.upload_file(request, "bucket", upload, key="test.txt", role=None, current_user={"is_admin": True})
-    assert exc.value.status_code == 400
-    assert "maximum allowed size" in exc.value.detail
-    # Helper must NOT be reached when Content-Length exceeds the limit
-    assert helper_called["value"] is False
-
-
-@pytest.mark.asyncio
 async def test_upload_file_streaming_limit(monkeypatch, reload_main):
+    """Task 4 note: pre-rewrite this exercised the mid-stream `total_read`
+    chunk-accumulation check; the rewritten handler has no streaming loop —
+    it re-checks the TRUE spooled size (via `file.size`, or the `file.file`
+    seek/tell fallback exercised here since SimpleUploadFile.size is None)
+    up front. Kept as direct-unit-test coverage of that fallback path;
+    status code changed 400 -> 413 (the route's defense-in-depth check is
+    now a 413, matching the body-guard middleware's status code)."""
     main = reload_main
 
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
@@ -624,10 +610,10 @@ async def test_upload_file_streaming_limit(monkeypatch, reload_main):
 
     helper_called = {"value": False}
 
-    def fake_put(*args, **kwargs):
+    def fake_upload(*args, **kwargs):
         helper_called["value"] = True
 
-    monkeypatch.setattr(main, "put_object_for_role", fake_put)
+    monkeypatch.setattr(main, "upload_fileobj_for_role", fake_upload)
     patch_load_config(monkeypatch, main, {"max_file_size": 5})
 
     request = SimpleNamespace(headers={})
@@ -635,9 +621,9 @@ async def test_upload_file_streaming_limit(monkeypatch, reload_main):
 
     with pytest.raises(HTTPException) as exc:
         await main.upload_file(request, "bucket", upload, key="test.txt", role=None, current_user={"is_admin": True})
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 413
     assert "maximum allowed size" in exc.value.detail
-    # Helper must NOT be reached when streamed body exceeds the limit
+    # Helper must NOT be reached when the spooled body exceeds the limit
     assert helper_called["value"] is False
 
 
@@ -651,19 +637,20 @@ async def test_upload_file_success(monkeypatch, reload_main):
 
     calls = []
 
-    def fake_put(role, bucket, path, content, user_dict, content_type=None, content_disposition=None):
+    def fake_upload(role, bucket, path, fileobj, user_dict, content_type=None, content_disposition=None, size=None):
         calls.append(
             {
                 "role": role,
                 "bucket": bucket,
                 "path": path,
-                "content": content,
+                "content": fileobj.read(),
                 "content_type": content_type,
                 "content_disposition": content_disposition,
+                "size": size,
             }
         )
 
-    monkeypatch.setattr(main, "put_object_for_role", fake_put)
+    monkeypatch.setattr(main, "upload_fileobj_for_role", fake_upload)
     patch_load_config(monkeypatch, main, {"max_file_size": 50})
 
     request = SimpleNamespace(headers={})
@@ -675,6 +662,7 @@ async def test_upload_file_success(monkeypatch, reload_main):
     assert response["message"] == "File uploaded successfully"
     assert calls[0]["path"] == "folder/ok.txt"
     assert calls[0]["content"] == b"12345"
+    assert calls[0]["size"] == 5
 
 
 @pytest.mark.asyncio
@@ -787,10 +775,10 @@ async def test_upload_file_env_max_file_size(monkeypatch, reload_main):
 
     called = []
 
-    def fake_put(role, bucket, path, content, user_dict, content_type=None, content_disposition=None):
+    def fake_upload(role, bucket, path, fileobj, user_dict, content_type=None, content_disposition=None, size=None):
         called.append(True)
 
-    monkeypatch.setattr(main, "put_object_for_role", fake_put)
+    monkeypatch.setattr(main, "upload_fileobj_for_role", fake_upload)
 
     request = SimpleNamespace(headers={})
     upload = SimpleUploadFile(b"abcd")
@@ -804,8 +792,10 @@ async def test_upload_file_env_max_file_size(monkeypatch, reload_main):
 
 @pytest.mark.asyncio
 async def test_upload_file_invalid_content_length(monkeypatch, reload_main):
-    """Pre-S3 path: malformed Content-Length header is silently ignored, body
-    streamed instead. Helper still called once with the actual body."""
+    """Pre-S3 path: malformed Content-Length header is silently ignored — the
+    rewritten handler (Task 4) doesn't consult request.headers at all
+    anymore, it derives size purely from the spooled file. Helper still
+    called once with the actual body."""
     main = reload_main
 
     patch_load_config(monkeypatch, main, {"max_file_size": 1024})
@@ -814,10 +804,10 @@ async def test_upload_file_invalid_content_length(monkeypatch, reload_main):
 
     called = []
 
-    def fake_put(role, bucket, path, content, user_dict, content_type=None, content_disposition=None):
-        called.append(content)
+    def fake_upload(role, bucket, path, fileobj, user_dict, content_type=None, content_disposition=None, size=None):
+        called.append(fileobj.read())
 
-    monkeypatch.setattr(main, "put_object_for_role", fake_put)
+    monkeypatch.setattr(main, "upload_fileobj_for_role", fake_upload)
 
     request = SimpleNamespace(headers={"content-length": "abc"})
     upload = SimpleUploadFile(b"abcd")
@@ -838,10 +828,10 @@ async def test_upload_file_client_error(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: name)
     monkeypatch.setattr(main, "sanitize_path", lambda key: key)
 
-    def _raise(role, bucket, path, content, user_dict, content_type=None, content_disposition=None):
+    def _raise(role, bucket, path, fileobj, user_dict, content_type=None, content_disposition=None, size=None):
         raise ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "PutObject")
 
-    monkeypatch.setattr(main, "put_object_for_role", _raise)
+    monkeypatch.setattr(main, "upload_fileobj_for_role", _raise)
 
     request = SimpleNamespace(headers={})
     upload = SimpleUploadFile(b"abcd")

@@ -36,13 +36,13 @@ except ImportError:
     # python-dotenv is optional, continue without it
     pass
 
-from io import BytesIO
 
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 import another_s3_manager.config as config_module
 from another_s3_manager.api_tokens import count_active_tokens
@@ -91,8 +91,8 @@ from another_s3_manager.s3_client import (
     list_objects_client_load_for_role,
     list_objects_for_role,
     list_objects_paginated_for_role,
-    put_object_for_role,
     role_uses_temporary_credentials,
+    upload_fileobj_for_role,
 )
 from another_s3_manager.s3_client import (
     generate_presigned_url_for_role as s3_generate_presigned_url_for_role,
@@ -1904,11 +1904,17 @@ async def upload_file(
     current_user: Dict[str, Any] = Depends(get_current_user),
     csrf_verified: bool = Depends(verify_csrf_token),
 ):
-    """Upload a file to S3 bucket - delegates the put to s3_client.put_object_for_role.
+    """Upload a file to S3 — streams the spooled body via
+    s3_client.upload_fileobj_for_role (boto3 managed multipart).
 
-    The route keeps streaming/size-limit enforcement and the upload_inline_extensions
-    content-disposition logic. The helper does role validation, bucket-access
-    validation, and metric accounting."""
+    The _upload_body_guard middleware has already auth-gated this request and
+    bounded its declared Content-Length. This handler re-checks the TRUE
+    spooled size (defense-in-depth against under-reported Content-Length),
+    applies the upload_inline_extensions content-disposition logic, and hands
+    the multipart parser's SpooledTemporaryFile to the streaming helper — the
+    body is never copied into a bytes object. The helper does role validation,
+    bucket-access validation, and metric accounting."""
+    size: Optional[int] = None
     try:
         # Validate and sanitize inputs
         try:
@@ -1922,55 +1928,22 @@ async def upload_file(
         config = load_config(force_reload=False)
         max_file_size = resolve_max_file_size()
 
-        # Check file size if available (some clients provide Content-Length)
-        # If not available, we'll check during streaming
-        file_size = None
-        if hasattr(file, "size") and file.size is not None:
-            file_size = file.size
-        elif hasattr(request, "headers") and "content-length" in request.headers:
-            try:
-                file_size = int(request.headers["content-length"])
-            except (ValueError, TypeError):
-                pass
+        # The multipart parser already spooled the body into `file`
+        # (SpooledTemporaryFile: memory under 1 MB, disk above). Starlette
+        # populates UploadFile.size while parsing; fall back to seeking the
+        # underlying sync file object (cheap — it's a local temp file).
+        size = file.size
+        if size is None:
+            file.file.seek(0, os.SEEK_END)
+            size = file.file.tell()
+        file.file.seek(0)
 
-        if file_size and file_size > max_file_size:
+        # Defense-in-depth: the middleware bounded the DECLARED Content-Length,
+        # but a client can under-report it. Reject on the true spooled size.
+        if size > max_file_size:
             upload_rejected_total.labels(reason="size_limit").inc()
             size_mb = max_file_size / (1024 * 1024)
-            raise HTTPException(status_code=400, detail=f"File size exceeds maximum allowed size of {size_mb}MB")
-
-        # Stream file content in chunks to minimize memory usage
-        # This allows handling large files without loading entire file into memory at once
-        chunk_size = 8 * 1024 * 1024  # 8MB chunks - good balance between memory and performance
-        total_read = 0
-
-        # Use BytesIO for efficient memory management
-        # This allows us to stream data without keeping all chunks in a list
-        content_buffer = BytesIO()
-
-        # Reset file pointer to beginning (in case it was read before)
-        await file.seek(0)
-
-        # Read file in chunks and write to buffer
-        while True:
-            chunk = await file.read(chunk_size)
-            if not chunk:
-                break
-
-            total_read += len(chunk)
-
-            # Check size limit during streaming (fail fast)
-            if total_read > max_file_size:
-                upload_rejected_total.labels(reason="size_limit").inc()
-                size_mb = max_file_size / (1024 * 1024)
-                raise HTTPException(status_code=400, detail=f"File size exceeds maximum allowed size of {size_mb}MB")
-
-            # Write chunk to buffer
-            content_buffer.write(chunk)
-
-        # Get content from buffer
-        content_buffer.seek(0)
-        content = content_buffer.getvalue()
-        content_buffer.close()
+            raise HTTPException(status_code=413, detail=f"File size exceeds maximum allowed size of {size_mb}MB")
 
         # Check if file extension should have Content-Disposition: inline so it
         # opens in the browser (instead of downloading) when served via CDN /
@@ -1984,16 +1957,20 @@ async def upload_file(
             if file_ext in upload_inline_extensions:
                 content_disposition = "inline"
 
-        # The helper increments s3_bytes_total (direction="upload") internally -
-        # do NOT also increment it here, doing so would double-count.
-        put_object_for_role(
+        # boto3's upload_fileobj is synchronous — run it off the event loop.
+        # The helper increments s3_bytes_total (direction="upload") and
+        # s3_objects_total (operation="upload") internally — do NOT also
+        # increment them here, doing so would double-count.
+        await run_in_threadpool(
+            upload_fileobj_for_role,
             role,
             bucket_name,
             key,
-            content,
+            file.file,
             current_user,
             content_type=file.content_type or "application/octet-stream",
             content_disposition=content_disposition,
+            size=size,
         )
         return {"message": "File uploaded successfully", "key": key}
     except HTTPException:
@@ -2032,7 +2009,7 @@ async def upload_file(
             "role": role,
             "error_type": error_type,
             "error_code": error_code,
-            "file_size": total_read if "total_read" in locals() else None,
+            "file_size": size,
         }
         if error_msg:
             log_extra["error_message"] = error_msg
@@ -2059,7 +2036,7 @@ async def upload_file(
                 "key": key,
                 "role": role,
                 "error_type": type(e).__name__,
-                "file_size": total_read if "total_read" in locals() else None,
+                "file_size": size,
             },
         )
         raise HTTPException(
