@@ -6,7 +6,10 @@ route dependencies like get_current_user run, so without the guard an
 unauthenticated 10 GB POST fills the temp dir and only then gets a 401.
 """
 
+import asyncio
 import importlib
+
+from starlette.requests import Request
 
 from tests.test_main import login  # noqa: F401 - reused by the middleware tests added in Task 3
 
@@ -103,6 +106,39 @@ def test_upload_without_content_length_gets_411(app_client):
     assert upload_rejected_total.labels(reason="size_limit")._value.get() == rejected_before
 
 
+def test_negative_content_length_rejected_with_411(mocker):
+    """A negative declared Content-Length must not fall through to call_next.
+    int("-5") == -5 is neither None (no 411 via the missing-header branch)
+    nor > max_file_size (no 413), so without an explicit `< 0` check the
+    request would reach the handler and the body would be spooled before the
+    handler's own true-size check runs. Upstream uvicorn/h11 usually reject a
+    negative Content-Length at the framing layer, but the guard's own logic
+    must not rely on that.
+
+    httpx (TestClient) recomputes Content-Length from the body it actually
+    sends, so a negative value can't be forged over the wire — this exercises
+    _upload_body_guard directly with a crafted ASGI scope/headers and a stub
+    call_next, with auth stubbed out so the test isolates the Content-Length
+    branch on an otherwise-authenticated request."""
+    main = reload_main()
+    mocker.patch("another_s3_manager.main.get_current_user", return_value={"username": "admin"})
+
+    async def _call_next(_request):
+        raise AssertionError("call_next must not run for a negative Content-Length")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/buckets/guard-bucket/upload",
+        "headers": [(b"content-length", b"-5")],
+    }
+    request = Request(scope)
+
+    response = asyncio.run(main._upload_body_guard(request, _call_next))
+
+    assert response.status_code == 411
+
+
 def test_upload_content_length_over_limit_gets_413_and_metric(app_client):
     """Declared Content-Length above max_file_size → 413 before the body is
     parsed, and upload_rejected_total{reason=size_limit} increments."""
@@ -148,13 +184,15 @@ def test_guard_rejections_still_counted_in_http_metrics(app_client):
     _http_metrics in module order → Starlette add_middleware prepends → metrics
     outermost of the two), so a guard-rejected request still lands in
     as3m_http_requests_total. Routing never ran for a guard-rejected request,
-    so scope has no `route` and _http_metrics' path_template label falls back
-    to the CONCRETE path — same posture as its existing no-route-404 fallback."""
+    so scope has no `route` — but the guard stamps a BOUNDED template
+    (`/api/buckets/{bucket_name}/upload`) into request.scope, so
+    _http_metrics' route-less fallback keys on that template instead of the
+    concrete (attacker-controlled) bucket-name path."""
     from another_s3_manager.metrics import REGISTRY
 
     labels = {
         "method": "POST",
-        "path_template": "/api/buckets/guard-metrics/upload",
+        "path_template": "/api/buckets/{bucket_name}/upload",
         "status_code": "401",
     }
     before = REGISTRY.get_sample_value("as3m_http_requests_total", labels) or 0.0
@@ -167,3 +205,34 @@ def test_guard_rejections_still_counted_in_http_metrics(app_client):
 
     after = REGISTRY.get_sample_value("as3m_http_requests_total", labels) or 0.0
     assert after - before == 1
+
+
+def test_guard_rejections_across_bucket_names_collapse_to_one_series(app_client):
+    """Cardinality-bounding regression proof. Without the guard-stamped path
+    template, _http_metrics' route-less fallback (routing never ran for a
+    guard-rejected request) uses the CONCRETE request path — an unauthenticated
+    attacker varying the bucket name (`/api/buckets/<rand>/upload`) would mint
+    one unbounded label series per bucket name in as3m_http_requests_total
+    (and ~15 per series in the duration histogram), held forever in the
+    registry: the same unauth resource-exhaustion class this branch closes,
+    relocated from disk to metrics-registry RAM. Two guard-rejected (401)
+    unauth uploads to DIFFERENT bucket names must collapse into the SAME
+    single template-labeled series."""
+    from another_s3_manager.metrics import REGISTRY
+
+    labels = {
+        "method": "POST",
+        "path_template": "/api/buckets/{bucket_name}/upload",
+        "status_code": "401",
+    }
+    before = REGISTRY.get_sample_value("as3m_http_requests_total", labels) or 0.0
+
+    for bucket in ("aaa", "bbb"):
+        response = app_client.post(
+            f"/api/buckets/{bucket}/upload",
+            files={"file": ("f.bin", b"x", "application/octet-stream")},
+        )
+        assert response.status_code == 401
+
+    after = REGISTRY.get_sample_value("as3m_http_requests_total", labels) or 0.0
+    assert after - before == 2

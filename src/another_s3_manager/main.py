@@ -254,6 +254,18 @@ async def _upload_body_guard(request: Request, call_next):
     """
     path = request.url.path
     if request.method == "POST" and path.startswith("/api/buckets/") and path.endswith("/upload"):
+        # Stamp a BOUNDED path template into scope so _http_metrics' route-less
+        # fallback (routing never runs for a guard-rejected request) doesn't key
+        # on the concrete, attacker-controlled bucket-name path. Without this, an
+        # unauthenticated client varying the bucket name mints one unbounded
+        # label series per bucket in as3m_http_requests_total (and ~15 per
+        # series in the duration histogram), held forever in the registry --
+        # the same unauth resource-exhaustion class this middleware closes,
+        # relocated from disk to metrics-registry RAM. Set once, before any of
+        # the three reject responses below, so all of them benefit. Must match
+        # the route decorator's path exactly: @app.post("/api/buckets/{bucket_name}/upload").
+        request.scope["upload_guard_path_template"] = "/api/buckets/{bucket_name}/upload"
+
         # 1. Auth-gate. get_current_user short-circuits on the missing-token
         #    branch before any load_users() I/O, so the unauth path is cheap.
         #    Convert HTTPException to a response HERE — exceptions raised in
@@ -273,7 +285,13 @@ async def _upload_body_guard(request: Request, call_next):
             declared_size = int(content_length) if content_length is not None else None
         except ValueError:
             declared_size = None
-        if declared_size is None:
+        # A negative declared size is nonsensical and must not fall through:
+        # int("-5") is neither None (no 411 above) nor > max_file_size (no 413
+        # below), so without this check it would reach call_next and the body
+        # would be spooled before the handler's own true-size check runs.
+        # Upstream uvicorn/h11 usually reject this at the framing layer, but
+        # the guard's own logic shouldn't rely on that.
+        if declared_size is None or declared_size < 0:
             return JSONResponse(
                 status_code=411,
                 content={"detail": "Content-Length header is required for uploads"},
@@ -311,9 +329,18 @@ async def _http_metrics(request: Request, call_next):
         # never leaks the gauge upward.
         http_requests_in_flight.dec()
     duration = time.perf_counter() - start
-    # path_template — bounded cardinality. Falls back to actual path on no-route 404.
+    # path_template — bounded cardinality. Routed requests always use the route
+    # pattern. When routing never ran (no-route 404, or a request rejected by
+    # _upload_body_guard before call_next), prefer a guard-stamped template
+    # over the concrete path — the guard stamps request.scope["upload_guard_path_template"]
+    # for upload requests so an attacker varying the bucket name can't mint
+    # unbounded label series. Falls back to the actual path for a genuine
+    # no-route 404 (not guard-stamped).
     route = request.scope.get("route")
-    path_template = route.path if route is not None else request.url.path
+    if route is not None:
+        path_template = route.path
+    else:
+        path_template = request.scope.get("upload_guard_path_template") or request.url.path
     method = request.method
     status_code = str(response.status_code)
     http_requests_total.labels(method=method, path_template=path_template, status_code=status_code).inc()
