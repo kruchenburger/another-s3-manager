@@ -188,3 +188,20 @@
   overflow-x: hidden;
   position: relative;
 }
+
+/* Clickable sort header (Name/Size/Modified). Inherits the th typography so
+   the header looks identical to before; the hover tint + cursor signal
+   interactivity without button chrome. */
+.sortHeader {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-weight: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+.sortHeader:hover {
+  color: var(--mantine-color-bright);
+}

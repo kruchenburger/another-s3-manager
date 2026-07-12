@@ -1,7 +1,13 @@
 import { type RefObject } from "react";
-import { Box, Checkbox, Table } from "@mantine/core";
+import { Box, Checkbox, Table, UnstyledButton } from "@mantine/core";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { FileEntry } from "@/types/api";
+import {
+  DEFAULT_SORT,
+  type SortColumn,
+  type SortState,
+} from "@/utils/sortEntries";
 import { FileRow } from "./FileRow";
 import { useNearEndAutoLoad } from "./useNearEndAutoLoad";
 import classes from "./FileBrowser.module.css";
@@ -27,6 +33,13 @@ interface FileTableProps {
   autoLoadEnabled: boolean;
   /** Fetch the next server chunk. */
   onLoadMore: () => void;
+  /** Active sort rendered in the headers (chevron + aria-sort). Optional with
+   *  a name-asc default ONLY so pre-wiring commits typecheck; FileBrowser
+   *  always passes it. */
+  sortState?: SortState;
+  /** Header click → request a sort on that column. FileBrowser derives the
+   *  next SortState (flip/switch) and applies the truncated-level gate. */
+  onSortColumn?: (column: SortColumn) => void;
 }
 
 // Fixed row height (px). Matches Table verticalSpacing="xs" single-line rows.
@@ -39,6 +52,52 @@ const ROW_HEIGHT = 44;
 // than the number of VISIBLE columns (Size/Modified hide below sm) makes
 // the fixed-layout table mint phantom columns that swallow the Name width.
 // The spacer only needs to set row height — one borderless cell suffices.
+
+function ariaSortFor(
+  sortState: SortState,
+  column: SortColumn,
+): "ascending" | "descending" | "none" {
+  if (sortState.column !== column) return "none";
+  return sortState.direction === "asc" ? "ascending" : "descending";
+}
+
+// Shared by the <th> and its nested button. Deviation from the plan: the
+// accessible-name spec (and dom-accessibility-api, which testing-library
+// uses) deliberately does NOT bubble a nested control's aria-label up into
+// an ancestor's "name from content" computation (accname issue #64 — the
+// button is an "embedded control", so its own text content is used instead
+// when a parent recurses into it). Without repeating the label on the <th>
+// itself, `getByRole("columnheader", { name: "Sort by size" })` would not
+// find it — the th's computed name would stay "Size". Setting aria-label
+// directly on the <th> is answered at step 2C, before any recursion.
+function sortAriaLabel(label: string): string {
+  return `Sort by ${label.toLowerCase()}`;
+}
+
+function SortHeaderButton({
+  label,
+  column,
+  sortState,
+  onSortColumn,
+}: {
+  label: string;
+  column: SortColumn;
+  sortState: SortState;
+  onSortColumn?: (column: SortColumn) => void;
+}) {
+  const active = sortState.column === column;
+  const Chevron = sortState.direction === "asc" ? ChevronUp : ChevronDown;
+  return (
+    <UnstyledButton
+      className={classes.sortHeader}
+      onClick={() => onSortColumn?.(column)}
+      aria-label={sortAriaLabel(label)}
+    >
+      {label}
+      {active && <Chevron size={14} aria-hidden />}
+    </UnstyledButton>
+  );
+}
 
 export function FileTable({
   files,
@@ -56,6 +115,8 @@ export function FileTable({
   scrollRef,
   autoLoadEnabled,
   onLoadMore,
+  sortState = DEFAULT_SORT,
+  onSortColumn,
 }: FileTableProps) {
   const allSelected =
     files.length > 0 && files.every((f) => selected.has(f.name));
@@ -98,15 +159,45 @@ export function FileTable({
               aria-label="Select all"
             />
           </Table.Th>
-          <Table.Th>Name</Table.Th>
+          <Table.Th
+            aria-sort={ariaSortFor(sortState, "name")}
+            aria-label={sortAriaLabel("Name")}
+          >
+            <SortHeaderButton
+              label="Name"
+              column="name"
+              sortState={sortState}
+              onSortColumn={onSortColumn}
+            />
+          </Table.Th>
           {/* Hidden below sm (with the matching FileRow cells): their fixed
               widths would starve the Name column on phones under
               layout="fixed". */}
-          <Table.Th visibleFrom="sm" style={{ width: 100 }}>
-            Size
+          <Table.Th
+            visibleFrom="sm"
+            style={{ width: 100 }}
+            aria-sort={ariaSortFor(sortState, "size")}
+            aria-label={sortAriaLabel("Size")}
+          >
+            <SortHeaderButton
+              label="Size"
+              column="size"
+              sortState={sortState}
+              onSortColumn={onSortColumn}
+            />
           </Table.Th>
-          <Table.Th visibleFrom="sm" style={{ width: 160 }}>
-            Modified
+          <Table.Th
+            visibleFrom="sm"
+            style={{ width: 160 }}
+            aria-sort={ariaSortFor(sortState, "modified")}
+            aria-label={sortAriaLabel("Modified")}
+          >
+            <SortHeaderButton
+              label="Modified"
+              column="modified"
+              sortState={sortState}
+              onSortColumn={onSortColumn}
+            />
           </Table.Th>
           <Table.Th className={classes.actionsCol}>
             {/* The label doesn't fit the 56px mobile column and painted past
