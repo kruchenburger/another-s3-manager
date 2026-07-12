@@ -990,12 +990,13 @@ def list_objects_recursive_for_role(
     user_dict: Dict[str, Any],
     max_keys: int = 1000,
     continuation_token: Optional[str] = None,
+    max_page_size: int = 10_000,
 ) -> Dict[str, Any]:
     """List ALL objects under `prefix` recursively (no Delimiter), with pagination.
 
     Designed for MCP agents that want to see/count an entire subtree without
-    walking it dir-by-dir (which would mean N+1 calls). Hard ceiling: 10000
-    keys per call (S3's own ListObjectsV2 limit).
+    walking it dir-by-dir (which would mean N+1 calls). Hard ceiling: max_page_size
+    keys per call (default 10000; the per-S3-request limit of 1000 is S3's own and unchanged).
 
     Returns:
         {
@@ -1012,9 +1013,11 @@ def list_objects_recursive_for_role(
     validated_role = validate_role_access(role, user_dict)
 
     # S3's hard limit per ListObjectsV2 call is 1000; for larger pages, paginate.
-    # We cap MaxKeys here for safety so a single MCP call can't return more than
-    # 10k entries even if a future caller asks for it.
-    max_keys = max(1, min(max_keys, 10_000))
+    # The safety ceiling on a single call comes from the caller (config-driven
+    # mcp_list_max_page_size for the MCP tool) instead of being invented here —
+    # s3_client does the clamping, it just takes the bound as an argument.
+    max_page_size = max(1, max_page_size)
+    max_keys = max(1, min(max_keys, max_page_size))
 
     def fetch(s3_client) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {
