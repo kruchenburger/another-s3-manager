@@ -2,6 +2,7 @@
 S3 client management module
 """
 
+import heapq
 import logging
 import os
 import time
@@ -1063,6 +1064,243 @@ def list_objects_recursive_for_role(
             "is_truncated": is_truncated,
             "next_continuation_token": next_token,
             "key_count": len(files),
+        }
+
+    return execute_with_s3_retry(validated_role, "list", fetch)
+
+
+def _human_bytes(size: int) -> str:
+    """Format a byte count as a short human string, e.g. 52428800 -> '50.0 MB'.
+
+    Binary steps (1024) with the conventional short unit labels the web UI uses.
+    """
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024:
+            return f"{int(value)} B" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} PB"
+
+
+def summarize_bucket_for_role(
+    role: str,
+    bucket: str,
+    prefix: str,
+    user_dict: Dict[str, Any],
+    max_keys: int,
+    prefix_scan_pages: int = 20,
+) -> Dict[str, Any]:
+    """Summarize a bucket (or a prefix subtree) in one bounded, honest response.
+
+    Two-step walk (see the 2026-07-12 big-bucket ergonomics design):
+
+    Step 1 — a Delimiter="/" listing scoped to `prefix` enumerates the
+    immediate child prefixes. Bounded by `prefix_scan_pages` pages (1000
+    entries each): a level holding hundreds of thousands of loose objects
+    would otherwise cost the very walk we are avoiding. Budget exhausted →
+    `prefix_list_complete: False` — never silently.
+
+    Step 2 — a recursive walk (no Delimiter, 1000 keys per request) under
+    `prefix`, capped at `max_keys`, aggregating counts, bytes, an extension
+    histogram, top-10 largest objects, the modified range and root_objects.
+    Zero-byte directory markers (keys ending "/") are skipped, consistent
+    with list_objects_recursive_for_role.
+
+    Why two steps: S3 returns keys lexicographically, so a capped recursive
+    walk alone only ever sees the alphabetically-earliest part of the bucket;
+    a "top prefixes" section built from that would be a lie. The delimiter
+    listing answers the cheaper "which prefixes exist" question first, and the
+    per-prefix `coverage` field (complete / partial / not_scanned) tells the
+    agent exactly which numbers it may trust.
+
+    The response is bounded by design: top-20 prefixes, top-20 extensions,
+    top-10 largest objects — low single-digit KB for ANY bucket.
+
+    Args:
+        role: Role name (validated against user_dict).
+        bucket: Bucket name (validated against the role's allowed_buckets).
+        prefix: Normalized S3 prefix ("" for bucket root, otherwise "sub/path/").
+        user_dict: Authenticated user dict ({username, is_admin, allowed_roles}).
+        max_keys: Walk cap (config: mcp_summary_max_keys). Floor: 1000.
+        prefix_scan_pages: Step-1 page budget (config: mcp_summary_prefix_scan_pages).
+            Floor: 1. Passed in — s3_client does no config lookups in the hot path.
+
+    Raises PermissionError on role/bucket access violation.
+    """
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    # Server-side floors: a pathological config value (0, negative) cannot
+    # disable the walk or the prefix scan entirely.
+    max_keys = max(1000, int(max_keys))
+    prefix_scan_pages = max(1, int(prefix_scan_pages))
+
+    def fetch(s3_client) -> Dict[str, Any]:
+        # ---- Step 1: enumerate immediate child prefixes (Delimiter="/") ----
+        step1_prefixes: list = []
+        prefix_list_complete = True
+        step1_kwargs: Dict[str, Any] = {"Bucket": bucket, "Prefix": prefix, "Delimiter": "/", "MaxKeys": 1000}
+        pages = 0
+        while True:
+            resp = s3_client.list_objects_v2(**step1_kwargs)
+            pages += 1
+            for cp in resp.get("CommonPrefixes", []) or []:
+                step1_prefixes.append(cp["Prefix"])
+            if not resp.get("IsTruncated"):
+                break
+            if pages >= prefix_scan_pages:
+                # Budget exhausted before the delimiter listing finished:
+                # prefixes may exist that we never even enumerated. Say so.
+                prefix_list_complete = False
+                break
+            step1_kwargs["ContinuationToken"] = resp["NextContinuationToken"]
+
+        # ---- Step 2: recursive walk (no Delimiter), capped at max_keys ----
+        scanned_objects = 0
+        scanned_bytes = 0
+        root_objects = 0
+        complete = True
+        oldest = None
+        newest = None
+        last_scanned_key: Optional[str] = None
+        ext_stats: Dict[str, list] = {}  # ext -> [objects, bytes]
+        prefix_stats: Dict[str, list] = {}  # immediate child prefix -> [objects, bytes]
+        largest_heap: list = []  # min-heap of (size, key, iso_modified), max 10 entries
+
+        walk_kwargs: Dict[str, Any] = {"Bucket": bucket, "Prefix": prefix, "MaxKeys": 1000}
+        stopped = False
+        while not stopped:
+            resp = s3_client.list_objects_v2(**walk_kwargs)
+            for obj in resp.get("Contents", []) or []:
+                key = obj["Key"]
+                # Skip empty "directory marker" objects (key ends with /),
+                # consistent with list_objects_recursive_for_role.
+                if key.endswith("/") and obj["Size"] == 0:
+                    continue
+                if scanned_objects >= max_keys:
+                    # Cap already reached and another real key exists.
+                    complete = False
+                    stopped = True
+                    break
+                scanned_objects += 1
+                size = obj["Size"]
+                scanned_bytes += size
+                lm = obj["LastModified"]
+                if oldest is None or lm < oldest:
+                    oldest = lm
+                if newest is None or lm > newest:
+                    newest = lm
+                last_scanned_key = key
+
+                remainder = key[len(prefix) :]
+                slash = remainder.find("/")
+                if slash == -1:
+                    # Directly under `prefix` — counted from the WALK, not from
+                    # Step 1 (whose Contents are bounded by the page budget and
+                    # would silently under-report on loose-object-heavy levels).
+                    root_objects += 1
+                else:
+                    child = prefix + remainder[: slash + 1]
+                    stats = prefix_stats.setdefault(child, [0, 0])
+                    stats[0] += 1
+                    stats[1] += size
+
+                basename = remainder.rsplit("/", 1)[-1]
+                if "." in basename and not basename.endswith("."):
+                    ext = basename.rsplit(".", 1)[-1].lower()
+                else:
+                    ext = "(none)"
+                estats = ext_stats.setdefault(ext, [0, 0])
+                estats[0] += 1
+                estats[1] += size
+
+                heapq.heappush(largest_heap, (size, key, lm.isoformat()))
+                if len(largest_heap) > 10:
+                    heapq.heappop(largest_heap)
+
+            if stopped:
+                break
+            if resp.get("IsTruncated"):
+                if scanned_objects >= max_keys:
+                    # Cap reached exactly at a page boundary with more pages
+                    # left. Conservative: even if the remaining pages held only
+                    # directory markers, we report incomplete — we understate
+                    # coverage, never overstate it.
+                    complete = False
+                    break
+                walk_kwargs["ContinuationToken"] = resp["NextContinuationToken"]
+            else:
+                break
+
+        scan_stopped_at: Optional[str] = None if complete else last_scanned_key
+
+        # ---- Coverage classification ----
+        # Union walk-discovered prefixes so a Step-1 budget exhaustion does not
+        # hide prefixes the walk actually has data for. prefix_count remains
+        # Step 1's enumeration (the design contract); the sets only diverge
+        # when prefix_list_complete is already False.
+        all_prefixes = sorted(set(step1_prefixes) | set(prefix_stats.keys()))
+        entries = []
+        for p in all_prefixes:
+            if complete:
+                coverage = "complete"
+            elif scan_stopped_at is not None and scan_stopped_at.startswith(p):
+                coverage = "partial"
+            elif scan_stopped_at is not None and p < scan_stopped_at:
+                # Keys arrive in lexicographic order: every key under p sorts
+                # before scan_stopped_at, so the walk passed fully through p.
+                coverage = "complete"
+            else:
+                coverage = "not_scanned"
+            if coverage == "not_scanned":
+                objects_n: Optional[int] = None
+                bytes_n: Optional[int] = None
+            else:
+                stats = prefix_stats.get(p, [0, 0])
+                objects_n, bytes_n = stats[0], stats[1]
+            entries.append({"prefix": p, "objects": objects_n, "bytes": bytes_n, "coverage": coverage})
+
+        # Top-20 selection: scanned prefixes ranked by objects desc first,
+        # remaining slots filled with not_scanned prefixes in key order; the
+        # final list is presented in key order so the complete -> partial ->
+        # not_scanned progression reads naturally.
+        scanned_entries = [e for e in entries if e["coverage"] != "not_scanned"]
+        scanned_entries.sort(key=lambda e: (-(e["objects"] or 0), e["prefix"]))
+        selected = scanned_entries[:20]
+        if len(selected) < 20:
+            not_scanned_entries = [e for e in entries if e["coverage"] == "not_scanned"]
+            selected.extend(not_scanned_entries[: 20 - len(selected)])
+        selected.sort(key=lambda e: e["prefix"])
+
+        ext_entries = [{"ext": ext, "objects": stats[0], "bytes": stats[1]} for ext, stats in ext_stats.items()]
+        ext_entries.sort(key=lambda e: (-e["objects"], e["ext"]))
+
+        largest = [
+            {"key": key, "size": size, "last_modified": iso} for size, key, iso in sorted(largest_heap, reverse=True)
+        ]
+
+        return {
+            "bucket": bucket,
+            "path": prefix,
+            "complete": complete,
+            "scanned_objects": scanned_objects,
+            "scanned_bytes": scanned_bytes,
+            "scanned_bytes_human": _human_bytes(scanned_bytes),
+            "total_objects": scanned_objects if complete else None,
+            "total_bytes": scanned_bytes if complete else None,
+            "total_bytes_human": _human_bytes(scanned_bytes) if complete else None,
+            "scan_stopped_at": scan_stopped_at,
+            "root_objects": root_objects,
+            "prefixes": selected,
+            "prefix_count": len(step1_prefixes),
+            "prefix_list_complete": prefix_list_complete,
+            "prefixes_truncated": len(all_prefixes) > 20,
+            "extensions": ext_entries[:20],
+            "extension_count": len(ext_entries),
+            "extensions_truncated": len(ext_entries) > 20,
+            "largest_objects": largest,
+            "oldest_modified": oldest.isoformat() if oldest else None,
+            "newest_modified": newest.isoformat() if newest else None,
         }
 
     return execute_with_s3_retry(validated_role, "list", fetch)
