@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Sortable file-browser columns (Name / Size / Modified, asc/desc); on huge
+  folders a size/date sort loads the whole level first so the order is exact.
+
 ## [1.1.0] - 2026-07-11
 
 ### Security
