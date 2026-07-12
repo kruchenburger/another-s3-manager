@@ -148,8 +148,10 @@ export function FileBrowser() {
     [contextKey, serverSearchActive, stopFolderDrain, stopSearchDrain],
   );
 
-  // All loaded items, directories first (vanilla parity). Single source of
-  // truth for filtering and every .find(name === ...) lookup below.
+  // Unsorted concatenation of the currently loaded directories + files, in
+  // arrival/S3 order. Source for every .find(name === ...) lookup below
+  // (preview, bulk delete) and the object count. Also what `sortedItems`
+  // below returns under the default sort — see the comment there.
   const items = useMemo(
     () => [...directories, ...files],
     [directories, files],
@@ -165,11 +167,21 @@ export function FileBrowser() {
     [truncated, sortPreference],
   );
 
-  // Folders first, files by the active column (pure + memoized). Feeds the
-  // filter below; `items` above stays as-is for name lookups and the count.
+  // While a level is truncated the honesty guard pins effectiveSort to the
+  // default, so the default path is also the one every arriving chunk takes.
+  // Re-sorting the merged array there would (a) redo an O(n log n) collated sort
+  // on every chunk of a drain, and (b) INTERLEAVE the new chunk among rows already
+  // on screen — the collator's order diverges from the byte order S3 paginates in,
+  // so rows would shift under the user mid-scroll. The plain concatenation is what
+  // the browser displayed before sorting existed. The collator only runs for an
+  // explicitly requested sort, which the guard guarantees can only happen on a
+  // fully-drained level (no more chunks, so no shifting).
   const sortedItems = useMemo(
-    () => sortEntries(directories, files, effectiveSort),
-    [directories, files, effectiveSort],
+    () =>
+      isDefaultSort(effectiveSort)
+        ? items
+        : sortEntries(directories, files, effectiveSort),
+    [items, directories, files, effectiveSort],
   );
 
   const queryClient = useQueryClient();

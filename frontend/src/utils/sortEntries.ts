@@ -29,11 +29,14 @@ export function nextSortForColumn(current: SortState, column: SortColumn): SortS
 // BEFORE "file1" here, but after it in Python (`_` is 0x5F > `1` is 0x31).
 // (Note it is NOT that punctuation is ignored: `ignorePunctuation` is false.)
 //
-// That divergence is fine — preferable, even: this function re-sorts the whole
-// merged multi-chunk array client-side, so the result is a single globally
-// consistent order across the list, whereas the backend sorts each chunk
-// independently, which can leave chunk 1's last item ordered after chunk 2's
-// first.
+// That divergence is fine — preferable, even. This function only runs for an
+// EXPLICITLY REQUESTED sort (FileBrowser's default view skips it and shows
+// the backend's per-chunk concatenated order unchanged — see the
+// `sortedItems` comment in FileBrowser.tsx). When it does run, it re-sorts
+// the whole merged multi-chunk array client-side, so the result is a single
+// globally consistent order across the list, whereas the backend sorts each
+// chunk independently, which can leave chunk 1's last item ordered after
+// chunk 2's first.
 //
 // Hoisted to module scope: constructing an Intl.Collator is relatively
 // expensive (it builds locale collation tables), so a single shared instance

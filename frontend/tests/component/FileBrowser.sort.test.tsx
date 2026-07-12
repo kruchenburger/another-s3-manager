@@ -30,6 +30,9 @@ const stopLoadAllMock = vi.fn();
 let mockTruncated = false;
 // true = the drain fully completes; false = the user cancelled mid-drain.
 let mockLoadAllCompletes = true;
+// true = the drain rejects (network/S3 failure mid-drain), exercised by the
+// error-toast test below. Takes priority over mockLoadAllCompletes.
+let mockLoadAllRejects = false;
 let mockDirectories = [{ name: "zzz-folder", is_directory: true, size: 0 }];
 // Deliberately anti-correlated: name-asc order (alpha, beta, gamma) is the
 // exact REVERSE of size-asc order (gamma 100 < beta 200 < alpha 300), so a
@@ -58,6 +61,7 @@ vi.mock("@/features/files/hooks/useFiles", () => ({
     // assertion could never pass.
     loadAll: () => {
       loadAllMock();
+      if (mockLoadAllRejects) return Promise.reject(new Error("network error"));
       if (mockLoadAllCompletes) mockTruncated = false;
       return Promise.resolve(mockLoadAllCompletes);
     },
@@ -148,6 +152,7 @@ describe("FileBrowser sorting — truncated-level gate", () => {
     stopLoadAllMock.mockReset();
     mockTruncated = false;
     mockLoadAllCompletes = true;
+    mockLoadAllRejects = false;
     window.localStorage.clear(); // useDisplayMode persists table/grid per bucket
     mockDirectories = [{ name: "zzz-folder", is_directory: true, size: 0 }];
     mockFiles = [
@@ -357,5 +362,54 @@ describe("FileBrowser sorting — truncated-level gate", () => {
       .closest("th");
     expect(nameHeader).toHaveAttribute("aria-sort", "ascending");
     expect(sizeHeader).toHaveAttribute("aria-sort", "none");
+  });
+
+  // Finding 1: the default (untouched) sort must not run the collator over
+  // the merged array — it must render the backend's arrival/concatenation
+  // order unchanged. Discriminator: S3/byte order sorts '1' (0x31) before
+  // '_' (0x5F), so file1.txt arrives before file_2.txt — but Intl.Collator
+  // (UCA primary weights, per the sortEntries.ts comment) sorts punctuation
+  // before digits, so it would place file_2.txt FIRST. A regression that
+  // re-introduces an unconditional sortEntries() call on every render would
+  // flip these two rows.
+  it("does not collator-sort the default view — arrival order survives", async () => {
+    mockTruncated = false;
+    mockDirectories = [];
+    mockFiles = [
+      {
+        name: "file1.txt",
+        is_directory: false,
+        size: 100,
+        last_modified: "2026-01-01T00:00:00Z",
+      },
+      {
+        name: "file_2.txt",
+        is_directory: false,
+        size: 100,
+        last_modified: "2026-01-01T00:00:00Z",
+      },
+    ];
+    const { container } = renderBrowser();
+
+    const rows = rowTexts(container);
+    expect(rowIndex(rows, "file1.txt")).toBeLessThan(rowIndex(rows, "file_2.txt"));
+  });
+
+  // Finding 3: requestSort's drain can reject (realistic network/S3 failure
+  // mid-drain) — nothing previously exercised that branch. Assert both that
+  // the error toast surfaces AND that the sort was never applied (the rows
+  // keep their prior, pre-sort-attempt order).
+  it("shows an error toast and keeps the prior order when the drain rejects", async () => {
+    mockTruncated = true;
+    mockLoadAllRejects = true;
+    const { container } = renderBrowser();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort by size" }));
+    expect(loadAllMock).toHaveBeenCalledTimes(1);
+
+    expect(await screen.findByText("Couldn't load all files")).toBeInTheDocument();
+
+    const rows = rowTexts(container);
+    expect(rowIndex(rows, "alpha.txt")).toBeLessThan(rowIndex(rows, "gamma.txt"));
   });
 });
