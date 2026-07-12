@@ -58,6 +58,7 @@ import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
 import { FileBrowserEmptyState } from "./FileBrowserEmptyState";
 import { FileBrowserLoadMoreFooter } from "./FileBrowserLoadMoreFooter";
+import { SortLoadAllModal } from "./SortLoadAllModal";
 import { BulkDeleteProgress } from "@/components/FileBrowser/BulkDeleteProgress";
 import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
 import { ScrollToTopButton } from "@/components/ScrollToTopButton/ScrollToTopButton";
@@ -83,6 +84,10 @@ export function FileBrowser() {
   // chosen sort while navigating folders; it resets on page reload — no
   // localStorage by design.
   const [sortPreference, setSortPreference] = useState<SortState>(DEFAULT_SORT);
+  // The sort the user just requested via a column header / grid Select while
+  // it's still awaiting confirmation (see requestSort below). Non-null opens
+  // SortLoadAllModal; the drain itself only starts once the user confirms.
+  const [pendingSort, setPendingSort] = useState<SortState | null>(null);
   // Optimistic header-counter offset during a bulk delete (batched every 50
   // successes; reset after the post-batch refetch lands).
   const [bulkDeletedCount, setBulkDeletedCount] = useState(0);
@@ -115,6 +120,10 @@ export function FileBrowser() {
     setPrevContextKey(contextKey);
     setServerSearchTerm(null);
     setSearchQuery("");
+    // A pending sort-confirmation belongs to the folder it was asked about —
+    // it must not survive into a different one (e.g. the user navigates away
+    // while the modal is still open).
+    setPendingSort(null);
   }
 
   // Latest contextKey, tracked in a ref and written unconditionally on every
@@ -570,43 +579,59 @@ export function FileBrowser() {
   }, [loadMore]);
 
   // Every sort request funnels through the truncated-level gate: a non-default
-  // sort on a truncated level drains the WHOLE level first (the existing
-  // "Load all" with its progress + Stop), and applies ONLY if the drain fully
-  // completed — cancelling keeps the current order. "Biggest file" must mean
-  // biggest in the whole folder, never in the loaded slice. The default
-  // {name, asc} is the native S3 key order and needs no drain.
+  // sort on a truncated level requires user confirmation (SortLoadAllModal)
+  // before it drains the WHOLE level (the existing "Load all" with its
+  // progress + Stop), and applies ONLY if the drain fully completed —
+  // cancelling keeps the current order. "Biggest file" must mean biggest in
+  // the whole folder, never in the loaded slice. The default {name, asc} is
+  // the native S3 key order and needs no drain, so it skips confirmation too.
+  //
+  // A header click alone must NEVER start the drain — on a folder with
+  // hundreds of thousands of objects it's thousands of S3 LIST requests and
+  // can take minutes. `setPendingSort` only opens the modal; the drain itself
+  // is deferred to `confirmPendingSort`, run solely on explicit user consent.
   const requestSort = useCallback(
     (next: SortState) => {
       if (isDefaultSort(next) || !truncated) {
         setSortPreference(next);
         return;
       }
-      // Capture the folder we're draining for. FileBrowser stays mounted
-      // across folder navigation (only the route params change), so a drain
-      // started here can resolve after the user has already moved to a
-      // different folder — applying it then would clobber whatever sort
-      // they picked in the meantime. Bail out if the context moved on
-      // (compare against the ref, which always holds the latest render's
-      // contextKey — the plain `contextKey` variable is frozen at the value
-      // from when this requestSort closure was created).
-      const drainContextKey = contextKey;
-      loadAll()
-        .then((completed) => {
-          if (completed && drainContextKey === contextKeyRef.current) {
-            setSortPreference(next);
-          }
-        })
-        .catch((e) =>
-          showToast({
-            color: "red",
-            title: "Couldn't load all files",
-            message: getErrorMessage(e),
-            autoClose: TOAST_DURATIONS.error,
-          }),
-        );
+      setPendingSort(next);
     },
-    [truncated, loadAll, contextKey],
+    [truncated],
   );
+
+  // Runs the drain the user just confirmed in SortLoadAllModal. This is the
+  // exact drain logic requestSort used to run unconditionally — moved here
+  // unchanged so the epoch guard and the `completed` check stay load-bearing.
+  const confirmPendingSort = useCallback(() => {
+    const next = pendingSort;
+    setPendingSort(null);
+    if (!next) return;
+    // Capture the folder we're draining for. FileBrowser stays mounted
+    // across folder navigation (only the route params change), so a drain
+    // started here can resolve after the user has already moved to a
+    // different folder — applying it then would clobber whatever sort
+    // they picked in the meantime. Bail out if the context moved on
+    // (compare against the ref, which always holds the latest render's
+    // contextKey — the plain `contextKey` variable is frozen at the value
+    // from when this callback was created).
+    const drainContextKey = contextKey;
+    loadAll()
+      .then((completed) => {
+        if (completed && drainContextKey === contextKeyRef.current) {
+          setSortPreference(next);
+        }
+      })
+      .catch((e) =>
+        showToast({
+          color: "red",
+          title: "Couldn't load all files",
+          message: getErrorMessage(e),
+          autoClose: TOAST_DURATIONS.error,
+        }),
+      );
+  }, [pendingSort, loadAll, contextKey]);
 
   // Sort controls go unavailable while a fetch/drain is in flight. loadAll()
   // resolves `false` not only on user-cancel but also when it can't even
@@ -1086,6 +1111,13 @@ export function FileBrowser() {
         onConfirm={confirmDelete}
         items={pendingDelete.current}
         loading={deleteMutation.isPending}
+      />
+      <SortLoadAllModal
+        opened={pendingSort !== null}
+        column={pendingSort?.column ?? null}
+        loadedCount={items.length}
+        onCancel={() => setPendingSort(null)}
+        onConfirm={confirmPendingSort}
       />
       {previewState && (
         <PreviewModal

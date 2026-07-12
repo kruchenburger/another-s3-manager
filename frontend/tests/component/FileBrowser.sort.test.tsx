@@ -200,12 +200,21 @@ describe("FileBrowser sorting — truncated-level gate", () => {
     expect(loadAllMock).not.toHaveBeenCalled();
   });
 
-  it("gates a size sort on a truncated level behind a full drain, then applies it", async () => {
+  it("gates a size sort on a truncated level behind a confirmation + full drain, then applies it", async () => {
     mockTruncated = true;
     mockLoadAllCompletes = true;
     const { container } = renderBrowser();
 
     fireEvent.click(screen.getByRole("button", { name: "Sort by size" }));
+    // The click alone must never start the drain — only open the confirmation.
+    expect(loadAllMock).not.toHaveBeenCalled();
+    expect(
+      await screen.findByRole("heading", {
+        name: "Load the whole folder to sort by size?",
+      }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Load all and sort" }));
     expect(loadAllMock).toHaveBeenCalledTimes(1);
 
     // After the drain resolves true, the sort applies over the full level.
@@ -217,10 +226,13 @@ describe("FileBrowser sorting — truncated-level gate", () => {
 
   it("keeps the prior order when the drain is cancelled — and does not pollute the sort preference", async () => {
     mockTruncated = true;
-    mockLoadAllCompletes = false; // the user hits Stop mid-drain
+    mockLoadAllCompletes = false; // the user hits Stop mid-drain (after confirming the drain itself)
     const { container, rerenderTree } = renderBrowser();
 
     fireEvent.click(screen.getByRole("button", { name: "Sort by size" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Load all and sort" }),
+    );
     expect(loadAllMock).toHaveBeenCalledTimes(1);
 
     // Flush the resolved-false promise chain, then assert nothing reordered.
@@ -273,6 +285,12 @@ describe("FileBrowser sorting — truncated-level gate", () => {
     // Current sortState is still the default {name, asc}, so per Finding 6
     // the toggle's accessible name is the ACTION it performs: "Sort descending".
     fireEvent.click(screen.getByRole("button", { name: "Sort descending" }));
+    // {name, desc} is non-default on a still-truncated level, so it must be
+    // gated behind the confirmation — same as any other non-default sort.
+    expect(loadAllMock).not.toHaveBeenCalled();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Load all and sort" }),
+    );
     expect(loadAllMock).toHaveBeenCalledTimes(1);
 
     // Flush the resolved-drain promise chain so requestSort's pending
@@ -405,11 +423,114 @@ describe("FileBrowser sorting — truncated-level gate", () => {
     const { container } = renderBrowser();
 
     fireEvent.click(screen.getByRole("button", { name: "Sort by size" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Load all and sort" }),
+    );
     expect(loadAllMock).toHaveBeenCalledTimes(1);
 
     expect(await screen.findByText("Couldn't load all files")).toBeInTheDocument();
 
     const rows = rowTexts(container);
     expect(rowIndex(rows, "alpha.txt")).toBeLessThan(rowIndex(rows, "gamma.txt"));
+  });
+});
+
+describe("FileBrowser sorting — confirmation modal", () => {
+  beforeEach(() => {
+    loadMoreMock.mockReset();
+    loadAllMock.mockReset();
+    stopLoadAllMock.mockReset();
+    mockTruncated = false;
+    mockLoadAllCompletes = true;
+    mockLoadAllRejects = false;
+    window.localStorage.clear(); // useDisplayMode persists table/grid per bucket
+    mockDirectories = [{ name: "zzz-folder", is_directory: true, size: 0 }];
+    mockFiles = [
+      { name: "alpha.txt", is_directory: false, size: 300, last_modified: "2026-01-03T00:00:00Z" },
+      { name: "beta.txt", is_directory: false, size: 200, last_modified: "2026-01-02T00:00:00Z" },
+      { name: "gamma.txt", is_directory: false, size: 100, last_modified: "2026-01-01T00:00:00Z" },
+    ];
+  });
+
+  it("opens the confirmation instead of draining when a non-default sort is requested on a truncated level", async () => {
+    mockTruncated = true;
+    renderBrowser();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort by size" }));
+
+    // The modal must appear BEFORE any drain starts — a header click alone
+    // must never kick off thousands of S3 LIST requests unannounced.
+    expect(
+      await screen.findByRole("heading", {
+        name: "Load the whole folder to sort by size?",
+      }),
+    ).toBeInTheDocument();
+    expect(loadAllMock).not.toHaveBeenCalled();
+  });
+
+  it("cancelling the confirmation drains nothing, keeps the prior order, and leaves the sort controls on the previous sort", async () => {
+    mockTruncated = true;
+    const { container } = renderBrowser();
+
+    const rowsBefore = rowTexts(container);
+    expect(rowIndex(rowsBefore, "alpha.txt")).toBeLessThan(
+      rowIndex(rowsBefore, "gamma.txt"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort by size" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    expect(loadAllMock).not.toHaveBeenCalled();
+    const rowsAfter = rowTexts(container);
+    expect(rowIndex(rowsAfter, "alpha.txt")).toBeLessThan(
+      rowIndex(rowsAfter, "gamma.txt"),
+    );
+
+    // Sort controls still show the untouched default: Name ascending, Size
+    // never became the active column.
+    const nameHeader = screen
+      .getByRole("button", { name: "Sort by name" })
+      .closest("th");
+    const sizeHeader = screen
+      .getByRole("button", { name: "Sort by size" })
+      .closest("th");
+    expect(nameHeader).toHaveAttribute("aria-sort", "ascending");
+    expect(sizeHeader).toHaveAttribute("aria-sort", "none");
+  });
+
+  it("does not show the confirmation when the level is not truncated — the sort applies immediately", async () => {
+    mockTruncated = false;
+    const { container } = renderBrowser();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort by size" }));
+
+    expect(
+      screen.queryByRole("heading", {
+        name: /load the whole folder to sort by/i,
+      }),
+    ).not.toBeInTheDocument();
+    await waitFor(() => {
+      const rows = rowTexts(container);
+      expect(rowIndex(rows, "gamma.txt")).toBeLessThan(rowIndex(rows, "alpha.txt"));
+    });
+    expect(loadAllMock).not.toHaveBeenCalled();
+  });
+
+  it("does not show the confirmation for the default {name, asc} sort on a truncated level", async () => {
+    mockTruncated = true;
+    renderBrowser();
+
+    // Same grid-Select path as the "does NOT drain" test above — the only UI
+    // route that can request the exact default while truncated.
+    await userEvent.click(screen.getByRole("button", { name: "Grid view" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Sort by" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Name" }));
+
+    expect(
+      screen.queryByRole("heading", {
+        name: /load the whole folder to sort by/i,
+      }),
+    ).not.toBeInTheDocument();
+    expect(loadAllMock).not.toHaveBeenCalled();
   });
 });

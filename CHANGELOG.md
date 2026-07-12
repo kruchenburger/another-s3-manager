@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Sortable file-browser columns (Name / Size / Modified, asc/desc); on huge
   folders a size/date sort loads the whole level first so the order is exact.
+  Since that load can be thousands of S3 requests on a very large folder, the
+  UI now asks for confirmation before it starts — a header click alone never
+  triggers it.
 
 ## [1.1.0] - 2026-07-11
 
