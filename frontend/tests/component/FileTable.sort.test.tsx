@@ -33,9 +33,11 @@ const files: FileEntry[] = [
 function Harness({
   sortState = DEFAULT_SORT,
   onSortColumn = () => {},
+  sortDisabled,
 }: {
   sortState?: SortState;
   onSortColumn?: (column: SortColumn) => void;
+  sortDisabled?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const qc = new QueryClient();
@@ -58,6 +60,7 @@ function Harness({
             onLoadMore={() => {}}
             sortState={sortState}
             onSortColumn={onSortColumn}
+            sortDisabled={sortDisabled}
           />
         </div>
       </QueryClientProvider>
@@ -121,5 +124,29 @@ describe("FileTable sortable headers", () => {
     expect(
       screen.getByRole("columnheader", { name: /actions/i }),
     ).not.toHaveAttribute("aria-sort");
+  });
+
+  it("disables the sort header buttons while sortDisabled is true, and a click does not fire onSortColumn", async () => {
+    const onSortColumn = vi.fn();
+    render(<Harness onSortColumn={onSortColumn} sortDisabled={true} />);
+    const button = screen.getByRole("button", { name: "Sort by size" });
+    expect(button).toBeDisabled();
+
+    // A native disabled <button> does not dispatch click at all — this is
+    // the behavior the sortDisabled prop relies on to make a busy click a
+    // true no-op instead of a silently swallowed one.
+    await userEvent.click(button);
+    expect(onSortColumn).not.toHaveBeenCalled();
+  });
+
+  it("keeps the sort header buttons enabled when sortDisabled is false or absent", () => {
+    // Discriminates against a constant-true assertion: this must be the
+    // OPPOSITE outcome of the disabled test above for the same button.
+    const { unmount } = render(<Harness />);
+    expect(screen.getByRole("button", { name: "Sort by size" })).not.toBeDisabled();
+    unmount();
+
+    render(<Harness sortDisabled={false} />);
+    expect(screen.getByRole("button", { name: "Sort by size" })).not.toBeDisabled();
   });
 });

@@ -114,4 +114,32 @@ describe("FileBrowserHeader — grid sort control", () => {
       direction: "asc",
     });
   });
+
+  it("disables the Select and the direction toggle while sortDisabled is true, and a click does not fire onSortChange", async () => {
+    const onSortChange = vi.fn();
+    renderHeader({ mode: "grid", sortDisabled: true, onSortChange });
+
+    const combobox = screen.getByRole("combobox", { name: "Sort by" });
+    const toggle = screen.getByRole("button", { name: "Sort ascending" });
+    expect(combobox).toBeDisabled();
+    expect(toggle).toBeDisabled();
+
+    // A native disabled control does not dispatch click at all — this is
+    // the behavior the sortDisabled prop relies on to make a busy click a
+    // true no-op instead of a silently swallowed one.
+    await userEvent.click(toggle);
+    expect(onSortChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the Select and the direction toggle enabled when sortDisabled is false or absent", () => {
+    // Discriminates against a constant-true assertion: this must be the
+    // OPPOSITE outcome of the disabled test above for the same controls.
+    renderHeader({ mode: "grid" });
+    expect(
+      screen.getByRole("combobox", { name: "Sort by" }),
+    ).not.toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Sort ascending" }),
+    ).not.toBeDisabled();
+  });
 });

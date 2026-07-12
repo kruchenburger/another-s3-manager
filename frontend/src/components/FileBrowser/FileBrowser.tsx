@@ -117,11 +117,17 @@ export function FileBrowser() {
     setSearchQuery("");
   }
 
-  // Latest contextKey, tracked in a ref rather than read via closure: a
-  // requestSort() call's `.then()` (below) closes over the contextKey from
-  // the render that created it, so comparing against that SAME closed-over
-  // value would always be equal — it needs the truly current value at
-  // resolution time, which only a ref (updated every render) can give it.
+  // Latest contextKey, tracked in a ref and written unconditionally on every
+  // render — NOT the same pattern as `prevContextKey` above, which is a
+  // useState render-time state adjustment. This is a plain ref write: the
+  // gate's `.then()` (in requestSort, below) must compare the drain's origin
+  // folder against the LIVE current folder at resolution time. A
+  // closure-captured `contextKey` can't do that — the `.then()` closes over
+  // whatever value was current when that requestSort call was created, so
+  // comparing against it would always compare a value to itself (a
+  // tautology) and could never detect that the user navigated away mid-drain.
+  // Only a ref, re-read at resolution time, gives the `.then()` a channel to
+  // the folder that is ACTUALLY current right now.
   const contextKeyRef = useRef(contextKey);
   contextKeyRef.current = contextKey;
 

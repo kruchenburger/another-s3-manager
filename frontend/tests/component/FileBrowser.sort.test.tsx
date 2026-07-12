@@ -269,5 +269,21 @@ describe("FileBrowser sorting — truncated-level gate", () => {
     await act(async () => {
       await Promise.resolve();
     });
+
+    // REFLECTION check (not just RECEIVES-a-click) — the drain above
+    // completed (mockLoadAllCompletes defaults true) and applied {name, desc}
+    // via setSortPreference, so the direction is now genuinely desc. The
+    // toggle button's accessible name is state-driven ("Sort ascending" while
+    // asc, "Sort descending" while desc — see FileBrowserHeader), so this
+    // only passes if FileBrowserHeader actually renders the LIVE
+    // effectiveSort it was just handed, not a stale/default one. If
+    // FileBrowser dropped `sortState={effectiveSort}` on the
+    // FileBrowserHeader call site, the optional prop's own DEFAULT_SORT
+    // fallback (name, asc) would keep this button labelled "Sort ascending"
+    // forever regardless of what requestSort resolved to — this assertion
+    // is what catches that silently-disconnected wire.
+    expect(
+      screen.getByRole("button", { name: "Sort descending" }),
+    ).toBeInTheDocument();
   });
 });
