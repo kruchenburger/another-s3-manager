@@ -22,12 +22,16 @@ export function nextSortForColumn(current: SortState, column: SortColumn): SortS
 }
 
 // Case-insensitive, locale-aware collation. Deliberately NOT identical to the
-// backend's ordinal Python `name.lower()` sort — Intl.Collator treats `-`,
-// `_` and space as variable/ignorable at "accent" strength, so plain-ASCII
-// names like "file-2" vs "file1" can sort in the OPPOSITE order from Python's
-// codepoint comparison. That's fine here: this function re-sorts the whole
+// backend's ordinal Python `name.lower()` sort: Intl.Collator orders by UCA
+// primary weights, where punctuation and symbols sort before digits and
+// letters, and accented letters collate beside their base letter. So even
+// plain-ASCII names can diverge from a codepoint comparison — "file_2" sorts
+// BEFORE "file1" here, but after it in Python (`_` is 0x5F > `1` is 0x31).
+// (Note it is NOT that punctuation is ignored: `ignorePunctuation` is false.)
+//
+// That divergence is fine — preferable, even: this function re-sorts the whole
 // merged multi-chunk array client-side, so the result is a single globally
-// consistent order across the list — whereas the backend sorts each chunk
+// consistent order across the list, whereas the backend sorts each chunk
 // independently, which can leave chunk 1's last item ordered after chunk 2's
 // first.
 //

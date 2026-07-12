@@ -70,7 +70,7 @@ function SortHeaderButton({
   label: string;
   column: SortColumn;
   sortState: SortState;
-  onSortColumn?: (column: SortColumn) => void;
+  onSortColumn: (column: SortColumn) => void;
   disabled?: boolean;
 }) {
   const active = sortState.column === column;
@@ -78,7 +78,7 @@ function SortHeaderButton({
   return (
     <UnstyledButton
       className={classes.sortHeader}
-      onClick={() => onSortColumn?.(column)}
+      onClick={() => onSortColumn(column)}
       aria-label={`Sort by ${label.toLowerCase()}`}
       disabled={disabled}
     >

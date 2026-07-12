@@ -48,7 +48,7 @@ describe("sortEntries", () => {
     }
   });
 
-  it("sorts files by name ascending, case-insensitively (mirrors the backend)", () => {
+  it("sorts files by name ascending, case-insensitively", () => {
     const out = sortEntries(
       [],
       [file("b.txt", 1), file("A.txt", 1), file("c.txt", 1)],
