@@ -5,7 +5,7 @@ The isolated_environment autouse fixture provides a config with a single
 "Default" role (type "default"), so get_s3_client("Default") builds a plain
 boto3 client that mock_aws intercepts.
 
-NOTE: two tests seed ~1000+ objects to cross the helper's hard floor of
+NOTE: three tests seed ~1000+ objects to cross the helper's hard floor of
 max_keys >= 1000 — they take a few seconds each under moto. That is expected.
 """
 
@@ -91,8 +91,12 @@ def test_summary_complete_small_bucket(moto_s3):
 
     assert result["largest_objects"][0]["key"] == "img/photo.jpg"
     assert result["largest_objects"][0]["size"] == 50
+    # Verify that datetime fields are formatted as ISO strings (not raw datetime objects)
+    assert isinstance(result["largest_objects"][0]["last_modified"], str)
     assert result["oldest_modified"] is not None
+    assert isinstance(result["oldest_modified"], str)
     assert result["newest_modified"] is not None
+    assert isinstance(result["newest_modified"], str)
 
 
 def test_summary_empty_bucket(moto_s3):
@@ -267,8 +271,8 @@ def test_summary_max_keys_floor_enforced(moto_s3):
 
 
 def test_summary_prefix_scan_pages_floor_enforced(moto_s3):
-    """prefix_scan_pages=0 must behave identically to 1 — Step 1 is not
-    skipped entirely, and prefix_list_complete is still reported correctly."""
+    """A pathological prefix_scan_pages=0 clamps to the floor of 1, so Step 1
+    still issues a working page 1 (do-while semantics)."""
     _seed(moto_s3, "summary-floor-pages", [("a/f.txt", 1), ("b/f.txt", 1)])
 
     result_zero = mod.summarize_bucket_for_role(
@@ -387,9 +391,10 @@ def test_summary_response_stays_small(moto_s3):
     The original version of this test seeded 13-character keys, which passed
     the old "< 5 KB" assertion with enormous headroom without ever exercising
     the failure mode it claims to guard against. This seed uses data-lake
-    style ~120-char keys for the bulk of the bucket, plus the 10 largest
-    objects (by construction, monotonically increasing size) padded to
-    within a byte of S3's 1024-byte key ceiling — the actual worst case.
+    style ~120-char keys for the bulk of the 300 objects (the rendered
+    prefixes have short names), plus the 10 largest objects (by construction,
+    monotonically increasing size) padded to within a byte of S3's 1024-byte
+    key ceiling — exercising the pathological key length the bound must survive.
     """
     keys = []
     for i in range(300):

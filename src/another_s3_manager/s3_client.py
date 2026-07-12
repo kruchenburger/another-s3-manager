@@ -1129,9 +1129,11 @@ def summarize_bucket_for_role(
 
     The response is bounded by design: top-20 prefixes, top-20 extensions
     (each "ext" capped at _MAX_EXTENSION_LENGTH chars), top-10 largest
-    objects — well under 40 KB for ANY bucket, including pathological ones
-    with keys near S3's 1024-byte key ceiling (see the worst-case math in
-    test_summary_response_stays_small).
+    objects — never scales with object count. The real bound is roughly 30
+    rendered entries (20 prefixes + 10 largest objects) times the maximum S3
+    key length (~1024 bytes, but inflated via UTF-8 encoding if non-ASCII).
+    With the test seed (~900-byte keys), this stays well under 40 KB (see
+    test_summary_response_stays_small for the realistic worst-case math).
 
     Args:
         role: Role name (validated against user_dict).
@@ -1150,6 +1152,10 @@ def summarize_bucket_for_role(
     # Server-side floors: a pathological config value (0, negative) cannot
     # disable the walk or the prefix scan entirely.
     max_keys = max(_MIN_SUMMARY_MAX_KEYS, int(max_keys))
+    # Floor is defensive-only: Step 1 is a do-while (issues page 1
+    # unconditionally before checking IsTruncated), so any budget <= 1 already
+    # yields exactly one page. Clamping to 1 prevents misinterpretation on
+    # pathological values.
     prefix_scan_pages = max(1, int(prefix_scan_pages))
 
     def fetch(s3_client) -> Dict[str, Any]:
