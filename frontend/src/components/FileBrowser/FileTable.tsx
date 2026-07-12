@@ -40,6 +40,11 @@ interface FileTableProps {
   /** Header click → request a sort on that column. FileBrowser derives the
    *  next SortState (flip/switch) and applies the truncated-level gate. */
   onSortColumn?: (column: SortColumn) => void;
+  /** True while a fetch/drain is in flight — disables the sort header buttons
+   *  so a click can't be silently swallowed by the truncated-level gate (a
+   *  drain that can't start because a fetch is already running resolves
+   *  `false` with no visible feedback). Optional, defaults to false. */
+  sortDisabled?: boolean;
 }
 
 // Fixed row height (px). Matches Table verticalSpacing="xs" single-line rows.
@@ -66,11 +71,13 @@ function SortHeaderButton({
   column,
   sortState,
   onSortColumn,
+  disabled,
 }: {
   label: string;
   column: SortColumn;
   sortState: SortState;
   onSortColumn?: (column: SortColumn) => void;
+  disabled?: boolean;
 }) {
   const active = sortState.column === column;
   const Chevron = sortState.direction === "asc" ? ChevronUp : ChevronDown;
@@ -79,6 +86,7 @@ function SortHeaderButton({
       className={classes.sortHeader}
       onClick={() => onSortColumn?.(column)}
       aria-label={`Sort by ${label.toLowerCase()}`}
+      disabled={disabled}
     >
       {label}
       {active && <Chevron size={14} aria-hidden />}
@@ -104,6 +112,7 @@ export function FileTable({
   onLoadMore,
   sortState = DEFAULT_SORT,
   onSortColumn,
+  sortDisabled = false,
 }: FileTableProps) {
   const allSelected =
     files.length > 0 && files.every((f) => selected.has(f.name));
@@ -152,6 +161,7 @@ export function FileTable({
               column="name"
               sortState={sortState}
               onSortColumn={onSortColumn}
+              disabled={sortDisabled}
             />
           </Table.Th>
           {/* Hidden below sm (with the matching FileRow cells): their fixed
@@ -167,6 +177,7 @@ export function FileTable({
               column="size"
               sortState={sortState}
               onSortColumn={onSortColumn}
+              disabled={sortDisabled}
             />
           </Table.Th>
           <Table.Th
@@ -179,6 +190,7 @@ export function FileTable({
               column="modified"
               sortState={sortState}
               onSortColumn={onSortColumn}
+              disabled={sortDisabled}
             />
           </Table.Th>
           <Table.Th className={classes.actionsCol}>

@@ -117,6 +117,14 @@ export function FileBrowser() {
     setSearchQuery("");
   }
 
+  // Latest contextKey, tracked in a ref rather than read via closure: a
+  // requestSort() call's `.then()` (below) closes over the contextKey from
+  // the render that created it, so comparing against that SAME closed-over
+  // value would always be equal — it needs the truly current value at
+  // resolution time, which only a ref (updated every render) can give it.
+  const contextKeyRef = useRef(contextKey);
+  contextKeyRef.current = contextKey;
+
   // All loaded items, directories first (vanilla parity). Single source of
   // truth for filtering and every .find(name === ...) lookup below.
   const items = useMemo(
@@ -538,9 +546,20 @@ export function FileBrowser() {
         setSortPreference(next);
         return;
       }
+      // Capture the folder we're draining for. FileBrowser stays mounted
+      // across folder navigation (only the route params change), so a drain
+      // started here can resolve after the user has already moved to a
+      // different folder — applying it then would clobber whatever sort
+      // they picked in the meantime. Bail out if the context moved on
+      // (compare against the ref, which always holds the latest render's
+      // contextKey — the plain `contextKey` variable is frozen at the value
+      // from when this requestSort closure was created).
+      const drainContextKey = contextKey;
       loadAll()
         .then((completed) => {
-          if (completed) setSortPreference(next);
+          if (completed && drainContextKey === contextKeyRef.current) {
+            setSortPreference(next);
+          }
         })
         .catch((e) =>
           showToast({
@@ -551,8 +570,15 @@ export function FileBrowser() {
           }),
         );
     },
-    [truncated, loadAll],
+    [truncated, loadAll, contextKey],
   );
+
+  // Sort controls go unavailable while a fetch/drain is in flight. loadAll()
+  // resolves `false` not only on user-cancel but also when it can't even
+  // start because a fetch (e.g. the lazy-load auto-load sentinel) is already
+  // running — in that window a sort click would silently no-op with no
+  // feedback. Disabling the controls means the click can never be swallowed.
+  const sortBusy = loadingAll || isFetchingNextPage;
 
   // Auto-load the next chunk during lazy infinite scroll. In folder mode it's
   // paused while a client-side filter is active (the "Search '<term>' on server"
@@ -865,6 +891,7 @@ export function FileBrowser() {
             onStopLoadAll={stopLoadAll}
             sortState={effectiveSort}
             onSortChange={requestSort}
+            sortDisabled={sortBusy}
           />
           <input
             type="file"
@@ -968,6 +995,7 @@ export function FileBrowser() {
                 onSortColumn={(col) =>
                   requestSort(nextSortForColumn(effectiveSort, col))
                 }
+                sortDisabled={sortBusy}
               />
               {showLoadMoreFooter && (
                 <FileBrowserLoadMoreFooter

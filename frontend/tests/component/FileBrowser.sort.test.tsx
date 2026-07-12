@@ -251,5 +251,23 @@ describe("FileBrowser sorting — truncated-level gate", () => {
     fireEvent.click(await screen.findByRole("option", { name: "Name" }));
 
     expect(loadAllMock).not.toHaveBeenCalled();
+
+    // Positive control — the Select alone can't prove the header→requestSort
+    // wire is live: FileBrowserHeader's sortState/onSortChange props are both
+    // OPTIONAL, so even if FileBrowser never passed `onSortChange={requestSort}`
+    // at all, selecting "Name" above would still no-op silently and the
+    // assertion above would still pass. Click the direction toggle — that
+    // requests {name, desc}, which IS non-default on a still-truncated level —
+    // and confirm it DOES drain. This proves the wire is actually connected,
+    // not just that a same-default selection correctly avoided draining.
+    fireEvent.click(screen.getByRole("button", { name: "Sort ascending" }));
+    expect(loadAllMock).toHaveBeenCalledTimes(1);
+
+    // Flush the resolved-drain promise chain so requestSort's pending
+    // `.then()` (which calls setSortPreference) doesn't fire outside of
+    // act() after this test ends (same pattern as the cancelled-drain test).
+    await act(async () => {
+      await Promise.resolve();
+    });
   });
 });

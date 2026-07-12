@@ -55,6 +55,12 @@ interface FileBrowserHeaderProps {
   sortState?: SortState;
   /** Request a sort change; FileBrowser applies the truncated-level gate. */
   onSortChange?: (next: SortState) => void;
+  /** True while a fetch/drain is in flight — disables the sort Select and
+   *  direction toggle so a click can't be silently swallowed by the
+   *  truncated-level gate (a drain that can't start because a fetch is
+   *  already running resolves `false` with no visible feedback). Optional,
+   *  defaults to false. */
+  sortDisabled?: boolean;
 }
 
 const SORT_OPTIONS: { value: SortColumn; label: string }[] = [
@@ -85,6 +91,7 @@ export function FileBrowserHeader({
   onStopLoadAll,
   sortState = DEFAULT_SORT,
   onSortChange,
+  sortDisabled = false,
 }: FileBrowserHeaderProps) {
   // Mobile-only: the filter collapses to a search icon so filter + view
   // toggle + Upload share one row on any phone (a fixed-width input didn't
@@ -182,6 +189,7 @@ export function FileBrowserHeader({
               value={sortState.column}
               allowDeselect={false}
               aria-label="Sort by"
+              disabled={sortDisabled}
               // onOptionSubmit (not onChange) — Mantine's Select only calls
               // onChange when the submitted value differs from the current
               // one, so re-selecting the already-active column would never
@@ -212,6 +220,7 @@ export function FileBrowserHeader({
                     ? "Sort ascending"
                     : "Sort descending"
                 }
+                disabled={sortDisabled}
                 onClick={() =>
                   onSortChange?.({
                     ...sortState,

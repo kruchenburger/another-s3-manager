@@ -24,8 +24,15 @@ export function nextSortForColumn(current: SortState, column: SortColumn): SortS
 // Case-insensitive, accent-sensitive — mirrors the backend's Python
 // name.lower() sort so the client-side name order matches the S3-native
 // order the backend already returns.
+//
+// Hoisted to module scope: constructing an Intl.Collator is relatively
+// expensive (it builds locale collation tables), so a single shared instance
+// is reused across every comparison instead of rebuilding one per call —
+// this function runs O(n log n) times per sort over a level that can hold
+// 100k+ entries.
+const collator = new Intl.Collator(undefined, { sensitivity: "accent" });
 function compareName(a: FileEntry, b: FileEntry): number {
-  return a.name.localeCompare(b.name, undefined, { sensitivity: "accent" });
+  return collator.compare(a.name, b.name);
 }
 
 // Folders always first (S3 prefixes have no size/date). Folders sort by name,
