@@ -559,18 +559,23 @@ async def list_files(
     bucket: str,
     path: str = "",
     recursive: bool = False,
-    max_keys: int = 1000,
+    max_keys: int | None = None,
     continuation_token: str | None = None,
 ) -> dict:
-    """List files at a path within a bucket.
+    """List files at a path within a bucket. Returns ACTUAL KEYS — to learn
+    what a bucket contains (counts, sizes, prefix breakdown), call
+    bucket_summary instead: one compact call, no paging.
 
     Args:
         role: Role name (must be in user's allowed_roles).
         bucket: Bucket name (must be in role's allowed_buckets if configured).
         path: Prefix to scope the listing. "" = bucket root.
-        recursive: If True, returns flat list of all keys under path with
+        recursive: If True, returns a flat list of all keys under path with
             pagination. If False (default), one level deep with directory entries.
-        max_keys: Max keys per call when recursive=True. Default 1000, max 10000.
+        max_keys: Max keys per call when recursive=True. Defaults to the
+            server-configured page size (mcp_list_page_size, normally 1000);
+            values above the server ceiling (mcp_list_max_page_size) are
+            clamped, not rejected.
         continuation_token: Pass back next_continuation_token from the previous
             recursive call to get the next page.
 
@@ -579,6 +584,9 @@ async def list_files(
         Recursive: {"files": [{key, size, last_modified}, ...],
                     "is_truncated": bool, "next_continuation_token": str|null,
                     "key_count": int}
+        A recursive page can be LARGE (~160 KB at 1000 keys). When
+        is_truncated is true, pass next_continuation_token back to continue
+        paging — or use bucket_summary for the shape of the bucket in one call.
     """
     error_code = "none"
     start = time.perf_counter()
@@ -586,14 +594,39 @@ async def list_files(
         token, user = await authenticate_mcp_request(_get_current_request())
         try:
             if recursive:
+                config = _config_module.load_config(force_reload=False)
+                # Resolution rules (2026-07-12 design): floors of 1 on both
+                # keys; the ceiling wins over the default page size; an
+                # agent-supplied max_keys is clamped to the ceiling, never
+                # rejected. Per-S3-request MaxKeys stays min(effective, 1000)
+                # inside the helper — S3's own limit, not configurable.
+                page_size = max(1, int(config.get("mcp_list_page_size", 1000)))
+                ceiling = max(1, int(config.get("mcp_list_max_page_size", 10_000)))
+                effective_max_keys = min(max_keys if max_keys is not None else page_size, ceiling)
                 # Normalize path → S3 prefix (no leading slash; trailing slash
                 # only if non-empty so we don't accidentally match other names).
                 prefix = path.strip("/")
                 if prefix:
                     prefix += "/"
                 result = _s3_client.list_objects_recursive_for_role(
-                    role, bucket, prefix, user, max_keys=max_keys, continuation_token=continuation_token
+                    role,
+                    bucket,
+                    prefix,
+                    user,
+                    max_keys=effective_max_keys,
+                    continuation_token=continuation_token,
+                    max_page_size=ceiling,
                 )
+                if result.get("is_truncated"):
+                    # Redirect at the exact moment the recorded incident went
+                    # off the rails. Only on truncated recursive pages — the
+                    # field is absent (not null) otherwise.
+                    result["hint"] = (
+                        "This is the first page of a larger listing. Pass "
+                        "next_continuation_token to page through keys, or call "
+                        "bucket_summary(role, bucket, path) to get counts, sizes "
+                        "and the prefix breakdown in one compact call."
+                    )
             else:
                 files = _s3_client.list_objects_for_role(role, bucket, path, user)
                 result = {"files": files}
