@@ -48,8 +48,12 @@ export function useClientLoadDerived(
     if (res.isError) throw res.error ?? new Error("Failed to load more files");
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
-  const loadAll = useCallback(async () => {
-    if (!hasNextPage || isFetchingNextPage) return;
+  // Resolves true when the level ended FULLY drained (including "was already
+  // fully loaded"), false when the drain stopped early (Stop button/unmount).
+  // Existing callers ignore the return value; the sort gate (FileBrowser)
+  // applies a pending sort only on true.
+  const loadAll = useCallback(async (): Promise<boolean> => {
+    if (!hasNextPage || isFetchingNextPage) return true;
     cancelRef.current = false;
     setLoadingAll(true);
     try {
@@ -61,6 +65,9 @@ export function useClientLoadDerived(
         res = await fetchNextPage();
         if (res.isError) throw res.error ?? new Error("Failed to load files");
       }
+      // hasNextPage still true here means the loop exited on cancellation —
+      // the level is NOT fully drained.
+      return !res.hasNextPage;
     } finally {
       setLoadingAll(false);
     }
