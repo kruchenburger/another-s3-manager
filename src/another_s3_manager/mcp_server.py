@@ -652,6 +652,89 @@ async def list_files(
 
 
 # ------------------------------------------------------------------
+# bucket_summary — one-call compact digest of a bucket / prefix.
+# Read-only; the remedy for the "list_files firehose" failure mode.
+# All S3 work and permission checks live in
+# s3_client.summarize_bucket_for_role — this stays a thin wrapper.
+# ------------------------------------------------------------------
+@mcp.tool()
+async def bucket_summary(role: str, bucket: str, path: str = "") -> dict:
+    """Summarize what's in a bucket (or under a prefix) in ONE compact call:
+    object count, total size, per-prefix breakdown, extension histogram,
+    largest objects, modified range. Use this FIRST when asked what a bucket
+    contains — do not page through list_files. Drill down by passing path.
+    Reported "ext" values are capped at 16 characters.
+    """
+    error_code = "none"
+    start = time.perf_counter()
+    try:
+        token, user = await authenticate_mcp_request(_get_current_request())
+        config = _config_module.load_config(force_reload=False)
+        max_keys = int(config.get("mcp_summary_max_keys", 50_000))
+        prefix_scan_pages = int(config.get("mcp_summary_prefix_scan_pages", 20))
+        # Normalize path → S3 prefix, exactly like list_files recursive mode.
+        prefix = path.strip("/")
+        if prefix:
+            prefix += "/"
+        try:
+            result = _s3_client.summarize_bucket_for_role(
+                role, bucket, prefix, user, max_keys=max_keys, prefix_scan_pages=prefix_scan_pages
+            )
+        except PermissionError as e:
+            msg = str(e).lower()
+            if "bucket" in msg:
+                raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
+            raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
+        logger.info(
+            "mcp.bucket_summary",
+            extra={
+                "user": user["username"],
+                "role": role,
+                "bucket": bucket,
+                "path": path,
+                "scanned_objects": result["scanned_objects"],
+                "complete": result["complete"],
+            },
+        )
+        return _observe_response_size("bucket_summary", token, result)
+    except McpError as e:
+        error_code = e.code
+        raise
+    except S3AccessDeniedError as e:
+        error_code = "S3_ACCESS_DENIED"
+        logger.warning("mcp.bucket_summary.access_denied", extra={"boto_code": e.code})
+        raise McpError("S3_ACCESS_DENIED", str(e), {"boto_code": e.code})
+    except S3NotFoundError as e:
+        error_code = "S3_NOT_FOUND"
+        logger.warning("mcp.bucket_summary.not_found", extra={"boto_code": e.code})
+        raise McpError("S3_NOT_FOUND", str(e), {"boto_code": e.code})
+    except S3ConfigError as e:
+        error_code = "S3_CONFIG_ERROR"
+        logger.warning("mcp.bucket_summary.config_error", extra={"boto_code": e.code})
+        raise McpError("S3_CONFIG_ERROR", str(e), {"boto_code": e.code})
+    except S3NetworkError as e:
+        error_code = "S3_NETWORK_ERROR"
+        logger.warning("mcp.bucket_summary.network_error", extra={"boto_code": e.code})
+        raise McpError("S3_NETWORK_ERROR", str(e), {"boto_code": e.code})
+    except CredentialsExpiredError as e:
+        error_code = "CREDENTIALS_EXPIRED"
+        logger.warning("mcp.bucket_summary.credentials_expired", extra={"boto_code": e.code})
+        raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
+    except S3OperationError as e:
+        # Unknown S3 subclass — still better than INTERNAL_ERROR.
+        error_code = "S3_OPERATION_ERROR"
+        logger.warning("mcp.bucket_summary.s3_operation_error", extra={"boto_code": e.code})
+        raise McpError("S3_OPERATION_ERROR", str(e), {"boto_code": e.code})
+    except Exception:
+        error_code = "INTERNAL_ERROR"
+        logger.exception("mcp.bucket_summary.error")
+        raise McpError("INTERNAL_ERROR", "Internal server error")
+    finally:
+        mcp_tool_calls_total.labels(tool="bucket_summary", error_code=error_code).inc()
+        mcp_tool_duration_seconds.labels(tool="bucket_summary").observe(time.perf_counter() - start)
+
+
+# ------------------------------------------------------------------
 # upload_file — upload a file to a bucket. Content as base64.
 # WRITE TOOL: gated by assert_write_allowed.
 # ------------------------------------------------------------------
