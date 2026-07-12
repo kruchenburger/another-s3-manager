@@ -1082,6 +1082,20 @@ def _human_bytes(size: int) -> str:
     return f"{value:.1f} PB"
 
 
+# Bucket-summary tunables (summarize_bucket_for_role). Named so the response's
+# hard caps are greppable, and so the two unrelated meanings of "1000" (the S3
+# per-request page size vs. the mcp_summary_max_keys floor) don't read as the
+# same constant.
+_S3_PAGE_SIZE = 1000  # Max entries per ListObjectsV2 call (S3's own ceiling).
+_MIN_SUMMARY_MAX_KEYS = 1000  # Server-side floor for the `max_keys` walk cap.
+_TOP_PREFIXES = 20  # How many prefixes are rendered in the response.
+_TOP_EXTENSIONS = 20  # How many extensions are rendered in the response.
+_TOP_LARGEST = 10  # How many largest-object entries are rendered.
+# Cap on the rendered "ext" string — an oversized basename suffix (e.g. 900
+# chars) is not a real file extension and must not inflate the response.
+_MAX_EXTENSION_LENGTH = 16
+
+
 def summarize_bucket_for_role(
     role: str,
     bucket: str,
@@ -1113,8 +1127,11 @@ def summarize_bucket_for_role(
     per-prefix `coverage` field (complete / partial / not_scanned) tells the
     agent exactly which numbers it may trust.
 
-    The response is bounded by design: top-20 prefixes, top-20 extensions,
-    top-10 largest objects — low single-digit KB for ANY bucket.
+    The response is bounded by design: top-20 prefixes, top-20 extensions
+    (each "ext" capped at _MAX_EXTENSION_LENGTH chars), top-10 largest
+    objects — well under 40 KB for ANY bucket, including pathological ones
+    with keys near S3's 1024-byte key ceiling (see the worst-case math in
+    test_summary_response_stays_small).
 
     Args:
         role: Role name (validated against user_dict).
@@ -1132,14 +1149,19 @@ def summarize_bucket_for_role(
 
     # Server-side floors: a pathological config value (0, negative) cannot
     # disable the walk or the prefix scan entirely.
-    max_keys = max(1000, int(max_keys))
+    max_keys = max(_MIN_SUMMARY_MAX_KEYS, int(max_keys))
     prefix_scan_pages = max(1, int(prefix_scan_pages))
 
     def fetch(s3_client) -> Dict[str, Any]:
         # ---- Step 1: enumerate immediate child prefixes (Delimiter="/") ----
         step1_prefixes: list = []
         prefix_list_complete = True
-        step1_kwargs: Dict[str, Any] = {"Bucket": bucket, "Prefix": prefix, "Delimiter": "/", "MaxKeys": 1000}
+        step1_kwargs: Dict[str, Any] = {
+            "Bucket": bucket,
+            "Prefix": prefix,
+            "Delimiter": "/",
+            "MaxKeys": _S3_PAGE_SIZE,
+        }
         pages = 0
         while True:
             resp = s3_client.list_objects_v2(**step1_kwargs)
@@ -1165,9 +1187,9 @@ def summarize_bucket_for_role(
         last_scanned_key: Optional[str] = None
         ext_stats: Dict[str, list] = {}  # ext -> [objects, bytes]
         prefix_stats: Dict[str, list] = {}  # immediate child prefix -> [objects, bytes]
-        largest_heap: list = []  # min-heap of (size, key, iso_modified), max 10 entries
+        largest_heap: list = []  # min-heap of (size, key, LastModified datetime), max _TOP_LARGEST entries
 
-        walk_kwargs: Dict[str, Any] = {"Bucket": bucket, "Prefix": prefix, "MaxKeys": 1000}
+        walk_kwargs: Dict[str, Any] = {"Bucket": bucket, "Prefix": prefix, "MaxKeys": _S3_PAGE_SIZE}
         stopped = False
         while not stopped:
             resp = s3_client.list_objects_v2(**walk_kwargs)
@@ -1207,15 +1229,21 @@ def summarize_bucket_for_role(
 
                 basename = remainder.rsplit("/", 1)[-1]
                 if "." in basename and not basename.endswith("."):
-                    ext = basename.rsplit(".", 1)[-1].lower()
+                    # Cap the rendered extension: an oversized basename suffix
+                    # (e.g. a 900-char "extension") is not a real file
+                    # extension and must not be allowed to inflate the response.
+                    ext = basename.rsplit(".", 1)[-1].lower()[:_MAX_EXTENSION_LENGTH]
                 else:
                     ext = "(none)"
                 estats = ext_stats.setdefault(ext, [0, 0])
                 estats[0] += 1
                 estats[1] += size
 
-                heapq.heappush(largest_heap, (size, key, lm.isoformat()))
-                if len(largest_heap) > 10:
+                # Keep the raw datetime on the heap; format only the (at most
+                # _TOP_LARGEST) survivors below. isoformat() on every scanned
+                # object here would be wasted work at the default 50k cap.
+                heapq.heappush(largest_heap, (size, key, lm))
+                if len(largest_heap) > _TOP_LARGEST:
                     heapq.heappop(largest_heap)
 
             if stopped:
@@ -1236,9 +1264,10 @@ def summarize_bucket_for_role(
 
         # ---- Coverage classification ----
         # Union walk-discovered prefixes so a Step-1 budget exhaustion does not
-        # hide prefixes the walk actually has data for. prefix_count remains
-        # Step 1's enumeration (the design contract); the sets only diverge
-        # when prefix_list_complete is already False.
+        # hide prefixes the walk actually has data for. prefix_count reports
+        # len(all_prefixes) (not Step 1's raw count) so it can never contradict
+        # the `prefixes` list below, which is built from this same union — see
+        # the NOTE next to `prefix_count` in the response dict.
         all_prefixes = sorted(set(step1_prefixes) | set(prefix_stats.keys()))
         entries = []
         for p in all_prefixes:
@@ -1256,8 +1285,8 @@ def summarize_bucket_for_role(
                 objects_n: Optional[int] = None
                 bytes_n: Optional[int] = None
             else:
-                stats = prefix_stats.get(p, [0, 0])
-                objects_n, bytes_n = stats[0], stats[1]
+                counts = prefix_stats.get(p, [0, 0])
+                objects_n, bytes_n = counts[0], counts[1]
             entries.append({"prefix": p, "objects": objects_n, "bytes": bytes_n, "coverage": coverage})
 
         # Top-20 selection: scanned prefixes ranked by objects desc first,
@@ -1266,17 +1295,20 @@ def summarize_bucket_for_role(
         # not_scanned progression reads naturally.
         scanned_entries = [e for e in entries if e["coverage"] != "not_scanned"]
         scanned_entries.sort(key=lambda e: (-(e["objects"] or 0), e["prefix"]))
-        selected = scanned_entries[:20]
-        if len(selected) < 20:
+        selected = scanned_entries[:_TOP_PREFIXES]
+        if len(selected) < _TOP_PREFIXES:
             not_scanned_entries = [e for e in entries if e["coverage"] == "not_scanned"]
-            selected.extend(not_scanned_entries[: 20 - len(selected)])
+            selected.extend(not_scanned_entries[: _TOP_PREFIXES - len(selected)])
         selected.sort(key=lambda e: e["prefix"])
 
         ext_entries = [{"ext": ext, "objects": stats[0], "bytes": stats[1]} for ext, stats in ext_stats.items()]
         ext_entries.sort(key=lambda e: (-e["objects"], e["ext"]))
 
+        # Format only the (at most _TOP_LARGEST) heap survivors — see the
+        # comment at the heappush call for why isoformat() is deferred here.
         largest = [
-            {"key": key, "size": size, "last_modified": iso} for size, key, iso in sorted(largest_heap, reverse=True)
+            {"key": key, "size": size, "last_modified": lm.isoformat()}
+            for size, key, lm in sorted(largest_heap, reverse=True)
         ]
 
         return {
@@ -1292,12 +1324,20 @@ def summarize_bucket_for_role(
             "scan_stopped_at": scan_stopped_at,
             "root_objects": root_objects,
             "prefixes": selected,
-            "prefix_count": len(step1_prefixes),
+            # NOTE: intentionally len(all_prefixes), not len(step1_prefixes).
+            # Step 1's CommonPrefixes are a superset of anything the walk can
+            # discover whenever prefix_list_complete is True, so this is
+            # unchanged for normal buckets. When Step 1's budget is exhausted
+            # (prefix_list_complete=False) it becomes an honest lower bound
+            # instead of contradicting `prefixes` above, which is built from
+            # this same union and can otherwise be non-empty while the raw
+            # Step-1 count is zero.
+            "prefix_count": len(all_prefixes),
             "prefix_list_complete": prefix_list_complete,
-            "prefixes_truncated": len(all_prefixes) > 20,
-            "extensions": ext_entries[:20],
+            "prefixes_truncated": len(all_prefixes) > _TOP_PREFIXES,
+            "extensions": ext_entries[:_TOP_EXTENSIONS],
             "extension_count": len(ext_entries),
-            "extensions_truncated": len(ext_entries) > 20,
+            "extensions_truncated": len(ext_entries) > _TOP_EXTENSIONS,
             "largest_objects": largest,
             "oldest_modified": oldest.isoformat() if oldest else None,
             "newest_modified": newest.isoformat() if newest else None,
