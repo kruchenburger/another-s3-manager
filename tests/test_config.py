@@ -299,3 +299,31 @@ def test_migrate_config_adds_mcp_fields_to_legacy_config(monkeypatch, tmp_path):
     assert loaded["mcp_disable_writes"] is False
     assert loaded["mcp_text_extensions"] == []
     assert loaded["mcp_global_max_read_bytes"] == 10_485_760
+
+
+def test_default_config_includes_big_bucket_mcp_fields():
+    """The four summary/list-paging keys ship in the default config template."""
+    from another_s3_manager.config import _get_default_config
+
+    cfg = _get_default_config()
+    assert cfg["mcp_summary_max_keys"] == 50_000
+    assert cfg["mcp_summary_prefix_scan_pages"] == 20
+    assert cfg["mcp_list_page_size"] == 1000
+    assert cfg["mcp_list_max_page_size"] == 10_000
+
+
+def test_migrate_config_adds_big_bucket_mcp_fields(monkeypatch, tmp_path):
+    """A legacy config.json without the summary/list-paging keys gets them backfilled on load."""
+    from another_s3_manager import config as config_module
+
+    legacy = tmp_path / "config.json"
+    legacy.write_text(json.dumps({"roles": [], "mcp_enabled": True}))
+    monkeypatch.setattr(config_module, "CONFIG_FILE", legacy)
+    config_module._config_cache = {}
+    config_module._config_mtime = 0
+
+    loaded = config_module.load_config(force_reload=True)
+    assert loaded["mcp_summary_max_keys"] == 50_000
+    assert loaded["mcp_summary_prefix_scan_pages"] == 20
+    assert loaded["mcp_list_page_size"] == 1000
+    assert loaded["mcp_list_max_page_size"] == 10_000

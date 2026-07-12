@@ -1785,6 +1785,82 @@ def test_post_config_preserves_mcp_fields_when_omitted(app_client):
 
 
 # ---------------------------------------------------------------------------
+# MCP big-bucket ergonomics config fields (2026-07-12 design)
+# ---------------------------------------------------------------------------
+
+_BIG_BUCKET_KEYS = (
+    "mcp_summary_max_keys",
+    "mcp_summary_prefix_scan_pages",
+    "mcp_list_page_size",
+    "mcp_list_max_page_size",
+)
+
+
+def test_get_config_includes_big_bucket_mcp_fields(app_client):
+    """GET /api/config must expose all four summary/list-paging keys to the admin."""
+    _, headers = login(app_client)
+    body = app_client.get("/api/config", headers=headers).json()
+    assert body["mcp_summary_max_keys"] == 50_000
+    assert body["mcp_summary_prefix_scan_pages"] == 20
+    assert body["mcp_list_page_size"] == 1000
+    assert body["mcp_list_max_page_size"] == 10_000
+
+
+def test_post_config_persists_big_bucket_mcp_fields(app_client):
+    """POST /api/config must accept and persist all four keys."""
+    _, headers = login(app_client)
+    cfg = app_client.get("/api/config", headers=headers).json()
+    cfg["mcp_summary_max_keys"] = 20_000
+    cfg["mcp_summary_prefix_scan_pages"] = 5
+    cfg["mcp_list_page_size"] = 200
+    cfg["mcp_list_max_page_size"] = 2000
+    resp = app_client.post("/api/config", json=cfg, headers=headers)
+    assert resp.status_code == 200
+    after = app_client.get("/api/config", headers=headers).json()
+    assert after["mcp_summary_max_keys"] == 20_000
+    assert after["mcp_summary_prefix_scan_pages"] == 5
+    assert after["mcp_list_page_size"] == 200
+    assert after["mcp_list_max_page_size"] == 2000
+
+
+def test_post_config_rejects_invalid_big_bucket_mcp_fields(app_client):
+    """Non-int, boolean, zero and over-ceiling values are rejected with 422."""
+    _, headers = login(app_client)
+    base = app_client.get("/api/config", headers=headers).json()
+
+    for key, bad in (
+        ("mcp_summary_max_keys", "abc"),
+        ("mcp_summary_max_keys", 0),
+        ("mcp_summary_max_keys", 1_000_001),
+        ("mcp_summary_prefix_scan_pages", True),
+        ("mcp_summary_prefix_scan_pages", 201),
+        ("mcp_list_page_size", -5),
+        ("mcp_list_page_size", 10_001),
+        ("mcp_list_max_page_size", 0),
+        ("mcp_list_max_page_size", 10_001),
+    ):
+        cfg = dict(base)
+        cfg[key] = bad
+        resp = app_client.post("/api/config", json=cfg, headers=headers)
+        assert resp.status_code == 422, f"{key}={bad!r} should be rejected, got {resp.status_code}"
+
+
+def test_post_config_preserves_big_bucket_mcp_fields_when_omitted(app_client):
+    """POST without the four keys must preserve previously saved values."""
+    _, headers = login(app_client)
+    cfg = app_client.get("/api/config", headers=headers).json()
+    cfg["mcp_summary_max_keys"] = 30_000
+    app_client.post("/api/config", json=cfg, headers=headers)
+
+    minimal = {k: v for k, v in cfg.items() if k not in _BIG_BUCKET_KEYS}
+    resp = app_client.post("/api/config", json=minimal, headers=headers)
+    assert resp.status_code == 200
+    after = app_client.get("/api/config", headers=headers).json()
+    assert after["mcp_summary_max_keys"] == 30_000
+    assert after["mcp_list_page_size"] == 1000  # untouched default preserved too
+
+
+# ---------------------------------------------------------------------------
 # MCP kill-switch middleware
 # ---------------------------------------------------------------------------
 

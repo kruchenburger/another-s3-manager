@@ -1362,6 +1362,10 @@ async def get_config(
             "mcp_disable_writes": config.get("mcp_disable_writes", False),
             "mcp_text_extensions": config.get("mcp_text_extensions", []),
             "mcp_global_max_read_bytes": config.get("mcp_global_max_read_bytes", 10_485_760),
+            "mcp_summary_max_keys": config.get("mcp_summary_max_keys", 50_000),
+            "mcp_summary_prefix_scan_pages": config.get("mcp_summary_prefix_scan_pages", 20),
+            "mcp_list_page_size": config.get("mcp_list_page_size", 1000),
+            "mcp_list_max_page_size": config.get("mcp_list_max_page_size", 10_000),
         }
         return safe_config
 
@@ -1601,9 +1605,33 @@ async def update_config(
             # Explicitly reject booleans (bool is a subclass of int in Python)
             if isinstance(v, bool) or not isinstance(v, int) or v < 1 or v > 10_485_760:
                 raise HTTPException(status_code=422, detail="mcp_global_max_read_bytes must be 1..10485760")
+        # MCP big-bucket ergonomics keys (2026-07-12): positive ints within UI
+        # bounds. POST rejects garbage; the READ path additionally clamps
+        # (floor 1 for the list keys, floor 1000 for the summary walk) so a
+        # hand-edited config file cannot brick the tools.
+        for int_field, lo, hi in (
+            ("mcp_summary_max_keys", 1, 1_000_000),
+            ("mcp_summary_prefix_scan_pages", 1, 200),
+            ("mcp_list_page_size", 1, 10_000),
+            ("mcp_list_max_page_size", 1, 10_000),
+        ):
+            if int_field in config:
+                v = config[int_field]
+                # Explicitly reject booleans (bool is a subclass of int in Python)
+                if isinstance(v, bool) or not isinstance(v, int) or v < lo or v > hi:
+                    raise HTTPException(status_code=422, detail=f"{int_field} must be {lo}..{hi}")
         # Preserve MCP fields from current config when omitted in request
         _current_cfg = load_config(force_reload=False)
-        for k in ("mcp_enabled", "mcp_disable_writes", "mcp_text_extensions", "mcp_global_max_read_bytes"):
+        for k in (
+            "mcp_enabled",
+            "mcp_disable_writes",
+            "mcp_text_extensions",
+            "mcp_global_max_read_bytes",
+            "mcp_summary_max_keys",
+            "mcp_summary_prefix_scan_pages",
+            "mcp_list_page_size",
+            "mcp_list_max_page_size",
+        ):
             if k not in config:
                 config[k] = _current_cfg.get(k)
 
