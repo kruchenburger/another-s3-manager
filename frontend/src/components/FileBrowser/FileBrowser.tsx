@@ -28,6 +28,13 @@ import { formatBytes } from "@/utils/formatBytes";
 import { formatTimeOfDay } from "@/utils/formatDate";
 import { formatDuration } from "@/utils/formatDuration";
 import { showToast, TOAST_DURATIONS } from "@/utils/toast";
+import {
+  DEFAULT_SORT,
+  isDefaultSort,
+  nextSortForColumn,
+  sortEntries,
+  type SortState,
+} from "@/utils/sortEntries";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
@@ -71,6 +78,11 @@ export function FileBrowser() {
   const [serverSearchTerm, setServerSearchTerm] = useState<string | null>(null);
   const serverSearchActive = serverSearchTerm !== null;
   const [searchQuery, setSearchQuery] = useState("");
+  // Session-only sort preference. Deliberately NOT reset in the contextKey
+  // block below (unlike searchQuery/serverSearchTerm): the user keeps their
+  // chosen sort while navigating folders; it resets on page reload — no
+  // localStorage by design.
+  const [sortPreference, setSortPreference] = useState<SortState>(DEFAULT_SORT);
   // Optimistic header-counter offset during a bulk delete (batched every 50
   // successes; reset after the post-batch refetch lands).
   const [bulkDeletedCount, setBulkDeletedCount] = useState(0);
@@ -112,6 +124,23 @@ export function FileBrowser() {
     [directories, files],
   );
 
+  // Honesty guard: a persisted custom sort must never order a partially-loaded
+  // (truncated) level — fall back to the native S3 name-asc order until the
+  // level is fully drained. Controls AND rows both render effectiveSort, so
+  // what the headers show is always what the rows do.
+  const effectiveSort = useMemo(
+    () =>
+      truncated && !isDefaultSort(sortPreference) ? DEFAULT_SORT : sortPreference,
+    [truncated, sortPreference],
+  );
+
+  // Folders first, files by the active column (pure + memoized). Feeds the
+  // filter below; `items` above stays as-is for name lookups and the count.
+  const sortedItems = useMemo(
+    () => sortEntries(directories, files, effectiveSort),
+    [directories, files, effectiveSort],
+  );
+
   const queryClient = useQueryClient();
   const deleteMutation = useDelete();
   const uploadMutation = useUpload();
@@ -141,11 +170,11 @@ export function FileBrowser() {
   const [debouncedQuery] = useDebouncedValue(searchQuery, 200);
 
   const filteredItems = useMemo(() => {
-    if (serverSearchActive) return items;
-    if (!debouncedQuery) return items;
+    if (serverSearchActive) return sortedItems;
+    if (!debouncedQuery) return sortedItems;
     const q = debouncedQuery.toLowerCase();
-    return items.filter((f) => f.name.toLowerCase().includes(q));
-  }, [items, debouncedQuery, serverSearchActive]);
+    return sortedItems.filter((f) => f.name.toLowerCase().includes(q));
+  }, [sortedItems, debouncedQuery, serverSearchActive]);
 
   const navigateToFolder = (folderName: string) => {
     clearSelection();
@@ -497,6 +526,34 @@ export function FileBrowser() {
     );
   }, [loadMore]);
 
+  // Every sort request funnels through the truncated-level gate: a non-default
+  // sort on a truncated level drains the WHOLE level first (the existing
+  // "Load all" with its progress + Stop), and applies ONLY if the drain fully
+  // completed — cancelling keeps the current order. "Biggest file" must mean
+  // biggest in the whole folder, never in the loaded slice. The default
+  // {name, asc} is the native S3 key order and needs no drain.
+  const requestSort = useCallback(
+    (next: SortState) => {
+      if (isDefaultSort(next) || !truncated) {
+        setSortPreference(next);
+        return;
+      }
+      loadAll()
+        .then((completed) => {
+          if (completed) setSortPreference(next);
+        })
+        .catch((e) =>
+          showToast({
+            color: "red",
+            title: "Couldn't load all files",
+            message: getErrorMessage(e),
+            autoClose: TOAST_DURATIONS.error,
+          }),
+        );
+    },
+    [truncated, loadAll],
+  );
+
   // Auto-load the next chunk during lazy infinite scroll. In folder mode it's
   // paused while a client-side filter is active (the "Search '<term>' on server"
   // affordance is the explicit path there); in server-search mode it stays on so
@@ -806,6 +863,8 @@ export function FileBrowser() {
             }
             loadingAll={loadingAll}
             onStopLoadAll={stopLoadAll}
+            sortState={effectiveSort}
+            onSortChange={requestSort}
           />
           <input
             type="file"
@@ -905,6 +964,10 @@ export function FileBrowser() {
                 scrollRef={scrollRef}
                 autoLoadEnabled={autoLoadEnabled}
                 onLoadMore={handleLoadMore}
+                sortState={effectiveSort}
+                onSortColumn={(col) =>
+                  requestSort(nextSortForColumn(effectiveSort, col))
+                }
               />
               {showLoadMoreFooter && (
                 <FileBrowserLoadMoreFooter
