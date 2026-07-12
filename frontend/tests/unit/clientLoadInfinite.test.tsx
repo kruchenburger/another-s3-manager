@@ -22,11 +22,12 @@ const page: ClientLoadPage = {
 function makeQuery(
   hasNextPage: boolean,
   fetchNextPage: (...args: unknown[]) => Promise<unknown>,
+  isFetchingNextPage = false,
 ): Query {
   return {
     data: { pages: [page], pageParams: [undefined] },
     hasNextPage,
-    isFetchingNextPage: false,
+    isFetchingNextPage,
     fetchNextPage,
   } as unknown as Query;
 }
@@ -77,6 +78,19 @@ describe("useClientLoadDerived loadAll completion", () => {
       completed = await result.current.loadAll();
     });
     expect(completed).toBe(true);
+    expect(fetchNextPage).not.toHaveBeenCalled();
+  });
+
+  it("resolves false without fetching when a fetch is already in flight and pages remain", async () => {
+    const fetchNextPage = vi.fn();
+    const { result } = renderHook(() =>
+      useClientLoadDerived(makeQuery(true, fetchNextPage, true)),
+    );
+    let completed: boolean | undefined;
+    await act(async () => {
+      completed = await result.current.loadAll();
+    });
+    expect(completed).toBe(false);
     expect(fetchNextPage).not.toHaveBeenCalled();
   });
 });

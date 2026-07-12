@@ -53,7 +53,12 @@ export function useClientLoadDerived(
   // Existing callers ignore the return value; the sort gate (FileBrowser)
   // applies a pending sort only on true.
   const loadAll = useCallback(async (): Promise<boolean> => {
-    if (!hasNextPage || isFetchingNextPage) return true;
+    // Nothing left to fetch — the level is already fully drained.
+    if (!hasNextPage) return true;
+    // A fetch (e.g. a lazy-scroll auto-load) is already in flight: we cannot
+    // start a drain now, and pages remain — so the level is NOT drained.
+    // Reporting `true` here would let a caller sort a half-loaded level.
+    if (isFetchingNextPage) return false;
     cancelRef.current = false;
     setLoadingAll(true);
     try {
