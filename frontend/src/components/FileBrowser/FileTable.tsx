@@ -61,19 +61,6 @@ function ariaSortFor(
   return sortState.direction === "asc" ? "ascending" : "descending";
 }
 
-// Shared by the <th> and its nested button. Deviation from the plan: the
-// accessible-name spec (and dom-accessibility-api, which testing-library
-// uses) deliberately does NOT bubble a nested control's aria-label up into
-// an ancestor's "name from content" computation (accname issue #64 — the
-// button is an "embedded control", so its own text content is used instead
-// when a parent recurses into it). Without repeating the label on the <th>
-// itself, `getByRole("columnheader", { name: "Sort by size" })` would not
-// find it — the th's computed name would stay "Size". Setting aria-label
-// directly on the <th> is answered at step 2C, before any recursion.
-function sortAriaLabel(label: string): string {
-  return `Sort by ${label.toLowerCase()}`;
-}
-
 function SortHeaderButton({
   label,
   column,
@@ -91,7 +78,7 @@ function SortHeaderButton({
     <UnstyledButton
       className={classes.sortHeader}
       onClick={() => onSortColumn?.(column)}
-      aria-label={sortAriaLabel(label)}
+      aria-label={`Sort by ${label.toLowerCase()}`}
     >
       {label}
       {active && <Chevron size={14} aria-hidden />}
@@ -159,10 +146,7 @@ export function FileTable({
               aria-label="Select all"
             />
           </Table.Th>
-          <Table.Th
-            aria-sort={ariaSortFor(sortState, "name")}
-            aria-label={sortAriaLabel("Name")}
-          >
+          <Table.Th aria-sort={ariaSortFor(sortState, "name")}>
             <SortHeaderButton
               label="Name"
               column="name"
@@ -177,7 +161,6 @@ export function FileTable({
             visibleFrom="sm"
             style={{ width: 100 }}
             aria-sort={ariaSortFor(sortState, "size")}
-            aria-label={sortAriaLabel("Size")}
           >
             <SortHeaderButton
               label="Size"
@@ -190,7 +173,6 @@ export function FileTable({
             visibleFrom="sm"
             style={{ width: 160 }}
             aria-sort={ariaSortFor(sortState, "modified")}
-            aria-label={sortAriaLabel("Modified")}
           >
             <SortHeaderButton
               label="Modified"

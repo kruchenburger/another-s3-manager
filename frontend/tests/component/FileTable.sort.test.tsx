@@ -65,6 +65,13 @@ function Harness({
   );
 }
 
+// The <th>'s accessible name is "Size" (name-from-content), not "Sort by size"
+// — dom-accessibility-api does not fold a nested button's aria-label into its
+// ancestor. Reach the header cell through its button instead of renaming the
+// column for screen readers just to satisfy a query.
+const headerCellFor = (buttonName: string): HTMLElement =>
+  screen.getByRole("button", { name: buttonName }).closest("th") as HTMLElement;
+
 describe("FileTable sortable headers", () => {
   it("reports the clicked column for Name, Size, and Modified", async () => {
     const onSortColumn = vi.fn();
@@ -79,22 +86,23 @@ describe("FileTable sortable headers", () => {
 
   it("marks the active column with aria-sort and the others with 'none'", () => {
     render(<Harness sortState={{ column: "size", direction: "desc" }} />);
-    expect(
-      screen.getByRole("columnheader", { name: /sort by size/i }),
-    ).toHaveAttribute("aria-sort", "descending");
-    expect(
-      screen.getByRole("columnheader", { name: /sort by name/i }),
-    ).toHaveAttribute("aria-sort", "none");
-    expect(
-      screen.getByRole("columnheader", { name: /sort by modified/i }),
-    ).toHaveAttribute("aria-sort", "none");
+    expect(headerCellFor("Sort by size")).toHaveAttribute(
+      "aria-sort",
+      "descending",
+    );
+    expect(headerCellFor("Sort by name")).toHaveAttribute("aria-sort", "none");
+    expect(headerCellFor("Sort by modified")).toHaveAttribute(
+      "aria-sort",
+      "none",
+    );
   });
 
   it("uses 'ascending' for asc on the active column", () => {
     render(<Harness sortState={{ column: "name", direction: "asc" }} />);
-    expect(
-      screen.getByRole("columnheader", { name: /sort by name/i }),
-    ).toHaveAttribute("aria-sort", "ascending");
+    expect(headerCellFor("Sort by name")).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
   });
 
   it("shows a direction chevron only on the active column", () => {
