@@ -21,6 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Since that load can be thousands of S3 requests on a very large folder, the
   UI now asks for confirmation before it starts — a header click alone never
   triggers it.
+- MCP: new `bucket_summary` tool — an agent asked "what's in this bucket?"
+  now gets an honest, compact summary (counts, sizes, per-prefix breakdown,
+  extension histogram, largest objects) in ONE call instead of paging through
+  thousands of keys. Partial scans are always labeled (`complete`, per-prefix
+  `coverage`, `prefix_list_complete`) — numbers are never guessed.
+- MCP: the server now orients connecting agents (start with `bucket_summary`;
+  the REST API is cookie-authenticated and not usable with MCP Bearer
+  tokens), and a truncated recursive `list_files` page carries a hint
+  pointing at `bucket_summary`.
+- MCP: admins can bound the default and maximum `list_files` page size
+  (`mcp_list_page_size` / `mcp_list_max_page_size`) and the summary walk
+  (`mcp_summary_max_keys` / `mcp_summary_prefix_scan_pages`) — all four
+  editable in Settings → MCP.
 
 ### Fixed
 

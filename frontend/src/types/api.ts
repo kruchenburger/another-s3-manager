@@ -167,6 +167,10 @@ export interface AppConfig {
   mcp_disable_writes: boolean;
   mcp_text_extensions: string[];
   mcp_global_max_read_bytes: number;
+  mcp_summary_max_keys: number;
+  mcp_summary_prefix_scan_pages: number;
+  mcp_list_page_size: number;
+  mcp_list_max_page_size: number;
 }
 
 export interface ChangeMyPasswordPayload {

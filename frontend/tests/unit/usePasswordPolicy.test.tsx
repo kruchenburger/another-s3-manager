@@ -35,6 +35,10 @@ describe("usePasswordPolicy", () => {
       mcp_disable_writes: false,
       mcp_text_extensions: [],
       mcp_global_max_read_bytes: 10 * 1024 * 1024,
+      mcp_summary_max_keys: 50000,
+      mcp_summary_prefix_scan_pages: 20,
+      mcp_list_page_size: 1000,
+      mcp_list_max_page_size: 10000,
     });
     const { result } = renderHook(() => usePasswordPolicy(), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));

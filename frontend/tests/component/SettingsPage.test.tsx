@@ -41,6 +41,10 @@ const baseConfig = {
   mcp_disable_writes: false,
   mcp_text_extensions: [],
   mcp_global_max_read_bytes: 10 * 1024 * 1024,
+  mcp_summary_max_keys: 50000,
+  mcp_summary_prefix_scan_pages: 20,
+  mcp_list_page_size: 1000,
+  mcp_list_max_page_size: 10000,
 };
 
 function renderPage() {
@@ -480,6 +484,95 @@ describe("SettingsPage", () => {
     // The value the user typed last must still be visible — not snapped
     // back to anything else.
     expect(screen.getByLabelText("Max client load", { selector: "input" })).toHaveValue("400");
+  });
+
+  it("renders the four MCP big-bucket NumberInputs populated from config", async () => {
+    vi.mocked(getConfig).mockResolvedValue({
+      ...baseConfig,
+      mcp_summary_max_keys: 25000,
+      mcp_summary_prefix_scan_pages: 10,
+      mcp_list_page_size: 500,
+      mcp_list_max_page_size: 5000,
+    });
+    renderPage();
+
+    // MCP panel is keepMounted — fields reachable by label without a tab click.
+    // { selector: "input" } disambiguates from the FieldLabelWithHelp
+    // "More about <label>" info-button, which also matches the label regex
+    // (same convention as the pre-existing "Max client load" lookups above).
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(/summary scan cap/i, { selector: "input" }),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByLabelText(/summary scan cap/i, { selector: "input" }),
+    ).toHaveValue("25000");
+    expect(
+      screen.getByLabelText(/summary prefix-scan pages/i, {
+        selector: "input",
+      }),
+    ).toHaveValue("10");
+    expect(
+      screen.getByLabelText(/default list page size/i, {
+        selector: "input",
+      }),
+    ).toHaveValue("500");
+    expect(
+      screen.getByLabelText(/max list page size/i, { selector: "input" }),
+    ).toHaveValue("5000");
+  });
+
+  it("includes all four big-bucket keys in the save payload (no unit conversion)", async () => {
+    vi.mocked(getConfig).mockResolvedValue(baseConfig);
+    vi.mocked(saveConfig).mockResolvedValue(undefined);
+    renderPage();
+
+    await waitForSaveButton();
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(/summary scan cap/i, { selector: "input" }),
+      ).toBeInTheDocument(),
+    );
+    // Edit one of the four to dirty the form; the rest ride along via the
+    // toWritableConfig allowlist + form plumbing.
+    fireEvent.change(
+      screen.getByLabelText(/summary scan cap/i, { selector: "input" }),
+      {
+        target: { value: "20000" },
+      },
+    );
+    clickSaveSettings();
+
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
+    expect(submitted.mcp_summary_max_keys).toBe(20000); // plain count — NOT bytes/MB
+    expect(submitted.mcp_summary_prefix_scan_pages).toBe(20);
+    expect(submitted.mcp_list_page_size).toBe(1000);
+    expect(submitted.mcp_list_max_page_size).toBe(10000);
+  });
+
+  it("disables the four big-bucket inputs in read-only mode", async () => {
+    vi.mocked(getConfig).mockResolvedValue({ ...baseConfig, is_read_only: true });
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(/summary scan cap/i, { selector: "input" }),
+      ).toBeDisabled(),
+    );
+    expect(
+      screen.getByLabelText(/summary prefix-scan pages/i, {
+        selector: "input",
+      }),
+    ).toBeDisabled();
+    expect(
+      screen.getByLabelText(/default list page size/i, {
+        selector: "input",
+      }),
+    ).toBeDisabled();
+    expect(
+      screen.getByLabelText(/max list page size/i, { selector: "input" }),
+    ).toBeDisabled();
   });
 });
 

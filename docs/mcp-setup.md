@@ -34,17 +34,18 @@ Either being on blocks all write operations.
 
 ### Tools
 
-| Tool                                                                                         | Purpose                                                                         |
-| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `list_roles`                                                                                 | List role names accessible to your token                                        |
-| `list_buckets(role)`                                                                         | List buckets in a given role                                                    |
-| `list_files(role, bucket, path)`                                                             | List files at a path in a bucket                                                |
-| `get_object_metadata(role, bucket, path)`                                                    | Size, last-modified, content-type, etag — no download                           |
-| `read_file(role, bucket, path, force_text=false)`                                            | Read a text file                                                                |
-| `presigned_url(role, bucket, path, expires_in=3600)`                                         | Time-limited download URL (works for binary too)                                |
-| `upload_file(role, bucket, path, content_base64)`                                            | Upload (write tool)                                                             |
-| `copy_object(role, source_bucket, source_path, dest_bucket, dest_path, delete_source=false)` | Server-side copy within a role; `delete_source=true` moves/renames (write tool) |
-| `delete_file(role, bucket, path)`                                                            | Delete (write tool)                                                             |
+| Tool                                                                                         | Purpose                                                                                                                                   |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_roles`                                                                                 | List role names accessible to your token                                                                                                  |
+| `list_buckets(role)`                                                                         | List buckets in a given role                                                                                                              |
+| `list_files(role, bucket, path)`                                                             | List files at a path in a bucket                                                                                                          |
+| `bucket_summary(role, bucket, path="")`                                                      | One-call compact digest: counts, sizes, per-prefix breakdown, extension histogram, top-10 largest. Use FIRST for "what's in this bucket?" |
+| `get_object_metadata(role, bucket, path)`                                                    | Size, last-modified, content-type, etag — no download                                                                                     |
+| `read_file(role, bucket, path, force_text=false)`                                            | Read a text file                                                                                                                          |
+| `presigned_url(role, bucket, path, expires_in=3600)`                                         | Time-limited download URL (works for binary too)                                                                                          |
+| `upload_file(role, bucket, path, content_base64)`                                            | Upload (write tool)                                                                                                                       |
+| `copy_object(role, source_bucket, source_path, dest_bucket, dest_path, delete_source=false)` | Server-side copy within a role; `delete_source=true` moves/renames (write tool)                                                           |
+| `delete_file(role, bucket, path)`                                                            | Delete (write tool)                                                                                                                       |
 
 `read_file` returns text content. Binary files error with `BINARY_CONTENT`
 unless `force_text=true` is passed (in which case undecoded bytes become
@@ -170,12 +171,16 @@ The file exceeds the smaller of (per-token cap, server-level
 
 Set in `data/config.json` or via the admin Settings page:
 
-| Field                       | Default            | Purpose                                                                            |
-| --------------------------- | ------------------ | ---------------------------------------------------------------------------------- |
-| `mcp_enabled`               | `true`             | Global kill-switch. When `false`, `/mcp/*` returns 503. Hot-reload.                |
-| `mcp_disable_writes`        | `false`            | Server-level read-only. Forces all tokens to read-only. Hot-reload.                |
-| `mcp_text_extensions`       | `[]`               | Per-deployment extension to the built-in text-extension whitelist for `read_file`. |
-| `mcp_global_max_read_bytes` | `10485760` (10 MB) | Server-level cap on `read_file` size. Cannot exceed 10 MB hard ceiling.            |
+| Field                           | Default            | Purpose                                                                                                                                     |
+| ------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mcp_enabled`                   | `true`             | Global kill-switch. When `false`, `/mcp/*` returns 503. Hot-reload.                                                                         |
+| `mcp_disable_writes`            | `false`            | Server-level read-only. Forces all tokens to read-only. Hot-reload.                                                                         |
+| `mcp_text_extensions`           | `[]`               | Per-deployment extension to the built-in text-extension whitelist for `read_file`.                                                          |
+| `mcp_global_max_read_bytes`     | `10485760` (10 MB) | Server-level cap on `read_file` size. Cannot exceed 10 MB hard ceiling.                                                                     |
+| `mcp_summary_max_keys`          | `50000`            | Keys the `bucket_summary` walk may visit per call. Larger buckets get an honest partial summary (`complete: false`, per-prefix `coverage`). |
+| `mcp_summary_prefix_scan_pages` | `20`               | Pages (1000 entries each) `bucket_summary` may spend enumerating prefixes at a level before flagging `prefix_list_complete: false`.         |
+| `mcp_list_page_size`            | `1000`             | Default page size for `list_files` when the agent omits `max_keys`.                                                                         |
+| `mcp_list_max_page_size`        | `10000`            | Hard ceiling on the `max_keys` an agent may request via `list_files`; larger values are clamped, not rejected.                              |
 
 MCP tool calls are covered by Prometheus metrics (`as3m_mcp_tool_calls_total`,
 `as3m_mcp_tool_response_bytes`, etc.) — see [observability.md](observability.md).
