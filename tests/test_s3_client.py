@@ -1514,19 +1514,6 @@ def test_list_objects_recursive_paginates_via_continuation_token(mocker):
     assert result["next_continuation_token"] == "TOKEN-A"
 
 
-def test_list_objects_recursive_max_keys_capped_at_10000():
-    """User-supplied max_keys is silently capped at 10000."""
-    import another_s3_manager.s3_client as mod
-
-    # We don't even need to mock S3 — just confirm no exception when max_keys=99999;
-    # the helper validates internally before any boto call.
-    # (Easier to assert via direct param check than full mock setup.)
-    with pytest.raises(PermissionError):
-        # Will fail on permission check before anything else; that's fine —
-        # we just want to ensure the function doesn't reject max_keys=99999 outright.
-        mod.list_objects_recursive_for_role("RoleX", "bucket", "", _make_user(allowed_roles=["RoleA"]), max_keys=99_999)
-
-
 def test_list_objects_recursive_permission_denied_role():
     import another_s3_manager.s3_client as mod
 

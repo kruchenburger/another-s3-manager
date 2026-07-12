@@ -180,8 +180,81 @@ async def test_hint_absent_when_not_truncated(alice_user, tool_registry):
 
 
 @pytest.mark.asyncio
-async def test_hint_never_in_non_recursive_shape(alice_user, tool_registry):
+async def test_hint_absent_in_short_non_recursive_listing(alice_user, tool_registry):
+    """A non-recursive listing well under the effective cap gets neither
+    field — is_truncated/hint are additive, not always-present."""
     uid, plaintext = alice_user
     with patch("another_s3_manager.s3_client.list_objects_for_role", return_value=[]):
         result = await _call(tool_registry, "list_files", _fake_request(plaintext), role="Default", bucket="b")
     assert "hint" not in result
+    assert "is_truncated" not in result
+
+
+# ---------------------------------------------------------------------------
+# Non-recursive mode is bounded too (2026-07-13 final review, BLOCKING 1):
+# recursive=False is the DEFAULT — reachable with zero optional arguments —
+# and previously called list_objects_for_role with no cap at all. A flat
+# bucket (backup dumps, exports, loose media) hit the exact firehose this
+# feature exists to prevent.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_non_recursive_listing_truncated_at_config_page_size(alice_user, tool_registry, monkeypatch):
+    """mcp_list_page_size=3 with 5 fake entries -> truncated to 3, is_truncated
+    True, and a hint that does NOT promise a continuation token."""
+    uid, plaintext = alice_user
+    _patch_paging_config(monkeypatch, mcp_list_page_size=3, mcp_list_max_page_size=1000)
+    fake_files = [{"name": f"f{i}.txt", "is_directory": False, "size": i} for i in range(5)]
+    with patch("another_s3_manager.s3_client.list_objects_for_role", return_value=fake_files):
+        result = await _call(tool_registry, "list_files", _fake_request(plaintext), role="Default", bucket="b")
+    assert result["files"] == fake_files[:3]
+    assert result["is_truncated"] is True
+    assert "bucket_summary" in result["hint"]
+    assert "continuation token" in result["hint"]
+    assert "next_continuation_token" not in result["hint"]
+
+
+@pytest.mark.asyncio
+async def test_non_recursive_listing_under_cap_is_not_truncated(alice_user, tool_registry, monkeypatch):
+    """4 entries under a page size of 5 -> untouched, no truncation fields."""
+    uid, plaintext = alice_user
+    _patch_paging_config(monkeypatch, mcp_list_page_size=5, mcp_list_max_page_size=1000)
+    fake_files = [{"name": f"f{i}.txt", "is_directory": False, "size": i} for i in range(4)]
+    with patch("another_s3_manager.s3_client.list_objects_for_role", return_value=fake_files):
+        result = await _call(tool_registry, "list_files", _fake_request(plaintext), role="Default", bucket="b")
+    assert result["files"] == fake_files
+    assert "is_truncated" not in result
+    assert "hint" not in result
+
+
+@pytest.mark.asyncio
+async def test_non_recursive_agent_max_keys_applies_too(alice_user, tool_registry, monkeypatch):
+    """An agent-supplied max_keys bounds the non-recursive listing exactly
+    like the recursive one — same resolution formula, both branches."""
+    uid, plaintext = alice_user
+    _patch_paging_config(monkeypatch, mcp_list_page_size=1000, mcp_list_max_page_size=1000)
+    fake_files = [{"name": f"f{i}.txt", "is_directory": False, "size": i} for i in range(10)]
+    with patch("another_s3_manager.s3_client.list_objects_for_role", return_value=fake_files):
+        result = await _call(
+            tool_registry, "list_files", _fake_request(plaintext), role="Default", bucket="b", max_keys=2
+        )
+    assert result["files"] == fake_files[:2]
+    assert result["is_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_non_recursive_agent_max_keys_zero_floors_to_one(alice_user, tool_registry, monkeypatch):
+    """An agent-supplied max_keys=0 must not collapse the response to an
+    empty files list — the recursive branch already floors this internally
+    (list_objects_recursive_for_role: max(1, min(...))); the non-recursive
+    branch computes its own bound in mcp_server.py and needs the same floor."""
+    uid, plaintext = alice_user
+    _patch_paging_config(monkeypatch, mcp_list_page_size=1000, mcp_list_max_page_size=1000)
+    fake_files = [{"name": f"f{i}.txt", "is_directory": False, "size": i} for i in range(3)]
+    with patch("another_s3_manager.s3_client.list_objects_for_role", return_value=fake_files):
+        result = await _call(
+            tool_registry, "list_files", _fake_request(plaintext), role="Default", bucket="b", max_keys=0
+        )
+    assert result["files"] == fake_files[:1]
+    assert result["is_truncated"] is True

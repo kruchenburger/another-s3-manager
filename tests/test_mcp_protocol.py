@@ -29,6 +29,8 @@ The 26 unit tests in test_mcp_tools.py cover the auth + tool dispatch chain
 exhaustively by calling tool bodies directly (skipping HTTP transport).
 """
 
+import json
+
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -179,3 +181,141 @@ def test_mcp_server_declares_instructions():
     assert "Bearer" in text
     assert "/mcp" in text
     assert "/api/" in text
+
+
+# ---------------------------------------------------------------------------
+# Test 5: a REAL protocol round-trip (2026-07-13 final review, Finding 6)
+#
+# Every test above (and all 26+ in test_mcp_tools.py) reaches into
+# mcp._tool_manager._tools and calls tool.fn directly — the suite would stay
+# green even if FastMCP failed to serialize bucket_summary's signature, or if
+# `instructions` never actually reached a connecting client.
+# test_mcp_server_declares_instructions above only asserts the Python
+# ATTRIBUTE, never that a client receives it over the wire.
+#
+# test_mcp_endpoint_is_mounted_not_404 above can't do this: FastAPI's
+# app.mount() does not propagate the parent's lifespan to the MCP sub-app
+# (see the module docstring), so FastMCP's session_manager task group is
+# never started when the app is reached that way.
+#
+# TestClient does something different: it manages the lifespan of whatever
+# ASGI app it wraps directly — so if we drive a Streamable HTTP ASGI app as
+# TestClient's ROOT app, its `with` block correctly starts and stops
+# FastMCP's session-manager task group, and a real
+# initialize -> notifications/initialized -> tools/list exchange works
+# without extra test infrastructure.
+#
+# One wrinkle: FastMCP's StreamableHTTPSessionManager can only .run() ONCE
+# per instance, ever (a hard internal guard in the mcp SDK), and the
+# production instance is memoized on the module-level `mcp` singleton the
+# first time streamable_http_app() is called (at mcp_server.py import time,
+# for mcp_asgi_app). test_main.py's startup-migration test already
+# legitimately drives the real app lifespan once (`with TestClient(app) as
+# _client:`) to observe alembic + JSON migration — which also runs, and
+# permanently exhausts, that same shared session manager for the rest of the
+# process. (Reloading mcp_server to dodge this was tried and reverted: other
+# already-collected test modules bind `McpError` / `_current_request` from
+# mcp_server at THEIR OWN import time, so a reload mid-suite hands the tool
+# functions a different ContextVar/exception class than what those modules
+# already imported — auth then fails everywhere downstream.)
+#
+# Instead, build a throwaway StreamableHTTPSessionManager bound to the REAL
+# mcp._mcp_server (the actual registered tools + actual instructions — the
+# same low-level server object streamable_http_app() would wrap) inside its
+# own tiny Starlette app. This is genuinely the production tool registry
+# over the real transport, isolated from the one-shot shared session
+# manager other tests already consume — not a fake or a mock.
+# ---------------------------------------------------------------------------
+
+
+def _parse_sse_json(text: str) -> dict:
+    """Extract the JSON-RPC payload from a Streamable HTTP SSE response body.
+
+    FastMCP replies to POST / with one `event: message` / `data: {...}` SSE
+    frame per JSON-RPC message rather than a bare JSON body.
+    """
+    for line in text.splitlines():
+        if line.startswith("data: "):
+            return json.loads(line[len("data: ") :])
+    raise AssertionError(f"no SSE 'data:' line found in response body: {text!r}")
+
+
+def test_mcp_protocol_round_trip_initialize_and_tools_list():
+    """Real initialize + tools/list over Streamable HTTP: the initialize
+    result must carry `instructions`, and bucket_summary must be
+    discoverable via tools/list — proving FastMCP actually serializes it."""
+    import contextlib
+
+    from mcp.server.fastmcp.server import StreamableHTTPASGIApp
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from another_s3_manager.mcp_server import _RequestCaptureMiddleware, mcp
+
+    # A fresh, never-run session manager wrapping the SAME real _mcp_server
+    # (real tool registrations, real `instructions`) that the production
+    # mcp_asgi_app wraps — see the module comment above for why this can't
+    # just reuse mcp.session_manager directly.
+    session_manager = StreamableHTTPSessionManager(
+        app=mcp._mcp_server,
+        json_response=mcp.settings.json_response,
+        stateless=mcp.settings.stateless_http,
+        security_settings=mcp.settings.transport_security,
+    )
+
+    @contextlib.asynccontextmanager
+    async def _lifespan(_app):
+        async with session_manager.run():
+            yield
+
+    test_asgi_app = Starlette(
+        routes=[Route("/", endpoint=StreamableHTTPASGIApp(session_manager))],
+        lifespan=_lifespan,
+    )
+    mcp_asgi_app = _RequestCaptureMiddleware(test_asgi_app)
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    with TestClient(mcp_asgi_app) as client:
+        init_resp = client.post(
+            "/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test-client", "version": "0.0.1"},
+                },
+            },
+        )
+        assert init_resp.status_code == 200
+        session_id = init_resp.headers["mcp-session-id"]
+        instructions = _parse_sse_json(init_resp.text)["result"]["instructions"]
+        assert "bucket_summary" in instructions
+        assert "next_continuation_token" in instructions
+
+        # Required handshake step before the session accepts further calls.
+        notif_resp = client.post(
+            "/",
+            headers={**headers, "mcp-session-id": session_id},
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        )
+        assert notif_resp.status_code == 202
+
+        list_resp = client.post(
+            "/",
+            headers={**headers, "mcp-session-id": session_id},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        )
+        assert list_resp.status_code == 200
+        tool_names = {t["name"] for t in _parse_sse_json(list_resp.text)["result"]["tools"]}
+        assert "bucket_summary" in tool_names
+        assert "list_files" in tool_names
+        assert "list_roles" in tool_names

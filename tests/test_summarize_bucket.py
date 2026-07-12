@@ -99,6 +99,16 @@ def test_summary_complete_small_bucket(moto_s3):
     assert isinstance(result["newest_modified"], str)
 
 
+def test_summary_complete_walk_has_no_note(moto_s3):
+    """note is None (not absent, not empty string) once the walk finished."""
+    _seed(moto_s3, "summary-note-none", [("a.txt", 1)])
+
+    result = mod.summarize_bucket_for_role("Default", "summary-note-none", "", _user(), max_keys=50_000)
+
+    assert result["complete"] is True
+    assert result["note"] is None
+
+
 def test_summary_empty_bucket(moto_s3):
     moto_s3.create_bucket(Bucket="summary-empty")
 
@@ -223,6 +233,11 @@ def test_summary_cap_and_coverage_classification(moto_s3):
     assert result["total_bytes_human"] is None
     assert result["scan_stopped_at"] is not None
     assert result["scan_stopped_at"].startswith("logs/")
+    # Honesty note (BLOCKING 2, 2026-07-13 final review): present and
+    # non-empty whenever complete is False, mentioning the fields it warns about.
+    assert result["note"]
+    assert "root_objects" in result["note"]
+    assert "largest_objects" in result["note"]
 
     by_prefix = {p["prefix"]: p for p in result["prefixes"]}
     assert by_prefix["archive/"]["coverage"] == "complete"
@@ -256,6 +271,50 @@ def test_summary_cap_hits_mid_page(moto_s3):
     # (0-indexed 1499) is f01499.txt.
     expected_stop_key = sorted(key for key, _ in keys)[1499]
     assert result["scan_stopped_at"] == expected_stop_key
+
+
+def test_summary_partial_scan_underreports_root_and_largest(moto_s3):
+    """The concrete failure this feature must document (BLOCKING 2, 2026-07-13
+    final review): a prefix that alone exceeds the scan cap sorts BEFORE a
+    loose root key and the bucket's true largest object, so the walk (which
+    visits keys in S3's lexicographic order) never reaches either.
+
+    'aaa/' holds 1100 tiny objects — more than the 1000-key floor — and a
+    single loose 'zzz.txt' at the root is by far the largest object in the
+    bucket. With max_keys=1000 the walk exhausts its cap entirely inside
+    'aaa/' and never sees 'zzz.txt' at all.
+
+    This is not a bug in the walk (reviewed as correct and NOT to be
+    restructured) — it is exactly the gap the `note` field exists to
+    disclose instead of silently answering "0 loose root objects" and
+    reporting the wrong "largest" object as if it were real.
+    """
+    keys = [(f"aaa/f{i:05d}.txt", 1) for i in range(1100)]
+    keys.append(("zzz.txt", 999_999))  # the TRUE largest object — never scanned
+    _seed(moto_s3, "summary-underreport", keys)
+
+    result = mod.summarize_bucket_for_role("Default", "summary-underreport", "", _user(), max_keys=1000)
+
+    assert result["complete"] is False
+    assert result["scanned_objects"] == 1000
+    assert result["scan_stopped_at"].startswith("aaa/")
+
+    # Known limitation, pinned rather than hidden: root_objects is 0 even
+    # though a loose root object (zzz.txt) genuinely exists — the walk
+    # stopped before ever reaching it.
+    assert result["root_objects"] == 0
+    # Likewise largest_objects reports only what was scanned inside aaa/
+    # (every seeded object there is 1 byte) — NOT the real largest object.
+    assert all(o["size"] == 1 for o in result["largest_objects"])
+    assert all(o["key"].startswith("aaa/") for o in result["largest_objects"])
+    assert not any(o["key"] == "zzz.txt" for o in result["largest_objects"])
+
+    # The honesty net: a `note` on the response says plainly that these
+    # numbers may under-report, naming the fields it's warning about.
+    assert result["note"] is not None
+    assert "root_objects" in result["note"]
+    assert "largest_objects" in result["note"]
+    assert "under-report" in result["note"].lower()
 
 
 def test_summary_max_keys_floor_enforced(moto_s3):

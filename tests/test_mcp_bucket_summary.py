@@ -11,6 +11,14 @@ import pytest
 
 from another_s3_manager import api_tokens as svc
 from another_s3_manager.database import session_scope
+from another_s3_manager.errors import (
+    CredentialsExpiredError,
+    S3AccessDeniedError,
+    S3ConfigError,
+    S3NetworkError,
+    S3NotFoundError,
+    S3OperationError,
+)
 from another_s3_manager.mcp_server import McpError, _current_request
 from another_s3_manager.models import User, UserRole
 
@@ -202,6 +210,60 @@ async def test_bucket_summary_no_auth_raises(tool_registry):
     with pytest.raises(McpError) as exc_info:
         await _call(tool_registry, "bucket_summary", _FakeRequest({}), role="Default", bucket="b")
     assert exc_info.value.code == "INVALID_TOKEN"
+
+
+# ---------------------------------------------------------------------------
+# Typed S3 exception ladder (final review, 2026-07-13 — carried-over minor
+# from Task 4: correctness was previously verified only by source comparison
+# against list_files/list_buckets, not by a test that would fail on
+# regression). Same pattern as test_mcp_list_buckets_typed_access_denied_...
+# / test_mcp_list_files_typed_config_error_... in test_mcp_tools.py, but
+# swept over all six typed exceptions in one parametrize since bucket_summary
+# had none at all.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "exc_cls,expected_code",
+    [
+        (S3AccessDeniedError, "S3_ACCESS_DENIED"),
+        (S3NotFoundError, "S3_NOT_FOUND"),
+        (S3ConfigError, "S3_CONFIG_ERROR"),
+        (S3NetworkError, "S3_NETWORK_ERROR"),
+        (CredentialsExpiredError, "CREDENTIALS_EXPIRED"),
+        (S3OperationError, "S3_OPERATION_ERROR"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bucket_summary_typed_s3_exception_ladder(alice_user, tool_registry, exc_cls, expected_code):
+    """Each typed S3 exception from summarize_bucket_for_role must surface its
+    own McpError code (never fall through to INTERNAL_ERROR) and increment
+    mcp_tool_calls_total{tool="bucket_summary", error_code=<expected_code>}."""
+    from another_s3_manager import metrics
+
+    uid, plaintext = alice_user
+
+    def _count() -> float:
+        for sample in metrics.mcp_tool_calls_total.collect()[0].samples:
+            if (
+                sample.name.endswith("_total")
+                and sample.labels.get("tool") == "bucket_summary"
+                and sample.labels.get("error_code") == expected_code
+            ):
+                return sample.value
+        return 0.0
+
+    before = _count()
+    with patch(
+        "another_s3_manager.s3_client.summarize_bucket_for_role",
+        side_effect=exc_cls("SomeBotoCode", "boom"),
+    ):
+        with pytest.raises(McpError) as exc_info:
+            await _call(tool_registry, "bucket_summary", _fake_request(plaintext), role="Default", bucket="b")
+
+    assert exc_info.value.code == expected_code
+    assert exc_info.value.details.get("boto_code") == "SomeBotoCode"
+    assert _count() == before + 1
 
 
 # ---------------------------------------------------------------------------

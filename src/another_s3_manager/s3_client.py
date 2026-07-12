@@ -1130,6 +1130,17 @@ def summarize_bucket_for_role(
     per-prefix `coverage` field (complete / partial / not_scanned) tells the
     agent exactly which numbers it may trust.
 
+    Honesty on cap-hit (2026-07-13): total_objects/total_bytes are nulled and
+    per-prefix entries carry `coverage` when `complete` is False — but
+    root_objects, extensions[_count]/extensions_truncated, largest_objects
+    and oldest/newest_modified are ALL computed from that same capped walk
+    too, and by lexicographic bad luck can under-report rather than merely
+    look "small" (e.g. a prefix that alone exceeds max_keys can hide a loose
+    root object, or the single largest object in the bucket, if either sorts
+    after `scan_stopped_at`). A top-level `note` string spells this out in
+    plain language whenever `complete` is False; `None` when the walk
+    finished. See test_summary_partial_scan_underreports_root_and_largest.
+
     The response is bounded by design: top-20 prefixes, top-20 extensions
     (each "ext" capped at _MAX_EXTENSION_LENGTH chars), top-10 largest
     objects — never scales with object count. The real bound is roughly 30
@@ -1320,10 +1331,35 @@ def summarize_bucket_for_role(
             for size, key, lm in sorted(largest_heap, reverse=True)
         ]
 
+        # Honesty note (2026-07-13, final-review BLOCKING 2): root_objects,
+        # extensions[_count]/extensions_truncated and largest_objects, and
+        # oldest/newest_modified are all computed from the SAME capped walk
+        # as total_objects/total_bytes — but unlike those two (nulled when
+        # complete=False) they read as plain facts with no built-in signal
+        # that they can under-report. S3 returns keys lexicographically, so
+        # e.g. a bucket where one prefix alone exceeds max_keys never lets
+        # the walk reach a loose root object or a bigger file that sorts
+        # later — root_objects/largest_objects would then be confidently
+        # wrong, not just incomplete. Spell that out for whatever reads this
+        # cold (an AI agent, not a human who can infer the caveat from
+        # `complete: false` alone).
+        note: Optional[str] = None
+        if not complete:
+            note = (
+                f"PARTIAL SCAN: only the first {scanned_objects} objects were visited, in S3's "
+                f"lexicographic key order, stopping at '{scan_stopped_at}'. root_objects, "
+                "extensions, largest_objects, oldest_modified and newest_modified reflect ONLY "
+                "this scanned range and can UNDER-REPORT — e.g. a prefix that alone exceeds the "
+                "scan cap can hide a loose object at the bucket root, or the single largest "
+                "object in the bucket, if either sorts after scan_stopped_at. Narrow with `path` "
+                "to a specific prefix, or raise mcp_summary_max_keys, for a trustworthy answer."
+            )
+
         return {
             "bucket": bucket,
             "path": prefix,
             "complete": complete,
+            "note": note,
             "scanned_objects": scanned_objects,
             "scanned_bytes": scanned_bytes,
             "scanned_bytes_human": _human_bytes(scanned_bytes),

@@ -1831,6 +1831,12 @@ def test_post_config_rejects_invalid_big_bucket_mcp_fields(app_client):
     for key, bad in (
         ("mcp_summary_max_keys", "abc"),
         ("mcp_summary_max_keys", 0),
+        # 999 was accepted before the 2026-07-13 final-review fix (POST bound
+        # was 1..1_000_000) even though the Settings NumberInput min and the
+        # runtime floor (s3_client._MIN_SUMMARY_MAX_KEYS) were both already
+        # 1000 — a value the walk would silently re-floor at call time. The
+        # POST bound now agrees with the other two layers.
+        ("mcp_summary_max_keys", 999),
         ("mcp_summary_max_keys", 1_000_001),
         ("mcp_summary_prefix_scan_pages", True),
         ("mcp_summary_prefix_scan_pages", 201),

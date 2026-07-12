@@ -1610,7 +1610,11 @@ async def update_config(
         # (floor 1 for the list keys, floor 1000 for the summary walk) so a
         # hand-edited config file cannot brick the tools.
         for int_field, lo, hi in (
-            ("mcp_summary_max_keys", 1, 1_000_000),
+            # Lower bound 1_000 matches the runtime floor
+            # (s3_client._MIN_SUMMARY_MAX_KEYS) and the Settings NumberInput
+            # min — a value accepted here that the walk silently re-floors
+            # at call time would be a lie by the time it's echoed back.
+            ("mcp_summary_max_keys", 1_000, 1_000_000),
             ("mcp_summary_prefix_scan_pages", 1, 200),
             ("mcp_list_page_size", 1, 10_000),
             ("mcp_list_max_page_size", 1, 10_000),

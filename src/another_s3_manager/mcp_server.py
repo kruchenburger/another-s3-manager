@@ -414,9 +414,10 @@ sizes, per-prefix breakdown, extension histogram — in one compact call. Drill
 into a subtree with bucket_summary(role, bucket, path="some/prefix/"). Only
 then use list_files for actual keys and read_file for file contents.
 
-list_files returns actual keys and can be large: recursive mode returns up to
-max_keys keys per page; when is_truncated is true, pass
-next_continuation_token back to fetch the next page.
+list_files returns actual keys and both modes are bounded by max_keys: in
+recursive mode, when is_truncated is true, pass next_continuation_token back
+to fetch the next page; in non-recursive mode a truncated listing has no
+continuation token — call bucket_summary or retry with recursive=True.
 
 The application's REST API requires a browser session cookie for /api/... routes;
 your MCP Bearer token (as3m_...) is not a JWT and will be rejected there. Use /mcp
@@ -567,13 +568,19 @@ async def list_buckets(role: str) -> dict:
 # ------------------------------------------------------------------
 # list_files — lists files at a path within a bucket.
 #
-# Two modes:
+# Two modes, BOTH bounded by the same config-driven max_keys (2026-07-13:
+# the non-recursive branch used to be unbounded — a flat bucket with
+# thousands of loose keys at one level was the exact firehose this feature
+# exists to prevent, reachable with zero optional arguments):
 #   recursive=False (default): one level deep, returns sub-directories as
-#     {is_directory: true} entries. Use for browsing dir-by-dir.
+#     {is_directory: true} entries. Use for browsing dir-by-dir. A listing
+#     longer than the effective cap is truncated with is_truncated/hint —
+#     there is no continuation token for this mode (see the hint text).
 #   recursive=True: flat list of all keys under `path`, paginated via
 #     continuation_token. Use for counting/searching/processing whole subtrees
-#     without N+1 calls. Returns up to max_keys (default 1000, max 10000) per
-#     call; pass back next_continuation_token to get the next page.
+#     without N+1 calls. Returns up to max_keys (config-driven default
+#     mcp_list_page_size, ceiling mcp_list_max_page_size) per call; pass back
+#     next_continuation_token to get the next page.
 # ------------------------------------------------------------------
 @mcp.tool()
 async def list_files(
@@ -594,18 +601,25 @@ async def list_files(
         path: Prefix to scope the listing. "" = bucket root.
         recursive: If True, returns a flat list of all keys under path with
             pagination. If False (default), one level deep with directory entries.
-        max_keys: Max keys per call when recursive=True. Defaults to the
+        max_keys: Max entries per call, in EITHER mode. Defaults to the
             server-configured page size (mcp_list_page_size, normally 1000);
             values above the server ceiling (mcp_list_max_page_size) are
             clamped, not rejected.
         continuation_token: Pass back next_continuation_token from the previous
-            recursive call to get the next page.
+            recursive call to get the next page. Not applicable when
+            recursive=False — a truncated non-recursive listing has no
+            continuation token (see is_truncated/hint below).
 
     Returns:
-        Non-recursive: {"files": [{name, is_directory, size, last_modified?}, ...]}
+        Non-recursive: {"files": [{name, is_directory, size, last_modified?}, ...],
+                         "is_truncated"?: true, "hint"?: str}
+            is_truncated/hint are present ONLY when the listing was cut —
+            absent, not null/false, on a short listing.
         Recursive: {"files": [{key, size, last_modified}, ...],
                     "is_truncated": bool, "next_continuation_token": str|null,
-                    "key_count": int}
+                    "key_count": int, "hint"?: str}
+            is_truncated is always present here; "hint" is present only when
+            is_truncated is true.
         A recursive page can be LARGE (~160 KB at 1000 keys). When
         is_truncated is true, pass next_continuation_token back to continue
         paging — or use bucket_summary for the shape of the bucket in one call.
@@ -615,16 +629,24 @@ async def list_files(
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         try:
+            config = _config_module.load_config(force_reload=False)
+            # Resolution rules (2026-07-12 design, extended 2026-07-13 to
+            # bound the non-recursive branch too — see the module comment
+            # above): floors of 1 on both keys; the ceiling wins over the
+            # default page size; an agent-supplied max_keys is clamped to
+            # the ceiling, never rejected. Per-S3-request MaxKeys stays
+            # min(effective, 1000) inside the recursive helper — S3's own
+            # limit, not configurable.
+            page_size = max(1, int(config.get("mcp_list_page_size", 1000)))
+            ceiling = max(1, int(config.get("mcp_list_max_page_size", 10_000)))
+            # Floor of 1 on the RESULT too, not just the two config inputs: an
+            # agent-supplied max_keys=0 (or negative) must not collapse the
+            # non-recursive branch to an empty, "is_truncated" response — the
+            # recursive helper already re-floors internally
+            # (list_objects_recursive_for_role: max(1, min(...))), so this
+            # keeps both modes consistent instead of only fixing one.
+            effective_max_keys = max(1, min(max_keys if max_keys is not None else page_size, ceiling))
             if recursive:
-                config = _config_module.load_config(force_reload=False)
-                # Resolution rules (2026-07-12 design): floors of 1 on both
-                # keys; the ceiling wins over the default page size; an
-                # agent-supplied max_keys is clamped to the ceiling, never
-                # rejected. Per-S3-request MaxKeys stays min(effective, 1000)
-                # inside the helper — S3's own limit, not configurable.
-                page_size = max(1, int(config.get("mcp_list_page_size", 1000)))
-                ceiling = max(1, int(config.get("mcp_list_max_page_size", 10_000)))
-                effective_max_keys = min(max_keys if max_keys is not None else page_size, ceiling)
                 # Normalize path → S3 prefix (no leading slash; trailing slash
                 # only if non-empty so we don't accidentally match other names).
                 prefix = path.strip("/")
@@ -650,8 +672,24 @@ async def list_files(
                         "and the prefix breakdown in one compact call."
                     )
             else:
+                # s3_client.list_objects_for_role still walks the WHOLE level
+                # (unchanged — the web UI relies on that helper too); what we
+                # bound here is the AGENT'S CONTEXT, i.e. what this tool
+                # returns. No continuation token exists for a non-recursive
+                # listing, so we do not invent one — the hint below points at
+                # the two real alternatives instead.
                 files = _s3_client.list_objects_for_role(role, bucket, path, user)
                 result = {"files": files}
+                if len(files) > effective_max_keys:
+                    result["files"] = files[:effective_max_keys]
+                    result["is_truncated"] = True
+                    result["hint"] = (
+                        f"This directory listing was cut at {effective_max_keys} entries. "
+                        "There is no continuation token for a non-recursive listing — call "
+                        "bucket_summary(role, bucket, path) for counts and the prefix "
+                        "breakdown, or list_files(..., recursive=True) to page through "
+                        "every key."
+                    )
         except PermissionError as e:
             msg = str(e).lower()
             if "bucket" in msg:
@@ -719,6 +757,18 @@ async def bucket_summary(role: str, bucket: str, path: str = "") -> dict:
     largest objects, modified range. Use this FIRST when asked what a bucket
     contains — do not page through list_files. Drill down by passing path.
     Reported "ext" values are capped at 16 characters.
+
+    IMPORTANT — when the bucket exceeds the scan cap, `complete` is false and
+    a `note` field explains that root_objects, extensions, largest_objects
+    and the oldest/newest_modified range cover ONLY the scanned range (keys
+    up to `scan_stopped_at`, in S3's lexicographic order) and can
+    UNDER-REPORT: a prefix alone larger than the cap can hide a loose object
+    at the bucket root, or the single largest object in the whole bucket, if
+    either happens to sort later. Only total_objects/total_bytes (nulled)
+    and each prefix's own `coverage` (complete/partial/not_scanned) are safe
+    to treat as exact on a partial scan — everything else in the response is
+    a lower bound, not a total. Narrow with `path` or raise
+    mcp_summary_max_keys for a trustworthy full-bucket answer.
     """
     error_code = "none"
     start = time.perf_counter()

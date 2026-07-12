@@ -47,6 +47,33 @@ Either being on blocks all write operations.
 | `copy_object(role, source_bucket, source_path, dest_bucket, dest_path, delete_source=false)` | Server-side copy within a role; `delete_source=true` moves/renames (write tool)                                                           |
 | `delete_file(role, bucket, path)`                                                            | Delete (write tool)                                                                                                                       |
 
+`list_files` is bounded in BOTH modes by `mcp_list_page_size` /
+`mcp_list_max_page_size` — a listing longer than the effective cap is cut,
+with `is_truncated: true` and a `hint` added to the response. In recursive
+mode, page through with `next_continuation_token`. In non-recursive mode
+there is no continuation token (S3's delimiter listing doesn't offer one at
+the granularity this tool needs) — the hint instead points at `bucket_summary`
+or `list_files(..., recursive=True)` to see the rest.
+
+### The `bucket_summary` honesty contract
+
+`bucket_summary` never guesses. When the bucket (or the scanned prefix) is
+larger than `mcp_summary_max_keys`, the response says so explicitly instead
+of silently reporting incomplete numbers as if they were the whole picture:
+
+| Field                  | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `complete`             | `false` once the walk hits `mcp_summary_max_keys`. When `false`, `total_objects`/`total_bytes` are `null` — they are NEVER reported as a guess.                                                                                                                                                                                                                                                                            |
+| `note`                 | Present (non-null) only when `complete` is `false`. Plain-language warning that `root_objects`, `extensions`, `largest_objects`, and `oldest_modified`/`newest_modified` were computed from the scanned range only and can under-report — S3 returns keys lexicographically, so a single oversized prefix can hide a loose root object, or the bucket's actual largest file, if either sorts after where the scan stopped. |
+| per-prefix `coverage`  | `"complete"` (every object under that prefix was scanned), `"partial"` (the scan stopped partway through it), or `"not_scanned"` (the scan never reached it) — the only per-prefix numbers safe to trust as exact are `"complete"` ones.                                                                                                                                                                                   |
+| `prefix_list_complete` | Whether Step 1 (the cheap `Delimiter="/"` enumeration of _which_ prefixes exist) finished within its own `mcp_summary_prefix_scan_pages` budget. Can be `false` even when `prefixes_truncated` is also relevant — they answer different questions.                                                                                                                                                                         |
+| `prefixes_truncated`   | Whether more than the top-20 rendered prefixes exist (`prefix_count` says how many). Independent of `prefix_list_complete` — all prefixes can be known (`prefix_list_complete: true`) while only the top 20 are shown (`prefixes_truncated: true`).                                                                                                                                                                        |
+
+Rule of thumb for an agent: if `complete` is `false`, treat every number
+outside `total_objects`/`total_bytes` (null) and `"complete"`-coverage
+prefixes as a lower bound, not a total — read `note` for specifics, then
+narrow with `path` or ask an admin to raise `mcp_summary_max_keys`.
+
 `read_file` returns text content. Binary files error with `BINARY_CONTENT`
 unless `force_text=true` is passed (in which case undecoded bytes become
 `�` replacement chars) — for binary files, prefer `presigned_url` to hand out
@@ -171,16 +198,16 @@ The file exceeds the smaller of (per-token cap, server-level
 
 Set in `data/config.json` or via the admin Settings page:
 
-| Field                           | Default            | Purpose                                                                                                                                     |
-| ------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mcp_enabled`                   | `true`             | Global kill-switch. When `false`, `/mcp/*` returns 503. Hot-reload.                                                                         |
-| `mcp_disable_writes`            | `false`            | Server-level read-only. Forces all tokens to read-only. Hot-reload.                                                                         |
-| `mcp_text_extensions`           | `[]`               | Per-deployment extension to the built-in text-extension whitelist for `read_file`.                                                          |
-| `mcp_global_max_read_bytes`     | `10485760` (10 MB) | Server-level cap on `read_file` size. Cannot exceed 10 MB hard ceiling.                                                                     |
-| `mcp_summary_max_keys`          | `50000`            | Keys the `bucket_summary` walk may visit per call. Larger buckets get an honest partial summary (`complete: false`, per-prefix `coverage`). |
-| `mcp_summary_prefix_scan_pages` | `20`               | Pages (1000 entries each) `bucket_summary` may spend enumerating prefixes at a level before flagging `prefix_list_complete: false`.         |
-| `mcp_list_page_size`            | `1000`             | Default page size for `list_files` when the agent omits `max_keys`.                                                                         |
-| `mcp_list_max_page_size`        | `10000`            | Hard ceiling on the `max_keys` an agent may request via `list_files`; larger values are clamped, not rejected.                              |
+| Field                           | Default            | Purpose                                                                                                                                                                                            |
+| ------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mcp_enabled`                   | `true`             | Global kill-switch. When `false`, `/mcp/*` returns 503. Hot-reload.                                                                                                                                |
+| `mcp_disable_writes`            | `false`            | Server-level read-only. Forces all tokens to read-only. Hot-reload.                                                                                                                                |
+| `mcp_text_extensions`           | `[]`               | Per-deployment extension to the built-in text-extension whitelist for `read_file`.                                                                                                                 |
+| `mcp_global_max_read_bytes`     | `10485760` (10 MB) | Server-level cap on `read_file` size. Cannot exceed 10 MB hard ceiling.                                                                                                                            |
+| `mcp_summary_max_keys`          | `50000` (min 1000) | Keys the `bucket_summary` walk may visit per call. Larger buckets get an honest partial summary (`complete: false`, per-prefix `coverage`, a `note` explaining what may under-report — see below). |
+| `mcp_summary_prefix_scan_pages` | `20`               | Pages (1000 entries each) `bucket_summary` may spend enumerating prefixes at a level before flagging `prefix_list_complete: false`.                                                                |
+| `mcp_list_page_size`            | `1000`             | Default page size for `list_files` when the agent omits `max_keys`.                                                                                                                                |
+| `mcp_list_max_page_size`        | `10000`            | Hard ceiling on the `max_keys` an agent may request via `list_files`; larger values are clamped, not rejected.                                                                                     |
 
 MCP tool calls are covered by Prometheus metrics (`as3m_mcp_tool_calls_total`,
 `as3m_mcp_tool_response_bytes`, etc.) — see [observability.md](observability.md).
