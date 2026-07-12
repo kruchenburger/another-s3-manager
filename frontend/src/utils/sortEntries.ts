@@ -21,9 +21,15 @@ export function nextSortForColumn(current: SortState, column: SortColumn): SortS
   return { column, direction: "asc" };
 }
 
-// Case-insensitive, accent-sensitive — mirrors the backend's Python
-// name.lower() sort so the client-side name order matches the S3-native
-// order the backend already returns.
+// Case-insensitive, locale-aware collation. Deliberately NOT identical to the
+// backend's ordinal Python `name.lower()` sort — Intl.Collator treats `-`,
+// `_` and space as variable/ignorable at "accent" strength, so plain-ASCII
+// names like "file-2" vs "file1" can sort in the OPPOSITE order from Python's
+// codepoint comparison. That's fine here: this function re-sorts the whole
+// merged multi-chunk array client-side, so the result is a single globally
+// consistent order across the list — whereas the backend sorts each chunk
+// independently, which can leave chunk 1's last item ordered after chunk 2's
+// first.
 //
 // Hoisted to module scope: constructing an Intl.Collator is relatively
 // expensive (it builds locale collation tables), so a single shared instance

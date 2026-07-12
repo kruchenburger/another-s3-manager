@@ -37,6 +37,9 @@ vi.mock("@/features/files/hooks/useFiles", () => ({
     truncated: false,
     loadMore: vi.fn(),
     loadAll: vi.fn(),
+    // FileBrowser's Finding-1 cleanup effect calls this on every unmount/route
+    // change; the mock must supply a callable or that effect throws.
+    stopLoadAll: vi.fn(),
     isFetching: false,
     isFetchingNextPage: false,
     error: null,

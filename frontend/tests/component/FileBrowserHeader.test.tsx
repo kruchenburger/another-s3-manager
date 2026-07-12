@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 import { FileBrowserHeader } from "@/components/FileBrowser/FileBrowserHeader";
+import { DEFAULT_SORT } from "@/utils/sortEntries";
 
 // Object-count rendering moved to BucketPageHeader (see its test file); this
 // suite covers the pure controls toolbar: filter, view toggle, Load, Upload.
@@ -29,6 +30,8 @@ function renderHeader(
           onLoadAll={vi.fn()}
           loadingAll={false}
           onStopLoadAll={vi.fn()}
+          sortState={DEFAULT_SORT}
+          onSortChange={vi.fn()}
           {...overrides}
         />
       </MemoryRouter>

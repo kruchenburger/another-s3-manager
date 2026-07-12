@@ -36,22 +36,44 @@ function renderHeader(
   );
 }
 
-describe("FileBrowserHeader — grid sort control", () => {
+describe("FileBrowserHeader — sort control", () => {
   it("renders the sort control in grid mode", () => {
     renderHeader({ mode: "grid" });
     expect(
       screen.getByRole("combobox", { name: "Sort by" }),
     ).toBeInTheDocument();
+    // Default sortState is {name, asc} — the toggle's accessible name is the
+    // ACTION a click performs (Finding 6), so while ascending it reads
+    // "Sort descending".
     expect(
-      screen.getByRole("button", { name: "Sort ascending" }),
+      screen.getByRole("button", { name: "Sort descending" }),
     ).toBeInTheDocument();
   });
 
-  it("hides the sort control in table mode (headers serve there)", () => {
+  it("in grid mode, renders the sort control WITHOUT the hidden-from-sm wrapper (always visible)", () => {
+    renderHeader({ mode: "grid" });
+    const combobox = screen.getByRole("combobox", { name: "Sort by" });
+    expect(combobox.closest('[class*="mantine-hidden-from-sm"]')).toBeNull();
+  });
+
+  // Finding 4: Size/Modified table headers hide below `sm`, which would
+  // otherwise leave Name as the only sortable column on a phone in the
+  // default (table) view. The control must still be IN THE DOM in table
+  // mode (queryBy* would wrongly report "absent" for a CSS-hidden element —
+  // Mantine's hiddenFrom hides via a class, jsdom keeps the node), just
+  // wrapped so it's only visible below `sm`.
+  it("in table mode, renders the sort control wrapped in Mantine's hidden-from-sm visibility class (present in DOM, hidden at/above sm)", () => {
     renderHeader({ mode: "table" });
-    expect(screen.queryByRole("combobox", { name: "Sort by" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Sort ascending" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Sort descending" })).toBeNull();
+    const combobox = screen.getByRole("combobox", { name: "Sort by" });
+    expect(combobox).toBeInTheDocument();
+    expect(
+      combobox.closest('[class*="mantine-hidden-from-sm"]'),
+    ).not.toBeNull();
+
+    const toggle = screen.getByRole("button", { name: "Sort descending" });
+    expect(
+      toggle.closest('[class*="mantine-hidden-from-sm"]'),
+    ).not.toBeNull();
   });
 
   it("selecting a NEW column requests it ascending", async () => {
@@ -91,8 +113,10 @@ describe("FileBrowserHeader — grid sort control", () => {
       sortState: { column: "modified", direction: "asc" },
       onSortChange,
     });
+    // Finding 6: accessible name is the ACTION, not the state — while
+    // ascending, the button reads "Sort descending".
     await userEvent.click(
-      screen.getByRole("button", { name: "Sort ascending" }),
+      screen.getByRole("button", { name: "Sort descending" }),
     );
     expect(onSortChange).toHaveBeenCalledWith({
       column: "modified",
@@ -106,8 +130,9 @@ describe("FileBrowserHeader — grid sort control", () => {
       sortState: { column: "modified", direction: "desc" },
       onSortChange,
     });
+    // Finding 6: while descending, the button reads "Sort ascending".
     await userEvent.click(
-      screen.getByRole("button", { name: "Sort descending" }),
+      screen.getByRole("button", { name: "Sort ascending" }),
     );
     expect(onSortChange).toHaveBeenCalledWith({
       column: "modified",
@@ -120,7 +145,8 @@ describe("FileBrowserHeader — grid sort control", () => {
     renderHeader({ mode: "grid", sortDisabled: true, onSortChange });
 
     const combobox = screen.getByRole("combobox", { name: "Sort by" });
-    const toggle = screen.getByRole("button", { name: "Sort ascending" });
+    // Default sortState is {name, asc} → toggle reads "Sort descending".
+    const toggle = screen.getByRole("button", { name: "Sort descending" });
     expect(combobox).toBeDisabled();
     expect(toggle).toBeDisabled();
 
@@ -139,7 +165,7 @@ describe("FileBrowserHeader — grid sort control", () => {
       screen.getByRole("combobox", { name: "Sort by" }),
     ).not.toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "Sort ascending" }),
+      screen.getByRole("button", { name: "Sort descending" }),
     ).not.toBeDisabled();
   });
 });

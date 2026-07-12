@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { filesQueryKey } from "@/features/files/hooks/useFiles";
 import { useShiftSelect } from "./useShiftSelect";
@@ -130,6 +130,23 @@ export function FileBrowser() {
   // the folder that is ACTUALLY current right now.
   const contextKeyRef = useRef(contextKey);
   contextKeyRef.current = contextKey;
+
+  // Abort a drain still running against the level we're leaving. fetchNextPage is
+  // bound to the query observer, whose options are re-set on every render — so a
+  // surviving loop would silently re-target the folder/search we just switched TO.
+  // FileBrowser never unmounts across folder navigation (only the route params
+  // change), so clientLoadInfinite's own unmount-only cancel can't catch this —
+  // this effect's cleanup fires on every contextKey/serverSearchActive change,
+  // which is exactly the moment a running drain must be stopped.
+  const stopFolderDrain = folder.stopLoadAll;
+  const stopSearchDrain = search.stopLoadAll;
+  useEffect(
+    () => () => {
+      stopFolderDrain();
+      stopSearchDrain();
+    },
+    [contextKey, serverSearchActive, stopFolderDrain, stopSearchDrain],
+  );
 
   // All loaded items, directories first (vanilla parity). Single source of
   // truth for filtering and every .find(name === ...) lookup below.

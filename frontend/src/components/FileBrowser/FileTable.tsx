@@ -3,11 +3,7 @@ import { Box, Checkbox, Table, UnstyledButton } from "@mantine/core";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { FileEntry } from "@/types/api";
-import {
-  DEFAULT_SORT,
-  type SortColumn,
-  type SortState,
-} from "@/utils/sortEntries";
+import { type SortColumn, type SortState } from "@/utils/sortEntries";
 import { FileRow } from "./FileRow";
 import { useNearEndAutoLoad } from "./useNearEndAutoLoad";
 import classes from "./FileBrowser.module.css";
@@ -33,13 +29,11 @@ interface FileTableProps {
   autoLoadEnabled: boolean;
   /** Fetch the next server chunk. */
   onLoadMore: () => void;
-  /** Active sort rendered in the headers (chevron + aria-sort). Optional with
-   *  a name-asc default ONLY so pre-wiring commits typecheck; FileBrowser
-   *  always passes it. */
-  sortState?: SortState;
+  /** Active sort rendered in the headers (chevron + aria-sort). */
+  sortState: SortState;
   /** Header click → request a sort on that column. FileBrowser derives the
    *  next SortState (flip/switch) and applies the truncated-level gate. */
-  onSortColumn?: (column: SortColumn) => void;
+  onSortColumn: (column: SortColumn) => void;
   /** True while a fetch/drain is in flight — disables the sort header buttons
    *  so a click can't be silently swallowed by the truncated-level gate (a
    *  drain that can't start because a fetch is already running resolves
@@ -110,7 +104,7 @@ export function FileTable({
   scrollRef,
   autoLoadEnabled,
   onLoadMore,
-  sortState = DEFAULT_SORT,
+  sortState,
   onSortColumn,
   sortDisabled = false,
 }: FileTableProps) {

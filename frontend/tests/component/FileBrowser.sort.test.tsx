@@ -26,6 +26,7 @@ vi.mock("@tanstack/react-virtual", () => ({
 
 const loadMoreMock = vi.fn();
 const loadAllMock = vi.fn();
+const stopLoadAllMock = vi.fn();
 let mockTruncated = false;
 // true = the drain fully completes; false = the user cancelled mid-drain.
 let mockLoadAllCompletes = true;
@@ -60,6 +61,10 @@ vi.mock("@/features/files/hooks/useFiles", () => ({
       if (mockLoadAllCompletes) mockTruncated = false;
       return Promise.resolve(mockLoadAllCompletes);
     },
+    // Finding 1 spy: FileBrowser must abort any drain still running against
+    // the folder it's leaving on navigation (contextKey change) — see the
+    // "stops a running drain" test below.
+    stopLoadAll: stopLoadAllMock,
     isFetching: false,
     isFetchingNextPage: false,
     isFetchNextPageError: false,
@@ -140,6 +145,7 @@ describe("FileBrowser sorting — truncated-level gate", () => {
   beforeEach(() => {
     loadMoreMock.mockReset();
     loadAllMock.mockReset();
+    stopLoadAllMock.mockReset();
     mockTruncated = false;
     mockLoadAllCompletes = true;
     window.localStorage.clear(); // useDisplayMode persists table/grid per bucket
@@ -253,14 +259,15 @@ describe("FileBrowser sorting — truncated-level gate", () => {
     expect(loadAllMock).not.toHaveBeenCalled();
 
     // Positive control — the Select alone can't prove the header→requestSort
-    // wire is live: FileBrowserHeader's sortState/onSortChange props are both
-    // OPTIONAL, so even if FileBrowser never passed `onSortChange={requestSort}`
-    // at all, selecting "Name" above would still no-op silently and the
-    // assertion above would still pass. Click the direction toggle — that
+    // wire is live: a no-op onSortChange would make "selecting 'Name' above"
+    // look identical (nothing reorders, loadAll never called) to a correctly
+    // gated same-default selection. Click the direction toggle — that
     // requests {name, desc}, which IS non-default on a still-truncated level —
     // and confirm it DOES drain. This proves the wire is actually connected,
     // not just that a same-default selection correctly avoided draining.
-    fireEvent.click(screen.getByRole("button", { name: "Sort ascending" }));
+    // Current sortState is still the default {name, asc}, so per Finding 6
+    // the toggle's accessible name is the ACTION it performs: "Sort descending".
+    fireEvent.click(screen.getByRole("button", { name: "Sort descending" }));
     expect(loadAllMock).toHaveBeenCalledTimes(1);
 
     // Flush the resolved-drain promise chain so requestSort's pending
@@ -273,17 +280,82 @@ describe("FileBrowser sorting — truncated-level gate", () => {
     // REFLECTION check (not just RECEIVES-a-click) — the drain above
     // completed (mockLoadAllCompletes defaults true) and applied {name, desc}
     // via setSortPreference, so the direction is now genuinely desc. The
-    // toggle button's accessible name is state-driven ("Sort ascending" while
-    // asc, "Sort descending" while desc — see FileBrowserHeader), so this
-    // only passes if FileBrowserHeader actually renders the LIVE
-    // effectiveSort it was just handed, not a stale/default one. If
-    // FileBrowser dropped `sortState={effectiveSort}` on the
-    // FileBrowserHeader call site, the optional prop's own DEFAULT_SORT
-    // fallback (name, asc) would keep this button labelled "Sort ascending"
-    // forever regardless of what requestSort resolved to — this assertion
-    // is what catches that silently-disconnected wire.
+    // toggle's accessible name is the ACTION a click performs, not the
+    // current state (Finding 6) — now that the sort is genuinely descending,
+    // clicking again would sort ascending, so the button reads
+    // "Sort ascending". This only passes if FileBrowserHeader actually
+    // renders the LIVE effectiveSort it was just handed, not a stale one —
+    // this assertion is what catches a silently-disconnected wire (e.g. the
+    // gate's `completed` check dropped, or `sortState={effectiveSort}`
+    // removed from the FileBrowserHeader call site).
     expect(
-      screen.getByRole("button", { name: "Sort descending" }),
+      screen.getByRole("button", { name: "Sort ascending" }),
     ).toBeInTheDocument();
+  });
+
+  // Finding 1: FileBrowser never unmounts across folder navigation (only the
+  // route params change), so a drain running against the folder being LEFT
+  // must be aborted explicitly — clientLoadInfinite's own unmount-only cancel
+  // can't catch this, and fetchNextPage is bound to the query observer whose
+  // options are re-set on every render, so a surviving loop would silently
+  // re-target the folder the user just navigated TO.
+  it("stops a running drain when the user navigates to a different folder", async () => {
+    mockTruncated = false;
+    renderBrowser();
+
+    expect(stopLoadAllMock).not.toHaveBeenCalled();
+
+    // Navigate by clicking the directory row — pathFromUrl changes but
+    // FileBrowser stays mounted (react-router matches the same Route
+    // element for both URLs), exactly the scenario Finding 1 covers.
+    fireEvent.click(screen.getByText("zzz-folder"));
+
+    await waitFor(() => {
+      expect(stopLoadAllMock).toHaveBeenCalled();
+    });
+  });
+
+  // Finding 2: nothing else in this suite ever renders truncated===true with
+  // a non-default sortPreference AT THE SAME TIME as a completed drain — the
+  // mock flips mockTruncated=false on every completed loadAll, so the one
+  // state effectiveSort exists for was never actually exercised. Without this
+  // test, `effectiveSort` could be replaced by `sortPreference` at all four
+  // FileBrowser call sites and the rest of the suite would still pass.
+  it("honesty guard: rows AND controls fall back to the default sort when the level is truncated again after a custom sort was applied", async () => {
+    mockTruncated = false;
+    const { container, rerenderTree } = renderBrowser();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort by size" }));
+    await waitFor(() => {
+      const rows = rowTexts(container);
+      expect(rowIndex(rows, "gamma.txt")).toBeLessThan(rowIndex(rows, "alpha.txt"));
+    });
+
+    // The level becomes truncated again (e.g. a later partial load) while
+    // sortPreference still holds the custom {size, asc} chosen above — this
+    // is the exact state the honesty guard exists for: truncated===true with
+    // a non-default sortPreference. rerenderTree keeps FileBrowser mounted so
+    // sortPreference survives, matching what a real re-render would do.
+    mockTruncated = true;
+    act(() => {
+      rerenderTree();
+    });
+
+    // ROWS: back to name-ascending — the guard suppressed the now-unsafe
+    // size sort rather than ordering a partially-loaded level by it.
+    const rows = rowTexts(container);
+    expect(rowIndex(rows, "alpha.txt")).toBeLessThan(rowIndex(rows, "gamma.txt"));
+
+    // CONTROLS: agree with the rows — the honesty guard feeds the SAME
+    // effectiveSort to both, so the headers can never advertise a sort the
+    // rows don't actually have.
+    const nameHeader = screen
+      .getByRole("button", { name: "Sort by name" })
+      .closest("th");
+    const sizeHeader = screen
+      .getByRole("button", { name: "Sort by size" })
+      .closest("th");
+    expect(nameHeader).toHaveAttribute("aria-sort", "ascending");
+    expect(sizeHeader).toHaveAttribute("aria-sort", "none");
   });
 });
