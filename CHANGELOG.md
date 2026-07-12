@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The interface now says "Sign in" / "Sign out" everywhere instead of "Login" /
+  "Logout", and the surrounding copy follows the same vocabulary — the sign-in
+  page, the user menu, the bans list, password reset, and the MCP tokens page.
+  URLs and API endpoints are unchanged.
+
 ### Added
 
 - Sortable file-browser columns (Name / Size / Modified, asc/desc); on huge
