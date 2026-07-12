@@ -152,3 +152,30 @@ async def test_mcp_auth_failure_increments_counter(alice_with_token):
 
     assert exc_info.value.code == "INVALID_TOKEN"
     assert _counter_value("malformed") >= before + 1
+
+
+# ---------------------------------------------------------------------------
+# Test 4: server-level instructions (2026-07-12 big-bucket ergonomics design)
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_server_declares_instructions():
+    """The FastMCP instance must carry server-level orientation for agents:
+    the explore order (list_roles → list_buckets → bucket_summary), the
+    list_files pagination contract, and — the sentence that closes the
+    recorded incident's dead end — that the REST API is cookie-authenticated
+    and NOT usable with the MCP Bearer token."""
+    from another_s3_manager.mcp_server import mcp
+
+    text = mcp.instructions or ""
+    # Explore order
+    assert "list_roles" in text
+    assert "list_buckets" in text
+    assert "bucket_summary" in text
+    # list_files pagination contract
+    assert "next_continuation_token" in text
+    # The REST dead-end closer
+    assert "session cookie" in text
+    assert "Bearer" in text
+    assert "/mcp" in text
+    assert "/api/" in text

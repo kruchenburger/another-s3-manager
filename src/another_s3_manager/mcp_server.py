@@ -401,10 +401,32 @@ def _is_likely_text_sample(sample: bytes) -> bool:
 #     "Use this in the lifespan context manager of your Starlette app"
 # ---------------------------------------------------------------------------
 
+# Server-level orientation delivered once per connection via
+# initialize.instructions. Single server-level string by design: a per-role
+# variant was evaluated and rejected (MCP delivers instructions once per
+# connection, so a multi-role user would only ever see one role's prompt).
+MCP_SERVER_INSTRUCTIONS = """\
+another-s3-manager: manage files in S3 and S3-compatible buckets.
+
+Getting oriented: call list_roles first, then list_buckets(role), then
+bucket_summary(role, bucket) to learn what a bucket contains — object counts,
+sizes, per-prefix breakdown, extension histogram — in one compact call. Drill
+into a subtree with bucket_summary(role, bucket, path="some/prefix/"). Only
+then use list_files for actual keys and read_file for file contents.
+
+list_files returns actual keys and can be large: recursive mode returns up to
+max_keys keys per page; when is_truncated is true, pass
+next_continuation_token back to fetch the next page.
+
+The application's REST API is NOT available to MCP clients: /api/... routes
+authenticate with a browser session cookie, and Bearer tokens work only on
+/mcp. Do not attempt REST calls with the MCP token.
+"""
+
 # streamable_http_path="/" so that mounting on FastAPI as app.mount("/mcp", …)
 # produces the canonical /mcp endpoint instead of the awkward /mcp/mcp.
 # (FastMCP's default streamable_http_path is "/mcp", which double-prefixes.)
-mcp = FastMCP("another-s3-manager", streamable_http_path="/")
+mcp = FastMCP("another-s3-manager", instructions=MCP_SERVER_INSTRUCTIONS, streamable_http_path="/")
 
 
 def _observe_response_size(tool: str, token: Any, payload: dict) -> dict:
