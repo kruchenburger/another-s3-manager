@@ -534,12 +534,37 @@ describe("SettingsPage", () => {
         screen.getByLabelText(/summary scan cap/i, { selector: "input" }),
       ).toBeInTheDocument(),
     );
-    // Edit one of the four to dirty the form; the rest ride along via the
-    // toWritableConfig allowlist + form plumbing.
+    // Dirty ALL FOUR fields with values distinct from the baseline
+    // (50000/20/1000/10000) so this is a real end-to-end wiring test for
+    // types -> form values -> populate -> onSubmit, not just a check that
+    // untouched values round-trip (which would pass even if the wiring were
+    // broken, since they'd equal the baseline either way).
     fireEvent.change(
       screen.getByLabelText(/summary scan cap/i, { selector: "input" }),
       {
         target: { value: "20000" },
+      },
+    );
+    fireEvent.change(
+      screen.getByLabelText(/summary prefix-scan pages/i, {
+        selector: "input",
+      }),
+      {
+        target: { value: "15" },
+      },
+    );
+    fireEvent.change(
+      screen.getByLabelText(/default list page size/i, {
+        selector: "input",
+      }),
+      {
+        target: { value: "750" },
+      },
+    );
+    fireEvent.change(
+      screen.getByLabelText(/max list page size/i, { selector: "input" }),
+      {
+        target: { value: "8000" },
       },
     );
     clickSaveSettings();
@@ -547,9 +572,9 @@ describe("SettingsPage", () => {
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock.calls[0]![0];
     expect(submitted.mcp_summary_max_keys).toBe(20000); // plain count — NOT bytes/MB
-    expect(submitted.mcp_summary_prefix_scan_pages).toBe(20);
-    expect(submitted.mcp_list_page_size).toBe(1000);
-    expect(submitted.mcp_list_max_page_size).toBe(10000);
+    expect(submitted.mcp_summary_prefix_scan_pages).toBe(15);
+    expect(submitted.mcp_list_page_size).toBe(750);
+    expect(submitted.mcp_list_max_page_size).toBe(8000);
   });
 
   it("disables the four big-bucket inputs in read-only mode", async () => {
