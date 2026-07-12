@@ -4,6 +4,18 @@ import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 import { UploadSplitButton } from "@/components/FileBrowser/UploadSplitButton";
 
+// This file's Menu-item lookups previously raced the 5000ms vitest default
+// test timeout with an internal findByRole wait ALSO set to 5000ms — under
+// full-suite parallel worker contention (many jsdom + React instances
+// competing for CPU), the Mantine Menu's portal + transition can take longer
+// than usual to actually mount the item, and the outer test timeout has zero
+// headroom over the inner wait to absorb that. Raising the file's test
+// timeout (not weakening any assertion — the item still must actually
+// appear, and userEvent still drives real interactions) gives the
+// findByRole waits below room to succeed under contention instead of
+// racing a budget they were already colliding with.
+vi.setConfig({ testTimeout: 15000 });
+
 function renderBtn(
   props: Partial<React.ComponentProps<typeof UploadSplitButton>> = {},
 ) {
@@ -39,7 +51,7 @@ describe("UploadSplitButton", () => {
       await screen.findByRole(
         "menuitem",
         { name: /upload folder/i },
-        { timeout: 5000 },
+        { timeout: 10000 },
       ),
     );
     expect(onUploadFolder).toHaveBeenCalledTimes(1);
@@ -55,7 +67,7 @@ describe("UploadSplitButton", () => {
       await screen.findByRole(
         "menuitem",
         { name: /upload files/i },
-        { timeout: 5000 },
+        { timeout: 10000 },
       ),
     );
     expect(onUploadFiles).toHaveBeenCalledTimes(1);

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Sortable file-browser columns (Name / Size / Modified, asc/desc); on huge
+  folders a size/date sort loads the whole level first so the order is exact.
+  Since that load can be thousands of S3 requests on a very large folder, the
+  UI now asks for confirmation before it starts — a header click alone never
+  triggers it.
+
+### Fixed
+
+- The object counter in the file browser header could show a wildly wrong,
+  deeply negative number (e.g. `-871665980+ objects`) while "Load all" was
+  draining a large folder. The count-up animation restarts on every batch of
+  objects that arrives, and a small timing quirk in how animation frames are
+  clamped let each restart overshoot slightly; on a big folder those
+  overshoots compounded across thousands of restarts into a nonsensical
+  value. The counter now animates within a mathematically guaranteed range,
+  so it always converges to the correct total.
+
 ## [1.1.0] - 2026-07-11
 
 ### Security

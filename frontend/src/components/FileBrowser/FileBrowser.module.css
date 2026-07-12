@@ -188,3 +188,34 @@
   overflow-x: hidden;
   position: relative;
 }
+
+/* Clickable sort header (Name/Size/Modified). Inherits the th typography so
+   the header looks identical to before; the hover tint + cursor signal
+   interactivity without button chrome. */
+.sortHeader {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-weight: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* :not(:disabled) scope is required: UnstyledButton applies no disabled
+   styling of its own, so without this scope the hover tint would still
+   fire (and the rule below would be fighting itself) while a fetch/drain
+   is in flight — the exact "click vanishes with no feedback" symptom the
+   sortDisabled prop exists to prevent, just relocated into CSS. */
+.sortHeader:not(:disabled):hover {
+  color: var(--mantine-color-bright);
+}
+
+/* Busy state (sortDisabled): default cursor + dimmed text signal the
+   control is temporarily unavailable, not just unstyled. Reduced opacity
+   is safe against the axe-core contrast gate — disabled controls are
+   exempt from contrast requirements. */
+.sortHeader:disabled {
+  cursor: default;
+  opacity: 0.55;
+}

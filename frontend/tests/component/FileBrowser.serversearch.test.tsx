@@ -40,6 +40,9 @@ vi.mock("@/features/files/hooks/useFiles", () => ({
     truncated: mockTruncated,
     loadMore: () => Promise.resolve(),
     loadAll: () => Promise.resolve(),
+    // FileBrowser's Finding-1 cleanup effect calls this on every unmount/route
+    // change; the mock must supply a callable or that effect throws.
+    stopLoadAll: vi.fn(),
     isFetching: false,
     isFetchingNextPage: false,
     isFetchNextPageError: false,
@@ -68,6 +71,9 @@ vi.mock("@/features/files/hooks/useFileSearch", () => ({
     truncated: mockSearchTruncated,
     loadMore: () => Promise.resolve(),
     loadAll: () => Promise.resolve(),
+    // FileBrowser's Finding-1 cleanup effect calls this on every unmount/route
+    // change; the mock must supply a callable or that effect throws.
+    stopLoadAll: vi.fn(),
     isFetching: false,
     isFetchingNextPage: false,
     isFetchNextPageError: false,

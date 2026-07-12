@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UseInfiniteQueryResult, InfiniteData } from "@tanstack/react-query";
 import type { ClientLoadPage } from "@/types/api";
 
@@ -18,14 +18,21 @@ import type { ClientLoadPage } from "@/types/api";
 export function useClientLoadDerived(
   query: UseInfiniteQueryResult<InfiniteData<ClientLoadPage>, Error>,
 ) {
-  const pages = query.data?.pages ?? [];
-  const seenDir = new Set<string>();
-  const directories = pages
-    .flatMap((p) => p.directories)
-    .filter((d) => (seenDir.has(d.name) ? false : (seenDir.add(d.name), true)));
-  const files = pages.flatMap((p) => p.files);
-  const lastPage = pages[pages.length - 1];
-  const truncated = lastPage ? lastPage.truncated : false;
+  // Memoized on query.data: TanStack Query's structural sharing keeps `data`
+  // referentially stable across re-renders that don't change the underlying
+  // pages (search keystrokes, selection toggles), so this flatMap/dedupe only
+  // re-runs when pages actually change — not on every render of the caller.
+  const { directories, files, truncated } = useMemo(() => {
+    const pages = query.data?.pages ?? [];
+    const seenDir = new Set<string>();
+    const directories = pages
+      .flatMap((p) => p.directories)
+      .filter((d) => (seenDir.has(d.name) ? false : (seenDir.add(d.name), true)));
+    const files = pages.flatMap((p) => p.files);
+    const lastPage = pages[pages.length - 1];
+    const truncated = lastPage ? lastPage.truncated : false;
+    return { directories, files, truncated };
+  }, [query.data]);
 
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = query;
 
@@ -48,8 +55,17 @@ export function useClientLoadDerived(
     if (res.isError) throw res.error ?? new Error("Failed to load more files");
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
-  const loadAll = useCallback(async () => {
-    if (!hasNextPage || isFetchingNextPage) return;
+  // Resolves true when the level ended FULLY drained (including "was already
+  // fully loaded"), false when the drain stopped early (Stop button/unmount).
+  // Existing callers ignore the return value; the sort gate (FileBrowser)
+  // applies a pending sort only on true.
+  const loadAll = useCallback(async (): Promise<boolean> => {
+    // Nothing left to fetch — the level is already fully drained.
+    if (!hasNextPage) return true;
+    // A fetch (e.g. a lazy-scroll auto-load) is already in flight: we cannot
+    // start a drain now, and pages remain — so the level is NOT drained.
+    // Reporting `true` here would let a caller sort a half-loaded level.
+    if (isFetchingNextPage) return false;
     cancelRef.current = false;
     setLoadingAll(true);
     try {
@@ -61,6 +77,9 @@ export function useClientLoadDerived(
         res = await fetchNextPage();
         if (res.isError) throw res.error ?? new Error("Failed to load files");
       }
+      // hasNextPage still true here means the loop exited on cancellation —
+      // the level is NOT fully drained.
+      return !res.hasNextPage;
     } finally {
       setLoadingAll(false);
     }

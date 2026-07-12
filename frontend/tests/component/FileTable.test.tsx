@@ -33,6 +33,7 @@ vi.mock("@/hooks/useConfig", () => ({
 }));
 
 import { FileTable } from "@/components/FileBrowser/FileTable";
+import { DEFAULT_SORT } from "@/utils/sortEntries";
 
 const files: FileEntry[] = Array.from({ length: 10 }, (_, i) => ({
   name: `f${i}.txt`,
@@ -63,6 +64,8 @@ function Harness(props: Partial<React.ComponentProps<typeof FileTable>> = {}) {
             scrollRef={ref}
             autoLoadEnabled={false}
             onLoadMore={onLoadMore}
+            sortState={DEFAULT_SORT}
+            onSortColumn={() => {}}
             {...props}
           />
         </div>

@@ -3,15 +3,23 @@ import {
   Box,
   CloseButton,
   Group,
+  Select,
   TextInput,
   Tooltip,
 } from "@mantine/core";
-import { LayoutGrid, List as ListIcon, Search } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  LayoutGrid,
+  List as ListIcon,
+  Search,
+} from "lucide-react";
 import { useState } from "react";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import { UploadSplitButton } from "./UploadSplitButton";
 import { LoadSplitButton } from "./LoadSplitButton";
 import type { DisplayMode } from "@/hooks/useDisplayMode";
+import { type SortColumn, type SortState } from "@/utils/sortEntries";
 
 interface FileBrowserHeaderProps {
   bucket: string;
@@ -37,6 +45,27 @@ interface FileBrowserHeaderProps {
   loadingAll: boolean;
   /** Halt an in-progress "Load all". */
   onStopLoadAll: () => void;
+  /** Active sort — shared with the table headers so table↔grid keeps the
+   *  sort. */
+  sortState: SortState;
+  /** Request a sort change; FileBrowser applies the truncated-level gate. */
+  onSortChange: (next: SortState) => void;
+  /** True while a fetch/drain is in flight — disables the sort Select and
+   *  direction toggle so a click can't be silently swallowed by the
+   *  truncated-level gate (a drain that can't start because a fetch is
+   *  already running resolves `false` with no visible feedback). Optional,
+   *  defaults to false. */
+  sortDisabled?: boolean;
+}
+
+const SORT_OPTIONS: { value: SortColumn; label: string }[] = [
+  { value: "name", label: "Name" },
+  { value: "size", label: "Size" },
+  { value: "modified", label: "Modified" },
+];
+
+function isSortColumn(v: string | null): v is SortColumn {
+  return v === "name" || v === "size" || v === "modified";
 }
 
 export function FileBrowserHeader({
@@ -55,6 +84,9 @@ export function FileBrowserHeader({
   onLoadAll,
   loadingAll,
   onStopLoadAll,
+  sortState,
+  onSortChange,
+  sortDisabled = false,
 }: FileBrowserHeaderProps) {
   // Mobile-only: the filter collapses to a search icon so filter + view
   // toggle + Upload share one row on any phone (a fixed-width input didn't
@@ -85,6 +117,73 @@ export function FileBrowserHeader({
         ) : undefined
       }
     />
+  );
+
+  // Sort column select + direction toggle. Extracted so it can be rendered
+  // either bare (grid mode, always visible) or wrapped in a responsive
+  // visibility group (table mode, visible only below `sm` — see the render
+  // call site for why).
+  const sortControls = (
+    <Group gap={2}>
+      <Select
+        size="sm"
+        w={120}
+        data={SORT_OPTIONS}
+        value={sortState.column}
+        allowDeselect={false}
+        aria-label="Sort by"
+        disabled={sortDisabled}
+        // onOptionSubmit (not onChange) — Mantine's Select only calls
+        // onChange when the submitted value differs from the current
+        // one, so re-selecting the already-active column would never
+        // fire. onOptionSubmit fires on every click/Enter regardless,
+        // which is what "re-selecting the current column" needs.
+        onOptionSubmit={(value) => {
+          if (!isSortColumn(value)) return;
+          onSortChange({
+            column: value,
+            direction:
+              sortState.column === value ? sortState.direction : "asc",
+          });
+        }}
+      />
+      <Tooltip
+        label={
+          sortState.direction === "asc"
+            ? "Ascending — click for descending"
+            : "Descending — click for ascending"
+        }
+      >
+        <ActionIcon
+          variant="subtle"
+          color="gray"
+          size="lg"
+          // Name the ACTION the click performs, not the current state
+          // (Finding 6): while ascending, clicking sorts descending, so
+          // the button reads "Sort descending" — and vice versa. The
+          // table headers already do this correctly via the invariant
+          // "Sort by <column>" name + aria-sort on the <th>; this control
+          // has no separate state indicator, so the label itself must
+          // carry the action.
+          aria-label={
+            sortState.direction === "asc" ? "Sort descending" : "Sort ascending"
+          }
+          disabled={sortDisabled}
+          onClick={() =>
+            onSortChange({
+              ...sortState,
+              direction: sortState.direction === "asc" ? "desc" : "asc",
+            })
+          }
+        >
+          {sortState.direction === "asc" ? (
+            <ChevronUp size={16} />
+          ) : (
+            <ChevronDown size={16} />
+          )}
+        </ActionIcon>
+      </Tooltip>
+    </Group>
   );
 
   // Breadcrumbs anchor the row's left side — without them the controls-only
@@ -139,6 +238,15 @@ export function FileBrowserHeader({
             </ActionIcon>
           </Tooltip>
         </Group>
+        {/* Grid has no column headers, so this is the primary sort affordance
+            there — always visible in grid mode. In table mode the clickable
+            column headers serve the same purpose ABOVE the `sm` breakpoint,
+            but Size/Modified headers hide below `sm` (see FileTable), which
+            would otherwise leave Name as the only sortable column on a phone.
+            So table mode renders the same control too, restricted to below
+            `sm` via Mantine's hiddenFrom — never both at once. Both views
+            share one SortState, so switching table↔grid keeps the sort. */}
+        {mode === "grid" ? sortControls : <Group hiddenFrom="sm" gap={2}>{sortControls}</Group>}
         {(truncated || loadingAll) && (
           <LoadSplitButton
             onLoadMore={onLoadMore}

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { filesQueryKey } from "@/features/files/hooks/useFiles";
 import { useShiftSelect } from "./useShiftSelect";
@@ -28,6 +28,13 @@ import { formatBytes } from "@/utils/formatBytes";
 import { formatTimeOfDay } from "@/utils/formatDate";
 import { formatDuration } from "@/utils/formatDuration";
 import { showToast, TOAST_DURATIONS } from "@/utils/toast";
+import {
+  DEFAULT_SORT,
+  isDefaultSort,
+  nextSortForColumn,
+  sortEntries,
+  type SortState,
+} from "@/utils/sortEntries";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { PreviewModal } from "@/components/Preview/PreviewModal";
 import { UploadDropZone } from "@/components/Upload/UploadDropZone";
@@ -51,6 +58,7 @@ import { FileTable } from "./FileTable";
 import { FileGrid } from "./FileGrid";
 import { FileBrowserEmptyState } from "./FileBrowserEmptyState";
 import { FileBrowserLoadMoreFooter } from "./FileBrowserLoadMoreFooter";
+import { SortLoadAllModal } from "./SortLoadAllModal";
 import { BulkDeleteProgress } from "@/components/FileBrowser/BulkDeleteProgress";
 import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
 import { ScrollToTopButton } from "@/components/ScrollToTopButton/ScrollToTopButton";
@@ -71,6 +79,15 @@ export function FileBrowser() {
   const [serverSearchTerm, setServerSearchTerm] = useState<string | null>(null);
   const serverSearchActive = serverSearchTerm !== null;
   const [searchQuery, setSearchQuery] = useState("");
+  // Session-only sort preference. Deliberately NOT reset in the contextKey
+  // block below (unlike searchQuery/serverSearchTerm): the user keeps their
+  // chosen sort while navigating folders; it resets on page reload — no
+  // localStorage by design.
+  const [sortPreference, setSortPreference] = useState<SortState>(DEFAULT_SORT);
+  // The sort the user just requested via a column header / grid Select while
+  // it's still awaiting confirmation (see requestSort below). Non-null opens
+  // SortLoadAllModal; the drain itself only starts once the user confirms.
+  const [pendingSort, setPendingSort] = useState<SortState | null>(null);
   // Optimistic header-counter offset during a bulk delete (batched every 50
   // successes; reset after the post-batch refetch lands).
   const [bulkDeletedCount, setBulkDeletedCount] = useState(0);
@@ -103,13 +120,77 @@ export function FileBrowser() {
     setPrevContextKey(contextKey);
     setServerSearchTerm(null);
     setSearchQuery("");
+    // A pending sort-confirmation belongs to the folder it was asked about —
+    // it must not survive into a different one (e.g. the user navigates away
+    // while the modal is still open).
+    setPendingSort(null);
   }
 
-  // All loaded items, directories first (vanilla parity). Single source of
-  // truth for filtering and every .find(name === ...) lookup below.
+  // Latest contextKey, tracked in a ref and written unconditionally on every
+  // render — NOT the same pattern as `prevContextKey` above, which is a
+  // useState render-time state adjustment. This is a plain ref write: the
+  // gate's `.then()` (in requestSort, below) must compare the drain's origin
+  // folder against the LIVE current folder at resolution time. A
+  // closure-captured `contextKey` can't do that — the `.then()` closes over
+  // whatever value was current when that requestSort call was created, so
+  // comparing against it would always compare a value to itself (a
+  // tautology) and could never detect that the user navigated away mid-drain.
+  // Only a ref, re-read at resolution time, gives the `.then()` a channel to
+  // the folder that is ACTUALLY current right now.
+  const contextKeyRef = useRef(contextKey);
+  contextKeyRef.current = contextKey;
+
+  // Abort a drain still running against the level we're leaving. fetchNextPage is
+  // bound to the query observer, whose options are re-set on every render — so a
+  // surviving loop would silently re-target the folder/search we just switched TO.
+  // FileBrowser never unmounts across folder navigation (only the route params
+  // change), so clientLoadInfinite's own unmount-only cancel can't catch this —
+  // this effect's cleanup fires on every contextKey/serverSearchActive change,
+  // which is exactly the moment a running drain must be stopped.
+  const stopFolderDrain = folder.stopLoadAll;
+  const stopSearchDrain = search.stopLoadAll;
+  useEffect(
+    () => () => {
+      stopFolderDrain();
+      stopSearchDrain();
+    },
+    [contextKey, serverSearchActive, stopFolderDrain, stopSearchDrain],
+  );
+
+  // Unsorted concatenation of the currently loaded directories + files, in
+  // arrival/S3 order. Source for every .find(name === ...) lookup below
+  // (preview, bulk delete) and the object count. Also what `sortedItems`
+  // below returns under the default sort — see the comment there.
   const items = useMemo(
     () => [...directories, ...files],
     [directories, files],
+  );
+
+  // Honesty guard: a persisted custom sort must never order a partially-loaded
+  // (truncated) level — fall back to the native S3 name-asc order until the
+  // level is fully drained. Controls AND rows both render effectiveSort, so
+  // what the headers show is always what the rows do.
+  const effectiveSort = useMemo(
+    () =>
+      truncated && !isDefaultSort(sortPreference) ? DEFAULT_SORT : sortPreference,
+    [truncated, sortPreference],
+  );
+
+  // While a level is truncated the honesty guard pins effectiveSort to the
+  // default, so the default path is also the one every arriving chunk takes.
+  // Re-sorting the merged array there would (a) redo an O(n log n) collated sort
+  // on every chunk of a drain, and (b) INTERLEAVE the new chunk among rows already
+  // on screen — the collator's order diverges from the byte order S3 paginates in,
+  // so rows would shift under the user mid-scroll. The plain concatenation is what
+  // the browser displayed before sorting existed. The collator only runs for an
+  // explicitly requested sort, which the guard guarantees can only happen on a
+  // fully-drained level (no more chunks, so no shifting).
+  const sortedItems = useMemo(
+    () =>
+      isDefaultSort(effectiveSort)
+        ? items
+        : sortEntries(directories, files, effectiveSort),
+    [items, directories, files, effectiveSort],
   );
 
   const queryClient = useQueryClient();
@@ -141,11 +222,11 @@ export function FileBrowser() {
   const [debouncedQuery] = useDebouncedValue(searchQuery, 200);
 
   const filteredItems = useMemo(() => {
-    if (serverSearchActive) return items;
-    if (!debouncedQuery) return items;
+    if (serverSearchActive) return sortedItems;
+    if (!debouncedQuery) return sortedItems;
     const q = debouncedQuery.toLowerCase();
-    return items.filter((f) => f.name.toLowerCase().includes(q));
-  }, [items, debouncedQuery, serverSearchActive]);
+    return sortedItems.filter((f) => f.name.toLowerCase().includes(q));
+  }, [sortedItems, debouncedQuery, serverSearchActive]);
 
   const navigateToFolder = (folderName: string) => {
     clearSelection();
@@ -497,6 +578,68 @@ export function FileBrowser() {
     );
   }, [loadMore]);
 
+  // Every sort request funnels through the truncated-level gate: a non-default
+  // sort on a truncated level requires user confirmation (SortLoadAllModal)
+  // before it drains the WHOLE level (the existing "Load all" with its
+  // progress + Stop), and applies ONLY if the drain fully completed —
+  // cancelling keeps the current order. "Biggest file" must mean biggest in
+  // the whole folder, never in the loaded slice. The default {name, asc} is
+  // the native S3 key order and needs no drain, so it skips confirmation too.
+  //
+  // A header click alone must NEVER start the drain — on a folder with
+  // hundreds of thousands of objects it's thousands of S3 LIST requests and
+  // can take minutes. `setPendingSort` only opens the modal; the drain itself
+  // is deferred to `confirmPendingSort`, run solely on explicit user consent.
+  const requestSort = useCallback(
+    (next: SortState) => {
+      if (isDefaultSort(next) || !truncated) {
+        setSortPreference(next);
+        return;
+      }
+      setPendingSort(next);
+    },
+    [truncated],
+  );
+
+  // Runs the drain the user just confirmed in SortLoadAllModal. This is the
+  // exact drain logic requestSort used to run unconditionally — moved here
+  // unchanged so the epoch guard and the `completed` check stay load-bearing.
+  const confirmPendingSort = useCallback(() => {
+    const next = pendingSort;
+    setPendingSort(null);
+    if (!next) return;
+    // Capture the folder we're draining for. FileBrowser stays mounted
+    // across folder navigation (only the route params change), so a drain
+    // started here can resolve after the user has already moved to a
+    // different folder — applying it then would clobber whatever sort
+    // they picked in the meantime. Bail out if the context moved on
+    // (compare against the ref, which always holds the latest render's
+    // contextKey — the plain `contextKey` variable is frozen at the value
+    // from when this callback was created).
+    const drainContextKey = contextKey;
+    loadAll()
+      .then((completed) => {
+        if (completed && drainContextKey === contextKeyRef.current) {
+          setSortPreference(next);
+        }
+      })
+      .catch((e) =>
+        showToast({
+          color: "red",
+          title: "Couldn't load all files",
+          message: getErrorMessage(e),
+          autoClose: TOAST_DURATIONS.error,
+        }),
+      );
+  }, [pendingSort, loadAll, contextKey]);
+
+  // Sort controls go unavailable while a fetch/drain is in flight. loadAll()
+  // resolves `false` not only on user-cancel but also when it can't even
+  // start because a fetch (e.g. the lazy-load auto-load sentinel) is already
+  // running — in that window a sort click would silently no-op with no
+  // feedback. Disabling the controls means the click can never be swallowed.
+  const sortBusy = loadingAll || isFetchingNextPage;
+
   // Auto-load the next chunk during lazy infinite scroll. In folder mode it's
   // paused while a client-side filter is active (the "Search '<term>' on server"
   // affordance is the explicit path there); in server-search mode it stays on so
@@ -806,6 +949,9 @@ export function FileBrowser() {
             }
             loadingAll={loadingAll}
             onStopLoadAll={stopLoadAll}
+            sortState={effectiveSort}
+            onSortChange={requestSort}
+            sortDisabled={sortBusy}
           />
           <input
             type="file"
@@ -905,6 +1051,11 @@ export function FileBrowser() {
                 scrollRef={scrollRef}
                 autoLoadEnabled={autoLoadEnabled}
                 onLoadMore={handleLoadMore}
+                sortState={effectiveSort}
+                onSortColumn={(col) =>
+                  requestSort(nextSortForColumn(effectiveSort, col))
+                }
+                sortDisabled={sortBusy}
               />
               {showLoadMoreFooter && (
                 <FileBrowserLoadMoreFooter
@@ -960,6 +1111,13 @@ export function FileBrowser() {
         onConfirm={confirmDelete}
         items={pendingDelete.current}
         loading={deleteMutation.isPending}
+      />
+      <SortLoadAllModal
+        opened={pendingSort !== null}
+        column={pendingSort?.column ?? null}
+        loadedCount={items.length}
+        onCancel={() => setPendingSort(null)}
+        onConfirm={confirmPendingSort}
       />
       {previewState && (
         <PreviewModal
