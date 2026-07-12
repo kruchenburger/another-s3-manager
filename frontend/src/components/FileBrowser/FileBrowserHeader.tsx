@@ -3,15 +3,27 @@ import {
   Box,
   CloseButton,
   Group,
+  Select,
   TextInput,
   Tooltip,
 } from "@mantine/core";
-import { LayoutGrid, List as ListIcon, Search } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  LayoutGrid,
+  List as ListIcon,
+  Search,
+} from "lucide-react";
 import { useState } from "react";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import { UploadSplitButton } from "./UploadSplitButton";
 import { LoadSplitButton } from "./LoadSplitButton";
 import type { DisplayMode } from "@/hooks/useDisplayMode";
+import {
+  DEFAULT_SORT,
+  type SortColumn,
+  type SortState,
+} from "@/utils/sortEntries";
 
 interface FileBrowserHeaderProps {
   bucket: string;
@@ -37,6 +49,22 @@ interface FileBrowserHeaderProps {
   loadingAll: boolean;
   /** Halt an in-progress "Load all". */
   onStopLoadAll: () => void;
+  /** Active sort — shared with the table headers so table↔grid keeps the
+   *  sort. Optional with a name-asc default ONLY so pre-wiring commits
+   *  typecheck; FileBrowser always passes it. */
+  sortState?: SortState;
+  /** Request a sort change; FileBrowser applies the truncated-level gate. */
+  onSortChange?: (next: SortState) => void;
+}
+
+const SORT_OPTIONS: { value: SortColumn; label: string }[] = [
+  { value: "name", label: "Name" },
+  { value: "size", label: "Size" },
+  { value: "modified", label: "Modified" },
+];
+
+function isSortColumn(v: string | null): v is SortColumn {
+  return v === "name" || v === "size" || v === "modified";
 }
 
 export function FileBrowserHeader({
@@ -55,6 +83,8 @@ export function FileBrowserHeader({
   onLoadAll,
   loadingAll,
   onStopLoadAll,
+  sortState = DEFAULT_SORT,
+  onSortChange,
 }: FileBrowserHeaderProps) {
   // Mobile-only: the filter collapses to a search icon so filter + view
   // toggle + Upload share one row on any phone (a fixed-width input didn't
@@ -139,6 +169,65 @@ export function FileBrowserHeader({
             </ActionIcon>
           </Tooltip>
         </Group>
+        {/* Grid has no column headers, so the sort control lives here —
+            grid mode ONLY (the table's clickable headers serve otherwise).
+            Both views share one SortState, so switching table↔grid keeps
+            the sort. */}
+        {mode === "grid" && (
+          <Group gap={2}>
+            <Select
+              size="sm"
+              w={120}
+              data={SORT_OPTIONS}
+              value={sortState.column}
+              allowDeselect={false}
+              aria-label="Sort by"
+              // onOptionSubmit (not onChange) — Mantine's Select only calls
+              // onChange when the submitted value differs from the current
+              // one, so re-selecting the already-active column would never
+              // fire. onOptionSubmit fires on every click/Enter regardless,
+              // which is what "re-selecting the current column" needs.
+              onOptionSubmit={(value) => {
+                if (!isSortColumn(value)) return;
+                onSortChange?.({
+                  column: value,
+                  direction:
+                    sortState.column === value ? sortState.direction : "asc",
+                });
+              }}
+            />
+            <Tooltip
+              label={
+                sortState.direction === "asc"
+                  ? "Ascending — click for descending"
+                  : "Descending — click for ascending"
+              }
+            >
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                size="lg"
+                aria-label={
+                  sortState.direction === "asc"
+                    ? "Sort ascending"
+                    : "Sort descending"
+                }
+                onClick={() =>
+                  onSortChange?.({
+                    ...sortState,
+                    direction: sortState.direction === "asc" ? "desc" : "asc",
+                  })
+                }
+              >
+                {sortState.direction === "asc" ? (
+                  <ChevronUp size={16} />
+                ) : (
+                  <ChevronDown size={16} />
+                )}
+              </ActionIcon>
+            </Tooltip>
+          </Group>
+        )}
         {(truncated || loadingAll) && (
           <LoadSplitButton
             onLoadMore={onLoadMore}
