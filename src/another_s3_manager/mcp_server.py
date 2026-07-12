@@ -418,9 +418,9 @@ list_files returns actual keys and can be large: recursive mode returns up to
 max_keys keys per page; when is_truncated is true, pass
 next_continuation_token back to fetch the next page.
 
-The application's REST API is NOT available to MCP clients: /api/... routes
-authenticate with a browser session cookie, and Bearer tokens work only on
-/mcp. Do not attempt REST calls with the MCP token.
+The application's REST API requires a browser session cookie for /api/... routes;
+your MCP Bearer token (as3m_...) is not a JWT and will be rejected there. Use /mcp
+tools instead. Do not attempt REST calls with the MCP token.
 """
 
 # streamable_http_path="/" so that mounting on FastAPI as app.mount("/mcp", …)
