@@ -563,15 +563,28 @@ def test_startup_force_overrides_a_ui_password(monkeypatch, tmp_path):
     assert admin["password_set_via"] == PASSWORD_SET_VIA_ENV
 
 
-def test_startup_on_a_fresh_db_is_a_clean_noop(monkeypatch, tmp_path):
+def test_startup_on_a_fresh_db_is_a_clean_noop(monkeypatch, tmp_path, caplog):
     """The admin seed is LAZY (it fires from load_users(), not at startup). So on a genuinely
     fresh DB the sync runs against a users table with no admin row and must no-op quietly --
-    and must NOT create the user itself. The seed then stamps 'env' on first use."""
+    and must NOT create the user itself. The seed then stamps 'env' on first use.
+
+    Also pins step ORDERING: the sync must run after the alembic migration that adds the
+    `password_set_via` column. Because a failing sync is swallowed (warn-and-continue), a
+    misordering wouldn't raise here -- it would just make the sync blow up with
+    OperationalError (no `users` table yet) and log the failure warning. Asserting that
+    warning is absent is what turns "ran after alembic" from a comment into a real check:
+    hoist `sync_admin_password_from_env()` above the alembic step and this assertion fails.
+    """
     monkeypatch.delenv("ADMIN_PASSWORD_FORCE", raising=False)
     main = _fresh_main(monkeypatch, tmp_path)
     monkeypatch.setenv("ADMIN_PASSWORD", ENV_PASSWORD)
 
-    main.run_startup_tasks()  # no admin row exists yet
+    with caplog.at_level(logging.WARNING):
+        main.run_startup_tasks()  # no admin row exists yet
+
+    assert not any("ADMIN_PASSWORD startup sync failed" in r.message for r in caplog.records), (
+        "sync must run AFTER the alembic migration; a failure here means it ran too early"
+    )
 
     from another_s3_manager.auth import verify_password
     from another_s3_manager.constants import PASSWORD_SET_VIA_ENV

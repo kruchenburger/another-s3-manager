@@ -147,6 +147,21 @@ def _run_alembic_upgrade() -> None:
         alembic_cfg_path = repo_root / "alembic.ini"
         cwd = repo_root
     cfg = Config(str(alembic_cfg_path))
+    # Force alembic to materialize `Config.file_config` (its parsed view of alembic.ini) NOW,
+    # while `config_file_name` still points at the real file. `file_config` is a
+    # `@util.memoized_property`: the FIRST access parses the ini (if `config_file_name` is set)
+    # or falls back to a bare, section-only ConfigParser (if it is None) -- and either way, the
+    # result is cached on this Config instance forever, unaffected by later reassignments of
+    # `config_file_name`. `set_main_option`/`get_main_option` below (and env.py's own
+    # `set_main_option("sqlalchemy.url", ...)`) all read/write through this same cached object,
+    # so the entire [alembic] section (script_location, prepend_sys_path, etc.) only survives
+    # nulling `config_file_name` below because it was materialized from the real ini right here.
+    # Without this explicit call, that survival would depend on `set_main_option` two lines down
+    # happening to be the thing that triggers the first access -- true today, but a silent trap
+    # for anyone reordering this function (verified against alembic 1.18.4: materializing AFTER
+    # nulling `config_file_name` yields an empty file_config -- `prepend_sys_path`/
+    # `sqlalchemy.url` both come back None instead of the ini's values, no exception raised).
+    _ = cfg.file_config
     cfg.set_main_option("script_location", str(cwd / "migrations"))
     # migrations/env.py calls `logging.config.fileConfig(config.config_file_name)` when this
     # attribute is set. fileConfig's stdlib default (disable_existing_loggers=True) sets
@@ -161,8 +176,9 @@ def _run_alembic_upgrade() -> None:
     # (logging_setup.configure_logging). Clearing config_file_name makes env.py's
     # `if config.config_file_name is not None` guard skip fileConfig() -- alembic's own Config
     # docstring sanctions exactly this ("the call to Python logging.fileConfig() is omitted if
-    # the programmatic configuration doesn't actually include logging directives"). The options
-    # we do need are set via set_main_option/read via get_main_option, independent of this.
+    # the programmatic configuration doesn't actually include logging directives"). This must run
+    # AFTER `cfg.file_config` above is materialized (see that comment) -- moving it earlier would
+    # silently drop the whole [alembic] section instead of raising.
     cfg.config_file_name = None
     command.upgrade(cfg, "head")
 
@@ -227,8 +243,9 @@ def run_startup_tasks() -> None:
 
     if os.getenv("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD) == DEFAULT_ADMIN_PASSWORD:
         logger.warning(
-            "ADMIN_PASSWORD is the default 'change_me_pls'. CHANGE IT before exposing this app — "
-            "admin is exempt from auto-ban and there is no application-level rate limit on /api/login."
+            f"ADMIN_PASSWORD is the default '{DEFAULT_ADMIN_PASSWORD}'. CHANGE IT before exposing "
+            "this app — admin is exempt from auto-ban and there is no application-level rate limit "
+            "on /api/login."
         )
 
 
