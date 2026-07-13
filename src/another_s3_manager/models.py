@@ -35,6 +35,12 @@ class User(Base):
     theme: Mapped[str] = mapped_column(String, nullable=False, default="auto")
     default_role: Mapped[str | None] = mapped_column(String, nullable=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    # Who last wrote password_hash: "env" | "ui" | "cli" | "unknown".
+    # The ORM default is "ui" — the SAFE value: any code path that creates a user
+    # without thinking about provenance must NOT be env-governed. The seed and the
+    # CLI override it explicitly. server_default="unknown" only ever applies to the
+    # rows backfilled by the migration (existing deployments), never to ORM inserts.
+    password_set_via: Mapped[str] = mapped_column(String, nullable=False, default="ui", server_default="unknown")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow

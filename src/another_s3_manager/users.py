@@ -29,6 +29,7 @@ def _user_to_dict(user: User) -> Dict[str, Any]:
         "theme": user.theme,
         "default_role": user.default_role,
         "must_change_password": user.must_change_password,
+        "password_set_via": user.password_set_via,
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
 

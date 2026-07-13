@@ -80,6 +80,23 @@ if _env_jwt_expire:
         ACCESS_TOKEN_EXPIRE_MINUTES = DEFAULT_JWT_EXPIRE_MINUTES
 else:
     ACCESS_TOKEN_EXPIRE_MINUTES = DEFAULT_JWT_EXPIRE_MINUTES
+
+# The built-in default admin password. Single source of truth for the seed path,
+# the startup env sync, and the lifespan default-password warning.
+DEFAULT_ADMIN_PASSWORD = "change_me_pls"
+
+# Provenance of the stored password (users.password_set_via). Decides whether the
+# startup hook may re-apply ADMIN_PASSWORD to a user:
+#   env     — written by the first-boot seed or a previous env sync; env governs it.
+#   ui      — written through the web UI / HTTP API; startup never touches it.
+#   cli     — written by the reset_admin_password CLI; startup never touches it.
+#   unknown — pre-existing row backfilled by the migration; classified once at startup.
+# ADMIN_PASSWORD_FORCE overrides all of them (see users.sync_admin_password_from_env).
+PASSWORD_SET_VIA_ENV = "env"
+PASSWORD_SET_VIA_UI = "ui"
+PASSWORD_SET_VIA_CLI = "cli"
+PASSWORD_SET_VIA_UNKNOWN = "unknown"
+
 MAX_LOGIN_ATTEMPTS = 3
 BAN_DURATION_MINUTES = 60  # 1 hour
 
