@@ -66,6 +66,7 @@ from another_s3_manager.constants import (
     APP_NAME,
     APP_VERSION,
     COOKIE_SECURE,
+    DEFAULT_ADMIN_PASSWORD,
     PASSWORD_SET_VIA_UI,
     PRESIGNED_STS_WARNING_THRESHOLD,
     PRESIGNED_URL_HARD_CEILING,
@@ -107,6 +108,7 @@ from another_s3_manager.users import (
     load_users,
     save_bans,
     save_users,
+    sync_admin_password_from_env,
 )
 from another_s3_manager.utils import (
     format_boto_error,
@@ -170,17 +172,15 @@ from contextlib import asynccontextmanager
 from another_s3_manager.mcp_server import mcp as _mcp_instance
 
 
-@asynccontextmanager
-async def lifespan(app_: FastAPI):
-    """App startup + MCP session manager lifecycle.
+def run_startup_tasks() -> None:
+    """Everything the app does on startup EXCEPT entering the MCP session manager.
 
-    Phase 5 added MCP via FastMCP (SDK 1.12.x). FastMCP's session_manager
-    needs an async task group that's only created inside its run() context
-    manager — without entering it during startup, every request to /mcp/*
-    fails with 'Task group is not initialized.' (We learned the hard way.)
-
-    Migration from on_event('startup') to lifespan also resolves the
-    deprecation warning that's been firing since the FastAPI 0.136 bump.
+    Synchronous and side-effect-only. Split out of `lifespan` so it can be driven
+    directly by tests: `lifespan` can only ever run ONCE per process (FastMCP's
+    StreamableHTTPSessionManager.run() is a hard once-per-instance guard, and the
+    FastMCP instance is a module-level singleton), which makes multi-boot startup
+    scenarios untestable through the lifespan itself. This function has no such
+    limit and is idempotent — running it N times is exactly N restarts.
     """
     # 1. DB migrations — must complete before any request hits a model
     try:
@@ -209,14 +209,47 @@ async def lifespan(app_: FastAPI):
     except Exception:
         logger.warning("Legacy default_role migration failed; continuing startup", exc_info=True)
 
-    # 4. Default-password security warning
-    if os.getenv("ADMIN_PASSWORD", "change_me_pls") == "change_me_pls":
+    # 4. Admin password: env sync, then the default-password warning.
+    #    The sync runs unconditionally — it is a no-op unless the environment governs the
+    #    admin password (users.password_set_via == "env") or the operator explicitly set
+    #    ADMIN_PASSWORD_FORCE. It also performs the one-time classification of rows that
+    #    predate the provenance column. Placed after steps 1-3 so the password_set_via
+    #    column exists and a legacy-JSON-migrated admin row is present before it runs.
+    try:
+        sync_admin_password_from_env()
+    except Exception:
+        # Same posture as the migrations above: a failed sync must not brick startup.
+        # It touches one row (username == 'admin') and does one bcrypt verify/hash; a
+        # transient DB or bcrypt error must not take down every other route. The failure
+        # is self-healing — provenance is left as-is and the sync retries on the next boot.
+        # (Unlike the alembic step, which IS fatal: a missing column breaks every query.)
+        logger.warning("ADMIN_PASSWORD startup sync failed; continuing startup", exc_info=True)
+
+    if os.getenv("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD) == DEFAULT_ADMIN_PASSWORD:
         logger.warning(
             "ADMIN_PASSWORD is the default 'change_me_pls'. CHANGE IT before exposing this app — "
             "admin is exempt from auto-ban and there is no application-level rate limit on /api/login."
         )
 
-    # 5. Enter FastMCP session manager — REQUIRED for /mcp/* to work.
+
+@asynccontextmanager
+async def lifespan(app_: FastAPI):
+    """App startup + MCP session manager lifecycle.
+
+    Phase 5 added MCP via FastMCP (SDK 1.12.x). FastMCP's session_manager
+    needs an async task group that's only created inside its run() context
+    manager — without entering it during startup, every request to /mcp/*
+    fails with 'Task group is not initialized.' (We learned the hard way.)
+
+    Migration from on_event('startup') to lifespan also resolves the
+    deprecation warning that's been firing since the FastAPI 0.136 bump.
+
+    The startup work itself lives in run_startup_tasks() — see its docstring for
+    why it is a separate, directly-callable function.
+    """
+    run_startup_tasks()
+
+    # Enter FastMCP session manager — REQUIRED for /mcp/* to work.
     async with _mcp_instance.session_manager.run():
         yield
 

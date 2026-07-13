@@ -1526,6 +1526,45 @@ def test_startup_runs_migrations_and_json_import(monkeypatch, tmp_path):
     assert get_user_by_username("imported") is not None
 
 
+async def test_lifespan_runs_startup_tasks_then_enters_mcp(mocker):
+    """The lifespan's two jobs: run the startup work, then enter FastMCP's session manager.
+
+    All the actual startup BEHAVIOUR is tested by driving main.run_startup_tasks() directly
+    (see tests/test_admin_password_sync.py) -- this test only pins the WIRING, i.e. that
+    `lifespan` still calls it and still enters the MCP session manager, in that order.
+
+    Both collaborators are mocked, deliberately: FastMCP's StreamableHTTPSessionManager.run()
+    can be entered only ONCE per instance for the life of the process (a hard guard in the mcp
+    SDK), and the FastMCP instance is a module-level singleton the suite never reloads. That
+    one real entry is already spent by test_startup_runs_migrations_and_json_import above, so
+    a second real lifespan boot anywhere in the suite would raise RuntimeError. Mocking the
+    session manager keeps this test independent of that budget.
+    """
+    import contextlib
+
+    from another_s3_manager import main
+
+    calls = []
+
+    mocker.patch.object(main, "run_startup_tasks", side_effect=lambda: calls.append("startup"))
+
+    @contextlib.asynccontextmanager
+    async def _fake_run():
+        calls.append("mcp_enter")
+        yield
+        calls.append("mcp_exit")
+
+    # Patch the module-level FastMCP reference rather than its `session_manager` attribute:
+    # session_manager is a read-only property on FastMCP, so patch.object cannot restore it.
+    mocker.patch.object(main, "_mcp_instance", mocker.Mock(session_manager=mocker.Mock(run=_fake_run)))
+
+    async with main.lifespan(main.app):
+        # Startup work must be done -- and MCP entered -- before the app serves anything.
+        assert calls == ["startup", "mcp_enter"]
+
+    assert calls == ["startup", "mcp_enter", "mcp_exit"]
+
+
 def test_download_file_with_colon_in_key(app_client, moto_s3):
     """REGRESSION: files with `:` in S3 key (e.g. ISO timestamps) must be downloadable.
     Previously sanitize_path rejected `:` outright, breaking download/delete for these keys.

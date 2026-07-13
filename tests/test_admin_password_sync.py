@@ -454,3 +454,155 @@ def test_force_logs_loudly_and_never_logs_the_password(monkeypatch, caplog):
     assert "cli" in message  # names the provenance it overrode
     assert "env" in message  # says provenance is reset to env
     assert ENV_PASSWORD not in caplog.text  # never the password
+
+
+# ---------------------------------------------------------------------------
+# Startup integration. The sync must run inside the real startup sequence, after
+# alembic + the legacy JSON migration -- so these drive main.run_startup_tasks(),
+# the actual startup routine, not sync_admin_password_from_env() in isolation.
+#
+# Why not through the real FastAPI lifespan / TestClient: `lifespan` also enters
+# FastMCP's session manager, whose .run() is a hard once-per-INSTANCE guard in the
+# mcp SDK (not once-at-a-time -- once, ever), and the FastMCP instance is a
+# module-level singleton in mcp_server.py that the suite deliberately never reloads
+# (see the comment in tests/test_mcp_protocol.py). So exactly ONE test in the whole
+# process may boot the real lifespan; it already exists
+# (test_main.py::test_startup_runs_migrations_and_json_import), and
+# test_main.py::test_lifespan_runs_startup_tasks_then_enters_mcp pins that `lifespan`
+# really does call run_startup_tasks(). Multi-boot scenarios live here.
+#
+# Reload pattern mirrors test_main.py::test_startup_runs_migrations_and_json_import:
+# point DATA_DIR at a FRESH empty dir (so `alembic upgrade head` builds the schema
+# itself rather than colliding with conftest's create_all), then reload
+# constants -> database -> users -> main so every module binds the new engine.
+# ---------------------------------------------------------------------------
+
+
+def _fresh_main(monkeypatch, tmp_path):
+    import importlib
+
+    import another_s3_manager.constants as constants
+    import another_s3_manager.database as database
+    import another_s3_manager.main as main
+    import another_s3_manager.users as users
+
+    data_dir = tmp_path / "startup-data"
+    data_dir.mkdir()
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key")
+
+    importlib.reload(constants)
+    importlib.reload(database)
+    importlib.reload(users)
+    database.reset_engine_for_tests()
+    return importlib.reload(main)
+
+
+def test_startup_seed_then_rotate_then_ui_wins(monkeypatch, tmp_path):
+    """Three boots end-to-end:
+    1. fresh DB, ADMIN_PASSWORD=foo  -> seeded from env
+    2. ADMIN_PASSWORD=bar, restart   -> ROTATED (the fix this feature exists for)
+    3. admin changes the password in the UI, restart with a stale env -> UI password survives
+    """
+    monkeypatch.delenv("ADMIN_PASSWORD_FORCE", raising=False)
+    main = _fresh_main(monkeypatch, tmp_path)
+
+    monkeypatch.setenv("ADMIN_PASSWORD", ENV_PASSWORD)
+    main.run_startup_tasks()
+
+    from another_s3_manager.auth import verify_password
+    from another_s3_manager.users import get_user_by_username, load_users
+
+    load_users()  # trigger the lazy seed, as the first real request would
+
+    assert verify_password(ENV_PASSWORD, get_user_by_username("admin")["password_hash"])
+
+    # Boot 2 — rotation.
+    monkeypatch.setenv("ADMIN_PASSWORD", ROTATED_PASSWORD)
+    main.run_startup_tasks()
+    assert verify_password(ROTATED_PASSWORD, get_user_by_username("admin")["password_hash"])
+
+    # Admin changes the password through the UI (same call path as PUT /api/me/password).
+    from another_s3_manager.auth import hash_password
+    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+    from another_s3_manager.users import update_user
+
+    update_user("admin", password_hash=hash_password("UiChosen456"), password_set_via=PASSWORD_SET_VIA_UI)
+
+    # Boot 3 — the stale env var must not win.
+    monkeypatch.setenv("ADMIN_PASSWORD", "YetAnother789")
+    main.run_startup_tasks()
+    admin = get_user_by_username("admin")
+    assert verify_password("UiChosen456", admin["password_hash"])
+    assert not verify_password("YetAnother789", admin["password_hash"])
+
+
+def test_startup_force_overrides_a_ui_password(monkeypatch, tmp_path):
+    """The FORCE escape hatch, driven through the real startup sequence."""
+    monkeypatch.delenv("ADMIN_PASSWORD_FORCE", raising=False)
+    main = _fresh_main(monkeypatch, tmp_path)
+
+    monkeypatch.setenv("ADMIN_PASSWORD", ENV_PASSWORD)
+    main.run_startup_tasks()
+
+    from another_s3_manager.auth import hash_password, verify_password
+    from another_s3_manager.constants import PASSWORD_SET_VIA_ENV, PASSWORD_SET_VIA_UI
+    from another_s3_manager.users import get_user_by_username, load_users, update_user
+
+    load_users()
+
+    update_user("admin", password_hash=hash_password("UiChosen456"), password_set_via=PASSWORD_SET_VIA_UI)
+
+    # Operator adds ADMIN_PASSWORD_FORCE=1 and restarts.
+    monkeypatch.setenv("ADMIN_PASSWORD", ROTATED_PASSWORD)
+    monkeypatch.setenv("ADMIN_PASSWORD_FORCE", "1")
+    main.run_startup_tasks()
+
+    admin = get_user_by_username("admin")
+    assert verify_password(ROTATED_PASSWORD, admin["password_hash"])
+    assert admin["password_set_via"] == PASSWORD_SET_VIA_ENV
+
+
+def test_startup_on_a_fresh_db_is_a_clean_noop(monkeypatch, tmp_path):
+    """The admin seed is LAZY (it fires from load_users(), not at startup). So on a genuinely
+    fresh DB the sync runs against a users table with no admin row and must no-op quietly --
+    and must NOT create the user itself. The seed then stamps 'env' on first use."""
+    monkeypatch.delenv("ADMIN_PASSWORD_FORCE", raising=False)
+    main = _fresh_main(monkeypatch, tmp_path)
+    monkeypatch.setenv("ADMIN_PASSWORD", ENV_PASSWORD)
+
+    main.run_startup_tasks()  # no admin row exists yet
+
+    from another_s3_manager.auth import verify_password
+    from another_s3_manager.constants import PASSWORD_SET_VIA_ENV
+    from another_s3_manager.users import get_user_by_username, load_users
+
+    assert get_user_by_username("admin") is None, "startup must not create the admin user"
+
+    load_users()  # the lazy seed fires here, as it would on the first request
+    admin = get_user_by_username("admin")
+    assert verify_password(ENV_PASSWORD, admin["password_hash"])
+    assert admin["password_set_via"] == PASSWORD_SET_VIA_ENV
+
+
+def test_startup_default_env_still_warns(monkeypatch, tmp_path, caplog):
+    """Regression guard: the pre-existing default-password warning keeps firing (plan D3)."""
+    main = _fresh_main(monkeypatch, tmp_path)
+    monkeypatch.setenv("ADMIN_PASSWORD", "change_me_pls")
+
+    with caplog.at_level(logging.WARNING):
+        main.run_startup_tasks()
+
+    assert any("ADMIN_PASSWORD is the default" in r.message for r in caplog.records)
+
+
+def test_startup_survives_sync_failure(monkeypatch, tmp_path, caplog, mocker):
+    """A broken sync must not brick startup — warn and continue (retried next boot)."""
+    main = _fresh_main(monkeypatch, tmp_path)
+    monkeypatch.setenv("ADMIN_PASSWORD", ENV_PASSWORD)
+    mocker.patch.object(main, "sync_admin_password_from_env", side_effect=RuntimeError("boom"))
+
+    with caplog.at_level(logging.WARNING):
+        main.run_startup_tasks()  # returning normally means startup completed
+
+    assert any("sync failed" in r.message for r in caplog.records)
