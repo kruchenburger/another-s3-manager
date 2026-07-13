@@ -115,15 +115,24 @@ class McpError(Exception):
         always kept first so the machine-readable code stays trivially
         parseable out of the string.
         """
-        parts = [f"{self.code}: {self.message}"]
+        suffix = []
         if "allowed_roles" in self.details:
             roles = self.details["allowed_roles"]
             roles_text = ", ".join(roles) if roles else "(none)"
-            parts.append(f"Roles you may use: {roles_text}.")
+            suffix.append(f"Roles you may use: {roles_text}.")
         hint = self.details.get("hint")
         if hint:
-            parts.append(str(hint))
-        return " ".join(parts)
+            suffix.append(str(hint))
+
+        if not suffix:
+            # Nothing to fold — leave the string byte-identical to the plain form.
+            return f"{self.code}: {self.message}"
+
+        # Terminate the message, or the sentences run together: "...not found in
+        # configuration Roles you may use: ...". Only the message needs it; the
+        # suffix parts already end in punctuation.
+        message = self.message if self.message.rstrip().endswith((".", "!", "?", ":")) else f"{self.message}."
+        return " ".join([f"{self.code}: {message}", *suffix])
 
 
 # ---------------------------------------------------------------------------

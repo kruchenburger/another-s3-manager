@@ -131,3 +131,23 @@ async def test_non_admin_unknown_role_still_role_not_allowed(plain_user, tool_re
 
     assert exc_info.value.code == "ROLE_NOT_ALLOWED"
     assert "Roles you may use:" in str(exc_info.value)
+
+
+def test_error_text_does_not_run_sentences_together():
+    """The agent reads this string. Without terminating the message first it
+    came out as '...not found in configuration Roles you may use: ...'."""
+    err = McpError(
+        "ROLE_NOT_ALLOWED",
+        "Role 'Backup' not found in configuration",
+        {"role": "Backup", "allowed_roles": ["A", "B"]},
+    )
+
+    assert "configuration. Roles you may use: A, B." in str(err)
+
+
+def test_error_text_does_not_double_punctuate():
+    """A message that already ends in punctuation must not gain a second dot."""
+    err = McpError("ROLE_NOT_ALLOWED", "Access denied.", {"allowed_roles": ["A"]})
+
+    assert "denied.. " not in str(err)
+    assert "Access denied. Roles you may use: A." in str(err)
