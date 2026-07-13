@@ -66,6 +66,7 @@ from another_s3_manager.constants import (
     APP_NAME,
     APP_VERSION,
     COOKIE_SECURE,
+    PASSWORD_SET_VIA_UI,
     PRESIGNED_STS_WARNING_THRESHOLD,
     PRESIGNED_URL_HARD_CEILING,
     PRESIGNED_URL_MIN_TTL,
@@ -696,6 +697,7 @@ async def create_user(
         "allowed_roles": roles_list,
         "theme": "auto",  # Default to auto (system preference)
         "must_change_password": must_change_password,
+        "password_set_via": PASSWORD_SET_VIA_UI,
         "created_at": datetime.now().isoformat(),
     }
 
@@ -751,6 +753,7 @@ async def update_user_password(
 
     user["password_hash"] = hashed_password
     user["must_change_password"] = payload.must_change_password
+    user["password_set_via"] = PASSWORD_SET_VIA_UI
     save_users(users)
 
     return AdminResetPasswordResponse(message=f"Password updated successfully for user {username}")
@@ -835,6 +838,7 @@ async def change_my_password(
         username,
         password_hash=hash_password(payload.new_password),
         must_change_password=False,
+        password_set_via=PASSWORD_SET_VIA_UI,
     )
     return {"ok": True}
 

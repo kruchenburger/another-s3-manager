@@ -13,6 +13,11 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from another_s3_manager.constants import (
+    DEFAULT_ADMIN_PASSWORD,
+    PASSWORD_SET_VIA_ENV,
+    PASSWORD_SET_VIA_UI,
+)
 from another_s3_manager.database import session_scope
 from another_s3_manager.models import Ban, User, UserRole
 
@@ -44,13 +49,16 @@ def _seed_default_admin_if_empty(session) -> Optional[User]:
     existing = session.execute(select(User).limit(1)).scalar_one_or_none()
     if existing is not None:
         return None
-    admin_password = os.getenv("ADMIN_PASSWORD", "change_me_pls")
+    admin_password = os.getenv("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD)
     admin = User(
         username="admin",
         password_hash=hash_password(admin_password),
         is_admin=True,
         theme="auto",
         must_change_password=False,
+        # Bootstrapped from the environment -> ADMIN_PASSWORD keeps governing this
+        # password until someone changes it in the UI or via the reset CLI.
+        password_set_via=PASSWORD_SET_VIA_ENV,
     )
     session.add(admin)
     session.flush()
@@ -146,7 +154,14 @@ def save_users(users_data: Dict[str, Any]) -> None:
             existing = existing_by_username.get(user_dict["username"])
             if existing is not None:
                 # In-place update preserves id, created_at, and bans (no cascade)
-                existing.password_hash = user_dict["password_hash"]
+                new_hash = user_dict["password_hash"]
+                if "password_set_via" in user_dict:
+                    existing.password_set_via = user_dict["password_set_via"]
+                elif new_hash != existing.password_hash:
+                    # Same fail-closed safety net as update_user: an unexplained password
+                    # change is treated as human-driven.
+                    existing.password_set_via = PASSWORD_SET_VIA_UI
+                existing.password_hash = new_hash
                 existing.is_admin = user_dict.get("is_admin", False)
                 existing.theme = user_dict.get("theme", "auto")
                 if "must_change_password" in user_dict:
@@ -174,6 +189,7 @@ def save_users(users_data: Dict[str, Any]) -> None:
                     is_admin=user_dict.get("is_admin", False),
                     theme=user_dict.get("theme", "auto"),
                     must_change_password=bool(user_dict.get("must_change_password", False)),
+                    password_set_via=user_dict.get("password_set_via", PASSWORD_SET_VIA_UI),
                 )
                 for role_name in user_dict.get("allowed_roles", []):
                     user.roles.append(UserRole(role_name=role_name))
@@ -216,6 +232,7 @@ def create_user(
     is_admin: bool = False,
     allowed_roles: Optional[List[str]] = None,
     must_change_password: bool = True,
+    password_set_via: str = PASSWORD_SET_VIA_UI,
 ) -> Dict[str, Any]:
     """Create a single user. Does NOT seed default admin (that's load_users's job).
 
@@ -244,6 +261,7 @@ def create_user(
             theme="auto",
             default_role=auto_default,
             must_change_password=must_change_password,
+            password_set_via=password_set_via,
         )
         for role_name in roles:
             user.roles.append(UserRole(role_name=role_name))
@@ -268,6 +286,12 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
 
         if "password_hash" in kwargs:
             user.password_hash = kwargs["password_hash"]
+            # Safety net (fails CLOSED): a password write with no stated provenance is
+            # assumed human-driven, so the startup env sync will never overwrite it.
+            # Callers that mean something else (the seed, the CLI) pass password_set_via.
+            user.password_set_via = kwargs.get("password_set_via", PASSWORD_SET_VIA_UI)
+        elif "password_set_via" in kwargs:
+            user.password_set_via = kwargs["password_set_via"]
         if "is_admin" in kwargs:
             user.is_admin = kwargs["is_admin"]
         if "theme" in kwargs:

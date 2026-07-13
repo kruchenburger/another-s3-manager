@@ -124,3 +124,146 @@ def test_user_dict_exposes_password_set_via():
     users.create_user(username="dictguy", password_hash="h", is_admin=False)
     user = users.get_user_by_username("dictguy")
     assert user["password_set_via"] == PASSWORD_SET_VIA_UI
+
+
+# ---------------------------------------------------------------------------
+# Write-site stamping. A missed write-site must fail CLOSED (-> "ui"), never
+# leave a stale "env" that re-arms the startup overwrite.
+# ---------------------------------------------------------------------------
+
+
+def _provenance(username: str = "admin") -> str:
+    from another_s3_manager.users import get_user_by_username
+
+    user = get_user_by_username(username)
+    assert user is not None
+    return user["password_set_via"]
+
+
+def test_seed_stamps_env(monkeypatch):
+    """The first-boot seed is env-driven, so env keeps governing it (rotation works)."""
+    from another_s3_manager.constants import PASSWORD_SET_VIA_ENV
+    from another_s3_manager.users import load_users
+
+    monkeypatch.setenv("ADMIN_PASSWORD", "EnvSecret123")
+    load_users()  # empty table -> lazy seed
+
+    assert _provenance("admin") == PASSWORD_SET_VIA_ENV
+
+
+def test_create_user_defaults_to_ui():
+    from another_s3_manager import users
+    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+
+    users.create_user(username="creature", password_hash="h", is_admin=False)
+    assert _provenance("creature") == PASSWORD_SET_VIA_UI
+
+
+def test_update_user_password_write_without_provenance_stamps_ui(monkeypatch):
+    """Safety net: any password write through update_user is assumed human-driven."""
+    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+    from another_s3_manager.users import load_users, update_user
+
+    monkeypatch.setenv("ADMIN_PASSWORD", "EnvSecret123")
+    load_users()  # seed admin as "env"
+
+    update_user("admin", password_hash="new-hash")  # no provenance passed
+    assert _provenance("admin") == PASSWORD_SET_VIA_UI
+
+
+def test_update_user_without_password_write_preserves_provenance(monkeypatch):
+    """Editing roles/theme must NOT reclassify the password."""
+    from another_s3_manager.constants import PASSWORD_SET_VIA_ENV
+    from another_s3_manager.users import load_users, update_user
+
+    monkeypatch.setenv("ADMIN_PASSWORD", "EnvSecret123")
+    load_users()
+
+    update_user("admin", theme="dark")
+    assert _provenance("admin") == PASSWORD_SET_VIA_ENV
+
+
+def test_save_users_password_change_without_provenance_stamps_ui(monkeypatch):
+    """Same safety net on the admin bulk-upsert path."""
+    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+    from another_s3_manager.users import load_users, save_users
+
+    monkeypatch.setenv("ADMIN_PASSWORD", "EnvSecret123")
+    users_data = load_users()  # seeds admin as "env"
+
+    admin = users_data["users"][0]
+    admin["password_hash"] = "brand-new-hash"
+    admin.pop("password_set_via")  # simulate a caller that forgot to stamp
+    save_users(users_data)
+
+    assert _provenance("admin") == PASSWORD_SET_VIA_UI
+
+
+def test_save_users_roundtrip_preserves_provenance(monkeypatch):
+    """PUT /api/admin/users/{username} loads -> mutates roles -> saves. Provenance must survive."""
+    from another_s3_manager.constants import PASSWORD_SET_VIA_ENV
+    from another_s3_manager.users import load_users, save_users
+
+    monkeypatch.setenv("ADMIN_PASSWORD", "EnvSecret123")
+    users_data = load_users()
+    users_data["users"][0]["allowed_roles"] = ["Default"]
+    save_users(users_data)
+
+    assert _provenance("admin") == PASSWORD_SET_VIA_ENV
+
+
+# --- HTTP write-sites -------------------------------------------------------
+
+
+def _login_admin(client) -> dict:
+    """conftest sets ADMIN_PASSWORD=admin123; the lazy seed uses it."""
+    response = client.post("/api/login", data={"username": "admin", "password": "admin123"})
+    assert response.status_code == 200, response.text
+    me = client.get("/api/me")
+    assert me.status_code == 200, me.text
+    return {"X-CSRF-Token": me.json()["csrf_token"]}
+
+
+def test_self_service_password_change_stamps_ui(app_client):
+    """PUT /api/me/password — also the first-login forced-change path."""
+    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+
+    headers = _login_admin(app_client)
+    response = app_client.put(
+        "/api/me/password",
+        json={"current_password": "admin123", "new_password": "NewPassword1"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert _provenance("admin") == PASSWORD_SET_VIA_UI
+
+
+def test_admin_reset_of_another_user_password_stamps_ui(app_client):
+    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+
+    headers = _login_admin(app_client)
+    app_client.post(
+        "/api/admin/users",
+        data={"username": "victim", "password": "Password123", "is_admin": "false", "allowed_roles": ""},
+        headers=headers,
+    )
+    response = app_client.put(
+        "/api/admin/users/victim/password",
+        json={"password": "Rotated1234", "must_change_password": False},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert _provenance("victim") == PASSWORD_SET_VIA_UI
+
+
+def test_admin_created_user_stamps_ui(app_client):
+    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+
+    headers = _login_admin(app_client)
+    response = app_client.post(
+        "/api/admin/users",
+        data={"username": "fresh", "password": "Password123", "is_admin": "false", "allowed_roles": ""},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert _provenance("fresh") == PASSWORD_SET_VIA_UI
