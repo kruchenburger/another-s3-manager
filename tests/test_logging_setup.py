@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from another_s3_manager.logging_setup import configure_logging
+from another_s3_manager.logging_setup import HANDLER_NAME, configure_logging
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +35,10 @@ def test_json_format_uses_jsonformatter(monkeypatch):
     monkeypatch.setenv("LOG_LEVEL", "info")
     monkeypatch.setenv("LOG_FORMAT", "json")
     configure_logging()
-    handler = logging.getLogger().handlers[0]
+    # configure_logging() only owns its own named handler on root -- it deliberately
+    # leaves any other handler (e.g. pytest's own log-capture handler) alone, so look up
+    # OUR handler by name rather than assuming it's the only (or first) one on root.
+    handler = next(h for h in logging.getLogger().handlers if h.name == HANDLER_NAME)
     formatter_class_name = type(handler.formatter).__name__
     assert "Json" in formatter_class_name
 
@@ -61,12 +64,21 @@ def test_log_level_case_insensitive(monkeypatch):
 
 
 def test_configure_logging_is_idempotent(monkeypatch):
-    """Calling configure_logging twice must not duplicate handlers."""
+    """Calling configure_logging twice must not duplicate OUR handler.
+
+    Counts only handlers configure_logging() itself owns (matched by HANDLER_NAME) --
+    it deliberately leaves foreign handlers (e.g. pytest's own log-capture handler) on
+    root untouched, so the total handler count on root is not a meaningful assertion here.
+    """
+
+    def _our_handler_count() -> int:
+        return len([h for h in logging.getLogger().handlers if h.name == HANDLER_NAME])
+
     monkeypatch.setenv("LOG_LEVEL", "INFO")
     configure_logging()
-    first_count = len(logging.getLogger().handlers)
+    first_count = _our_handler_count()
     configure_logging()
-    second_count = len(logging.getLogger().handlers)
+    second_count = _our_handler_count()
     assert first_count == second_count == 1
 
 
