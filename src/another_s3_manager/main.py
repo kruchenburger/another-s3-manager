@@ -356,6 +356,29 @@ async def _http_metrics(request: Request, call_next):
     return response
 
 
+# Canonical bare /mcp — registered BEFORE the kill-switch below, so Starlette's
+# add_middleware() prepend order leaves the kill-switch OUTSIDE this one and it
+# still evaluates the original, un-rewritten path (it matches both forms itself).
+@app.middleware("http")
+async def _mcp_canonical_path(request: Request, call_next):
+    """Serve a bare /mcp directly instead of 307-redirecting it to /mcp/.
+
+    Starlette's Mount matches with a regex equivalent to ^/mcp(?P<path>/.*)$,
+    so a request to exactly /mcp never matches the mount; the router then falls
+    through to redirect_slashes and answers 307 -> /mcp/. MCP clients that do
+    not follow redirects cannot connect at all — and a bare /mcp is both how
+    every other MCP server is addressed and what our own MCP_SERVER_INSTRUCTIONS
+    text tells agents to use. Rewriting the path before routing makes the mount
+    match directly, so both forms answer 200.
+
+    Exact match only: /mcpfoo must still 404, so never use startswith("/mcp").
+    """
+    if request.scope["path"] == "/mcp":
+        request.scope["path"] = "/mcp/"
+        request.scope["raw_path"] = b"/mcp/"
+    return await call_next(request)
+
+
 # MCP kill-switch middleware — must be registered BEFORE the MCP sub-app is
 # mounted so Starlette evaluates it on every /mcp/* request.
 @app.middleware("http")

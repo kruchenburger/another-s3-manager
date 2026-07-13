@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- MCP: the endpoint now answers on a bare `/mcp` instead of redirecting it to
+  `/mcp/` with a 307. MCP clients that don't follow redirects could not connect
+  at all, and `/mcp` is both the conventional address and the one the server's
+  own instructions hand to agents. Both forms work; existing `/mcp/` configs are
+  unaffected.
 - The object counter in the file browser header could show a wildly wrong,
   deeply negative number (e.g. `-871665980+ objects`) while "Load all" was
   draining a large folder. The count-up animation restarts on every batch of

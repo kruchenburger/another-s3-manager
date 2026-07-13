@@ -429,3 +429,92 @@ def test_mcp_protocol_tools_call_surfaces_role_not_allowed_in_text_content(alice
         text = result["content"][0]["text"]
         assert "ROLE_NOT_ALLOWED" in text
         assert "Roles you may use:" in text
+
+
+# ---------------------------------------------------------------------------
+# Test 6: bare /mcp is canonical — no 307 (2026-07-13)
+# ---------------------------------------------------------------------------
+
+
+def _mount_client():
+    """TestClient over the real mounted app.
+
+    raise_server_exceptions=False for the same reason as Test 2: under
+    TestClient the mounted sub-app never gets its lifespan, so FastMCP's task
+    group is uninitialized and any request that actually reaches it surfaces as
+    500. That is fine here — these tests are about ROUTING (which status the
+    router picks), not about what the MCP app then does with the request.
+    """
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    import another_s3_manager.main as main
+
+    importlib.reload(main)
+    return TestClient(main.app, raise_server_exceptions=False)
+
+
+def test_bare_mcp_path_does_not_redirect():
+    """POST /mcp (no trailing slash) must reach the mount, not 307 to /mcp/.
+
+    Starlette's Mount matches ^/mcp(?P<path>/.*)$, so a bare /mcp misses the
+    mount and the router's redirect_slashes answers 307. An MCP client that
+    does not follow redirects cannot connect at all — and a bare /mcp is both
+    what every other MCP server uses and what MCP_SERVER_INSTRUCTIONS itself
+    tells agents to use. _mcp_canonical_path rewrites the path before routing.
+
+    Redirects are disabled so a non-following client is genuinely represented:
+    /mcp and /mcp/ must land on the same handler and return the same status.
+    """
+    client = _mount_client()
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+
+    bare = client.post("/mcp", headers=headers, json=body, follow_redirects=False)
+    slashed = client.post("/mcp/", headers=headers, json=body, follow_redirects=False)
+
+    assert bare.status_code != 307, "bare /mcp still redirects — clients that don't follow it cannot connect"
+    assert bare.status_code == slashed.status_code
+
+
+def test_bare_mcp_rewrite_does_not_over_match():
+    """The rewrite matches /mcp EXACTLY. A startswith("/mcp") version would
+    swallow sibling paths like /mcpfoo into the MCP mount.
+
+    Asserted against a control path rather than a hardcoded status: /mcpfoo
+    must be routed exactly like any other unknown path (both fall through to
+    the GET-only SPA catch-all, so a POST to either is a 405). What matters is
+    that /mcpfoo is NOT treated as the MCP endpoint — it must not reach the
+    mount, and it must not be redirected there.
+    """
+    client = _mount_client()
+
+    sibling = client.post("/mcpfoo", follow_redirects=False)
+    control = client.post("/notmcp", follow_redirects=False)
+
+    assert sibling.status_code != 307, "/mcpfoo was redirected — the rewrite is over-matching"
+    assert sibling.status_code == control.status_code
+
+
+def test_bare_mcp_does_not_bypass_kill_switch(app_client, monkeypatch):
+    """The rewrite runs in front of the router — prove it cannot be used to
+    slip past the kill-switch. With mcp_enabled=False a bare /mcp must still
+    503, exactly as /mcp/ does.
+
+    (Bearer auth needs no equivalent test: it is enforced inside the tool
+    bodies via authenticate_mcp_request reading the request from a contextvar,
+    not by any path-matching middleware, so a path rewrite cannot reach it.)
+    """
+    import another_s3_manager.config as config_module
+
+    _patch_config_mcp_disabled(monkeypatch, config_module)
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+
+    bare = app_client.post("/mcp", headers=headers, json=body, follow_redirects=False)
+    slashed = app_client.post("/mcp/", headers=headers, json=body, follow_redirects=False)
+
+    assert bare.status_code == 503
+    assert bare.json().get("error") == "MCP_DISABLED"
+    assert slashed.status_code == 503

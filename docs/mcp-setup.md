@@ -105,7 +105,7 @@ bucket this generic S3 manager (AWS/R2/MinIO/Wasabi) can point at.
 
 **One caveat if your client auto-approves read-only tools:** `presigned_url`
 is annotated `readOnlyHint: true` because it never modifies the bucket — but
-unlike the other read tools, it doesn't just describe state, it *mints* a
+unlike the other read tools, it doesn't just describe state, it _mints_ a
 live, shareable, credential-bearing download URL that anyone holding it can
 use until it expires. Annotations are hints, not a security boundary — treat
 `presigned_url` as worth a manual look before auto-approving it, not
@@ -122,7 +122,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
   "mcpServers": {
     "another-s3-manager": {
       "type": "http",
-      "url": "https://your-app.example.com/mcp/",
+      "url": "https://your-app.example.com/mcp",
       "headers": {
         "Authorization": "Bearer as3m_YOUR_TOKEN_HERE"
       }
@@ -131,9 +131,9 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
 }
 ```
 
-Note: the URL must end with a trailing slash (`/mcp/`), and `"type": "http"`
-is required by clients that don't auto-detect Streamable HTTP transport
-(VS Code MCP, some SDK builds).
+Note: `"type": "http"` is required by clients that don't auto-detect
+Streamable HTTP transport (VS Code MCP, some SDK builds). Both `/mcp` and
+`/mcp/` work — the bare form is served directly, with no redirect.
 
 Restart Claude Desktop. The tools should appear under the MCP icon.
 
@@ -146,7 +146,7 @@ Edit `~/.cursor/mcp.json` (or via Cursor settings → Extensions → MCP):
   "mcpServers": {
     "another-s3-manager": {
       "type": "http",
-      "url": "https://your-app.example.com/mcp/",
+      "url": "https://your-app.example.com/mcp",
       "headers": {
         "Authorization": "Bearer as3m_YOUR_TOKEN_HERE"
       }
@@ -164,7 +164,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 async with streamablehttp_client(
-    "https://your-app.example.com/mcp/",
+    "https://your-app.example.com/mcp",
     headers={"Authorization": "Bearer as3m_YOUR_TOKEN_HERE"},
 ) as (read, write, _):
     async with ClientSession(read, write) as session:
