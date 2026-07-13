@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from starlette.requests import Request
 
 import another_s3_manager.config as _config_module
@@ -94,10 +95,34 @@ class McpError(Exception):
     details: dict = field(default_factory=dict)
 
     def __str__(self) -> str:
-        return f"{self.code}: {self.message}"
+        """Render the error the way the agent actually receives it.
 
-    def to_payload(self) -> dict:
-        return {"error": self.code, "message": self.message, "details": self.details}
+        FastMCP (mcp/server/fastmcp/tools/base.py, Tool.run) catches every
+        exception raised from a tool body and wraps `str(e)` as an
+        `isError: true` text result — `details` never reaches the client any
+        other way. This used to mean useful, already-computed context (e.g.
+        ROLE_NOT_ALLOWED's `allowed_roles`, or the `hint` pointing at
+        presigned_url on BINARY_CONTENT/FILE_TOO_LARGE) was silently thrown
+        away: the agent was told "no" and never told what "yes" looks like.
+
+        Fold in only details that are both actionable (tell the agent what to
+        do next) and safe (information the caller is already entitled to —
+        `allowed_roles` is the caller's OWN role list, `hint` is static
+        guidance text naming another tool). Everything else in `details`
+        stays out of the message; it's either redundant with `message`
+        already or not meant to leave the process. The "{code}: " prefix is
+        always kept first so the machine-readable code stays trivially
+        parseable out of the string.
+        """
+        parts = [f"{self.code}: {self.message}"]
+        if "allowed_roles" in self.details:
+            roles = self.details["allowed_roles"]
+            roles_text = ", ".join(roles) if roles else "(none)"
+            parts.append(f"Roles you may use: {roles_text}.")
+        hint = self.details.get("hint")
+        if hint:
+            parts.append(str(hint))
+        return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -459,9 +484,12 @@ def _observe_response_size(tool: str, token: Any, payload: dict) -> dict:
 # list_roles — returns the intersection of user's allowed_roles and
 # role names defined in config (only what actually exists).
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def list_roles() -> dict:
-    """List role names accessible to the authenticated user."""
+    """List role names accessible to the authenticated user.
+
+    Call this FIRST — every other tool needs a role name, and this is how you learn which ones you have.
+    """
     error_code = "none"
     start = time.perf_counter()
     try:
@@ -511,9 +539,12 @@ async def list_roles() -> dict:
 # ------------------------------------------------------------------
 # list_buckets — lists buckets accessible via the given role.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def list_buckets(role: str) -> dict:
-    """List buckets accessible via the given role."""
+    """List buckets accessible via the given role.
+
+    Call this right after list_roles, before touching files — every other tool needs a bucket name too.
+    """
     error_code = "none"
     start = time.perf_counter()
     try:
@@ -582,7 +613,7 @@ async def list_buckets(role: str) -> dict:
 #     mcp_list_page_size, ceiling mcp_list_max_page_size) per call; pass back
 #     next_continuation_token to get the next page.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def list_files(
     role: str,
     bucket: str,
@@ -750,7 +781,7 @@ async def list_files(
 # All S3 work and permission checks live in
 # s3_client.summarize_bucket_for_role — this stays a thin wrapper.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def bucket_summary(role: str, bucket: str, path: str = "") -> dict:
     """Summarize what's in a bucket (or under a prefix) in ONE compact call:
     object count, total size, per-prefix breakdown, extension histogram,
@@ -843,7 +874,7 @@ async def bucket_summary(role: str, bucket: str, path: str = "") -> dict:
 # upload_file — upload a file to a bucket. Content as base64.
 # WRITE TOOL: gated by assert_write_allowed.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True))
 async def upload_file(role: str, bucket: str, path: str, content_base64: str) -> dict:
     """Upload a file to a bucket (WRITE operation — creates or overwrites the
     object at `path`). Content must be base64-encoded. Blocked for read-only
@@ -913,7 +944,7 @@ async def upload_file(role: str, bucket: str, path: str, content_base64: str) ->
 # delete_file — delete a file from a bucket.
 # WRITE TOOL: gated by assert_write_allowed.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
 async def delete_file(role: str, bucket: str, path: str) -> dict:
     """Delete a file from a bucket (WRITE / DESTRUCTIVE operation — the object is
     permanently removed; a `path` ending in "/" deletes the whole folder
@@ -980,12 +1011,23 @@ async def delete_file(role: str, bucket: str, path: str) -> dict:
 # AppFlow regression: S3 Content-Type metadata is IGNORED; classification
 # is driven by extension whitelist and UTF-8 sniffing only.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def read_file(role: str, bucket: str, path: str, force_text: bool = False) -> dict:
-    """Download and return a text file from a bucket.
+    """Download a text file's FULL CONTENTS into your context. Call this only when you actually need to
+    read/quote/analyze what's inside a specific, already-known-text file.
 
-    Performs HEAD first to avoid downloading large or binary files.
-    Set force_text=True to skip detection and use errors='replace' decoding.
+    Do NOT call this to check whether a file exists, how big it is, or what
+    type it is — that's get_object_metadata (no download, cheap, use it
+    first if you're unsure). Do NOT call this for binary files (images,
+    archives, PDFs, executables, media) or for a file you intend to hand to
+    a user rather than read yourself — that's presigned_url, a link instead
+    of bytes through your context.
+
+    Performs HEAD first so oversized or binary files are refused before
+    download: FILE_TOO_LARGE and BINARY_CONTENT errors both name
+    presigned_url as the alternative. Set force_text=True to skip binary
+    detection and decode with errors='replace' (undecodable bytes become the
+    UTF-8 replacement character).
     """
     error_code = "none"
     start_t = time.perf_counter()
@@ -1011,7 +1053,14 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
             raise McpError(
                 "FILE_TOO_LARGE",
                 f"File size {size} exceeds limit {effective_max}",
-                {"size": size, "max_read_bytes": effective_max},
+                {
+                    "size": size,
+                    "max_read_bytes": effective_max,
+                    "hint": (
+                        "Use the presigned_url tool for a download link instead, "
+                        "or request a token with a higher max_read_bytes."
+                    ),
+                },
             )
 
         ext: str | None = None
@@ -1143,7 +1192,7 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
 # copy_object — server-side copy (optionally move/rename) within a role.
 # WRITE TOOL: gated by assert_write_allowed; delete_source also needs deletion.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
 async def copy_object(
     role: str,
     source_bucket: str,
@@ -1152,7 +1201,9 @@ async def copy_object(
     dest_path: str,
     delete_source: bool = False,
 ) -> dict:
-    """Copy an object to a new location (WRITE operation).
+    """Copy an object to a new location (WRITE operation — overwrites the
+    object at `dest_path` if one already exists; there is no existence
+    check first).
 
     Server-side copy within one role's credentials — source and destination
     buckets must both be accessible to `role`. Set delete_source=true to MOVE
@@ -1253,7 +1304,7 @@ async def copy_object(
 # ------------------------------------------------------------------
 # get_object_metadata — HEAD an object; no download. Read-only.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def get_object_metadata(role: str, bucket: str, path: str) -> dict:
     """Return object metadata (size, last_modified, content_type, etag) without
     downloading it. Read-only — useful to inspect a file before read_file or
@@ -1314,7 +1365,7 @@ async def get_object_metadata(role: str, bucket: str, path: str) -> dict:
 # ------------------------------------------------------------------
 # presigned_url — time-limited GET URL for an object. Read-only.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def presigned_url(role: str, bucket: str, path: str, expires_in: int = 3600) -> dict:
     """Generate a time-limited download URL for an object (read-only).
 

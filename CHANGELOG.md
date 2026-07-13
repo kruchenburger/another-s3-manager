@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`mcp_list_page_size` / `mcp_list_max_page_size`) and the summary walk
   (`mcp_summary_max_keys` / `mcp_summary_prefix_scan_pages`) — all four
   editable in Settings → MCP.
+- MCP: all ten tools now advertise `readOnlyHint`/`destructiveHint`/
+  `idempotentHint` annotations, so an MCP client can auto-approve reads while
+  still gating writes. All three write tools (`upload_file`, `copy_object`,
+  `delete_file`) are flagged destructive — none of them checks whether
+  something already exists at the destination before overwriting it.
+  `presigned_url` is read-only but mints a shareable, credential-bearing
+  URL — flagged in `docs/mcp-setup.md` as worth a manual look rather than a
+  blanket auto-approve despite the read-only hint.
 
 ### Fixed
 
@@ -45,6 +53,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overshoots compounded across thousands of restarts into a nonsensical
   value. The counter now animates within a mathematically guaranteed range,
   so it always converges to the correct total.
+- MCP: tool errors now actually tell the agent what to do next. FastMCP only
+  ever forwards `str(exception)` to the client — the `details` dict a tool
+  raised alongside it (e.g. `ROLE_NOT_ALLOWED`'s list of roles the caller MAY
+  use, or the `presigned_url` redirect on `BINARY_CONTENT`/`FILE_TOO_LARGE`)
+  was silently discarded, so the agent was told "no" and never told what
+  "yes" looks like. The useful, already-safe-to-share parts of `details` are
+  now folded into the error text itself. `read_file`'s docstring also now
+  states upfront (not just inside the error body) when to reach for
+  `get_object_metadata` or `presigned_url` instead, and `list_roles`/
+  `list_buckets` each got a one-line "call this first" trigger.
 
 ## [1.1.0] - 2026-07-11
 

@@ -86,6 +86,30 @@ read-only tokens and when `mcp_disable_writes` is set; `delete_file` and
 only (both buckets must be in the role's allowed_buckets) — cross-role /
 cross-provider copy is not supported.
 
+### Tool annotations (auto-approval hints)
+
+All ten tools advertise MCP `readOnlyHint`/`destructiveHint`/`idempotentHint`
+annotations so a client (e.g. Claude Desktop) can auto-approve reads while
+still gating writes — the 7 read tools (`list_roles`, `list_buckets`,
+`list_files`, `bucket_summary`, `read_file`, `get_object_metadata`,
+`presigned_url`) are `readOnlyHint: true`; the 3 write tools
+(`upload_file`, `copy_object`, `delete_file`) are not, and all three are
+additionally flagged `destructiveHint: true` — none of them checks whether
+something already exists at the destination before overwriting it (S3
+`PutObject`/`CopyObject` semantics), and `delete_file` removes an object
+outright. `upload_file` is also `idempotentHint: true` (same bytes to the
+same key always end in the same state) — destructive and idempotent are
+independent hints, a tool can be both.
+
+**One caveat if your client auto-approves read-only tools:** `presigned_url`
+is annotated `readOnlyHint: true` because it never modifies the bucket — but
+unlike the other read tools, it doesn't just describe state, it *mints* a
+live, shareable, credential-bearing download URL that anyone holding it can
+use until it expires. Annotations are hints, not a security boundary — treat
+`presigned_url` as worth a manual look before auto-approving it, not
+something that's safe to blanket-approve just because it's technically
+read-only.
+
 ## Claude Desktop
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json`

@@ -39,16 +39,60 @@ def test_mcp_error_str():
     assert str(err) == "SOME_CODE: some message"
 
 
-def test_mcp_error_to_payload_no_details():
-    err = McpError("SOME_CODE", "some message")
-    payload = err.to_payload()
-    assert payload == {"error": "SOME_CODE", "message": "some message", "details": {}}
-
-
-def test_mcp_error_to_payload_with_details():
+def test_mcp_error_str_unaffected_by_details_without_fold_keys():
+    """`details` keys other than allowed_roles/hint don't change str(err) —
+    matches the pre-fix contract for codes like READ_ONLY_TOKEN whose
+    `details` (e.g. {"tool": ...}) is redundant with `message`."""
     err = McpError("READ_ONLY_TOKEN", "Read-only", {"tool": "upload_file"})
-    payload = err.to_payload()
-    assert payload["details"] == {"tool": "upload_file"}
+    assert str(err) == "READ_ONLY_TOKEN: Read-only"
+
+
+def test_mcp_error_str_folds_allowed_roles():
+    """REAL BUG this fix closes: FastMCP (mcp/server/fastmcp/tools/base.py)
+    catches tool exceptions and forwards only str(exc) to the client as an
+    isError text result — `details` never reaches the agent any other way.
+    A ROLE_NOT_ALLOWED error's `allowed_roles` (the caller's OWN role list —
+    safe to surface, list_roles already returns it) must therefore be folded
+    into str(err), or the agent is told "no" without ever learning "yes"."""
+    err = McpError(
+        "ROLE_NOT_ALLOWED",
+        "role 'Admin' not in allowed_roles",
+        {"role": "Admin", "allowed_roles": ["Default", "ReadOnly"]},
+    )
+    text = str(err)
+    assert text.startswith("ROLE_NOT_ALLOWED: role 'Admin' not in allowed_roles")
+    assert "Default" in text
+    assert "ReadOnly" in text
+
+
+def test_mcp_error_str_folds_empty_allowed_roles_honestly():
+    """An empty allowed_roles list must still be folded in (not silently
+    dropped) so the agent learns it truly has zero usable roles."""
+    err = McpError("ROLE_NOT_ALLOWED", "role 'X' not in allowed_roles", {"role": "X", "allowed_roles": []})
+    assert "none" in str(err).lower()
+
+
+def test_mcp_error_str_folds_hint():
+    """A `hint` in details (BINARY_CONTENT/FILE_TOO_LARGE pointing at
+    presigned_url) must also reach str(err)."""
+    err = McpError(
+        "FILE_TOO_LARGE",
+        "File size 999 exceeds limit 100",
+        {"size": 999, "max_read_bytes": 100, "hint": "Use the presigned_url tool instead."},
+    )
+    text = str(err)
+    assert text.startswith("FILE_TOO_LARGE: File size 999 exceeds limit 100")
+    assert "presigned_url" in text
+
+
+def test_mcp_error_has_no_to_payload_method():
+    """to_payload() was dead code — grep confirmed its only callers were
+    tests, FastMCP never calls it (it only ever sees str(exc)). Now that its
+    useful fields fold into __str__, keeping to_payload() around would be a
+    second, unused serialization path implying a machine-readable channel
+    that doesn't actually exist in production. Removed rather than kept."""
+    err = McpError("SOME_CODE", "some message")
+    assert not hasattr(err, "to_payload")
 
 
 # ---------------------------------------------------------------------------
