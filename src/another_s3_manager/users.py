@@ -84,19 +84,27 @@ def _admin_password_force_enabled() -> bool:
     return os.getenv("ADMIN_PASSWORD_FORCE", "").strip().lower() in ("1", "true", "yes")
 
 
-def _classify_legacy_admin(password_hash: str, env_password: str) -> str:
-    """Decide the provenance of a pre-provenance ('unknown') admin row. Runs once.
+def _classify_legacy_admin(password_hash: str, env_password: str) -> tuple[str, bool]:
+    """Decide the provenance of a pre-provenance ('unknown') admin row. Runs once it CAN prove one.
 
     The migration deliberately cannot do this (it must stay deterministic and env-free), so the
     classification lives here, where bcrypt and the environment are both available.
 
       1. hash verifies against the built-in default -> "env": the row still holds the bootstrap
          password; there is no operator-chosen password to lose.
-      2. hash verifies against the current ADMIN_PASSWORD -> "env": the stored password IS the env
+      2. ADMIN_PASSWORD is absent (or resolves to the built-in default) and the hash does NOT match
+         the default -> stay "unknown". There is nothing in the environment to prove or disprove
+         "env" with; classifying "ui" here would be permanent and wrong on the strength of an
+         environment that said nothing. A later, informed boot (ADMIN_PASSWORD set to something
+         else) can bcrypt-*prove* "env" and classify correctly then.
+      3. hash verifies against the current ADMIN_PASSWORD -> "env": the stored password IS the env
          value, so it was seeded from env; re-applying it now is a no-op and future rotation works.
-      3. otherwise -> "ui": an unknown, human-chosen password. NEVER touch it.
+      4. otherwise (ADMIN_PASSWORD IS present and matches neither) -> "ui": an unknown, human-chosen
+         password. NEVER touch it.
 
-    Failing to "ui" is the safe direction: env stops governing, no password is lost.
+    Failing to "ui" is the safe direction: env stops governing, no password is lost. Staying
+    "unknown" is even safer — it costs nothing (an "unknown" row is never acted upon) and preserves
+    the option to classify correctly once the environment actually says something.
     ADMIN_PASSWORD_FORCE is the documented way back for an operator who wanted env management
     after all.
 
@@ -105,14 +113,20 @@ def _classify_legacy_admin(password_hash: str, env_password: str) -> str:
     a deliberate split: JSON-origin rows have no reliable way to distinguish "seeded from env" from
     "operator changed it", so migration.py conservatively calls all of them "ui" up front, and this
     function never runs against them.
+
+    Returns (provenance, hash_matches_env_password). The second element is True only when
+    provenance was proven "env" via case 3 above (a direct bcrypt match against `env_password`) —
+    the caller can then skip re-running that same verify to decide whether a write is needed.
     """
     from another_s3_manager.auth import verify_password
 
     if verify_password(DEFAULT_ADMIN_PASSWORD, password_hash):
-        return PASSWORD_SET_VIA_ENV
-    if env_password != DEFAULT_ADMIN_PASSWORD and verify_password(env_password, password_hash):
-        return PASSWORD_SET_VIA_ENV
-    return PASSWORD_SET_VIA_UI
+        return PASSWORD_SET_VIA_ENV, False
+    if env_password == DEFAULT_ADMIN_PASSWORD:
+        return PASSWORD_SET_VIA_UNKNOWN, False
+    if verify_password(env_password, password_hash):
+        return PASSWORD_SET_VIA_ENV, True
+    return PASSWORD_SET_VIA_UI, False
 
 
 def sync_admin_password_from_env() -> bool:
@@ -129,7 +143,8 @@ def sync_admin_password_from_env() -> bool:
         "ui" and "cli"), reset provenance to "env", and log it LOUDLY. This is the operator's explicit
         escape hatch out of any provenance dead-end; it cannot fire by accident because it needs a
         second, purpose-built variable.
-      - provenance "unknown" (row predates this feature) -> classify once, persist, continue.
+      - provenance "unknown" (row predates this feature) -> classify once IF the environment can
+        prove something; otherwise stay "unknown" and let a later, more-informed boot classify.
       - provenance "ui"/"cli" -> the operator set this password deliberately. Never touched.
       - provenance "env" and the env value differs from the stored hash -> apply it, and clear
         must_change_password (the operator chose this password; forcing a change would be hostile).
@@ -137,6 +152,12 @@ def sync_admin_password_from_env() -> bool:
     "Differs from the stored hash" is one bcrypt verify: when provenance is "env", the stored hash IS
     a salted fingerprint of the last-applied env value, so no separate fingerprint column is needed
     (and storing one would be a second place a password could leak from).
+
+    Deliberately NOT subject to the UI password policy (password_min_length etc.): the seeded admin
+    password is already exempt from it, and the built-in "change_me_pls" default would itself fail
+    a shipped policy — a bootstrap/sync path must never be able to brick startup by rejecting its
+    own input. This also means a policy-violating env password lands with must_change_password
+    cleared (no forced change at next login), matching the seed's posture.
 
     Returns True iff the password was rewritten.
     """
@@ -180,23 +201,30 @@ def sync_admin_password_from_env() -> bool:
             )
             return True
 
+        already_synced = False
         if admin.password_set_via == PASSWORD_SET_VIA_UNKNOWN:
-            admin.password_set_via = _classify_legacy_admin(admin.password_hash, env_password)
-            if admin.password_set_via == PASSWORD_SET_VIA_ENV:
+            classified, hash_matches_env = _classify_legacy_admin(admin.password_hash, env_password)
+            if classified == PASSWORD_SET_VIA_ENV:
+                admin.password_set_via = classified
+                already_synced = hash_matches_env
                 logger.info("Admin password provenance recorded as 'env'; ADMIN_PASSWORD governs it on restart.")
-            else:
+            elif classified == PASSWORD_SET_VIA_UI:
+                admin.password_set_via = classified
                 logger.warning(
                     "Admin password provenance recorded as 'ui' (the stored password is neither the built-in "
                     "default nor the current ADMIN_PASSWORD). ADMIN_PASSWORD is now ignored for this user — "
                     "change the password in the UI, run 'python -m another_s3_manager.reset_admin_password', "
                     "or set ADMIN_PASSWORD_FORCE=1 once to hand the password back to the environment."
                 )
+            # else: classified stays "unknown" -- ADMIN_PASSWORD said nothing this boot (unset, or
+            # the built-in default), so there is nothing to classify with. Leave the row exactly as
+            # it is and let a later, informed boot decide.
 
         if admin.password_set_via != PASSWORD_SET_VIA_ENV:
             return False
         if env_password == DEFAULT_ADMIN_PASSWORD:
             return False
-        if verify_password(env_password, admin.password_hash):
+        if already_synced or verify_password(env_password, admin.password_hash):
             return False  # env value unchanged since it was last applied
 
         admin.password_hash = hash_password(env_password)

@@ -29,10 +29,38 @@ def _seed_admin(password: str, provenance: str, must_change_password: bool = Fal
         )
 
 
+def _seed_bystander(username: str, password: str, provenance: str) -> None:
+    """Insert a non-admin user row -- used to pin that the sync's WHERE username == 'admin'
+    filter really does leave every other row alone."""
+    from another_s3_manager.auth import hash_password
+    from another_s3_manager.database import session_scope
+    from another_s3_manager.models import User
+
+    with session_scope() as session:
+        session.add(
+            User(
+                username=username,
+                password_hash=hash_password(password),
+                is_admin=False,
+                theme="auto",
+                must_change_password=False,
+                password_set_via=provenance,
+            )
+        )
+
+
 def _admin() -> dict:
     from another_s3_manager.users import get_user_by_username
 
     user = get_user_by_username("admin")
+    assert user is not None
+    return user
+
+
+def _user(username: str) -> dict:
+    from another_s3_manager.users import get_user_by_username
+
+    user = get_user_by_username(username)
     assert user is not None
     return user
 
@@ -43,10 +71,12 @@ def _admin() -> dict:
 def test_env_rotation_applies(monkeypatch, caplog):
     """THE case the provenance model exists for: ADMIN_PASSWORD foo -> bar rotates the password."""
     from another_s3_manager.auth import verify_password
-    from another_s3_manager.constants import PASSWORD_SET_VIA_ENV
+    from another_s3_manager.constants import PASSWORD_SET_VIA_ENV, PASSWORD_SET_VIA_UI
     from another_s3_manager.users import sync_admin_password_from_env
 
     _seed_admin(ENV_PASSWORD, PASSWORD_SET_VIA_ENV)  # previously applied from env
+    _seed_bystander("alice", "AliceSecret1", PASSWORD_SET_VIA_UI)
+    alice_hash_before = _user("alice")["password_hash"]
     monkeypatch.setenv("ADMIN_PASSWORD", ROTATED_PASSWORD)
 
     with caplog.at_level(logging.WARNING):
@@ -57,17 +87,28 @@ def test_env_rotation_applies(monkeypatch, caplog):
     assert _admin()["password_set_via"] == PASSWORD_SET_VIA_ENV  # still env-governed
     assert any("ADMIN_PASSWORD" in r.message for r in caplog.records)
     assert ROTATED_PASSWORD not in caplog.text  # never log the password
+    # The destructive write must be scoped to 'admin' -- the bystander is untouched.
+    alice = _user("alice")
+    assert alice["password_hash"] == alice_hash_before
+    assert alice["password_set_via"] == PASSWORD_SET_VIA_UI
 
 
 def test_env_unchanged_is_a_noop(monkeypatch):
-    """The stored hash already verifies against the env value -> no write, no churn."""
+    """The stored hash already verifies against the env value -> no write, no churn.
+
+    Asserts byte-for-byte hash equality, not just the return value -- an implementation that
+    pointlessly re-hashed the password (new salt) and returned False would still pass a
+    return-value-only assertion.
+    """
     from another_s3_manager.constants import PASSWORD_SET_VIA_ENV
     from another_s3_manager.users import sync_admin_password_from_env
 
     _seed_admin(ENV_PASSWORD, PASSWORD_SET_VIA_ENV)
     monkeypatch.setenv("ADMIN_PASSWORD", ENV_PASSWORD)
+    hash_before = _admin()["password_hash"]
 
     assert sync_admin_password_from_env() is False
+    assert _admin()["password_hash"] == hash_before
 
 
 def test_default_password_row_gets_env_applied(monkeypatch):
@@ -215,6 +256,39 @@ def test_classification_is_persisted_and_not_repeated(monkeypatch):
 
     assert sync_admin_password_from_env() is False
     assert _admin()["password_set_via"] == PASSWORD_SET_VIA_UI
+
+
+def test_uninformative_boot_does_not_burn_the_classification(monkeypatch):
+    """An upgrade boot with NO ADMIN_PASSWORD must not permanently stamp 'ui' on a legacy admin
+    whose password happens not to be the default -- the environment said nothing, so there is
+    nothing to classify WITH. A later, informed boot must still be able to prove 'env' and, from
+    there, rotate. This is the likely upgrade order: ADMIN_PASSWORD dropped from compose long ago
+    (docs describe it as first-boot-only), then re-added later expecting rotation to work."""
+    from another_s3_manager.auth import verify_password
+    from another_s3_manager.constants import PASSWORD_SET_VIA_ENV, PASSWORD_SET_VIA_UNKNOWN
+    from another_s3_manager.users import sync_admin_password_from_env
+
+    _seed_admin("SeededLongAgo1", PASSWORD_SET_VIA_UNKNOWN)
+
+    # Boot 1: ADMIN_PASSWORD is absent. Nothing in the environment can prove or disprove "env"
+    # against this non-default hash -- the row must stay "unknown", not be locked to "ui".
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    assert sync_admin_password_from_env() is False
+    assert _admin()["password_set_via"] == PASSWORD_SET_VIA_UNKNOWN
+
+    # Boot 2: operator adds ADMIN_PASSWORD matching the stored password. Now the environment can
+    # prove "env" (a direct bcrypt match) -- classify, no write needed yet (already matches).
+    monkeypatch.setenv("ADMIN_PASSWORD", "SeededLongAgo1")
+    assert sync_admin_password_from_env() is False
+    assert _admin()["password_set_via"] == PASSWORD_SET_VIA_ENV
+
+    # Boot 3: operator rotates ADMIN_PASSWORD. Because the row is now genuinely "env"-governed,
+    # rotation fires -- the whole point of not having burned the classification in boot 1.
+    monkeypatch.setenv("ADMIN_PASSWORD", ROTATED_PASSWORD)
+    assert sync_admin_password_from_env() is True
+    admin = _admin()
+    assert verify_password(ROTATED_PASSWORD, admin["password_hash"])
+    assert admin["password_set_via"] == PASSWORD_SET_VIA_ENV
 
 
 # --- missing admin ----------------------------------------------------------
