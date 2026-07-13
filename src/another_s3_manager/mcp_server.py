@@ -24,6 +24,7 @@ from another_s3_manager import api_tokens as token_svc
 from another_s3_manager import s3_client as _s3_client
 from another_s3_manager.errors import (
     CredentialsExpiredError,
+    RoleNotFoundError,
     S3AccessDeniedError,
     S3ConfigError,
     S3NetworkError,
@@ -551,7 +552,7 @@ async def list_buckets(role: str) -> dict:
         token, user = await authenticate_mcp_request(_get_current_request())
         try:
             buckets = _s3_client.list_buckets_for_role(role, user)
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             raise McpError(
                 "ROLE_NOT_ALLOWED",
                 str(e),
@@ -721,7 +722,7 @@ async def list_files(
                         "breakdown, or list_files(..., recursive=True) to page through "
                         "every key."
                     )
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
@@ -816,7 +817,7 @@ async def bucket_summary(role: str, bucket: str, path: str = "") -> dict:
             result = _s3_client.summarize_bucket_for_role(
                 role, bucket, prefix, user, max_keys=max_keys, prefix_scan_pages=prefix_scan_pages
             )
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
@@ -891,7 +892,7 @@ async def upload_file(role: str, bucket: str, path: str, content_base64: str) ->
             raise McpError("INVALID_INPUT", f"content_base64 is not valid base64: {e}", {"tool": "upload_file"})
         try:
             _s3_client.put_object_for_role(role, bucket, path, content, user)
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
@@ -958,7 +959,7 @@ async def delete_file(role: str, bucket: str, path: str) -> dict:
         assert_write_allowed(token, "delete_file", config)
         try:
             _s3_client.delete_object_for_role(role, bucket, path, user)
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
@@ -1043,7 +1044,7 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
             size = _s3_client.head_object_for_role(role, bucket, path, user)
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             if "bucket" in str(e).lower():
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
             raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
@@ -1233,7 +1234,7 @@ async def copy_object(
                 _s3_client.delete_object_for_role(role, source_bucket, source_path, user)
         except FileNotFoundError as e:
             raise McpError("FILE_NOT_FOUND", str(e), {"bucket": source_bucket, "path": source_path})
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             if "bucket" in str(e).lower():
                 raise McpError(
                     "BUCKET_NOT_ALLOWED",
@@ -1317,7 +1318,7 @@ async def get_object_metadata(role: str, bucket: str, path: str) -> dict:
             meta = _s3_client.get_object_metadata_for_role(role, bucket, path, user)
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             if "bucket" in str(e).lower():
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
             raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
@@ -1382,7 +1383,7 @@ async def presigned_url(role: str, bucket: str, path: str, expires_in: int = 360
         clamped = max(60, min(int(expires_in), max_ttl))
         try:
             url = _s3_client.generate_presigned_url_for_role(role, bucket, path, user, expires_in=clamped)
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             if "bucket" in str(e).lower():
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
             raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})

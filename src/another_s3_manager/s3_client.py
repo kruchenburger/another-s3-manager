@@ -561,6 +561,7 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     # Import here to avoid circular dependency
     from another_s3_manager.config import load_config
     from another_s3_manager.errors import (
+        RoleNotFoundError,
         S3AccessDeniedError,
         S3OperationError,
         classify_boto_error,
@@ -580,7 +581,7 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     if role_name:
         role = next((r for r in roles if r.get("name") == role_name), None)
         if not role:
-            raise ValueError(f"Role '{role_name}' not found in configuration")
+            raise RoleNotFoundError(f"Role '{role_name}' not found in configuration")
     else:
         # Use first role
         role = roles[0] if roles else None

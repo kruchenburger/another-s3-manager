@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- MCP: asking for a role that does not exist returned an opaque
+  `INTERNAL_ERROR` when the token belonged to an **admin**. Admins bypass the
+  role check ("admins have access to all roles"), so an unknown role only
+  surfaced later as a config error and was swallowed by the tools' catch-all —
+  the agent learned nothing and could not correct itself, and a routine "no such
+  role" was counted as a server fault in the metrics. It now returns
+  `ROLE_NOT_ALLOWED` naming the roles the token may use, exactly as it already
+  did for non-admins.
 - MCP: the endpoint now answers on a bare `/mcp` instead of redirecting it to
   `/mcp/` with a 307. MCP clients that don't follow redirects could not connect
   at all, and `/mcp` is both the conventional address and the one the server's

@@ -67,6 +67,29 @@ class S3ThrottledError(S3OperationError):
     default_http_status: ClassVar[int] = 503
 
 
+class RoleNotFoundError(ValueError):
+    """The requested role does not exist in the configuration.
+
+    Why this is not just a ValueError: validate_role_access() short-circuits for
+    admins ("admins have access to all roles"), so for an admin an unknown role
+    is NOT caught there — it surfaces later, when get_s3_client() fails to find
+    it. That used to be a bare ValueError, which the MCP tools' exception ladder
+    swallowed into a useless "INTERNAL_ERROR: Internal server error": the agent
+    was told nothing, and the tool call was miscounted as a server fault. A
+    non-admin asking for the same role got a proper ROLE_NOT_ALLOWED naming the
+    roles it may use — so the answer depended on who was asking.
+
+    Subclasses ValueError ON PURPOSE and nothing else: get_s3_client raises
+    ValueError for a dozen unrelated config faults (missing endpoint_url, empty
+    keys, unknown role type), and the web routes catch ValueError -> HTTP 400
+    for all of them. Keeping ValueError in the bases means every existing web
+    handler behaves exactly as before. The MCP tools name this class explicitly
+    alongside PermissionError so an unknown role becomes ROLE_NOT_ALLOWED there
+    — actionable for an agent — without a blanket `except ValueError` that would
+    disguise real config errors as permission problems.
+    """
+
+
 # ----- Classifier ------------------------------------------------------------
 
 # Boto error codes that map to S3ConfigError (admin needs to fix the role).
