@@ -1514,24 +1514,69 @@ def test_list_objects_recursive_paginates_via_continuation_token(mocker):
     assert result["next_continuation_token"] == "TOKEN-A"
 
 
-def test_list_objects_recursive_max_keys_capped_at_10000():
-    """User-supplied max_keys is silently capped at 10000."""
-    import another_s3_manager.s3_client as mod
-
-    # We don't even need to mock S3 — just confirm no exception when max_keys=99999;
-    # the helper validates internally before any boto call.
-    # (Easier to assert via direct param check than full mock setup.)
-    with pytest.raises(PermissionError):
-        # Will fail on permission check before anything else; that's fine —
-        # we just want to ensure the function doesn't reject max_keys=99999 outright.
-        mod.list_objects_recursive_for_role("RoleX", "bucket", "", _make_user(allowed_roles=["RoleA"]), max_keys=99_999)
-
-
 def test_list_objects_recursive_permission_denied_role():
     import another_s3_manager.s3_client as mod
 
     with pytest.raises(PermissionError):
         mod.list_objects_recursive_for_role("RoleX", "bucket", "", _make_user(allowed_roles=["RoleA"]))
+
+
+def test_list_objects_recursive_honours_max_page_size_parameter(mocker):
+    """The safety ceiling comes from the caller, not a hardcoded 10_000:
+    max_keys above max_page_size is clamped down to it."""
+    import datetime
+
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    dt = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
+    fake_client = mocker.MagicMock()
+    fake_client.list_objects_v2.return_value = {
+        "Contents": [{"Key": f"f{i}.txt", "Size": i, "LastModified": dt} for i in range(8)],
+        "IsTruncated": False,
+    }
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    result = mod.list_objects_recursive_for_role(
+        "RoleA", "bucket", "", _make_user(allowed_roles=["RoleA"]), max_keys=99, max_page_size=3
+    )
+    assert result["key_count"] == 3
+    assert result["is_truncated"] is True
+
+
+def test_list_objects_recursive_max_page_size_default_still_10000(mocker):
+    """Without max_page_size the previous behaviour is preserved: a request of
+    1500 keys (> the old per-page 1000, < the 10_000 ceiling) is honoured."""
+    import datetime
+
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    dt = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
+    fake_client = mocker.MagicMock()
+    page1 = {
+        "Contents": [{"Key": f"a{i:04d}.txt", "Size": 1, "LastModified": dt} for i in range(1000)],
+        "IsTruncated": True,
+        "NextContinuationToken": "TOKEN-B",
+    }
+    page2 = {
+        "Contents": [{"Key": f"b{i:04d}.txt", "Size": 1, "LastModified": dt} for i in range(1000)],
+        "IsTruncated": False,
+    }
+    fake_client.list_objects_v2.side_effect = [page1, page2]
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    result = mod.list_objects_recursive_for_role(
+        "RoleA", "bucket", "", _make_user(allowed_roles=["RoleA"]), max_keys=1500
+    )
+    assert result["key_count"] == 1500
+    assert result["is_truncated"] is True
 
 
 # --- generate_presigned_url_for_role ---

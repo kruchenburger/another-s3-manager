@@ -145,11 +145,18 @@ async def test_list_roles_filters_roles_not_in_config(alice_user, tool_registry,
 
 @pytest.mark.asyncio
 async def test_list_buckets_role_not_allowed(alice_user, tool_registry):
-    """Requesting a role the user doesn't have → McpError(ROLE_NOT_ALLOWED)."""
+    """Requesting a role the user doesn't have → McpError(ROLE_NOT_ALLOWED).
+
+    REAL BUG regression guard: str(exc) — the only thing that reaches the
+    agent, see mcp_server.py McpError.__str__ — must name the roles alice
+    actually has ("Default"), not just say no. A test asserting only `.code`
+    would have passed before this fix; that's the whole point of this line.
+    """
     uid, plaintext = alice_user
     with pytest.raises(McpError) as exc_info:
         await _call(tool_registry, "list_buckets", _fake_request(plaintext), role="AdminRole")
     assert exc_info.value.code == "ROLE_NOT_ALLOWED"
+    assert "Default" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -197,6 +204,7 @@ async def test_list_files_role_not_allowed(alice_user, tool_registry):
         with pytest.raises(McpError) as exc_info:
             await _call(tool_registry, "list_files", _fake_request(plaintext), role="AdminRole", bucket="b", path="")
     assert exc_info.value.code == "ROLE_NOT_ALLOWED"
+    assert "Default" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -494,6 +502,7 @@ async def test_delete_file_role_not_allowed(alice_user, tool_registry):
                 path="f.txt",
             )
     assert exc_info.value.code == "ROLE_NOT_ALLOWED"
+    assert "Default" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

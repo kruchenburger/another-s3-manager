@@ -356,6 +356,29 @@ async def _http_metrics(request: Request, call_next):
     return response
 
 
+# Canonical bare /mcp — registered BEFORE the kill-switch below, so Starlette's
+# add_middleware() prepend order leaves the kill-switch OUTSIDE this one and it
+# still evaluates the original, un-rewritten path (it matches both forms itself).
+@app.middleware("http")
+async def _mcp_canonical_path(request: Request, call_next):
+    """Serve a bare /mcp directly instead of 307-redirecting it to /mcp/.
+
+    Starlette's Mount matches with a regex equivalent to ^/mcp(?P<path>/.*)$,
+    so a request to exactly /mcp never matches the mount; the router then falls
+    through to redirect_slashes and answers 307 -> /mcp/. MCP clients that do
+    not follow redirects cannot connect at all — and a bare /mcp is both how
+    every other MCP server is addressed and what our own MCP_SERVER_INSTRUCTIONS
+    text tells agents to use. Rewriting the path before routing makes the mount
+    match directly, so both forms answer 200.
+
+    Exact match only: /mcpfoo must still 404, so never use startswith("/mcp").
+    """
+    if request.scope["path"] == "/mcp":
+        request.scope["path"] = "/mcp/"
+        request.scope["raw_path"] = b"/mcp/"
+    return await call_next(request)
+
+
 # MCP kill-switch middleware — must be registered BEFORE the MCP sub-app is
 # mounted so Starlette evaluates it on every /mcp/* request.
 @app.middleware("http")
@@ -1362,6 +1385,10 @@ async def get_config(
             "mcp_disable_writes": config.get("mcp_disable_writes", False),
             "mcp_text_extensions": config.get("mcp_text_extensions", []),
             "mcp_global_max_read_bytes": config.get("mcp_global_max_read_bytes", 10_485_760),
+            "mcp_summary_max_keys": config.get("mcp_summary_max_keys", 50_000),
+            "mcp_summary_prefix_scan_pages": config.get("mcp_summary_prefix_scan_pages", 20),
+            "mcp_list_page_size": config.get("mcp_list_page_size", 1000),
+            "mcp_list_max_page_size": config.get("mcp_list_max_page_size", 10_000),
         }
         return safe_config
 
@@ -1601,9 +1628,37 @@ async def update_config(
             # Explicitly reject booleans (bool is a subclass of int in Python)
             if isinstance(v, bool) or not isinstance(v, int) or v < 1 or v > 10_485_760:
                 raise HTTPException(status_code=422, detail="mcp_global_max_read_bytes must be 1..10485760")
+        # MCP big-bucket ergonomics keys (2026-07-12): positive ints within UI
+        # bounds. POST rejects garbage; the READ path additionally clamps
+        # (floor 1 for the list keys, floor 1000 for the summary walk) so a
+        # hand-edited config file cannot brick the tools.
+        for int_field, lo, hi in (
+            # Lower bound 1_000 matches the runtime floor
+            # (s3_client._MIN_SUMMARY_MAX_KEYS) and the Settings NumberInput
+            # min — a value accepted here that the walk silently re-floors
+            # at call time would be a lie by the time it's echoed back.
+            ("mcp_summary_max_keys", 1_000, 1_000_000),
+            ("mcp_summary_prefix_scan_pages", 1, 200),
+            ("mcp_list_page_size", 1, 10_000),
+            ("mcp_list_max_page_size", 1, 10_000),
+        ):
+            if int_field in config:
+                v = config[int_field]
+                # Explicitly reject booleans (bool is a subclass of int in Python)
+                if isinstance(v, bool) or not isinstance(v, int) or v < lo or v > hi:
+                    raise HTTPException(status_code=422, detail=f"{int_field} must be {lo}..{hi}")
         # Preserve MCP fields from current config when omitted in request
         _current_cfg = load_config(force_reload=False)
-        for k in ("mcp_enabled", "mcp_disable_writes", "mcp_text_extensions", "mcp_global_max_read_bytes"):
+        for k in (
+            "mcp_enabled",
+            "mcp_disable_writes",
+            "mcp_text_extensions",
+            "mcp_global_max_read_bytes",
+            "mcp_summary_max_keys",
+            "mcp_summary_prefix_scan_pages",
+            "mcp_list_page_size",
+            "mcp_list_max_page_size",
+        ):
             if k not in config:
                 config[k] = _current_cfg.get(k)
 

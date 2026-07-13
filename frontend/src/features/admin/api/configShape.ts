@@ -39,5 +39,10 @@ export function toWritableConfig(config: AppConfig): AppConfig {
     mcp_disable_writes: config.mcp_disable_writes,
     mcp_text_extensions: config.mcp_text_extensions,
     mcp_global_max_read_bytes: config.mcp_global_max_read_bytes,
+    // Big-bucket ergonomics (2026-07-12): plain key counts, no unit conversion.
+    mcp_summary_max_keys: config.mcp_summary_max_keys,
+    mcp_summary_prefix_scan_pages: config.mcp_summary_prefix_scan_pages,
+    mcp_list_page_size: config.mcp_list_page_size,
+    mcp_list_max_page_size: config.mcp_list_max_page_size,
   };
 }

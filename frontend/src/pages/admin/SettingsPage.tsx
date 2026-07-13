@@ -49,6 +49,10 @@ export interface SettingsFormValues {
   mcp_disable_writes: boolean;
   mcp_text_extensions: string[];
   mcp_global_max_read_bytes_mb: number;
+  mcp_summary_max_keys: number;
+  mcp_summary_prefix_scan_pages: number;
+  mcp_list_page_size: number;
+  mcp_list_max_page_size: number;
 }
 
 /**
@@ -89,6 +93,10 @@ export function SettingsPage() {
       mcp_disable_writes: false,
       mcp_text_extensions: [],
       mcp_global_max_read_bytes_mb: 10,
+      mcp_summary_max_keys: 50000,
+      mcp_summary_prefix_scan_pages: 20,
+      mcp_list_page_size: 1000,
+      mcp_list_max_page_size: 10000,
     },
     // Inline validation as the user types — so a value like 500000 in
     // "Max client load" lights up the input in red with a tooltip-style
@@ -145,6 +153,10 @@ export function SettingsPage() {
       mcp_text_extensions: config.mcp_text_extensions ?? [],
       // Convert bytes → MB for the NumberInput display
       mcp_global_max_read_bytes_mb: config.mcp_global_max_read_bytes / MB,
+      mcp_summary_max_keys: config.mcp_summary_max_keys,
+      mcp_summary_prefix_scan_pages: config.mcp_summary_prefix_scan_pages,
+      mcp_list_page_size: config.mcp_list_page_size,
+      mcp_list_max_page_size: config.mcp_list_max_page_size,
     };
     // setInitialValues so form.isDirty() correctly reports which fields the
     // user has actually modified (vs. fields populated from server data).
@@ -229,6 +241,11 @@ export function SettingsPage() {
       mcp_global_max_read_bytes: form.isDirty("mcp_global_max_read_bytes_mb")
         ? Math.round(values.mcp_global_max_read_bytes_mb * MB)
         : config.mcp_global_max_read_bytes,
+      // Plain key counts — no MB shadow field, no conversion.
+      mcp_summary_max_keys: values.mcp_summary_max_keys,
+      mcp_summary_prefix_scan_pages: values.mcp_summary_prefix_scan_pages,
+      mcp_list_page_size: values.mcp_list_page_size,
+      mcp_list_max_page_size: values.mcp_list_max_page_size,
     };
     // On success, advance the form's "baseline" to the values that exist at
     // the moment the response comes back — NOT the closure-captured `values`

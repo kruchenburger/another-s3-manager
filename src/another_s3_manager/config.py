@@ -142,6 +142,19 @@ def _migrate_config() -> bool:
     if "mcp_global_max_read_bytes" not in _config_cache:
         _config_cache["mcp_global_max_read_bytes"] = 10_485_760
         config_modified = True
+    # MCP big-bucket ergonomics — added 2026-07-12.
+    if "mcp_summary_max_keys" not in _config_cache:
+        _config_cache["mcp_summary_max_keys"] = 50_000
+        config_modified = True
+    if "mcp_summary_prefix_scan_pages" not in _config_cache:
+        _config_cache["mcp_summary_prefix_scan_pages"] = 20
+        config_modified = True
+    if "mcp_list_page_size" not in _config_cache:
+        _config_cache["mcp_list_page_size"] = 1000
+        config_modified = True
+    if "mcp_list_max_page_size" not in _config_cache:
+        _config_cache["mcp_list_max_page_size"] = 10_000
+        config_modified = True
     if "presigned_url_default_ttl" not in _config_cache or "presigned_url_max_ttl" not in _config_cache:
         from another_s3_manager.constants import DEFAULT_PRESIGNED_URL_DEFAULT_TTL, DEFAULT_PRESIGNED_URL_MAX_TTL
 
@@ -190,6 +203,10 @@ def _get_default_config() -> Dict[str, Any]:
         "mcp_disable_writes": False,
         "mcp_text_extensions": [],
         "mcp_global_max_read_bytes": 10_485_760,
+        "mcp_summary_max_keys": 50_000,
+        "mcp_summary_prefix_scan_pages": 20,
+        "mcp_list_page_size": 1000,
+        "mcp_list_max_page_size": 10_000,
         "presigned_url_default_ttl": int(
             os.getenv("PRESIGNED_URL_DEFAULT_TTL", str(DEFAULT_PRESIGNED_URL_DEFAULT_TTL))
         ),

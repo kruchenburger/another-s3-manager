@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from starlette.requests import Request
 
 import another_s3_manager.config as _config_module
@@ -23,6 +24,7 @@ from another_s3_manager import api_tokens as token_svc
 from another_s3_manager import s3_client as _s3_client
 from another_s3_manager.errors import (
     CredentialsExpiredError,
+    RoleNotFoundError,
     S3AccessDeniedError,
     S3ConfigError,
     S3NetworkError,
@@ -94,10 +96,43 @@ class McpError(Exception):
     details: dict = field(default_factory=dict)
 
     def __str__(self) -> str:
-        return f"{self.code}: {self.message}"
+        """Render the error the way the agent actually receives it.
 
-    def to_payload(self) -> dict:
-        return {"error": self.code, "message": self.message, "details": self.details}
+        FastMCP (mcp/server/fastmcp/tools/base.py, Tool.run) catches every
+        exception raised from a tool body and wraps `str(e)` as an
+        `isError: true` text result — `details` never reaches the client any
+        other way. This used to mean useful, already-computed context (e.g.
+        ROLE_NOT_ALLOWED's `allowed_roles`, or the `hint` pointing at
+        presigned_url on BINARY_CONTENT/FILE_TOO_LARGE) was silently thrown
+        away: the agent was told "no" and never told what "yes" looks like.
+
+        Fold in only details that are both actionable (tell the agent what to
+        do next) and safe (information the caller is already entitled to —
+        `allowed_roles` is the caller's OWN role list, `hint` is static
+        guidance text naming another tool). Everything else in `details`
+        stays out of the message; it's either redundant with `message`
+        already or not meant to leave the process. The "{code}: " prefix is
+        always kept first so the machine-readable code stays trivially
+        parseable out of the string.
+        """
+        suffix = []
+        if "allowed_roles" in self.details:
+            roles = self.details["allowed_roles"]
+            roles_text = ", ".join(roles) if roles else "(none)"
+            suffix.append(f"Roles you may use: {roles_text}.")
+        hint = self.details.get("hint")
+        if hint:
+            suffix.append(str(hint))
+
+        if not suffix:
+            # Nothing to fold — leave the string byte-identical to the plain form.
+            return f"{self.code}: {self.message}"
+
+        # Terminate the message, or the sentences run together: "...not found in
+        # configuration Roles you may use: ...". Only the message needs it; the
+        # suffix parts already end in punctuation.
+        message = self.message if self.message.rstrip().endswith((".", "!", "?", ":")) else f"{self.message}."
+        return " ".join([f"{self.code}: {message}", *suffix])
 
 
 # ---------------------------------------------------------------------------
@@ -401,10 +436,33 @@ def _is_likely_text_sample(sample: bytes) -> bool:
 #     "Use this in the lifespan context manager of your Starlette app"
 # ---------------------------------------------------------------------------
 
+# Server-level orientation delivered once per connection via
+# initialize.instructions. Single server-level string by design: a per-role
+# variant was evaluated and rejected (MCP delivers instructions once per
+# connection, so a multi-role user would only ever see one role's prompt).
+MCP_SERVER_INSTRUCTIONS = """\
+another-s3-manager: manage files in S3 and S3-compatible buckets.
+
+Getting oriented: call list_roles first, then list_buckets(role), then
+bucket_summary(role, bucket) to learn what a bucket contains — object counts,
+sizes, per-prefix breakdown, extension histogram — in one compact call. Drill
+into a subtree with bucket_summary(role, bucket, path="some/prefix/"). Only
+then use list_files for actual keys and read_file for file contents.
+
+list_files returns actual keys and both modes are bounded by max_keys: in
+recursive mode, when is_truncated is true, pass next_continuation_token back
+to fetch the next page; in non-recursive mode a truncated listing has no
+continuation token — call bucket_summary or retry with recursive=True.
+
+The application's REST API requires a browser session cookie for /api/... routes;
+your MCP Bearer token (as3m_...) is not a JWT and will be rejected there. Use /mcp
+tools instead. Do not attempt REST calls with the MCP token.
+"""
+
 # streamable_http_path="/" so that mounting on FastAPI as app.mount("/mcp", …)
 # produces the canonical /mcp endpoint instead of the awkward /mcp/mcp.
 # (FastMCP's default streamable_http_path is "/mcp", which double-prefixes.)
-mcp = FastMCP("another-s3-manager", streamable_http_path="/")
+mcp = FastMCP("another-s3-manager", instructions=MCP_SERVER_INSTRUCTIONS, streamable_http_path="/")
 
 
 def _observe_response_size(tool: str, token: Any, payload: dict) -> dict:
@@ -436,9 +494,12 @@ def _observe_response_size(tool: str, token: Any, payload: dict) -> dict:
 # list_roles — returns the intersection of user's allowed_roles and
 # role names defined in config (only what actually exists).
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def list_roles() -> dict:
-    """List role names accessible to the authenticated user."""
+    """List role names accessible to the authenticated user.
+
+    Call this FIRST — every other tool needs a role name, and this is how you learn which ones you have.
+    """
     error_code = "none"
     start = time.perf_counter()
     try:
@@ -488,16 +549,19 @@ async def list_roles() -> dict:
 # ------------------------------------------------------------------
 # list_buckets — lists buckets accessible via the given role.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def list_buckets(role: str) -> dict:
-    """List buckets accessible via the given role."""
+    """List buckets accessible via the given role.
+
+    Call this right after list_roles, before touching files — every other tool needs a bucket name too.
+    """
     error_code = "none"
     start = time.perf_counter()
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         try:
             buckets = _s3_client.list_buckets_for_role(role, user)
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             raise McpError(
                 "ROLE_NOT_ALLOWED",
                 str(e),
@@ -545,46 +609,84 @@ async def list_buckets(role: str) -> dict:
 # ------------------------------------------------------------------
 # list_files — lists files at a path within a bucket.
 #
-# Two modes:
+# Two modes, BOTH bounded by the same config-driven max_keys (2026-07-13:
+# the non-recursive branch used to be unbounded — a flat bucket with
+# thousands of loose keys at one level was the exact firehose this feature
+# exists to prevent, reachable with zero optional arguments):
 #   recursive=False (default): one level deep, returns sub-directories as
-#     {is_directory: true} entries. Use for browsing dir-by-dir.
+#     {is_directory: true} entries. Use for browsing dir-by-dir. A listing
+#     longer than the effective cap is truncated with is_truncated/hint —
+#     there is no continuation token for this mode (see the hint text).
 #   recursive=True: flat list of all keys under `path`, paginated via
 #     continuation_token. Use for counting/searching/processing whole subtrees
-#     without N+1 calls. Returns up to max_keys (default 1000, max 10000) per
-#     call; pass back next_continuation_token to get the next page.
+#     without N+1 calls. Returns up to max_keys (config-driven default
+#     mcp_list_page_size, ceiling mcp_list_max_page_size) per call; pass back
+#     next_continuation_token to get the next page.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def list_files(
     role: str,
     bucket: str,
     path: str = "",
     recursive: bool = False,
-    max_keys: int = 1000,
+    max_keys: int | None = None,
     continuation_token: str | None = None,
 ) -> dict:
-    """List files at a path within a bucket.
+    """List files at a path within a bucket. Returns ACTUAL KEYS — to learn
+    what a bucket contains (counts, sizes, prefix breakdown), call
+    bucket_summary instead: one compact call, no paging.
 
     Args:
         role: Role name (must be in user's allowed_roles).
         bucket: Bucket name (must be in role's allowed_buckets if configured).
         path: Prefix to scope the listing. "" = bucket root.
-        recursive: If True, returns flat list of all keys under path with
+        recursive: If True, returns a flat list of all keys under path with
             pagination. If False (default), one level deep with directory entries.
-        max_keys: Max keys per call when recursive=True. Default 1000, max 10000.
+        max_keys: Max entries per call, in EITHER mode. Defaults to the
+            server-configured page size (mcp_list_page_size, normally 1000);
+            values above the server ceiling (mcp_list_max_page_size) are
+            clamped, not rejected.
         continuation_token: Pass back next_continuation_token from the previous
-            recursive call to get the next page.
+            recursive call to get the next page. Not applicable when
+            recursive=False — a truncated non-recursive listing has no
+            continuation token (see is_truncated/hint below).
 
     Returns:
-        Non-recursive: {"files": [{name, is_directory, size, last_modified?}, ...]}
+        Non-recursive: {"files": [{name, is_directory, size, last_modified?}, ...],
+                         "is_truncated"?: true, "hint"?: str}
+            is_truncated/hint are present ONLY when the listing was cut —
+            absent, not null/false, on a short listing.
         Recursive: {"files": [{key, size, last_modified}, ...],
                     "is_truncated": bool, "next_continuation_token": str|null,
-                    "key_count": int}
+                    "key_count": int, "hint"?: str}
+            is_truncated is always present here; "hint" is present only when
+            is_truncated is true.
+        A recursive page can be LARGE (~160 KB at 1000 keys). When
+        is_truncated is true, pass next_continuation_token back to continue
+        paging — or use bucket_summary for the shape of the bucket in one call.
     """
     error_code = "none"
     start = time.perf_counter()
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         try:
+            config = _config_module.load_config(force_reload=False)
+            # Resolution rules (2026-07-12 design, extended 2026-07-13 to
+            # bound the non-recursive branch too — see the module comment
+            # above): floors of 1 on both keys; the ceiling wins over the
+            # default page size; an agent-supplied max_keys is clamped to
+            # the ceiling, never rejected. Per-S3-request MaxKeys stays
+            # min(effective, 1000) inside the recursive helper — S3's own
+            # limit, not configurable.
+            page_size = max(1, int(config.get("mcp_list_page_size", 1000)))
+            ceiling = max(1, int(config.get("mcp_list_max_page_size", 10_000)))
+            # Floor of 1 on the RESULT too, not just the two config inputs: an
+            # agent-supplied max_keys=0 (or negative) must not collapse the
+            # non-recursive branch to an empty, "is_truncated" response — the
+            # recursive helper already re-floors internally
+            # (list_objects_recursive_for_role: max(1, min(...))), so this
+            # keeps both modes consistent instead of only fixing one.
+            effective_max_keys = max(1, min(max_keys if max_keys is not None else page_size, ceiling))
             if recursive:
                 # Normalize path → S3 prefix (no leading slash; trailing slash
                 # only if non-empty so we don't accidentally match other names).
@@ -592,12 +694,44 @@ async def list_files(
                 if prefix:
                     prefix += "/"
                 result = _s3_client.list_objects_recursive_for_role(
-                    role, bucket, prefix, user, max_keys=max_keys, continuation_token=continuation_token
+                    role,
+                    bucket,
+                    prefix,
+                    user,
+                    max_keys=effective_max_keys,
+                    continuation_token=continuation_token,
+                    max_page_size=ceiling,
                 )
+                if result.get("is_truncated"):
+                    # Redirect at the exact moment the recorded incident went
+                    # off the rails. Only on truncated recursive pages — the
+                    # field is absent (not null) otherwise.
+                    result["hint"] = (
+                        "This is the first page of a larger listing. Pass "
+                        "next_continuation_token to page through keys, or call "
+                        "bucket_summary(role, bucket, path) to get counts, sizes "
+                        "and the prefix breakdown in one compact call."
+                    )
             else:
+                # s3_client.list_objects_for_role still walks the WHOLE level
+                # (unchanged — the web UI relies on that helper too); what we
+                # bound here is the AGENT'S CONTEXT, i.e. what this tool
+                # returns. No continuation token exists for a non-recursive
+                # listing, so we do not invent one — the hint below points at
+                # the two real alternatives instead.
                 files = _s3_client.list_objects_for_role(role, bucket, path, user)
                 result = {"files": files}
-        except PermissionError as e:
+                if len(files) > effective_max_keys:
+                    result["files"] = files[:effective_max_keys]
+                    result["is_truncated"] = True
+                    result["hint"] = (
+                        f"This directory listing was cut at {effective_max_keys} entries. "
+                        "There is no continuation token for a non-recursive listing — call "
+                        "bucket_summary(role, bucket, path) for counts and the prefix "
+                        "breakdown, or list_files(..., recursive=True) to page through "
+                        "every key."
+                    )
+        except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
@@ -652,10 +786,105 @@ async def list_files(
 
 
 # ------------------------------------------------------------------
+# bucket_summary — one-call compact digest of a bucket / prefix.
+# Read-only; the remedy for the "list_files firehose" failure mode.
+# All S3 work and permission checks live in
+# s3_client.summarize_bucket_for_role — this stays a thin wrapper.
+# ------------------------------------------------------------------
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+async def bucket_summary(role: str, bucket: str, path: str = "") -> dict:
+    """Summarize what's in a bucket (or under a prefix) in ONE compact call:
+    object count, total size, per-prefix breakdown, extension histogram,
+    largest objects, modified range. Use this FIRST when asked what a bucket
+    contains — do not page through list_files. Drill down by passing path.
+    Reported "ext" values are capped at 16 characters.
+
+    IMPORTANT — when the bucket exceeds the scan cap, `complete` is false and
+    a `note` field explains that root_objects, extensions, largest_objects
+    and the oldest/newest_modified range cover ONLY the scanned range (keys
+    up to `scan_stopped_at`, in S3's lexicographic order) and can
+    UNDER-REPORT: a prefix alone larger than the cap can hide a loose object
+    at the bucket root, or the single largest object in the whole bucket, if
+    either happens to sort later. Only total_objects/total_bytes (nulled)
+    and each prefix's own `coverage` (complete/partial/not_scanned) are safe
+    to treat as exact on a partial scan — everything else in the response is
+    a lower bound, not a total. Narrow with `path` or raise
+    mcp_summary_max_keys for a trustworthy full-bucket answer.
+    """
+    error_code = "none"
+    start = time.perf_counter()
+    try:
+        token, user = await authenticate_mcp_request(_get_current_request())
+        config = _config_module.load_config(force_reload=False)
+        max_keys = int(config.get("mcp_summary_max_keys", 50_000))
+        prefix_scan_pages = int(config.get("mcp_summary_prefix_scan_pages", 20))
+        # Normalize path → S3 prefix, exactly like list_files recursive mode.
+        prefix = path.strip("/")
+        if prefix:
+            prefix += "/"
+        try:
+            result = _s3_client.summarize_bucket_for_role(
+                role, bucket, prefix, user, max_keys=max_keys, prefix_scan_pages=prefix_scan_pages
+            )
+        except (PermissionError, RoleNotFoundError) as e:
+            msg = str(e).lower()
+            if "bucket" in msg:
+                raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
+            raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
+        logger.info(
+            "mcp.bucket_summary",
+            extra={
+                "user": user["username"],
+                "role": role,
+                "bucket": bucket,
+                "path": path,
+                "scanned_objects": result["scanned_objects"],
+                "complete": result["complete"],
+            },
+        )
+        return _observe_response_size("bucket_summary", token, result)
+    except McpError as e:
+        error_code = e.code
+        raise
+    except S3AccessDeniedError as e:
+        error_code = "S3_ACCESS_DENIED"
+        logger.warning("mcp.bucket_summary.access_denied", extra={"boto_code": e.code})
+        raise McpError("S3_ACCESS_DENIED", str(e), {"boto_code": e.code})
+    except S3NotFoundError as e:
+        error_code = "S3_NOT_FOUND"
+        logger.warning("mcp.bucket_summary.not_found", extra={"boto_code": e.code})
+        raise McpError("S3_NOT_FOUND", str(e), {"boto_code": e.code})
+    except S3ConfigError as e:
+        error_code = "S3_CONFIG_ERROR"
+        logger.warning("mcp.bucket_summary.config_error", extra={"boto_code": e.code})
+        raise McpError("S3_CONFIG_ERROR", str(e), {"boto_code": e.code})
+    except S3NetworkError as e:
+        error_code = "S3_NETWORK_ERROR"
+        logger.warning("mcp.bucket_summary.network_error", extra={"boto_code": e.code})
+        raise McpError("S3_NETWORK_ERROR", str(e), {"boto_code": e.code})
+    except CredentialsExpiredError as e:
+        error_code = "CREDENTIALS_EXPIRED"
+        logger.warning("mcp.bucket_summary.credentials_expired", extra={"boto_code": e.code})
+        raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
+    except S3OperationError as e:
+        # Unknown S3 subclass — still better than INTERNAL_ERROR.
+        error_code = "S3_OPERATION_ERROR"
+        logger.warning("mcp.bucket_summary.s3_operation_error", extra={"boto_code": e.code})
+        raise McpError("S3_OPERATION_ERROR", str(e), {"boto_code": e.code})
+    except Exception:
+        error_code = "INTERNAL_ERROR"
+        logger.exception("mcp.bucket_summary.error")
+        raise McpError("INTERNAL_ERROR", "Internal server error")
+    finally:
+        mcp_tool_calls_total.labels(tool="bucket_summary", error_code=error_code).inc()
+        mcp_tool_duration_seconds.labels(tool="bucket_summary").observe(time.perf_counter() - start)
+
+
+# ------------------------------------------------------------------
 # upload_file — upload a file to a bucket. Content as base64.
 # WRITE TOOL: gated by assert_write_allowed.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
 async def upload_file(role: str, bucket: str, path: str, content_base64: str) -> dict:
     """Upload a file to a bucket (WRITE operation — creates or overwrites the
     object at `path`). Content must be base64-encoded. Blocked for read-only
@@ -672,7 +901,7 @@ async def upload_file(role: str, bucket: str, path: str, content_base64: str) ->
             raise McpError("INVALID_INPUT", f"content_base64 is not valid base64: {e}", {"tool": "upload_file"})
         try:
             _s3_client.put_object_for_role(role, bucket, path, content, user)
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
@@ -725,7 +954,7 @@ async def upload_file(role: str, bucket: str, path: str, content_base64: str) ->
 # delete_file — delete a file from a bucket.
 # WRITE TOOL: gated by assert_write_allowed.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
 async def delete_file(role: str, bucket: str, path: str) -> dict:
     """Delete a file from a bucket (WRITE / DESTRUCTIVE operation — the object is
     permanently removed; a `path` ending in "/" deletes the whole folder
@@ -739,7 +968,7 @@ async def delete_file(role: str, bucket: str, path: str) -> dict:
         assert_write_allowed(token, "delete_file", config)
         try:
             _s3_client.delete_object_for_role(role, bucket, path, user)
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
@@ -792,12 +1021,23 @@ async def delete_file(role: str, bucket: str, path: str) -> dict:
 # AppFlow regression: S3 Content-Type metadata is IGNORED; classification
 # is driven by extension whitelist and UTF-8 sniffing only.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def read_file(role: str, bucket: str, path: str, force_text: bool = False) -> dict:
-    """Download and return a text file from a bucket.
+    """Download a text file's FULL CONTENTS into your context. Call this only when you actually need to
+    read/quote/analyze what's inside a specific, already-known-text file.
 
-    Performs HEAD first to avoid downloading large or binary files.
-    Set force_text=True to skip detection and use errors='replace' decoding.
+    Do NOT call this to check whether a file exists, how big it is, or what
+    type it is — that's get_object_metadata (no download, cheap, use it
+    first if you're unsure). Do NOT call this for binary files (images,
+    archives, PDFs, executables, media) or for a file you intend to hand to
+    a user rather than read yourself — that's presigned_url, a link instead
+    of bytes through your context.
+
+    Performs HEAD first so oversized or binary files are refused before
+    download: FILE_TOO_LARGE and BINARY_CONTENT errors both name
+    presigned_url as the alternative. Set force_text=True to skip binary
+    detection and decode with errors='replace' (undecodable bytes become the
+    UTF-8 replacement character).
     """
     error_code = "none"
     start_t = time.perf_counter()
@@ -813,7 +1053,7 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
             size = _s3_client.head_object_for_role(role, bucket, path, user)
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             if "bucket" in str(e).lower():
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
             raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
@@ -823,7 +1063,14 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
             raise McpError(
                 "FILE_TOO_LARGE",
                 f"File size {size} exceeds limit {effective_max}",
-                {"size": size, "max_read_bytes": effective_max},
+                {
+                    "size": size,
+                    "max_read_bytes": effective_max,
+                    "hint": (
+                        "Use the presigned_url tool for a download link instead, "
+                        "or request a token with a higher max_read_bytes."
+                    ),
+                },
             )
 
         ext: str | None = None
@@ -955,7 +1202,7 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
 # copy_object — server-side copy (optionally move/rename) within a role.
 # WRITE TOOL: gated by assert_write_allowed; delete_source also needs deletion.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
 async def copy_object(
     role: str,
     source_bucket: str,
@@ -964,7 +1211,9 @@ async def copy_object(
     dest_path: str,
     delete_source: bool = False,
 ) -> dict:
-    """Copy an object to a new location (WRITE operation).
+    """Copy an object to a new location (WRITE operation — overwrites the
+    object at `dest_path` if one already exists; there is no existence
+    check first).
 
     Server-side copy within one role's credentials — source and destination
     buckets must both be accessible to `role`. Set delete_source=true to MOVE
@@ -994,7 +1243,7 @@ async def copy_object(
                 _s3_client.delete_object_for_role(role, source_bucket, source_path, user)
         except FileNotFoundError as e:
             raise McpError("FILE_NOT_FOUND", str(e), {"bucket": source_bucket, "path": source_path})
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             if "bucket" in str(e).lower():
                 raise McpError(
                     "BUCKET_NOT_ALLOWED",
@@ -1065,7 +1314,7 @@ async def copy_object(
 # ------------------------------------------------------------------
 # get_object_metadata — HEAD an object; no download. Read-only.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def get_object_metadata(role: str, bucket: str, path: str) -> dict:
     """Return object metadata (size, last_modified, content_type, etag) without
     downloading it. Read-only — useful to inspect a file before read_file or
@@ -1078,7 +1327,7 @@ async def get_object_metadata(role: str, bucket: str, path: str) -> dict:
             meta = _s3_client.get_object_metadata_for_role(role, bucket, path, user)
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             if "bucket" in str(e).lower():
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
             raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})
@@ -1126,7 +1375,7 @@ async def get_object_metadata(role: str, bucket: str, path: str) -> dict:
 # ------------------------------------------------------------------
 # presigned_url — time-limited GET URL for an object. Read-only.
 # ------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def presigned_url(role: str, bucket: str, path: str, expires_in: int = 3600) -> dict:
     """Generate a time-limited download URL for an object (read-only).
 
@@ -1143,7 +1392,7 @@ async def presigned_url(role: str, bucket: str, path: str, expires_in: int = 360
         clamped = max(60, min(int(expires_in), max_ttl))
         try:
             url = _s3_client.generate_presigned_url_for_role(role, bucket, path, user, expires_in=clamped)
-        except PermissionError as e:
+        except (PermissionError, RoleNotFoundError) as e:
             if "bucket" in str(e).lower():
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
             raise McpError("ROLE_NOT_ALLOWED", str(e), {"role": role, "allowed_roles": user["allowed_roles"]})

@@ -46,6 +46,13 @@ const baseConfig = {
   mcp_disable_writes: false,
   mcp_text_extensions: [],
   mcp_global_max_read_bytes: 10 * 1024 * 1024,
+  // Deliberately NOT the SettingsPage form defaults (50000/20/1000/10000) —
+  // distinct values so an assertion on the save payload can't pass by
+  // coincidence if toWritableConfig's allowlist ever drops one of these keys.
+  mcp_summary_max_keys: 42000,
+  mcp_summary_prefix_scan_pages: 17,
+  mcp_list_page_size: 750,
+  mcp_list_max_page_size: 8500,
 };
 
 function renderPage() {
@@ -147,6 +154,14 @@ describe("RolesPage", () => {
     // R2 removed from roles, Default still there
     expect(submitted.roles).toHaveLength(1);
     expect(submitted.roles[0]!.name).toBe("Default");
+    // Guard against toWritableConfig's allowlist silently dropping the
+    // big-bucket MCP keys on a role save that doesn't touch them itself —
+    // onConfirmDelete spreads ...toWritableConfig(config) with no override,
+    // so a missing key here would come back undefined, not just wrong.
+    expect(submitted.mcp_summary_max_keys).toBe(42000);
+    expect(submitted.mcp_summary_prefix_scan_pages).toBe(17);
+    expect(submitted.mcp_list_page_size).toBe(750);
+    expect(submitted.mcp_list_max_page_size).toBe(8500);
   });
 
   it("renders error EmptyState when getConfig fails", async () => {
@@ -258,6 +273,14 @@ describe("RolesPage", () => {
     const r2 = submitted.roles.find((r) => r.name === "R2");
     // Parent merge attaches the original secret because the drawer emitted "".
     expect(r2?.secret_access_key).toBe("S");
+    // Guard against toWritableConfig's allowlist silently dropping the
+    // big-bucket MCP keys on a role save — onSubmitRole's edit-mode branch
+    // spreads ...toWritableConfig(config) with no override for these keys,
+    // so a missing key here would come back undefined, not just wrong.
+    expect(submitted.mcp_summary_max_keys).toBe(42000);
+    expect(submitted.mcp_summary_prefix_scan_pages).toBe(17);
+    expect(submitted.mcp_list_page_size).toBe(750);
+    expect(submitted.mcp_list_max_page_size).toBe(8500);
   });
 
   it("uses the new secret when one is typed in the edit drawer", async () => {

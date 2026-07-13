@@ -21,9 +21,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Since that load can be thousands of S3 requests on a very large folder, the
   UI now asks for confirmation before it starts — a header click alone never
   triggers it.
+- MCP: new `bucket_summary` tool — an agent asked "what's in this bucket?"
+  now gets an honest, compact summary (counts, sizes, per-prefix breakdown,
+  extension histogram, largest objects) in ONE call instead of paging through
+  thousands of keys. Partial scans are always labeled (`complete`, per-prefix
+  `coverage`, `prefix_list_complete`) — numbers are never guessed.
+- MCP: the server now orients connecting agents (start with `bucket_summary`;
+  the REST API is cookie-authenticated and not usable with MCP Bearer
+  tokens), and a truncated recursive `list_files` page carries a hint
+  pointing at `bucket_summary`.
+- MCP: admins can bound the default and maximum `list_files` page size
+  (`mcp_list_page_size` / `mcp_list_max_page_size`) and the summary walk
+  (`mcp_summary_max_keys` / `mcp_summary_prefix_scan_pages`) — all four
+  editable in Settings → MCP.
+- MCP: all ten tools now advertise `readOnlyHint`/`destructiveHint`
+  annotations, so an MCP client can auto-approve reads while still gating
+  writes (`idempotentHint` is deliberately left unset on every tool — see
+  `docs/mcp-setup.md` for why). All three write tools (`upload_file`,
+  `copy_object`, `delete_file`) are flagged destructive — none of them
+  checks whether something already exists at the destination before
+  overwriting it. `presigned_url` is read-only but mints a shareable,
+  credential-bearing URL — flagged in `docs/mcp-setup.md` as worth a manual
+  look rather than a blanket auto-approve despite the read-only hint.
 
 ### Fixed
 
+- MCP: asking for a role that does not exist returned an opaque
+  `INTERNAL_ERROR` when the token belonged to an **admin**. Admins bypass the
+  role check ("admins have access to all roles"), so an unknown role only
+  surfaced later as a config error and was swallowed by the tools' catch-all —
+  the agent learned nothing and could not correct itself, and a routine "no such
+  role" was counted as a server fault in the metrics. It now returns
+  `ROLE_NOT_ALLOWED` naming the roles the token may use, exactly as it already
+  did for non-admins.
+- MCP: the endpoint now answers on a bare `/mcp` instead of redirecting it to
+  `/mcp/` with a 307. MCP clients that don't follow redirects could not connect
+  at all, and `/mcp` is both the conventional address and the one the server's
+  own instructions hand to agents. Both forms work; existing `/mcp/` configs are
+  unaffected.
 - The object counter in the file browser header could show a wildly wrong,
   deeply negative number (e.g. `-871665980+ objects`) while "Load all" was
   draining a large folder. The count-up animation restarts on every batch of
@@ -32,6 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overshoots compounded across thousands of restarts into a nonsensical
   value. The counter now animates within a mathematically guaranteed range,
   so it always converges to the correct total.
+- MCP: tool errors now actually tell the agent what to do next. FastMCP only
+  ever forwards `str(exception)` to the client — the `details` dict a tool
+  raised alongside it (e.g. `ROLE_NOT_ALLOWED`'s list of roles the caller MAY
+  use, or the `presigned_url` redirect on `BINARY_CONTENT`/`FILE_TOO_LARGE`)
+  was silently discarded, so the agent was told "no" and never told what
+  "yes" looks like. The useful, already-safe-to-share parts of `details` are
+  now folded into the error text itself. `read_file`'s docstring also now
+  states upfront (not just inside the error body) when to reach for
+  `get_object_metadata` or `presigned_url` instead, and `list_roles`/
+  `list_buckets` each got a one-line "call this first" trigger.
 
 ## [1.1.0] - 2026-07-11
 

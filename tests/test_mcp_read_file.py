@@ -180,6 +180,10 @@ async def test_binary_extension_raises_without_download(alice_user, tool_registr
     assert exc_info.value.details.get("ext") == "png"
     # Download must NOT have been called — no wasted bandwidth.
     mock_read.assert_not_called()
+    # REAL BUG regression guard: the hint pointing at presigned_url lives in
+    # `details` — it must reach str(exc), the only thing FastMCP forwards to
+    # the agent (see mcp_server.py McpError.__str__).
+    assert "presigned_url" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +243,10 @@ async def test_file_too_large_no_download(alice_user, tool_registry):
     assert exc_info.value.details["size"] == 2048
     assert exc_info.value.details["max_read_bytes"] == 1024
     mock_read.assert_not_called()
+    # REAL BUG regression guard: FILE_TOO_LARGE must name presigned_url as
+    # the alternative in str(exc) — the only thing FastMCP forwards to the
+    # agent — not just inside `details`, which never leaves the process.
+    assert "presigned_url" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
