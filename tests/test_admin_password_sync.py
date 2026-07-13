@@ -218,9 +218,13 @@ def test_unknown_matching_current_env_becomes_env_without_a_write(monkeypatch):
 
     _seed_admin(ENV_PASSWORD, PASSWORD_SET_VIA_UNKNOWN)
     monkeypatch.setenv("ADMIN_PASSWORD", ENV_PASSWORD)
+    hash_before = _admin()["password_hash"]
 
     assert sync_admin_password_from_env() is False  # nothing to apply
     assert _admin()["password_set_via"] == PASSWORD_SET_VIA_ENV  # but now env-governed
+    # "without a write" is in the name, so pin it: bcrypt is salted, so a pointless re-hash
+    # would produce a different string while still returning False and still reading 'env'.
+    assert _admin()["password_hash"] == hash_before, "the sync must not re-hash an already-synced password"
 
 
 def test_unknown_with_a_human_password_becomes_ui_and_is_untouched(monkeypatch, caplog):

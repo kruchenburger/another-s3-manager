@@ -85,7 +85,7 @@ def _admin_password_force_enabled() -> bool:
 
 
 def _classify_legacy_admin(password_hash: str, env_password: str) -> tuple[str, bool]:
-    """Decide the provenance of a pre-provenance ('unknown') admin row. Runs once it CAN prove one.
+    """Decide the provenance of a pre-provenance ('unknown') admin row -- but only once it CAN prove one.
 
     The migration deliberately cannot do this (it must stay deterministic and env-free), so the
     classification lives here, where bcrypt and the environment are both available.
@@ -216,9 +216,18 @@ def sync_admin_password_from_env() -> bool:
                     "change the password in the UI, run 'python -m another_s3_manager.reset_admin_password', "
                     "or set ADMIN_PASSWORD_FORCE=1 once to hand the password back to the environment."
                 )
-            # else: classified stays "unknown" -- ADMIN_PASSWORD said nothing this boot (unset, or
-            # the built-in default), so there is nothing to classify with. Leave the row exactly as
-            # it is and let a later, informed boot decide.
+            else:
+                # ADMIN_PASSWORD said nothing this boot (unset, or the built-in default), so there is
+                # nothing to classify WITH. Leave the row 'unknown' and let a later, informed boot
+                # decide -- burning the classification now would permanently strand the likely
+                # upgrade path (an operator who set ADMIN_PASSWORD long ago, then dropped it from
+                # compose because the docs called it first-boot-only). Say so: the row is inert
+                # until then, and silence would make that indistinguishable from working.
+                logger.info(
+                    "Admin password provenance left as 'unknown': ADMIN_PASSWORD is not set, so there is "
+                    "nothing to classify it against. ADMIN_PASSWORD does not govern this user yet — set it "
+                    "and restart, and a boot that can prove the match will record the provenance."
+                )
 
         if admin.password_set_via != PASSWORD_SET_VIA_ENV:
             return False
