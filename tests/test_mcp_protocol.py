@@ -240,24 +240,26 @@ def _parse_sse_json(text: str) -> dict:
     raise AssertionError(f"no SSE 'data:' line found in response body: {text!r}")
 
 
-def test_mcp_protocol_round_trip_initialize_and_tools_list():
-    """Real initialize + tools/list over Streamable HTTP: the initialize
-    result must carry `instructions`, and bucket_summary must be
-    discoverable via tools/list — proving FastMCP actually serializes it."""
+def _build_protocol_test_app():
+    """Build a fresh, never-run Streamable HTTP ASGI app wrapping the SAME
+    real _mcp_server (real tool registrations, real `instructions`) that the
+    production mcp_asgi_app wraps — see the module comment above for why
+    this can't just reuse mcp.session_manager directly.
+
+    Each call constructs its own StreamableHTTPSessionManager instance, so
+    multiple tests can each get one independent, never-run manager bound to
+    the same underlying tool registry (the "run() only once per instance"
+    constraint is per-manager, not per-_mcp_server).
+    """
     import contextlib
 
     from mcp.server.fastmcp.server import StreamableHTTPASGIApp
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
     from starlette.routing import Route
-    from starlette.testclient import TestClient
 
     from another_s3_manager.mcp_server import _RequestCaptureMiddleware, mcp
 
-    # A fresh, never-run session manager wrapping the SAME real _mcp_server
-    # (real tool registrations, real `instructions`) that the production
-    # mcp_asgi_app wraps — see the module comment above for why this can't
-    # just reuse mcp.session_manager directly.
     session_manager = StreamableHTTPSessionManager(
         app=mcp._mcp_server,
         json_response=mcp.settings.json_response,
@@ -274,7 +276,16 @@ def test_mcp_protocol_round_trip_initialize_and_tools_list():
         routes=[Route("/", endpoint=StreamableHTTPASGIApp(session_manager))],
         lifespan=_lifespan,
     )
-    mcp_asgi_app = _RequestCaptureMiddleware(test_asgi_app)
+    return _RequestCaptureMiddleware(test_asgi_app)
+
+
+def test_mcp_protocol_round_trip_initialize_and_tools_list():
+    """Real initialize + tools/list over Streamable HTTP: the initialize
+    result must carry `instructions`, and bucket_summary must be
+    discoverable via tools/list — proving FastMCP actually serializes it."""
+    from starlette.testclient import TestClient
+
+    mcp_asgi_app = _build_protocol_test_app()
 
     headers = {
         "Content-Type": "application/json",
@@ -319,3 +330,102 @@ def test_mcp_protocol_round_trip_initialize_and_tools_list():
         assert "bucket_summary" in tool_names
         assert "list_files" in tool_names
         assert "list_roles" in tool_names
+
+
+# ---------------------------------------------------------------------------
+# Test 6: a REAL tools/call error round-trip (Fix round 1, Finding 4)
+#
+# Every test in this module and in test_mcp_tools.py that touches McpError
+# asserts on `str(exc)` directly — none of them drives FastMCP's actual
+# Tool.run -> isError: true text-content path. That leaves the load-bearing
+# claim in McpError.__str__'s docstring (FastMCP only ever forwards
+# str(exception) to the client, which is why actionable `details` —
+# allowed_roles, hint — are folded into the message there) asserted only in
+# a code comment, never proven end to end. If a future `mcp` SDK bump changed
+# exception marshalling (e.g. started serializing `details` structurally, or
+# wrapped exceptions with repr() instead of str()), every existing test would
+# stay green while a real agent silently stopped seeing allowed_roles and the
+# hints again — the exact bug this commit fixes, resurrected invisibly.
+#
+# Reuses _build_protocol_test_app() (Test 5's harness) instead of inventing
+# a new one: same throwaway StreamableHTTPSessionManager bound to the real
+# mcp._mcp_server, driven through TestClient as its own ASGI root so the
+# session-manager task group actually starts.
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_protocol_tools_call_surfaces_role_not_allowed_in_text_content(alice_with_token):
+    """Real initialize -> notifications/initialized -> tools/call over
+    Streamable HTTP, calling list_buckets with a role the token's user is
+    NOT allowed to use (alice_with_token only has "Default"). Asserts on the
+    actual isError text CONTENT the client receives — not on str(exc) — so
+    this proves ROLE_NOT_ALLOWED and the "Roles you may use:" text the agent
+    needs to self-correct actually survive FastMCP's real error-marshalling
+    path end to end."""
+    from starlette.testclient import TestClient
+
+    _, plaintext_token = alice_with_token
+
+    mcp_asgi_app = _build_protocol_test_app()
+
+    # FastMCP's Streamable HTTP session runs its message-processing loop in a
+    # single task spawned while handling the FIRST (`initialize`) POST — see
+    # StreamableHTTPSessionManager._handle_stateful_request: the task group
+    # is started (capturing a snapshot of the request-scoped contextvars,
+    # including _current_request) BEFORE that request returns, and every
+    # later message for this session (notifications/initialized, tools/call)
+    # is processed inside that SAME long-lived task, not the task that
+    # handles each individual POST. So _get_current_request() inside a tool
+    # body resolves to whatever request was current when the session task
+    # was spawned — the `initialize` call — not the request each subsequent
+    # POST is made with. A real client sends the same Authorization header
+    # on every request for a session; this test mirrors that by sending it
+    # from the start rather than only on the tools/call POST.
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "Authorization": f"Bearer {plaintext_token}",
+    }
+    with TestClient(mcp_asgi_app) as client:
+        init_resp = client.post(
+            "/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test-client", "version": "0.0.1"},
+                },
+            },
+        )
+        assert init_resp.status_code == 200
+        session_id = init_resp.headers["mcp-session-id"]
+
+        # Required handshake step before the session accepts further calls.
+        notif_resp = client.post(
+            "/",
+            headers={**headers, "mcp-session-id": session_id},
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        )
+        assert notif_resp.status_code == 202
+
+        call_resp = client.post(
+            "/",
+            headers={**headers, "mcp-session-id": session_id},
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "list_buckets", "arguments": {"role": "NotAllowedRole"}},
+            },
+        )
+        assert call_resp.status_code == 200
+        result = _parse_sse_json(call_resp.text)["result"]
+
+        assert result["isError"] is True
+        text = result["content"][0]["text"]
+        assert "ROLE_NOT_ALLOWED" in text
+        assert "Roles you may use:" in text

@@ -97,9 +97,11 @@ still gating writes — the 7 read tools (`list_roles`, `list_buckets`,
 additionally flagged `destructiveHint: true` — none of them checks whether
 something already exists at the destination before overwriting it (S3
 `PutObject`/`CopyObject` semantics), and `delete_file` removes an object
-outright. `upload_file` is also `idempotentHint: true` (same bytes to the
-same key always end in the same state) — destructive and idempotent are
-independent hints, a tool can be both.
+outright. None of the three write tools advertises `idempotentHint` —
+`upload_file`'s repeat `PutObject` on a bucket with S3 object versioning
+enabled mints a new object version instead of leaving the bucket unchanged,
+so the "no additional effect on repeat" claim does not hold for every
+bucket this generic S3 manager (AWS/R2/MinIO/Wasabi) can point at.
 
 **One caveat if your client auto-approves read-only tools:** `presigned_url`
 is annotated `readOnlyHint: true` because it never modifies the bucket — but

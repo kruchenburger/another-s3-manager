@@ -34,14 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`mcp_list_page_size` / `mcp_list_max_page_size`) and the summary walk
   (`mcp_summary_max_keys` / `mcp_summary_prefix_scan_pages`) — all four
   editable in Settings → MCP.
-- MCP: all ten tools now advertise `readOnlyHint`/`destructiveHint`/
-  `idempotentHint` annotations, so an MCP client can auto-approve reads while
-  still gating writes. All three write tools (`upload_file`, `copy_object`,
-  `delete_file`) are flagged destructive — none of them checks whether
-  something already exists at the destination before overwriting it.
-  `presigned_url` is read-only but mints a shareable, credential-bearing
-  URL — flagged in `docs/mcp-setup.md` as worth a manual look rather than a
-  blanket auto-approve despite the read-only hint.
+- MCP: all ten tools now advertise `readOnlyHint`/`destructiveHint`
+  annotations, so an MCP client can auto-approve reads while still gating
+  writes (`idempotentHint` is deliberately left unset on every tool — see
+  `docs/mcp-setup.md` for why). All three write tools (`upload_file`,
+  `copy_object`, `delete_file`) are flagged destructive — none of them
+  checks whether something already exists at the destination before
+  overwriting it. `presigned_url` is read-only but mints a shareable,
+  credential-bearing URL — flagged in `docs/mcp-setup.md` as worth a manual
+  look rather than a blanket auto-approve despite the read-only hint.
 
 ### Fixed
 

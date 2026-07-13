@@ -66,9 +66,18 @@ def test_delete_file_is_annotated_destructive():
 
 
 def test_delete_file_idempotent_hint_left_unset():
-    """s3_client.delete_object_for_role raises FileNotFoundError when the
-    target is already gone — a repeat delete_file call errors instead of
-    silently no-op'ing, so the tool is not uniformly idempotent."""
+    """A repeat delete_file on a SINGLE KEY actually SUCCEEDS: when the
+    target is already gone, delete_object_for_role's prefix listing comes
+    back empty, so the non-directory branch falls through to a plain S3
+    DeleteObject on that key — and AWS S3's DeleteObject returns 204 (no
+    error) for a key that doesn't exist, so deleted_count is 1 and the tool
+    reports success again on every repeat call. A repeat delete_file on a
+    DIRECTORY path (`path` ending in "/") behaves differently: an empty
+    prefix listing there leaves deleted_count at 0, which
+    delete_object_for_role turns into FileNotFoundError. Same tool, same
+    "target already gone" starting state, two different outcomes depending
+    on whether `path` names a file or a directory — not uniformly idempotent
+    across its argument space, so the hint stays unset."""
     assert _annotations("delete_file").idempotentHint is None
 
 
@@ -83,13 +92,19 @@ def test_upload_file_is_annotated_destructive():
     assert _annotations("upload_file").destructiveHint is True
 
 
-def test_upload_file_is_annotated_idempotent():
-    """put_object_for_role never raises on a repeat call with the same args —
-    PUT to a fixed key: same bytes in, same end state, every time. Idempotent
-    and destructive are independent flags — a tool can be both (the official
-    write_file example is: readOnlyHint=false, destructiveHint=true,
-    idempotentHint=true)."""
-    assert _annotations("upload_file").idempotentHint is True
+def test_upload_file_idempotent_hint_left_unset():
+    """put_object_for_role issues a plain S3 PutObject to a fixed key — on a
+    bucket WITHOUT versioning that repeat is a true no-additional-effect
+    no-op, but another-s3-manager is a GENERIC S3 manager (AWS/R2/MinIO/
+    Wasabi) and on any bucket WITH versioning enabled, a repeat PutObject
+    mints a brand new object version — extra storage, a changed version
+    history, different behavior for a later version-aware delete/restore.
+    That is an additional effect the MCP idempotentHint definition
+    (mcp/types.py: "calling the tool repeatedly with the same arguments will
+    have no additional effect on its environment") explicitly rules out, so
+    the hint stays unset rather than being true only for some configurations
+    this tool can run against."""
+    assert _annotations("upload_file").idempotentHint is None
 
 
 def test_copy_object_is_annotated_destructive():

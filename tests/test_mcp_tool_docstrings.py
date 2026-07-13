@@ -41,10 +41,19 @@ def test_read_file_docstring_names_presigned_url_alternative():
     assert "presigned_url" in _doc("read_file")
 
 
-def test_read_file_docstring_warns_about_binary_and_large_files():
-    doc = _doc("read_file").lower()
-    assert "binary" in doc
-    assert "large" in doc or "size" in doc
+def test_read_file_docstring_names_its_own_error_codes():
+    """Pin the actual McpError codes read_file raises (FILE_TOO_LARGE,
+    BINARY_CONTENT), not generic words like "binary" or "large"/"size" —
+    those can appear anywhere in any rewrite and prove nothing (e.g. "size"
+    is a substring of "oversized", so a loose `"size" in doc` check is
+    near-unfalsifiable). The codes are the concrete, machine-checkable
+    contract: they're what the agent actually sees in the error message
+    (McpError.__str__ always keeps "{code}: " first), so the docstring
+    naming them is what lets the agent correlate a future error with the
+    redirect it already read up front."""
+    doc = _doc("read_file")
+    assert "FILE_TOO_LARGE" in doc
+    assert "BINARY_CONTENT" in doc
 
 
 # ---------------------------------------------------------------------------
