@@ -183,17 +183,27 @@ def test_update_user_without_password_write_preserves_provenance(monkeypatch):
     assert _provenance("admin") == PASSWORD_SET_VIA_ENV
 
 
-def test_save_users_password_change_without_provenance_stamps_ui(monkeypatch):
-    """Same safety net on the admin bulk-upsert path."""
-    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+def test_save_users_password_change_with_stale_provenance_stamps_ui(monkeypatch):
+    """Fail-closed safety net on the admin bulk-upsert path (C1).
+
+    Every real dict reaching save_users comes from load_users() -> _user_to_dict(),
+    which ALWAYS includes password_set_via -- no real caller can omit the key, so a
+    test that pops it (as this one used to) exercises a state nothing in production
+    can produce. The realistic failing case is exactly this one: the incoming dict
+    still carries the STALE "env" value it round-tripped in with, but the hash has
+    changed underneath it. A hash change must always win, or a missed write-site
+    (like main.py forgetting its explicit stamp) would leave the row claiming "env"
+    forever, arming Task 3's sync to overwrite a human-set password on next boot.
+    """
+    from another_s3_manager.constants import PASSWORD_SET_VIA_ENV, PASSWORD_SET_VIA_UI
     from another_s3_manager.users import load_users, save_users
 
     monkeypatch.setenv("ADMIN_PASSWORD", "EnvSecret123")
     users_data = load_users()  # seeds admin as "env"
 
     admin = users_data["users"][0]
-    admin["password_hash"] = "brand-new-hash"
-    admin.pop("password_set_via")  # simulate a caller that forgot to stamp
+    assert admin["password_set_via"] == PASSWORD_SET_VIA_ENV  # precondition: stale value present, not popped
+    admin["password_hash"] = "brand-new-hash"  # forgot to stamp -- password_set_via is left as the stale "env"
     save_users(users_data)
 
     assert _provenance("admin") == PASSWORD_SET_VIA_UI
@@ -238,22 +248,26 @@ def test_self_service_password_change_stamps_ui(app_client):
     assert _provenance("admin") == PASSWORD_SET_VIA_UI
 
 
-def test_admin_reset_of_another_user_password_stamps_ui(app_client):
-    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+def test_admin_reset_of_env_managed_admin_stamps_ui(app_client):
+    """The seeded admin starts "env"-governed. Resetting its password through the
+    admin HTTP route must flip it to "ui" -- this is the one write-site test that
+    can actually discriminate: a "victim" created through the UI is already "ui"
+    before the reset (round-tripping it wouldn't prove anything), but "admin"
+    starts "env", so this test fails if EITHER the explicit main.py stamp OR the
+    save_users fail-closed safety net regresses.
+    """
+    from another_s3_manager.constants import PASSWORD_SET_VIA_ENV, PASSWORD_SET_VIA_UI
 
     headers = _login_admin(app_client)
-    app_client.post(
-        "/api/admin/users",
-        data={"username": "victim", "password": "Password123", "is_admin": "false", "allowed_roles": ""},
-        headers=headers,
-    )
+    assert _provenance("admin") == PASSWORD_SET_VIA_ENV  # precondition
+
     response = app_client.put(
-        "/api/admin/users/victim/password",
+        "/api/admin/users/admin/password",
         json={"password": "Rotated1234", "must_change_password": False},
         headers=headers,
     )
     assert response.status_code == 200, response.text
-    assert _provenance("victim") == PASSWORD_SET_VIA_UI
+    assert _provenance("admin") == PASSWORD_SET_VIA_UI
 
 
 def test_admin_created_user_stamps_ui(app_client):

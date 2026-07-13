@@ -58,6 +58,13 @@ def _seed_default_admin_if_empty(session) -> Optional[User]:
         must_change_password=False,
         # Bootstrapped from the environment -> ADMIN_PASSWORD keeps governing this
         # password until someone changes it in the UI or via the reset CLI.
+        #
+        # Note this stamps "env" even when ADMIN_PASSWORD is unset (falls back to
+        # DEFAULT_ADMIN_PASSWORD) -- intentional, so an operator who adds ADMIN_PASSWORD
+        # to their compose file *after* first boot can still rotate it. Task 3's startup
+        # sync MUST condition on `os.getenv("ADMIN_PASSWORD") is not None`, never on the
+        # DEFAULT_ADMIN_PASSWORD-fallback value -- otherwise an operator who later removes
+        # the var resets the admin password back to the publicly known default.
         password_set_via=PASSWORD_SET_VIA_ENV,
     )
     session.add(admin)
@@ -155,12 +162,19 @@ def save_users(users_data: Dict[str, Any]) -> None:
             if existing is not None:
                 # In-place update preserves id, created_at, and bans (no cascade)
                 new_hash = user_dict["password_hash"]
-                if "password_set_via" in user_dict:
-                    existing.password_set_via = user_dict["password_set_via"]
-                elif new_hash != existing.password_hash:
-                    # Same fail-closed safety net as update_user: an unexplained password
-                    # change is treated as human-driven.
+                if new_hash != existing.password_hash:
+                    # Fail CLOSED. Every dict reaching save_users round-trips through
+                    # load_users() -> _user_to_dict(), so it ALWAYS carries a
+                    # password_set_via key -- a value that merely survived the
+                    # round-trip is not a statement of intent, it's leftover state.
+                    # A hash change is the only reliable signal: it means some HTTP
+                    # write-site just mutated this dict in place, and every such site
+                    # is UI/admin-driven. env/cli provenance is written through their
+                    # own sessions (the seed, Task 3's sync, Task 5's CLI), never
+                    # through save_users, so this can never wrongly downgrade them.
                     existing.password_set_via = PASSWORD_SET_VIA_UI
+                elif "password_set_via" in user_dict:
+                    existing.password_set_via = user_dict["password_set_via"]
                 existing.password_hash = new_hash
                 existing.is_admin = user_dict.get("is_admin", False)
                 existing.theme = user_dict.get("theme", "auto")
@@ -289,9 +303,15 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
             # Safety net (fails CLOSED): a password write with no stated provenance is
             # assumed human-driven, so the startup env sync will never overwrite it.
             # Callers that mean something else (the seed, the CLI) pass password_set_via.
+            #
+            # No standalone `elif "password_set_via" in kwargs` branch here on purpose:
+            # a value-only stamp with no accompanying password_hash change has no real
+            # caller today, and it would be a dormant fail-open -- a future
+            # `update_user(username, **user_dict)` could carry a stale round-tripped
+            # "env"/"cli" through it without ever proving a password actually changed.
+            # If Task 3/5 need to set provenance without touching the hash, they should
+            # write it directly (or extend this call explicitly, not resurrect this elif).
             user.password_set_via = kwargs.get("password_set_via", PASSWORD_SET_VIA_UI)
-        elif "password_set_via" in kwargs:
-            user.password_set_via = kwargs["password_set_via"]
         if "is_admin" in kwargs:
             user.is_admin = kwargs["is_admin"]
         if "theme" in kwargs:
