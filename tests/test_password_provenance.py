@@ -253,8 +253,14 @@ def test_admin_reset_of_env_managed_admin_stamps_ui(app_client):
     admin HTTP route must flip it to "ui" -- this is the one write-site test that
     can actually discriminate: a "victim" created through the UI is already "ui"
     before the reset (round-tripping it wouldn't prove anything), but "admin"
-    starts "env", so this test fails if EITHER the explicit main.py stamp OR the
-    save_users fail-closed safety net regresses.
+    starts "env".
+
+    Scope, precisely: the route's explicit stamp and save_users' fail-closed net are
+    BOTH sufficient on their own, so this test only fails if both regress together.
+    That is defense in depth, not a coverage hole -- each layer has its own
+    discriminating unit test above (test_save_users_password_change_with_stale_
+    provenance_stamps_ui and test_update_user_password_write_without_provenance_
+    stamps_ui). What this test uniquely pins is the end-to-end HTTP path.
     """
     from another_s3_manager.constants import PASSWORD_SET_VIA_ENV, PASSWORD_SET_VIA_UI
 
