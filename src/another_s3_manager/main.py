@@ -146,6 +146,22 @@ def _run_alembic_upgrade() -> None:
         cwd = repo_root
     cfg = Config(str(alembic_cfg_path))
     cfg.set_main_option("script_location", str(cwd / "migrations"))
+    # migrations/env.py calls `logging.config.fileConfig(config.config_file_name)` when this
+    # attribute is set. fileConfig's stdlib default (disable_existing_loggers=True) sets
+    # .disabled = True on EVERY already-created logger not named in alembic.ini's [loggers]
+    # section. Migrations run at app startup, after logging is configured and after every
+    # module-level `logging.getLogger(__name__)` has run -- so this silently kills every
+    # another_s3_manager.* logger AND uvicorn's own loggers (uvicorn.error, uvicorn.access)
+    # for the remaining life of the process.
+    #
+    # alembic.ini's [loggers]/[handlers] sections exist for the standalone `alembic` CLI;
+    # when we drive `upgrade` programmatically we have already configured logging ourselves
+    # (logging_setup.configure_logging). Clearing config_file_name makes env.py's
+    # `if config.config_file_name is not None` guard skip fileConfig() -- alembic's own Config
+    # docstring sanctions exactly this ("the call to Python logging.fileConfig() is omitted if
+    # the programmatic configuration doesn't actually include logging directives"). The options
+    # we do need are set via set_main_option/read via get_main_option, independent of this.
+    cfg.config_file_name = None
     command.upgrade(cfg, "head")
 
 
