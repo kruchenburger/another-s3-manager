@@ -17,6 +17,7 @@ from another_s3_manager.constants import (
     DEFAULT_ADMIN_PASSWORD,
     PASSWORD_SET_VIA_ENV,
     PASSWORD_SET_VIA_UI,
+    PASSWORD_SET_VIA_UNKNOWN,
 )
 from another_s3_manager.database import session_scope
 from another_s3_manager.models import Ban, User, UserRole
@@ -70,6 +71,142 @@ def _seed_default_admin_if_empty(session) -> Optional[User]:
     session.add(admin)
     session.flush()
     return admin
+
+
+def _admin_password_force_enabled() -> bool:
+    """The ONE truthiness rule for ADMIN_PASSWORD_FORCE: "1" / "true" / "yes", case-insensitive.
+
+    Everything else — including "0", "false", "no", "off", "" and any typo — is False. No clever
+    parsing: an ADMIN_PASSWORD_FORCE=0 that force-overwrote an admin password would be a vicious
+    surprise, so the rule is a closed allow-list. The CLI imports this helper rather than
+    re-parsing the variable, so there is exactly one definition of "force is on".
+    """
+    return os.getenv("ADMIN_PASSWORD_FORCE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _classify_legacy_admin(password_hash: str, env_password: str) -> str:
+    """Decide the provenance of a pre-provenance ('unknown') admin row. Runs once.
+
+    The migration deliberately cannot do this (it must stay deterministic and env-free), so the
+    classification lives here, where bcrypt and the environment are both available.
+
+      1. hash verifies against the built-in default -> "env": the row still holds the bootstrap
+         password; there is no operator-chosen password to lose.
+      2. hash verifies against the current ADMIN_PASSWORD -> "env": the stored password IS the env
+         value, so it was seeded from env; re-applying it now is a no-op and future rotation works.
+      3. otherwise -> "ui": an unknown, human-chosen password. NEVER touch it.
+
+    Failing to "ui" is the safe direction: env stops governing, no password is lost.
+    ADMIN_PASSWORD_FORCE is the documented way back for an operator who wanted env management
+    after all.
+
+    Note: a legacy admin migrated from users.json is stamped "ui" directly by migration.py, not
+    "unknown" — this classifier only ever sees rows backfilled by the Alembic migration. That is
+    a deliberate split: JSON-origin rows have no reliable way to distinguish "seeded from env" from
+    "operator changed it", so migration.py conservatively calls all of them "ui" up front, and this
+    function never runs against them.
+    """
+    from another_s3_manager.auth import verify_password
+
+    if verify_password(DEFAULT_ADMIN_PASSWORD, password_hash):
+        return PASSWORD_SET_VIA_ENV
+    if env_password != DEFAULT_ADMIN_PASSWORD and verify_password(env_password, password_hash):
+        return PASSWORD_SET_VIA_ENV
+    return PASSWORD_SET_VIA_UI
+
+
+def sync_admin_password_from_env() -> bool:
+    """Apply ADMIN_PASSWORD to the 'admin' user when the environment governs its password.
+
+    Runs once per startup (see main.lifespan). Rules:
+      - no 'admin' row -> no-op. Startup never creates or resurrects users; the reset_admin_password
+        CLI is the explicit tool for that. (The first-boot seed is lazy — it fires from load_users()
+        on the first request, and stamps "env".)
+      - ADMIN_PASSWORD unset or equal to the built-in default -> no-op, even under FORCE. Applying it
+        would DOWNGRADE a deployed password back to a publicly-known default when someone removes the
+        variable from their compose file.
+      - ADMIN_PASSWORD_FORCE truthy -> apply the env password regardless of provenance (including
+        "ui" and "cli"), reset provenance to "env", and log it LOUDLY. This is the operator's explicit
+        escape hatch out of any provenance dead-end; it cannot fire by accident because it needs a
+        second, purpose-built variable.
+      - provenance "unknown" (row predates this feature) -> classify once, persist, continue.
+      - provenance "ui"/"cli" -> the operator set this password deliberately. Never touched.
+      - provenance "env" and the env value differs from the stored hash -> apply it, and clear
+        must_change_password (the operator chose this password; forcing a change would be hostile).
+
+    "Differs from the stored hash" is one bcrypt verify: when provenance is "env", the stored hash IS
+    a salted fingerprint of the last-applied env value, so no separate fingerprint column is needed
+    (and storing one would be a second place a password could leak from).
+
+    Returns True iff the password was rewritten.
+    """
+    from another_s3_manager.auth import hash_password, verify_password
+
+    env_password = os.getenv("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD)
+    force = _admin_password_force_enabled()
+
+    if force and env_password == DEFAULT_ADMIN_PASSWORD:
+        logger.warning(
+            "ADMIN_PASSWORD_FORCE is set but ADMIN_PASSWORD is unset (or is the built-in default) — "
+            "the force override is IGNORED. Set ADMIN_PASSWORD to the password you want installed."
+        )
+        force = False
+
+    with session_scope() as session:
+        admin = session.execute(select(User).where(User.username == "admin")).scalar_one_or_none()
+        if admin is None:
+            return False
+
+        if force:
+            if verify_password(env_password, admin.password_hash):
+                # Already matches — nothing to write. Nag: while FORCE stays set, the environment is
+                # authoritative and would revert any password later set through the UI.
+                admin.password_set_via = PASSWORD_SET_VIA_ENV
+                logger.warning(
+                    "ADMIN_PASSWORD_FORCE is still set; the admin password already matches ADMIN_PASSWORD. "
+                    "Remove ADMIN_PASSWORD_FORCE — while it is set, the environment overrides any password "
+                    "set through the UI on every restart."
+                )
+                return False
+            previous = admin.password_set_via
+            admin.password_hash = hash_password(env_password)
+            admin.must_change_password = False
+            admin.password_set_via = PASSWORD_SET_VIA_ENV
+            logger.warning(
+                "ADMIN_PASSWORD_FORCE: OVERWROTE the password of user 'admin' with ADMIN_PASSWORD "
+                "(previous provenance: %s; provenance reset to 'env'). Remove ADMIN_PASSWORD_FORCE from "
+                "the environment — it is a one-shot override, not a mode.",
+                previous,
+            )
+            return True
+
+        if admin.password_set_via == PASSWORD_SET_VIA_UNKNOWN:
+            admin.password_set_via = _classify_legacy_admin(admin.password_hash, env_password)
+            if admin.password_set_via == PASSWORD_SET_VIA_ENV:
+                logger.info("Admin password provenance recorded as 'env'; ADMIN_PASSWORD governs it on restart.")
+            else:
+                logger.warning(
+                    "Admin password provenance recorded as 'ui' (the stored password is neither the built-in "
+                    "default nor the current ADMIN_PASSWORD). ADMIN_PASSWORD is now ignored for this user — "
+                    "change the password in the UI, run 'python -m another_s3_manager.reset_admin_password', "
+                    "or set ADMIN_PASSWORD_FORCE=1 once to hand the password back to the environment."
+                )
+
+        if admin.password_set_via != PASSWORD_SET_VIA_ENV:
+            return False
+        if env_password == DEFAULT_ADMIN_PASSWORD:
+            return False
+        if verify_password(env_password, admin.password_hash):
+            return False  # env value unchanged since it was last applied
+
+        admin.password_hash = hash_password(env_password)
+        admin.must_change_password = False
+        # Security-relevant event: say WHAT happened, never the password itself.
+        logger.warning(
+            "Applied ADMIN_PASSWORD from the environment to user 'admin' (password provenance: env). "
+            "Change the password in the UI (or via the reset CLI) to make the database authoritative."
+        )
+        return True
 
 
 def load_users() -> Dict[str, Any]:
