@@ -6,11 +6,24 @@ dropped — which is why `docker compose logs` only shows uvicorn lines.
 """
 
 import logging
-import logging.config
 import os
 import sys
 
+from pythonjsonlogger.json import JsonFormatter
+
 _VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+_QUIET_LOGGERS = ("boto3", "botocore", "urllib3", "s3transfer")
+
+# Name tag for the handler this function installs on the root logger. Removing by name
+# (rather than blindly clearing every handler, which is what logging.config.dictConfig/
+# fileConfig do when configuring the root logger) keeps repeat calls idempotent without
+# evicting handlers OTHER code attached to root -- e.g. pytest's log-capture handler when
+# this function reruns mid-test (tests reload `main`, which re-executes this module-level
+# call). Matching by name (not a stored object reference) also stays correct even if
+# something else has directly manipulated root.handlers between calls (e.g. a test
+# fixture's snapshot/restore of the handler list).
+HANDLER_NAME = "another_s3_manager.console"
 
 
 def configure_logging() -> None:
@@ -22,8 +35,8 @@ def configure_logging() -> None:
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
     log_format = os.getenv("LOG_FORMAT", "text").lower()
 
-    # Validate log level before passing to dictConfig — an invalid value raises
-    # ValueError inside dictConfig which produces a confusing startup traceback.
+    # Validate log level before configuring — an invalid value would otherwise silently
+    # fall back to logging's own default (WARNING) with no indication why.
     if log_level not in _VALID_LOG_LEVELS:
         print(
             f"WARNING: LOG_LEVEL='{log_level}' is not a valid Python log level. Falling back to INFO.",
@@ -31,42 +44,27 @@ def configure_logging() -> None:
         )
         log_level = "INFO"
 
-    # Clear existing root handlers to make this function idempotent.
-    # dictConfig does NOT remove handlers added by previous calls, so a
-    # double-call (e.g. import-time + test re-import) would duplicate output.
-    root = logging.getLogger()
-    for h in list(root.handlers):
-        root.removeHandler(h)
-
+    formatter: logging.Formatter
     if log_format == "json":
-        formatter = {
-            "()": "pythonjsonlogger.json.JsonFormatter",
-            "fmt": "%(asctime)s %(levelname)s %(name)s %(message)s",
-        }
+        formatter = JsonFormatter(fmt="%(asctime)s %(levelname)s %(name)s %(message)s")
     else:
-        formatter = {
-            "format": "%(asctime)s %(levelname)s %(name)s: %(message)s",
-            "datefmt": "%Y-%m-%dT%H:%M:%S%z",
-        }
+        formatter = logging.Formatter(
+            fmt="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S%z",
+        )
 
-    logging.config.dictConfig(
-        {
-            "version": 1,
-            "disable_existing_loggers": False,
-            "formatters": {"default": formatter},
-            "handlers": {
-                "console": {
-                    "class": "logging.StreamHandler",
-                    "formatter": "default",
-                    "stream": sys.stdout,
-                },
-            },
-            "root": {"level": log_level, "handlers": ["console"]},
-            "loggers": {
-                "boto3": {"level": "WARNING"},
-                "botocore": {"level": "WARNING"},
-                "urllib3": {"level": "WARNING"},
-                "s3transfer": {"level": "WARNING"},
-            },
-        }
-    )
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(formatter)
+    handler.name = HANDLER_NAME
+
+    root = logging.getLogger()
+    # Idempotent re-configuration: remove every handler we previously installed (matched
+    # by name -- see HANDLER_NAME comment above), then install the new one. Foreign
+    # handlers are left untouched.
+    for existing in [h for h in root.handlers if h.name == HANDLER_NAME]:
+        root.removeHandler(existing)
+    root.addHandler(handler)
+    root.setLevel(log_level)
+
+    for name in _QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
