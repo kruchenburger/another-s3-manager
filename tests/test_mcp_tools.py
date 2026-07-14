@@ -984,3 +984,55 @@ async def test_presigned_url_clamps_to_max_ttl(alice_user, tool_registry, monkey
         )
     assert captured["expires_in"] == 3600
     assert result["expires_in"] == 3600
+
+
+# ---------------------------------------------------------------------------
+# Parameter schema descriptions
+#
+# FastMCP builds each tool's JSON Schema from the Python signature via
+# Pydantic — it does NOT read the Google-style `Args:` docstring blocks.
+# Without `Annotated[T, Field(description=...)]` on every parameter, an agent
+# receives a bare `{"title": "Role", "type": "string"}` and has no way to
+# learn what a role is or where to get one. This guard is what stops the
+# next tool (or the next parameter on an existing tool) from shipping
+# without one — remove a description above and this test fails.
+# ---------------------------------------------------------------------------
+
+
+def test_every_tool_parameter_has_a_schema_description():
+    """Every parameter of every MCP tool must have a non-empty JSON Schema description."""
+    from another_s3_manager.mcp_server import mcp
+
+    missing = []
+    for tool_name, tool in mcp._tool_manager._tools.items():
+        for param_name, schema in tool.parameters.get("properties", {}).items():
+            description = schema.get("description")
+            if not description or not description.strip():
+                missing.append(f"{tool_name}.{param_name}")
+    assert missing == [], f"Parameters missing a schema description: {missing}"
+
+
+def test_no_tool_parameter_has_numeric_bounds_in_schema():
+    """max_keys and expires_in must stay description-only — no minimum/maximum in the schema.
+
+    Both are CLAMPED by the tool body (not rejected), and both ceilings come
+    from operator-configurable settings (mcp_list_max_page_size,
+    presigned_url_max_ttl). A static `maximum` in the schema would let a
+    validating MCP client reject an out-of-range call before it ever reaches
+    us, destroying that deliberate behaviour — see the module-level comment
+    above RoleParam/BucketParam in mcp_server.py. Do not "fix" this test by
+    adding bounds back.
+    """
+    from another_s3_manager.mcp_server import mcp
+
+    offenders = []
+    for tool_name, tool in mcp._tool_manager._tools.items():
+        for param_name, schema in tool.parameters.get("properties", {}).items():
+            if (
+                "minimum" in schema
+                or "maximum" in schema
+                or "exclusiveMinimum" in schema
+                or "exclusiveMaximum" in schema
+            ):
+                offenders.append(f"{tool_name}.{param_name}")
+    assert offenders == [], f"Numeric constraints must not be added to the schema: {offenders}"
