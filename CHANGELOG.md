@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **SQLite now runs in WAL journal mode with a 5-second `busy_timeout`,
+  instead of the default DELETE mode with no wait on lock contention.**
+  Under DELETE mode a writer transaction blocks every reader for the
+  duration of the write, and a connection that hits a locked database fails
+  immediately with `database is locked` rather than waiting. This mattered
+  little when the app was effectively single-threaded, but a recent change
+  moved every boto3 call onto a worker thread, so the app now genuinely runs
+  database work from dozens of threads concurrently — sign-ins, ban
+  records, and MCP token use all write to SQLite. WAL removes the
+  reader/writer contention (readers no longer block on an in-flight
+  writer, and vice versa); `synchronous=NORMAL` is enabled alongside it,
+  which is safe under WAL (only risks losing the most recent commits on an
+  OS/power failure, never corruption). Both pragmas are set on every new
+  connection; `journal_mode` is persisted in the database file itself, so
+  repeating it per connection is a harmless no-op once it has taken effect.
+
+  WAL relies on real POSIX file locking and mmap support for its `-wal`/`-shm`
+  sidecar files, which some network filesystems (NFS, SMB) and Docker
+  Desktop bind mounts on Windows/macOS do not reliably provide — on those,
+  WAL can silently corrupt the database. A new `SQLITE_JOURNAL_MODE`
+  environment variable (default `wal`) lets an operator on such a
+  filesystem opt back into the traditional `delete` mode; see
+  `.env.example`.
+
 ### Fixed
 
 - **Deleting a file could silently delete its siblings too — including a

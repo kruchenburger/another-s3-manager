@@ -115,6 +115,131 @@ def test_db_query_metric_records_select():
     assert after >= before + 1
 
 
+def test_journal_mode_is_wal_on_real_connection(monkeypatch, tmp_path):
+    """The pragma listener must actually flip SQLite into WAL — not merely fire.
+
+    Asserts the *effect* (PRAGMA journal_mode read back from a real connection),
+    not that the listener ran.
+    """
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    import importlib
+
+    from another_s3_manager import constants, database
+
+    importlib.reload(constants)
+    importlib.reload(database)
+
+    engine = database.get_engine()
+    with engine.connect() as conn:
+        mode = conn.exec_driver_sql("PRAGMA journal_mode").scalar()
+    assert mode is not None and mode.lower() == "wal"
+
+
+def test_busy_timeout_is_set(monkeypatch, tmp_path):
+    """PRAGMA busy_timeout must be a positive value, not SQLite's default of 0."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    import importlib
+
+    from another_s3_manager import constants, database
+
+    importlib.reload(constants)
+    importlib.reload(database)
+
+    engine = database.get_engine()
+    with engine.connect() as conn:
+        timeout_ms = conn.exec_driver_sql("PRAGMA busy_timeout").scalar()
+    assert timeout_ms == database._BUSY_TIMEOUT_MS
+    assert timeout_ms > 0
+
+
+def test_wal_reader_not_blocked_by_uncommitted_exclusive_writer(monkeypatch, tmp_path):
+    """The whole point of enabling WAL: a reader is never blocked by an in-flight
+    writer, even one holding SQLite's strongest (EXCLUSIVE) write lock.
+
+    Uses raw sqlite3 connections (not the SQLAlchemy engine) so the writer and
+    reader are independent connections to the same on-disk file, and forces
+    BEGIN EXCLUSIVE rather than a plain uncommitted write: an ordinary write only
+    takes SQLite's true EXCLUSIVE lock for a few microseconds at COMMIT time,
+    which is too timing-dependent to assert on reliably in a single-threaded
+    test. BEGIN EXCLUSIVE holds that lock for the whole transaction, making the
+    scenario deterministic instead of racy.
+
+    The reader sets busy_timeout=0 so success can only mean "was never blocked",
+    not "blocked, then waited it out" — a slower false negative would show up as
+    an OperationalError here, not a flaky pass.
+    """
+    import sqlite3
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    import importlib
+
+    from another_s3_manager import constants, database
+
+    importlib.reload(constants)
+    importlib.reload(database)
+
+    engine = database.get_engine()
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE wal_probe (val INTEGER)")
+
+    db_path = str(constants.get_db_path())
+    writer = sqlite3.connect(db_path)
+    reader = sqlite3.connect(db_path)
+    try:
+        writer.execute("BEGIN EXCLUSIVE")
+        writer.execute("INSERT INTO wal_probe (val) VALUES (1)")
+        # writer transaction is deliberately left open (uncommitted) here
+
+        reader.execute("PRAGMA busy_timeout=0")
+        row = reader.execute("SELECT COUNT(*) FROM wal_probe").fetchone()
+        # Under WAL the reader sees a stable pre-transaction snapshot and is
+        # never blocked — it must succeed, and must not see the uncommitted row.
+        assert row == (0,)
+    finally:
+        writer.rollback()
+        writer.close()
+        reader.close()
+
+
+def test_delete_mode_reader_blocked_by_exclusive_writer(monkeypatch, tmp_path):
+    """Contrast case proving the WAL test above genuinely discriminates: the exact
+    same reader-vs-uncommitted-EXCLUSIVE-writer scenario DOES fail under SQLite's
+    default (DELETE / rollback-journal) mode, which is what SQLITE_JOURNAL_MODE=delete
+    opts an operator back into.
+    """
+    import sqlite3
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SQLITE_JOURNAL_MODE", "delete")
+    import importlib
+
+    from another_s3_manager import constants, database
+
+    importlib.reload(constants)
+    importlib.reload(database)
+
+    engine = database.get_engine()
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE wal_probe (val INTEGER)")
+        mode = conn.exec_driver_sql("PRAGMA journal_mode").scalar()
+    assert mode.lower() == "delete"  # sanity: this run really is in rollback-journal mode
+
+    db_path = str(constants.get_db_path())
+    writer = sqlite3.connect(db_path)
+    reader = sqlite3.connect(db_path)
+    try:
+        writer.execute("BEGIN EXCLUSIVE")
+        writer.execute("INSERT INTO wal_probe (val) VALUES (1)")
+
+        reader.execute("PRAGMA busy_timeout=0")
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            reader.execute("SELECT COUNT(*) FROM wal_probe")
+    finally:
+        writer.rollback()
+        writer.close()
+        reader.close()
+
+
 def test_db_level_cascade_works_in_production_engine():
     """Raw SQL DELETE on a user must cascade to api_tokens via ON DELETE CASCADE."""
     import hashlib

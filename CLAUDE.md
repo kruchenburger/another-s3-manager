@@ -46,6 +46,7 @@ another-s3-manager/
 - Tables: `users`, `user_roles` (junction), `bans` (FK → users with CASCADE), `api_tokens` (FK CASCADE → users; stores SHA-256 hash of plaintext token, `is_read_only`, `max_read_bytes`, `revoked_at`)
 - Module: `database.py` (engine + `session_scope()`), `models.py` (ORM)
 - Auto-migration from `users.json` / `bans.json` on first startup (legacy files renamed to `*.migrated.bak`)
+- WAL journal mode + `busy_timeout=5000` set on every connection (readers no longer block on writers — matters with the ~40 concurrent boto3 worker threads); escape hatch `SQLITE_JOURNAL_MODE=delete` for network-mounted `DATA_DIR`. Backing up the DB file requires either `sqlite3 .backup` / the online backup API, or stopping the app first — copying `another_s3_manager.db` alone while the app is running can produce a torn snapshot (the `-wal` file holds uncommitted-to-main-file pages). No such backup tooling exists in this repo yet.
 
 ## Migration commands
 
@@ -204,6 +205,7 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 | `AWS_REGION`                      | No       | from env                                | Default AWS region                                                                                                                                                          |
 | `S3_FILE_MANAGER_CONFIG`          | No       | `./data/config.json`                    | Path to config file (under DATA_DIR by convention)                                                                                                                          |
 | `DATA_DIR`                        | No       | `./data` (native), `/app/data` (Docker) | Data dir (SQLite DB + runtime data)                                                                                                                                         |
+| `SQLITE_JOURNAL_MODE`              | No       | `wal`                                   | SQLite journal mode (`wal`/`delete`). WAL removes reader/writer blocking but needs real POSIX locking + mmap; set `delete` if `DATA_DIR` is on NFS/SMB or a Docker Desktop bind mount on Windows/macOS |
 | `COOKIE_SECURE`                   | No       | `true`                                  | `Secure` flag on auth cookie. MUST be `false` on local HTTP, else browser drops the cookie                                                                                  |
 | `LOG_FORMAT`                      | No       | `text`                                  | Log output format: `text` or `json` (structured, for log aggregators)                                                                                                       |
 | `METRICS_PASSWORD`                | No       | —                                       | Optional basic-auth password for `/metrics` (username `metrics`). If unset, endpoint is open                                                                                |
