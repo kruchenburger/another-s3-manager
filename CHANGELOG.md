@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ADMIN_PASSWORD` is no longer first-boot-only: the app now records who last
+  set the admin password (environment, UI, or the reset CLI) and re-applies
+  `ADMIN_PASSWORD` on every restart as long as the environment still governs
+  it. A password set through the UI, or via the new break-glass CLI, is never
+  touched by the environment again.
+- New `ADMIN_PASSWORD_FORCE` env var — a one-shot opt-in that overwrites the
+  admin password with `ADMIN_PASSWORD` regardless of provenance and hands
+  password management back to the environment. Every boot with it set logs a
+  warning to remove it.
+- New break-glass CLI:
+  `docker compose exec app python -m another_s3_manager.reset_admin_password`
+  — resets (or recreates) the `admin` user's password from inside the
+  container without touching SQLite by hand. Interactive by default (hidden
+  prompt, asked twice); `--yes` plus a positional password for non-interactive
+  use (`docker compose exec -T ...`, CI). Enforces the same password policy
+  as the UI. See the README's "Admin password lifecycle" section.
+- Existing databases are upgraded via a new Alembic migration that adds
+  `password_set_via` to `users`, backfilling non-admin users as `ui` and
+  leaving the admin's provenance to be classified honestly at the next
+  startup (see README) — the backfill never assigns `env` on its own.
+
 ## [1.1.1] - 2026-07-13
 
 ### Changed
