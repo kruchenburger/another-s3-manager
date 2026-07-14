@@ -7,7 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **SQLite now runs in WAL journal mode with a 5-second `busy_timeout`,
+  instead of the default DELETE mode with no wait on lock contention.**
+  Under DELETE mode a writer transaction blocks every reader for the
+  duration of the write, and a connection that hits a locked database fails
+  immediately with `database is locked` rather than waiting. This mattered
+  little when the app was effectively single-threaded, but a recent change
+  moved every boto3 call onto a worker thread, so the app now genuinely runs
+  database work from dozens of threads concurrently — sign-ins, ban
+  records, and MCP token use all write to SQLite. WAL removes the
+  reader/writer contention (readers no longer block on an in-flight
+  writer, and vice versa); `synchronous=NORMAL` is enabled alongside it,
+  which is safe under WAL (only risks losing the most recent commits on an
+  OS/power failure, never corruption). Both pragmas are set on every new
+  connection; `journal_mode` is persisted in the database file itself, so
+  repeating it per connection is a harmless no-op once it has taken effect.
+
+  WAL relies on real POSIX file locking and mmap support for its `-wal`/`-shm`
+  sidecar files, which some network filesystems (NFS, SMB) and Docker
+  Desktop bind mounts on Windows/macOS do not reliably provide — on those,
+  WAL can silently corrupt the database. A new `SQLITE_JOURNAL_MODE`
+  environment variable (default `wal`) lets an operator on such a
+  filesystem opt back into the traditional `delete` mode; see
+  `.env.example`.
+
 ### Fixed
+
+- **One slow S3 request used to freeze the app for every user.** boto3 is
+  synchronous, and nearly every `*_for_role` helper — bucket listing, file
+  browsing, upload, download, delete, presigned URLs, and all ten MCP tools —
+  called it directly from an `async def` handler. That blocks the whole
+  event loop for the duration of the call, so while one request was talking
+  to S3, every other request (from every other user, including `/health` and
+  `/metrics`) had to wait its turn. The worst case was the MCP `bucket_summary`
+  tool: it can walk up to `mcp_summary_max_keys` (default 50,000) keys —
+  roughly 50 sequential S3 requests — during which the web UI was frozen for
+  everyone. Every blocking call site (7 in the web API, 13 across the MCP
+  tools; the web upload route was already done) now runs in a worker thread instead, so a slow or unreachable S3
+  endpoint only delays the request that's actually waiting on it. Streamed
+  downloads were already partially offloaded (Starlette threads each chunk
+  read) — only the initial metadata fetch needed the same fix. No behavior,
+  arguments, or error responses changed; this is purely about which thread
+  the network call runs on.
+
+  The failure mode changes rather than disappearing: enough simultaneous slow
+  S3 operations can now exhaust the worker pool and make requests _queue_,
+  where before they _froze_. That is a strictly better place to be, but if you
+  run this at a scale where it bites, note that raising the thread count alone
+  will not help — botocore caps each role's connection pool at 10, so extra
+  threads churn connections rather than adding throughput. Raise both together.
 
 - **The MCP `upload_file` tool ignored the operator's `max_file_size` limit and
   held the payload in memory twice.** The web upload route was hardened
