@@ -2091,12 +2091,17 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
     Delete a file or recursively delete a directory from `bucket`.
 
     `path` ending with "/" is treated as a directory (recursive delete).
+    Without a trailing "/", exactly ONE key is deleted — the key must match
+    `path` verbatim. This is NOT a prefix match: deleting "notes.txt" must
+    never also remove "notes.txt.bak" just because the latter starts with the
+    former (a real data-loss bug this function used to have, when it treated
+    the single-file case as "delete everything list_objects_v2 returned for
+    Prefix=path").
+
     Raises PermissionError on role/bucket access violation.
     Raises FileNotFoundError if the object/directory does not exist.
     Returns {"message": ..., "count": N}.
     """
-    from botocore.exceptions import ClientError as _ClientError
-
     from another_s3_manager.metrics import s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
@@ -2108,32 +2113,39 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
     def do_delete(s3_client):
         deleted_count = 0
         paginator = s3_client.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=bucket, Prefix=prefix + ("/" if is_directory else ""))
+        # Directory delete lists the "prefix/" subtree and takes every key
+        # under it (recursive). Single-file delete lists the SAME prefix but
+        # keeps only a key that matches `prefix` EXACTLY — listing without the
+        # trailing slash would otherwise match every key that merely *starts
+        # with* this name, which is the data-loss bug described above.
+        list_prefix = prefix + "/" if is_directory else prefix
+        pages = paginator.paginate(Bucket=bucket, Prefix=list_prefix)
 
         objects_to_delete = []
         for page in pages:
-            if "Contents" in page:
-                for obj in page["Contents"]:
-                    objects_to_delete.append({"Key": obj["Key"]})
+            for obj in page.get("Contents", []) or []:
+                key = obj["Key"]
+                if is_directory or key == prefix:
+                    objects_to_delete.append({"Key": key})
 
-        if not is_directory and not objects_to_delete:
-            try:
-                s3_client.delete_object(Bucket=bucket, Key=prefix)
-                deleted_count = 1
-            except _ClientError as e:
-                error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
-                if error_code in ("404", "NoSuchKey"):
-                    raise FileNotFoundError(f"File or directory '{path}' not found") from e
-                raise
-        else:
-            if objects_to_delete:
-                for i in range(0, len(objects_to_delete), 1000):
-                    batch = objects_to_delete[i : i + 1000]
-                    s3_client.delete_objects(Bucket=bucket, Delete={"Objects": batch, "Quiet": True})
-                    deleted_count += len(batch)
-
-        if deleted_count == 0:
+        if not objects_to_delete:
+            # Note: we deliberately do NOT fall back to a blind delete_object()
+            # call here and hope it raises for a missing key — real S3's
+            # DeleteObject is idempotent and succeeds silently even when the
+            # key does not exist, so existence must be established from the
+            # listing above.
             raise FileNotFoundError(f"File or directory '{path}' not found")
+
+        if not is_directory:
+            # Exactly one match (the key itself) — delete_object is equivalent
+            # to, and cheaper than, the batch API for a single key.
+            s3_client.delete_object(Bucket=bucket, Key=prefix)
+            deleted_count = 1
+        else:
+            for i in range(0, len(objects_to_delete), 1000):
+                batch = objects_to_delete[i : i + 1000]
+                s3_client.delete_objects(Bucket=bucket, Delete={"Objects": batch, "Quiet": True})
+                deleted_count += len(batch)
 
         s3_objects_total.labels(
             role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="delete"
