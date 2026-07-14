@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-07-14
+
+### Fixed
+
+- **The app was log-silent in production.** Since v1.1.1, after the first
+  migration on any boot it stopped logging entirely: no sign-in events, no MCP
+  audit lines, no security warnings — including the "ADMIN_PASSWORD is still the
+  default, change it" one — no uvicorn access log, not even
+  `Application startup complete.`. `LOG_FORMAT=json` silently did nothing. Only
+  alembic and SQLAlchemy still spoke.
+
+  Migrations run at startup, and `migrations/env.py` calls
+  `logging.config.fileConfig()`, whose standard-library default is
+  `disable_existing_loggers=True` — so every logger not named in `alembic.ini`
+  was disabled for the rest of the process, and root's handler was replaced with
+  alembic's (stderr, alembic's format, level `WARNING`).
+
+  Nothing failed, because nothing asserted it. There is now a test that boots the
+  loggers, runs the real migration path, and fails if they come back disabled.
+
+- `configure_logging()` cleared every handler on the root logger on each call to
+  stay idempotent — evicting handlers it never installed. It now installs a named
+  handler and removes only its own.
+
 ### Added
 
 - `ADMIN_PASSWORD` is no longer first-boot-only: the app now records who last
@@ -411,7 +435,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CSRF protection
 - Login attempt rate limiting
 
-[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/kruchenburger/another-s3-manager/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/kruchenburger/another-s3-manager/compare/v1.0.2...v1.0.3
