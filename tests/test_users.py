@@ -241,6 +241,40 @@ def test_get_user_by_username_not_found(db_session):
     assert get_user_by_username("missing") is None
 
 
+def test_get_user_by_username_is_a_single_query(db_session):
+    """get_user_by_username() must stay a single SELECT.
+
+    Without selectinload(User.roles), _user_to_dict()'s access to
+    user.roles would trigger a second, lazy SELECT — and this function
+    runs on every authenticated request (auth.get_current_user), so a
+    silent regression here would double DB round trips on the hottest
+    path in the app.
+    """
+    from sqlalchemy import event
+
+    from another_s3_manager import database
+    from another_s3_manager.users import create_user, get_user_by_username
+
+    create_user(username="findme", password_hash="hash", allowed_roles=["r1", "r2"])
+
+    select_statements = []
+    engine = database.get_engine()
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):  # noqa: ARG001
+        if statement.lstrip().upper().startswith("SELECT"):
+            select_statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _capture)
+    try:
+        user = get_user_by_username("findme")
+    finally:
+        event.remove(engine, "before_cursor_execute", _capture)
+
+    assert user is not None
+    assert sorted(user["allowed_roles"]) == ["r1", "r2"]
+    assert len(select_statements) == 1, f"expected a single SELECT, got {len(select_statements)}: {select_statements}"
+
+
 def test_get_all_users(db_session):
     from another_s3_manager.users import create_user, get_all_users
 
