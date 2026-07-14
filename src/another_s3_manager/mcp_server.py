@@ -823,9 +823,7 @@ async def list_files(
                 # straight into it. The recursive branch already normalizes
                 # via path.strip("/") above; mirror that here.
                 normalized_path = path.strip("/")
-                files = await run_in_threadpool(
-                    _s3_client.list_objects_for_role, role, bucket, normalized_path, user
-                )
+                files = await run_in_threadpool(_s3_client.list_objects_for_role, role, bucket, normalized_path, user)
                 result = {"files": files}
                 if len(files) > effective_max_keys:
                     result["files"] = files[:effective_max_keys]
