@@ -392,13 +392,17 @@ def test_oversize_upload_is_counted_as_size_limit(app_client, monkeypatch):
     it increments the same as3m_upload_rejected_total{reason=size_limit}
     counter the handler used to, so the metric assertion is unchanged.
     """
-    from another_s3_manager import main as main_module
+    from another_s3_manager import config as config_module
     from tests.test_main import login
 
     login(app_client)
     csrf = app_client.get("/api/me").json()["csrf_token"]
 
-    monkeypatch.setattr(main_module, "load_config", lambda force_reload=False: {"max_file_size": 10})
+    # resolve_max_file_size() now lives in config.py (main.py just imports
+    # it — see the MCP upload-guard review's finding 4), so its internal
+    # load_config call resolves in config.py's namespace: patch it there,
+    # not on main_module.
+    monkeypatch.setattr(config_module, "load_config", lambda force_reload=False: {"max_file_size": 10})
     labels = {"reason": "size_limit"}
     before = _sample("as3m_upload_rejected_total", labels)
 

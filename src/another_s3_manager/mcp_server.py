@@ -18,6 +18,7 @@ from typing import Annotated, Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 
 import another_s3_manager.config as _config_module
@@ -39,6 +40,7 @@ from another_s3_manager.metrics import (
     mcp_tool_calls_total,
     mcp_tool_duration_seconds,
     mcp_writes_denied_total,
+    upload_rejected_total,
 )
 
 logger = logging.getLogger(__name__)
@@ -606,7 +608,7 @@ async def list_buckets(role: RoleParam) -> dict:
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         try:
-            buckets = _s3_client.list_buckets_for_role(role, user)
+            buckets = await run_in_threadpool(_s3_client.list_buckets_for_role, role, user)
         except (PermissionError, RoleNotFoundError) as e:
             raise McpError(
                 "ROLE_NOT_ALLOWED",
@@ -783,7 +785,8 @@ async def list_files(
                 prefix = path.strip("/")
                 if prefix:
                     prefix += "/"
-                result = _s3_client.list_objects_recursive_for_role(
+                result = await run_in_threadpool(
+                    _s3_client.list_objects_recursive_for_role,
                     role,
                     bucket,
                     prefix,
@@ -820,7 +823,9 @@ async def list_files(
                 # straight into it. The recursive branch already normalizes
                 # via path.strip("/") above; mirror that here.
                 normalized_path = path.strip("/")
-                files = _s3_client.list_objects_for_role(role, bucket, normalized_path, user)
+                files = await run_in_threadpool(
+                    _s3_client.list_objects_for_role, role, bucket, normalized_path, user
+                )
                 result = {"files": files}
                 if len(files) > effective_max_keys:
                     result["files"] = files[:effective_max_keys]
@@ -938,8 +943,14 @@ async def bucket_summary(
         if prefix:
             prefix += "/"
         try:
-            result = _s3_client.summarize_bucket_for_role(
-                role, bucket, prefix, user, max_keys=max_keys, prefix_scan_pages=prefix_scan_pages
+            result = await run_in_threadpool(
+                _s3_client.summarize_bucket_for_role,
+                role,
+                bucket,
+                prefix,
+                user,
+                max_keys=max_keys,
+                prefix_scan_pages=prefix_scan_pages,
             )
         except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
@@ -995,6 +1006,35 @@ async def bucket_summary(
         mcp_tool_duration_seconds.labels(tool="bucket_summary").observe(time.perf_counter() - start)
 
 
+def _estimate_base64_decoded_size(content_base64: str) -> int:
+    """Estimate the decoded byte size of a base64 string WITHOUT decoding it.
+
+    Base64 encodes 3 raw bytes as 4 characters, padded with '=' at the end so
+    the encoded length is always a multiple of 4. This inverts that: strip up
+    to two trailing '=' padding characters from the count, then convert the
+    remaining character count back to bytes. Deliberately approximate (it
+    does not validate the string is well-formed base64 — that check still
+    happens in b64decode afterward) — its only job is to reject an oversized
+    payload BEFORE paying for the full decode.
+
+    Padding is capped at 2 characters by construction (only the last two
+    characters of the string are ever inspected for '='): legitimate base64
+    padding is never more than two '=' characters, so a malformed string with
+    a longer run of '=' must not be allowed to inflate `padding` past 2 — that
+    would make the estimate go negative and sail past the size check below
+    without ever exercising it. A malformed tail instead makes the estimate
+    LARGER than the true decoded size (safe: more likely to reject, never to
+    under-count), and b64decode(validate=True) still rejects the malformed
+    input afterward regardless. The estimate is also clamped at 0 as a second,
+    independent guard against ever returning a negative value.
+    """
+    length = len(content_base64)
+    tail = content_base64[-2:]
+    padding = len(tail) - len(tail.rstrip("="))
+    estimate = (length * 3 // 4) - padding
+    return max(estimate, 0)
+
+
 # ------------------------------------------------------------------
 # upload_file — upload a file to a bucket. Content as base64.
 # WRITE TOOL: gated by assert_write_allowed.
@@ -1029,19 +1069,48 @@ async def upload_file(
 ) -> dict:
     """Upload a file to a bucket (WRITE operation — creates or overwrites the
     object at `path`). Content must be base64-encoded. Blocked for read-only
-    tokens and when the server disables MCP writes."""
+    tokens and when the server disables MCP writes. Rejected with
+    FILE_TOO_LARGE before decoding if the payload exceeds the server's
+    max_file_size limit."""
     error_code = "none"
     start = time.perf_counter()
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         config = _config_module.load_config(force_reload=False)
         assert_write_allowed(token, "upload_file", config)
+
+        # Layer 2 (defense in depth): reject an oversized upload BEFORE
+        # b64decode ever runs — the real transport-level bound lives in
+        # main.py's _mcp_body_guard middleware (Layer 1), which rejects the
+        # request before its body is even read off the socket. This check
+        # exists for the cases the middleware ceiling deliberately allows
+        # through (its ceiling has JSON-envelope headroom baked in) and,
+        # more importantly, gives the AGENT an actionable error instead of a
+        # transport-level rejection it cannot interpret.
+        # Shared with main.py's web-upload guard/route (config.py's single
+        # implementation, passed the already-loaded config to avoid a
+        # redundant load_config call) — see config.resolve_max_file_size's
+        # docstring for why this used to be a hand-copy and isn't anymore.
+        max_file_size = _config_module.resolve_max_file_size(config)
+        estimated_size = _estimate_base64_decoded_size(content_base64)
+        if estimated_size > max_file_size:
+            upload_rejected_total.labels(reason="size_limit").inc()
+            raise McpError(
+                "FILE_TOO_LARGE",
+                f"Upload of ~{estimated_size} bytes exceeds the server's max_file_size limit of {max_file_size}",
+                {
+                    "estimated_size": estimated_size,
+                    "max_file_size": max_file_size,
+                    "hint": "Reduce the file size, or ask the operator to raise max_file_size.",
+                },
+            )
+
         try:
             content = base64.b64decode(content_base64, validate=True)
         except (binascii.Error, ValueError) as e:
             raise McpError("INVALID_INPUT", f"content_base64 is not valid base64: {e}", {"tool": "upload_file"})
         try:
-            _s3_client.put_object_for_role(role, bucket, path, content, user)
+            await run_in_threadpool(_s3_client.put_object_for_role, role, bucket, path, content, user)
         except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
@@ -1130,7 +1199,7 @@ async def delete_file(
         config = _config_module.load_config(force_reload=False)
         assert_write_allowed(token, "delete_file", config)
         try:
-            _s3_client.delete_object_for_role(role, bucket, path, user)
+            await run_in_threadpool(_s3_client.delete_object_for_role, role, bucket, path, user)
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
         except (PermissionError, RoleNotFoundError) as e:
@@ -1231,7 +1300,7 @@ async def read_file(
         )
 
         try:
-            size = _s3_client.head_object_for_role(role, bucket, path, user)
+            size = await run_in_threadpool(_s3_client.head_object_for_role, role, bucket, path, user)
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
         except (PermissionError, RoleNotFoundError) as e:
@@ -1277,7 +1346,9 @@ async def read_file(
             elif kind == "text:extensionless":
                 decision = "extensionless"
             else:  # sniff
-                sample = _s3_client.read_object_range_for_role(role, bucket, path, 0, 8191, user)
+                sample = await run_in_threadpool(
+                    _s3_client.read_object_range_for_role, role, bucket, path, 0, 8191, user
+                )
                 if _is_likely_text_sample(sample):
                     decision = "sniffed"
                 else:
@@ -1294,7 +1365,7 @@ async def read_file(
                         },
                     )
 
-        raw = _s3_client.read_object_for_role(role, bucket, path, user)
+        raw = await run_in_threadpool(_s3_client.read_object_for_role, role, bucket, path, user)
         mcp_bytes_read_total.labels(bucket=bucket).inc(len(raw))
 
         # Strip UTF-8 BOM silently if present.
@@ -1451,9 +1522,11 @@ async def copy_object(
                 {"tool": "copy_object"},
             )
         try:
-            _s3_client.copy_object_for_role(role, source_bucket, source_path, dest_bucket, dest_path, user)
+            await run_in_threadpool(
+                _s3_client.copy_object_for_role, role, source_bucket, source_path, dest_bucket, dest_path, user
+            )
             if delete_source:
-                _s3_client.delete_object_for_role(role, source_bucket, source_path, user)
+                await run_in_threadpool(_s3_client.delete_object_for_role, role, source_bucket, source_path, user)
         except FileNotFoundError as e:
             raise McpError("FILE_NOT_FOUND", str(e), {"bucket": source_bucket, "path": source_path})
         except (PermissionError, RoleNotFoundError) as e:
@@ -1546,7 +1619,7 @@ async def get_object_metadata(
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         try:
-            meta = _s3_client.get_object_metadata_for_role(role, bucket, path, user)
+            meta = await run_in_threadpool(_s3_client.get_object_metadata_for_role, role, bucket, path, user)
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
         except (PermissionError, RoleNotFoundError) as e:
@@ -1627,7 +1700,12 @@ async def presigned_url(
         max_ttl = int(config.get("presigned_url_max_ttl", 604800))
         clamped = max(60, min(int(expires_in), max_ttl))
         try:
-            url = _s3_client.generate_presigned_url_for_role(role, bucket, path, user, expires_in=clamped)
+            # generate_presigned_url_for_role is local crypto, but get_s3_client()
+            # underneath can perform a blocking STS assume_role call or refresh
+            # expired credentials for assume_role/profile-typed roles.
+            url = await run_in_threadpool(
+                _s3_client.generate_presigned_url_for_role, role, bucket, path, user, expires_in=clamped
+            )
         except (PermissionError, RoleNotFoundError) as e:
             if "bucket" in str(e).lower():
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})

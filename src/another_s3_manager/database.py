@@ -4,6 +4,7 @@ Sync engine for SQLite. Used by users.py and migration.py.
 The engine is module-level (lazy-initialized) so callers don't pass it around.
 """
 
+import logging
 import threading
 import time
 from contextlib import contextmanager
@@ -12,16 +13,72 @@ from typing import Generator, Optional
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
-from another_s3_manager.constants import get_db_path
+from another_s3_manager.constants import SQLITE_JOURNAL_MODE, get_db_path
+
+logger = logging.getLogger(__name__)
+
+# Milliseconds SQLite will wait for a lock before raising "database is locked",
+# instead of failing immediately. 5s comfortably rides out a normal write
+# transaction (single-row inserts/updates take milliseconds) even with R001's
+# ~40 concurrent worker threads hammering the DB, but still surfaces a genuinely
+# stuck/deadlocked connection as a request-scoped error within a few seconds
+# rather than hanging indefinitely.
+_BUSY_TIMEOUT_MS = 5000
 
 
 @event.listens_for(Engine, "connect")
-def _enable_sqlite_fk(dbapi_connection, _connection_record):
+def _enable_sqlite_pragmas(dbapi_connection, _connection_record):
     # SQLite ships with FK enforcement OFF by default — we need it ON
     # so DB-level ON DELETE CASCADE actually works.
-    if dbapi_connection.__class__.__module__.startswith("sqlite"):
-        cursor = dbapi_connection.cursor()
+    if not dbapi_connection.__class__.__module__.startswith("sqlite"):
+        return
+    cursor = dbapi_connection.cursor()
+    try:
         cursor.execute("PRAGMA foreign_keys=ON")
+
+        # busy_timeout is a per-connection setting (SQLite does not persist it),
+        # so it must be reissued on every new connection.
+        cursor.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+
+        # journal_mode is persisted in the database file header, so setting it
+        # again on every connection is a harmless no-op once it has taken
+        # effect once — but doing it unconditionally is simpler and cheaper
+        # than tracking "has this file already been switched" ourselves, and
+        # it's also what re-applies WAL if an operator ever restores a DELETE
+        # mode backup file into place.
+        #
+        # WAL requires a real POSIX-locking, mmap-capable filesystem for its
+        # -wal/-shm sidecar files. It is unsafe (can silently corrupt the
+        # database) on NFS/SMB shares and some Docker Desktop bind mounts on
+        # Windows/macOS. SQLITE_JOURNAL_MODE lets an operator on such a
+        # filesystem opt back into the traditional DELETE (rollback journal)
+        # mode; see .env.example.
+        cursor.execute(f"PRAGMA journal_mode={SQLITE_JOURNAL_MODE}")
+        (actual_mode,) = cursor.fetchone()
+        if actual_mode.lower() != SQLITE_JOURNAL_MODE:
+            # SQLite declined the requested mode (e.g. the VFS doesn't support
+            # the shared memory WAL needs) and silently kept whatever mode was
+            # already active — this is not corruption, but it does mean the
+            # throughput win this pragma exists for isn't happening.
+            logger.warning(
+                "SQLite requested journal_mode=%s but %s is active instead — "
+                "the DATA_DIR filesystem may not support the requested mode "
+                "(e.g. no mmap/shared-memory support, common on some network "
+                "or Docker Desktop bind mounts).",
+                SQLITE_JOURNAL_MODE,
+                actual_mode,
+            )
+
+        # synchronous=NORMAL is only safe to pair with WAL: WAL's own commit
+        # protocol still guarantees consistency, so NORMAL just trades "an
+        # fsync on every commit" for "an fsync only at WAL checkpoints" — the
+        # only downside is losing the last few committed transactions on an
+        # OS/power failure, never database corruption. With a rollback
+        # journal (DELETE mode), NORMAL drops a safety fsync that mode
+        # actually relies on, so we leave SQLite's default (FULL) there.
+        if actual_mode.lower() == "wal":
+            cursor.execute("PRAGMA synchronous=NORMAL")
+    finally:
         cursor.close()
 
 
