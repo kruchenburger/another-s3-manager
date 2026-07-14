@@ -838,13 +838,63 @@ def test_delete_file(app_client, moto_s3):
     moto_s3.create_bucket(Bucket="test-bucket")
     moto_s3.put_object(Bucket="test-bucket", Key="path/file.txt", Body=b"data")
 
-    response = app_client.delete("/api/buckets/test-bucket/files", params={"path": "path"}, headers=headers)
+    response = app_client.delete("/api/buckets/test-bucket/files", params={"path": "path/file.txt"}, headers=headers)
     assert response.status_code == status.HTTP_200_OK
     body = response.json()
     assert body["count"] == 1
     # Verify the file is actually gone from the moto-backed bucket
     remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="test-bucket").get("Contents", [])}
     assert "path/file.txt" not in remaining
+
+
+def test_delete_file_does_not_delete_prefix_siblings(app_client, moto_s3):
+    """Data-loss regression: deleting 'notes.txt' via the web route must not
+    also remove 'notes.txt.bak' / 'notes.txt.old' just because they share the
+    same prefix."""
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="siblings-route-b")
+    moto_s3.put_object(Bucket="siblings-route-b", Key="notes.txt", Body=b"a")
+    moto_s3.put_object(Bucket="siblings-route-b", Key="notes.txt.bak", Body=b"b")
+    moto_s3.put_object(Bucket="siblings-route-b", Key="notes.txt.old", Body=b"c")
+
+    response = app_client.delete("/api/buckets/siblings-route-b/files", params={"path": "notes.txt"}, headers=headers)
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["count"] == 1
+
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="siblings-route-b").get("Contents", [])}
+    assert remaining == {"notes.txt.bak", "notes.txt.old"}
+
+
+def test_delete_file_folder_delete_via_route_is_recursive(app_client, moto_s3):
+    """A trailing '/' in the query param must survive sanitize_path and still
+    trigger a recursive folder delete, while a lexically-similar sibling
+    outside the folder survives."""
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="folder-route-b")
+    moto_s3.put_object(Bucket="folder-route-b", Key="reports/2026/jan.csv", Body=b"f")
+    moto_s3.put_object(Bucket="folder-route-b", Key="reports/2026/feb.csv", Body=b"g")
+    moto_s3.put_object(Bucket="folder-route-b", Key="reports/2026-q1.csv", Body=b"e")
+
+    response = app_client.delete("/api/buckets/folder-route-b/files", params={"path": "reports/2026/"}, headers=headers)
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["count"] == 2
+
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="folder-route-b").get("Contents", [])}
+    assert remaining == {"reports/2026-q1.csv"}
+
+
+def test_delete_file_not_found_returns_404_via_moto(app_client, moto_s3):
+    """A genuinely non-existent key returns 404, not a silent success — real
+    S3's DeleteObject is idempotent and would not raise on its own."""
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="missing-route-b")
+    moto_s3.put_object(Bucket="missing-route-b", Key="unrelated.txt", Body=b"z")
+
+    response = app_client.delete("/api/buckets/missing-route-b/files", params={"path": "gone.txt"}, headers=headers)
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="missing-route-b").get("Contents", [])}
+    assert remaining == {"unrelated.txt"}
 
 
 def test_login_user_not_found(app_client):
@@ -1448,14 +1498,36 @@ def test_validate_role_access_denied():
     assert exc.value.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_delete_file_root_path_forbidden(app_client):
+@pytest.mark.parametrize("raw_path", ["", "/", "//", "  /  ", "../"])
+def test_delete_file_root_path_forbidden(app_client, moto_s3, raw_path):
+    """The root-delete guard (`if not path: raise 400`) in main.py fires
+    BEFORE the trailing-slash restoration step that re-appends "/" after
+    sanitize_path strips it — that ORDERING is the entire reason an input
+    that sanitizes to "" can never be resurrected into "/", a bucket-root
+    recursive-delete prefix. The previous version of this test only covered
+    `path=""`, so a refactor that moved the restoration above the guard
+    would have stayed green right up until it deleted a whole bucket.
+
+    Parametrized over shapes that could plausibly collapse to "" or "/" —
+    bare empty, one or more bare slashes, a whitespace-padded slash, and a
+    traversal attempt — each seeded against a real (moto) bucket and
+    asserted to leave every object untouched. Checking only the response
+    status would still pass even if the delete had already happened; the
+    survival assertion is what actually proves the guard held."""
     _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="root-guard-bucket")
+    moto_s3.put_object(Bucket="root-guard-bucket", Key="keep-me.txt", Body=b"data")
+    moto_s3.put_object(Bucket="root-guard-bucket", Key="also-keep.txt", Body=b"data2")
+
     response = app_client.delete(
-        "/api/buckets/test-bucket/files",
-        params={"path": ""},
+        "/api/buckets/root-guard-bucket/files",
+        params={"path": raw_path},
         headers=headers,
     )
     assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="root-guard-bucket").get("Contents", [])}
+    assert remaining == {"keep-me.txt", "also-keep.txt"}
 
 
 def test_delete_file_disabled(app_client, mocker):

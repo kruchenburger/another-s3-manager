@@ -1113,7 +1113,16 @@ async def delete_file(
     """Delete a file from a bucket (WRITE / DESTRUCTIVE operation — the object is
     permanently removed; a `path` ending in "/" deletes the whole folder
     recursively). Blocked for read-only tokens, when the server disables MCP
-    writes, and when deletion is disabled server-wide."""
+    writes, and when deletion is disabled server-wide.
+
+    Args:
+        role: Role name (must be in user's allowed_roles).
+        bucket: Bucket name (must be in role's allowed_buckets if configured).
+        path: Full S3 key to delete — exactly that object, nothing else. A
+            trailing "/" changes this into a RECURSIVE FOLDER DELETE: every
+            object nested under that prefix is removed. Omit the trailing
+            slash unless a whole folder is genuinely meant to be wiped.
+    """
     error_code = "none"
     start = time.perf_counter()
     try:
@@ -1122,6 +1131,8 @@ async def delete_file(
         assert_write_allowed(token, "delete_file", config)
         try:
             _s3_client.delete_object_for_role(role, bucket, path, user)
+        except FileNotFoundError:
+            raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
         except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:

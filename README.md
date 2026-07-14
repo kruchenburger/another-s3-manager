@@ -128,84 +128,31 @@ via `X-CSRF-Token` header on mutating requests; the CSRF token comes from
 For local HTTP development, set `COOKIE_SECURE=false` or the browser will
 silently drop the cookie (Secure flag requires HTTPS).
 
-### Admin password lifecycle
+### Admin password
 
-The built-in `admin` user is created on first startup with the password from
-`ADMIN_PASSWORD` (default `change_me_pls`).
+The built-in `admin` user is created on first startup with the password from `ADMIN_PASSWORD`
+(default `change_me_pls` — change it).
 
-The app records **who last set** the admin password:
+- **Change `ADMIN_PASSWORD` and restart** and the new value is applied. Rotation works.
+- **Change the password in the web UI** (or with the reset CLI below) and the database wins from
+  then on: `ADMIN_PASSWORD` will not silently revert a password you chose yourself. To hand
+  management back to the environment, set `ADMIN_PASSWORD_FORCE=1` alongside `ADMIN_PASSWORD` for
+  one restart, then remove it — while it is set, the environment overrides the UI on every boot.
 
-- **Set from the environment** (first boot, or a previous restart): the environment keeps
-  governing it. Change `ADMIN_PASSWORD` in your compose file, restart, and the new value is
-  applied — rotation included.
-- **Set from the web UI, or with the reset CLI below**: the database is authoritative.
-  `ADMIN_PASSWORD` is **not** applied over it — not on the next restart, not later. A password
-  an operator chose must not be silently reverted by a stale environment variable.
-
-`ADMIN_PASSWORD` is never applied when it is unset or left at the default `change_me_pls` —
-removing the variable will not downgrade a deployed password back to the default.
-
-#### Taking the password back with `ADMIN_PASSWORD_FORCE`
-
-If the admin password was set in the UI (or with the CLI) and you want the environment to
-govern it again, set `ADMIN_PASSWORD_FORCE=1` (accepted: `1`, `true`, `yes` — anything else
-means off) alongside `ADMIN_PASSWORD`, and restart. On that start the app **overwrites the
-current admin password** with `ADMIN_PASSWORD` and hands password management back to the
-environment. The overwrite is logged at WARNING (the password itself is never logged).
-
-It is a one-shot: **remove `ADMIN_PASSWORD_FORCE` once it has done its job.** Leaving it in
-place makes the environment permanently authoritative — any password you later set in the UI
-would be reverted to `ADMIN_PASSWORD` on the next restart. Every start with it set logs a
-reminder to remove it.
-
-`ADMIN_PASSWORD_FORCE` alone does nothing: if `ADMIN_PASSWORD` is unset or is still the built-in
-default `change_me_pls`, the force override is **ignored** (with a warning) instead of installing
-the publicly-known default. Setting only `ADMIN_PASSWORD_FORCE=1`, hoping to reset the admin
-password back to the default, will not work — set `ADMIN_PASSWORD` to the value you actually want
-installed alongside it.
+The app tells you which of these is in effect at startup, so if `ADMIN_PASSWORD` isn't doing what
+you expect, the logs say why and what to do about it.
 
 #### Lost the admin password?
 
 Reset it from inside the container:
 
-    # Interactive — hidden password prompt + confirmation (preferred:
-    # keeps the password out of your shell history):
+    # Interactive — hidden prompt, asked twice (keeps it out of your shell history):
     docker compose exec app python -m another_s3_manager.reset_admin_password
 
     # Non-interactive (scripts / CI) — note the -T and --yes:
     docker compose exec -T app python -m another_s3_manager.reset_admin_password 'NewPassword1' --yes
 
-The CLI enforces the same password policy as the UI, recreates the `admin` user if it was
-deleted, and clears the "must change password on next login" flag. After a CLI reset,
-`ADMIN_PASSWORD` no longer governs the admin password — remove it from your compose file to
-avoid confusion, and make sure `ADMIN_PASSWORD_FORCE` is not set, or the next restart will
-revert the reset (the CLI warns you if it is).
-
-#### Upgrading an existing deployment
-
-There are two different upgrade paths, and they are classified differently. **Read the one that
-matches your deployment** — assuming the wrong one leaves you thinking rotation works when it
-doesn't, silently.
-
-- **Upgrading a database that already has a `users` table** (i.e. you were already on SQLite):
-  the admin password's origin is unknown, so the app classifies it once, on the first startup
-  after the upgrade: if the stored password is still the built-in default (or is exactly the
-  current `ADMIN_PASSWORD`), the environment keeps governing it; otherwise the password is
-  treated as operator-chosen and `ADMIN_PASSWORD` is ignored from then on. The startup logs say
-  which happened.
-- **Upgrading from a legacy `users.json` file** (pre-SQLite deployment): every user imported by
-  the one-shot migration — **including `admin`, including an admin still on the built-in
-  default** — is stamped operator-set (`ui`) up front, not classified. There is no reliable way
-  to tell "seeded from env, never touched" apart from "operator changed it" from a JSON file
-  alone, so the migration conservatively assumes the latter for everyone. **`ADMIN_PASSWORD`
-  will NOT govern a JSON-migrated admin, ever, on its own** — there is no classification step
-  that will later flip it to `env`. If you want the environment to manage this admin's password
-  going forward, you must explicitly hand it back with `ADMIN_PASSWORD_FORCE=1` once (see
-  below).
-
-**No upgrade path can overwrite a password you set yourself** — and if the classification (or,
-for the JSON case, the blanket `ui` stamp) was not what you wanted, `ADMIN_PASSWORD_FORCE` gets
-you back to environment management.
+It enforces the same password policy as the UI and recreates the `admin` user if it was deleted.
 
 ### Brute-force defense
 

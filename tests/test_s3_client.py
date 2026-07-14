@@ -1390,15 +1390,17 @@ def test_delete_object_for_role_single_file(mocker):
         return_value={"roles": [{"name": "RoleA", "type": "default"}]},
     )
     fake_client = mocker.MagicMock()
-    # No objects from paginator (triggers single delete_object path)
-    fake_paginator = mocker.MagicMock()
-    fake_paginator.paginate.return_value = []
-    fake_client.get_paginator.return_value = fake_paginator
+    # Single-key existence + exact-match check is now ONE list_objects_v2
+    # call (Prefix=path, MaxKeys=1), not a paginated walk -- its lone result
+    # is the exact key (an exact match, not merely a prefix match), which
+    # triggers the single delete_object path.
+    fake_client.list_objects_v2.return_value = {"Contents": [{"Key": "file.txt"}]}
     fake_client.delete_object.return_value = {}
     mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
 
     result = mod.delete_object_for_role("RoleA", "bucket", "file.txt", _make_user(allowed_roles=["RoleA"]))
     assert result["count"] == 1
+    fake_client.list_objects_v2.assert_called_once_with(Bucket="bucket", Prefix="file.txt", MaxKeys=1)
     fake_client.delete_object.assert_called_once_with(Bucket="bucket", Key="file.txt")
 
 
@@ -1410,14 +1412,37 @@ def test_delete_object_for_role_not_found(mocker):
         return_value={"roles": [{"name": "RoleA", "type": "default"}]},
     )
     fake_client = mocker.MagicMock()
-    fake_paginator = mocker.MagicMock()
-    fake_paginator.paginate.return_value = []
-    fake_client.get_paginator.return_value = fake_paginator
-    fake_client.delete_object.side_effect = ClientError({"Error": {"Code": "NoSuchKey"}}, "DeleteObject")
+    # Listing finds nothing at all -> the key does not exist. Real S3's
+    # DeleteObject is idempotent (it does NOT raise for a missing key), so
+    # existence must be established from the listing itself, not by hoping
+    # delete_object errors.
+    fake_client.list_objects_v2.return_value = {"Contents": []}
     mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
 
     with pytest.raises(FileNotFoundError):
         mod.delete_object_for_role("RoleA", "bucket", "gone.txt", _make_user(allowed_roles=["RoleA"]))
+    fake_client.delete_object.assert_not_called()
+
+
+def test_delete_object_for_role_single_file_prefix_match_not_exact(mocker):
+    """The single-key list_objects_v2(MaxKeys=1) call can return a key that
+    merely STARTS WITH the requested path (its lexicographically-nearest
+    match) when the exact key doesn't exist -- e.g. deleting "gone.txt" in a
+    bucket that only has "gone.txt.bak". That must still raise
+    FileNotFoundError and must NOT delete the sibling it happened to see."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.list_objects_v2.return_value = {"Contents": [{"Key": "gone.txt.bak"}]}
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    with pytest.raises(FileNotFoundError):
+        mod.delete_object_for_role("RoleA", "bucket", "gone.txt", _make_user(allowed_roles=["RoleA"]))
+    fake_client.delete_object.assert_not_called()
 
 
 def test_delete_object_for_role_permission_denied():
@@ -1425,6 +1450,100 @@ def test_delete_object_for_role_permission_denied():
 
     with pytest.raises(PermissionError):
         mod.delete_object_for_role("RoleX", "bucket", "f", _make_user(allowed_roles=["RoleA"]))
+
+
+# --- delete_object_for_role: data-loss regression (prefix-match deleted siblings) ---
+
+
+def test_delete_object_for_role_does_not_delete_prefix_siblings(moto_s3):
+    """Reproduction: deleting 'notes.txt' must not also delete 'notes.txt.bak'
+    or 'notes.txt.old' just because they start with the same string."""
+    import another_s3_manager.s3_client as mod
+
+    moto_s3.create_bucket(Bucket="siblings-b")
+    moto_s3.put_object(Bucket="siblings-b", Key="notes.txt", Body=b"a")
+    moto_s3.put_object(Bucket="siblings-b", Key="notes.txt.bak", Body=b"b")
+    moto_s3.put_object(Bucket="siblings-b", Key="notes.txt.old", Body=b"c")
+    moto_s3.put_object(Bucket="siblings-b", Key="reports/2026", Body=b"d")
+    moto_s3.put_object(Bucket="siblings-b", Key="reports/2026-q1.csv", Body=b"e")
+    moto_s3.put_object(Bucket="siblings-b", Key="reports/2026/jan.csv", Body=b"f")
+
+    result = mod.delete_object_for_role("Default", "siblings-b", "notes.txt", _ADMIN)
+
+    assert result["count"] == 1
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="siblings-b").get("Contents", [])}
+    assert remaining == {
+        "notes.txt.bak",
+        "notes.txt.old",
+        "reports/2026",
+        "reports/2026-q1.csv",
+        "reports/2026/jan.csv",
+    }
+
+
+def test_delete_object_for_role_exact_key_that_looks_like_a_prefix(moto_s3):
+    """'reports/2026' (no trailing slash) is a real object AND a prefix of two
+    other keys. Deleting it must remove only the exact key."""
+    import another_s3_manager.s3_client as mod
+
+    moto_s3.create_bucket(Bucket="reports-b")
+    moto_s3.put_object(Bucket="reports-b", Key="reports/2026", Body=b"d")
+    moto_s3.put_object(Bucket="reports-b", Key="reports/2026-q1.csv", Body=b"e")
+    moto_s3.put_object(Bucket="reports-b", Key="reports/2026/jan.csv", Body=b"f")
+
+    result = mod.delete_object_for_role("Default", "reports-b", "reports/2026", _ADMIN)
+
+    assert result["count"] == 1
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="reports-b").get("Contents", [])}
+    assert remaining == {"reports/2026-q1.csv", "reports/2026/jan.csv"}
+
+
+def test_delete_object_for_role_folder_delete_still_recursive(moto_s3):
+    """A trailing '/' still means 'recursive folder delete', and a
+    lexically-similar sibling outside the folder must survive."""
+    import another_s3_manager.s3_client as mod
+
+    moto_s3.create_bucket(Bucket="folder-b")
+    moto_s3.put_object(Bucket="folder-b", Key="reports/2026/jan.csv", Body=b"f")
+    moto_s3.put_object(Bucket="folder-b", Key="reports/2026/feb.csv", Body=b"g")
+    moto_s3.put_object(Bucket="folder-b", Key="reports/2026-q1.csv", Body=b"e")
+
+    result = mod.delete_object_for_role("Default", "folder-b", "reports/2026/", _ADMIN)
+
+    assert result["count"] == 2
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="folder-b").get("Contents", [])}
+    assert remaining == {"reports/2026-q1.csv"}
+
+
+def test_delete_object_for_role_missing_key_raises_via_moto(moto_s3):
+    """A genuinely non-existent single key raises FileNotFoundError, even
+    though real S3's DeleteObject would otherwise succeed silently."""
+    import another_s3_manager.s3_client as mod
+
+    moto_s3.create_bucket(Bucket="missing-del-b")
+    moto_s3.put_object(Bucket="missing-del-b", Key="unrelated.txt", Body=b"z")
+
+    with pytest.raises(FileNotFoundError):
+        mod.delete_object_for_role("Default", "missing-del-b", "gone.txt", _ADMIN)
+
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="missing-del-b").get("Contents", [])}
+    assert remaining == {"unrelated.txt"}
+
+
+def test_move_via_copy_then_delete_does_not_touch_siblings(moto_s3):
+    """copy_object_for_role + delete_object_for_role (the MCP move path) must
+    delete only the exact source key, not siblings sharing its prefix."""
+    import another_s3_manager.s3_client as mod
+
+    moto_s3.create_bucket(Bucket="move-b")
+    moto_s3.put_object(Bucket="move-b", Key="notes.txt", Body=b"hello")
+    moto_s3.put_object(Bucket="move-b", Key="notes.txt.bak", Body=b"backup")
+
+    mod.copy_object_for_role("Default", "move-b", "notes.txt", "move-b", "archive/notes.txt", _ADMIN)
+    mod.delete_object_for_role("Default", "move-b", "notes.txt", _ADMIN)
+
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="move-b").get("Contents", [])}
+    assert remaining == {"notes.txt.bak", "archive/notes.txt"}
 
 
 # ---------------------------------------------------------------------------
