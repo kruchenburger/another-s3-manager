@@ -13,10 +13,11 @@ import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from pydantic import Field
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 
@@ -428,6 +429,51 @@ def _is_likely_text_sample(sample: bytes) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Parameter schema descriptions
+#
+# FastMCP builds each tool's JSON Schema from its Python signature via
+# Pydantic — it does NOT parse the Google-style `Args:` blocks in the
+# docstrings below. Without `Annotated[T, Field(description=...)]`, an agent
+# sees bare `{"title": "Role", "type": "string"}` and has no way to learn
+# what a role *is* or where to get one. These aliases put that knowledge
+# where the agent actually receives it; the docstrings stay as the
+# human-facing reference (this server's `--help`).
+#
+# Deliberately NOT adding `minimum`/`maximum` (or any other numeric
+# constraint) to max_keys / expires_in: both are CLAMPED, not rejected, by
+# the tool bodies below, and both ceilings (mcp_list_max_page_size,
+# presigned_url_max_ttl) are operator-configurable. A static `maximum` in
+# the schema would let a validating MCP client reject an out-of-range call
+# before it ever reaches us — destroying the deliberate "clamp, don't
+# reject" behaviour — and would be a lie for any operator who raised the
+# ceiling. Descriptions say "clamped" and name the governing config key
+# instead; do not "fix" this by adding bounds back.
+# ---------------------------------------------------------------------------
+
+RoleParam = Annotated[
+    str,
+    Field(
+        description=(
+            "Role to act as — selects which S3 credentials and bucket permissions apply. Not free "
+            "text: call list_roles() first to see the role names available to you. Passing a role "
+            "you don't have raises ROLE_NOT_ALLOWED and reports your actual allowed roles."
+        )
+    ),
+]
+
+BucketParam = Annotated[
+    str,
+    Field(
+        description=(
+            "Bucket name. Must be one of the buckets `role` is allowed to access — call "
+            "list_buckets(role) to list them. An unauthorized bucket raises BUCKET_NOT_ALLOWED; a "
+            "bucket that simply doesn't exist (for an unrestricted role) raises S3_NOT_FOUND instead."
+        )
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
 # FastMCP instance — must be created at module level (not inside a factory)
 # so that lifespan handlers can reach mcp.session_manager. FastMCP's
 # session_manager.run() context manager is the only way to initialize the
@@ -552,7 +598,7 @@ async def list_roles() -> dict:
 # list_buckets — lists buckets accessible via the given role.
 # ------------------------------------------------------------------
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-async def list_buckets(role: str) -> dict:
+async def list_buckets(role: RoleParam) -> dict:
     """List buckets accessible via the given role.
 
     Call this right after list_roles, before touching files — every other tool needs a bucket name too.
@@ -627,12 +673,56 @@ async def list_buckets(role: str) -> dict:
 # ------------------------------------------------------------------
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def list_files(
-    role: str,
-    bucket: str,
-    path: str = "",
-    recursive: bool = False,
-    max_keys: int | None = None,
-    continuation_token: str | None = None,
+    role: RoleParam,
+    bucket: BucketParam,
+    path: Annotated[
+        str,
+        Field(
+            description=(
+                "Directory-style prefix (a full path segment, not a partial name) to scope the "
+                'listing, normalized to end with "/". "rep" will NOT match a key like "reports.csv" — '
+                'use "reports" to scope to that directory. "" (default) lists the bucket root. '
+                "Non-recursive mode returns one level directly under the prefix, with sub-directories "
+                "as `is_directory: true` entries; recursive mode returns a flat list of every key "
+                "under the prefix."
+            )
+        ),
+    ] = "",
+    recursive: Annotated[
+        bool,
+        Field(
+            description=(
+                "If True, return a flat, paginated list of every key under `path` — use for "
+                "counting/searching/processing a whole subtree without N+1 calls. If False (default), "
+                "list only one level deep, with sub-directories returned as `is_directory: true` "
+                "entries — use for interactive dir-by-dir browsing."
+            )
+        ),
+    ] = False,
+    max_keys: Annotated[
+        int | None,
+        Field(
+            description=(
+                "Maximum entries to return in this call, in EITHER mode. Defaults to the "
+                "server-configured page size (`mcp_list_page_size`, normally 1000). Values above the "
+                "server ceiling (`mcp_list_max_page_size`, normally 10000) are CLAMPED down to that "
+                "ceiling, not rejected — you will never get an error for asking too big, just fewer "
+                "keys than requested. Values of 0 or below are floored up to 1 — you will never get "
+                "zero results back because of this parameter."
+            )
+        ),
+    ] = None,
+    continuation_token: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Opaque pagination cursor. Pass back `next_continuation_token` from a previous "
+                "recursive=True call to fetch the next page. Only meaningful when recursive=True — a "
+                "truncated non-recursive listing has no continuation token; it returns is_truncated "
+                "and a hint pointing at bucket_summary or recursive=True instead."
+            )
+        ),
+    ] = None,
 ) -> dict:
     """List files at a path within a bucket. Returns ACTUAL KEYS — to learn
     what a bucket contains (counts, sizes, prefix breakdown), call
@@ -722,7 +812,18 @@ async def list_files(
                 # returns. No continuation token exists for a non-recursive
                 # listing, so we do not invent one — the hint below points at
                 # the two real alternatives instead.
-                files = await run_in_threadpool(_s3_client.list_objects_for_role, role, bucket, path, user)
+                #
+                # Normalize away a trailing slash before calling
+                # list_objects_for_role: that helper appends "/" onto path
+                # itself (`prefix = path + "/" if path else ""`), so a
+                # caller-supplied trailing slash used to double up into "//"
+                # and S3 silently returned an empty listing — no error, just
+                # nothing. bucket_summary's own path description shows the
+                # trailing-slash form, so this tool was steering agents
+                # straight into it. The recursive branch already normalizes
+                # via path.strip("/") above; mirror that here.
+                normalized_path = path.strip("/")
+                files = await run_in_threadpool(_s3_client.list_objects_for_role, role, bucket, normalized_path, user)
                 result = {"files": files}
                 if len(files) > effective_max_keys:
                     result["files"] = files[:effective_max_keys]
@@ -795,7 +896,21 @@ async def list_files(
 # s3_client.summarize_bucket_for_role — this stays a thin wrapper.
 # ------------------------------------------------------------------
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-async def bucket_summary(role: str, bucket: str, path: str = "") -> dict:
+async def bucket_summary(
+    role: RoleParam,
+    bucket: BucketParam,
+    path: Annotated[
+        str,
+        Field(
+            description=(
+                "Directory-style prefix (a full path segment, not a partial name) to scope the "
+                'summary, normalized to end with "/". "" (default) summarizes the whole bucket. Pass '
+                '"some/subdir" to drill into just that subtree — a partial name like "some/sub" will '
+                "NOT match it."
+            )
+        ),
+    ] = "",
+) -> dict:
     """Summarize what's in a bucket (or under a prefix) in ONE compact call:
     object count, total size, per-prefix breakdown, extension histogram,
     largest objects, modified range. Use this FIRST when asked what a bucket
@@ -923,7 +1038,33 @@ def _estimate_base64_decoded_size(content_base64: str) -> int:
 # WRITE TOOL: gated by assert_write_allowed.
 # ------------------------------------------------------------------
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
-async def upload_file(role: str, bucket: str, path: str, content_base64: str) -> dict:
+async def upload_file(
+    role: RoleParam,
+    bucket: BucketParam,
+    path: Annotated[
+        str,
+        Field(
+            description=(
+                'Full S3 key to write to (not a prefix), e.g. "reports/2026/q1.csv". Creates the '
+                "object if absent, OVERWRITES it if present — there is no existence check first."
+            )
+        ),
+    ],
+    content_base64: Annotated[
+        str,
+        Field(
+            description=(
+                "File content, base64-encoded (standard alphabet, padded; no embedded newlines/whitespace "
+                "— those are rejected as INVALID_INPUT). The whole string is decoded FULLY INTO SERVER "
+                "MEMORY before upload — keep this to the low-MB range. There is NO server-enforced size "
+                "ceiling on this path (unlike the web UI's upload route, which is bounded by the "
+                "operator-configured max_file_size): a multi-GB payload will not be rejected, it will "
+                "exhaust server RAM. S3's 5 GB single-PutObject cap is only the absolute hard stop, not a "
+                "safe practical target."
+            )
+        ),
+    ],
+) -> dict:
     """Upload a file to a bucket (WRITE operation — creates or overwrites the
     object at `path`). Content must be base64-encoded. Blocked for read-only
     tokens and when the server disables MCP writes. Rejected with
@@ -1022,7 +1163,20 @@ async def upload_file(role: str, bucket: str, path: str, content_base64: str) ->
 # WRITE TOOL: gated by assert_write_allowed.
 # ------------------------------------------------------------------
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
-async def delete_file(role: str, bucket: str, path: str) -> dict:
+async def delete_file(
+    role: RoleParam,
+    bucket: BucketParam,
+    path: Annotated[
+        str,
+        Field(
+            description=(
+                'Full S3 key to delete. A path ending in "/" deletes the entire folder recursively '
+                "(every key under that prefix), not just one object — there is no confirmation step, "
+                "this is DESTRUCTIVE."
+            )
+        ),
+    ],
+) -> dict:
     """Delete a file from a bucket (WRITE / DESTRUCTIVE operation — the object is
     permanently removed; a `path` ending in "/" deletes the whole folder
     recursively). Blocked for read-only tokens, when the server disables MCP
@@ -1100,7 +1254,23 @@ async def delete_file(role: str, bucket: str, path: str) -> dict:
 # is driven by extension whitelist and UTF-8 sniffing only.
 # ------------------------------------------------------------------
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-async def read_file(role: str, bucket: str, path: str, force_text: bool = False) -> dict:
+async def read_file(
+    role: RoleParam,
+    bucket: BucketParam,
+    path: Annotated[str, Field(description="Full S3 key to read (not a prefix).")],
+    force_text: Annotated[
+        bool,
+        Field(
+            description=(
+                "Skip binary detection and decode the object as UTF-8 with errors='replace' "
+                "(undecodable bytes become the U+FFFD replacement character). Only set this when you "
+                "already know the file is text despite failing the server's extension/content sniffing "
+                "heuristics — otherwise the server refuses binary-looking files with BINARY_CONTENT and "
+                "points you at presigned_url instead."
+            )
+        ),
+    ] = False,
+) -> dict:
     """Download a text file's FULL CONTENTS into your context. Call this only when you actually need to
     read/quote/analyze what's inside a specific, already-known-text file.
 
@@ -1284,12 +1454,44 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
 # ------------------------------------------------------------------
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
 async def copy_object(
-    role: str,
-    source_bucket: str,
-    source_path: str,
-    dest_bucket: str,
-    dest_path: str,
-    delete_source: bool = False,
+    role: RoleParam,
+    source_bucket: Annotated[
+        str,
+        Field(
+            description=(
+                "Bucket the object is copied FROM. Must be accessible to `role` — call list_buckets(role) to check."
+            )
+        ),
+    ],
+    source_path: Annotated[str, Field(description="Full S3 key of the object to copy FROM (not a prefix).")],
+    dest_bucket: Annotated[
+        str,
+        Field(
+            description=(
+                "Bucket the object is copied TO. Must be accessible to `role` too — the same role's "
+                "credentials perform both sides of the copy. Call list_buckets(role) to check."
+            )
+        ),
+    ],
+    dest_path: Annotated[
+        str,
+        Field(
+            description=(
+                "Full S3 key to copy TO (not a prefix). OVERWRITES any existing object at this key; "
+                "there is no existence check first."
+            )
+        ),
+    ],
+    delete_source: Annotated[
+        bool,
+        Field(
+            description=(
+                "If True, delete the source object after a successful copy — this turns the call into "
+                "a MOVE/RENAME rather than a copy. DESTRUCTIVE and irreversible, and additionally "
+                "requires deletion to be enabled server-wide (blocked with DELETION_DISABLED otherwise)."
+            )
+        ),
+    ] = False,
 ) -> dict:
     """Copy an object to a new location (WRITE operation — overwrites the
     object at `dest_path` if one already exists; there is no existence
@@ -1397,7 +1599,16 @@ async def copy_object(
 # get_object_metadata — HEAD an object; no download. Read-only.
 # ------------------------------------------------------------------
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-async def get_object_metadata(role: str, bucket: str, path: str) -> dict:
+async def get_object_metadata(
+    role: RoleParam,
+    bucket: BucketParam,
+    path: Annotated[
+        str,
+        Field(
+            description="Full S3 key to inspect (not a prefix). No object bytes are downloaded — only a HEAD request."
+        ),
+    ],
+) -> dict:
     """Return object metadata (size, last_modified, content_type, etag) without
     downloading it. Read-only — useful to inspect a file before read_file or
     before handing out a presigned_url."""
@@ -1458,7 +1669,21 @@ async def get_object_metadata(role: str, bucket: str, path: str) -> dict:
 # presigned_url — time-limited GET URL for an object. Read-only.
 # ------------------------------------------------------------------
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-async def presigned_url(role: str, bucket: str, path: str, expires_in: int = 3600) -> dict:
+async def presigned_url(
+    role: RoleParam,
+    bucket: BucketParam,
+    path: Annotated[str, Field(description="Full S3 key to generate a download link for (not a prefix).")],
+    expires_in: Annotated[
+        int,
+        Field(
+            description=(
+                "Requested link lifetime in seconds. CLAMPED to [60, presigned_url_max_ttl] from server "
+                "config (default max 604800 = 7 days) — an out-of-range value is silently adjusted into "
+                "that window, never rejected."
+            )
+        ),
+    ] = 3600,
+) -> dict:
     """Generate a time-limited download URL for an object (read-only).
 
     Anyone holding the URL can fetch the object until it expires — hand it to a
