@@ -82,6 +82,30 @@ def test_configure_logging_is_idempotent(monkeypatch):
     assert first_count == second_count == 1
 
 
+def test_configure_logging_leaves_foreign_handlers_alone(monkeypatch):
+    """THE regression the named-handler rewrite exists for.
+
+    configure_logging() used to clear EVERY handler on the root logger to stay idempotent,
+    evicting handlers it never installed -- pytest's own log-capture handler among them, which
+    is why log assertions behaved erratically once anything re-triggered the module-level call.
+
+    test_configure_logging_is_idempotent cannot catch a regression here: it counts only OUR
+    handlers, so an implementation that goes back to clearing root wholesale and then adds one
+    of ours still passes it. This test is what actually pins the fix.
+    """
+    root = logging.getLogger()
+    foreign = logging.NullHandler()
+    foreign.name = "someone-elses-handler"
+    root.addHandler(foreign)
+
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    configure_logging()
+    configure_logging()  # re-configure: the foreign handler must survive this too
+
+    assert foreign in root.handlers, "configure_logging() evicted a handler it does not own"
+    assert len([h for h in root.handlers if h.name == HANDLER_NAME]) == 1, "our own handler duplicated"
+
+
 def test_invalid_log_level_falls_back_to_info(monkeypatch, capsys):
     monkeypatch.setenv("LOG_LEVEL", "VERBOSE")
     configure_logging()
