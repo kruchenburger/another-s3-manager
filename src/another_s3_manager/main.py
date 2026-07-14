@@ -59,7 +59,7 @@ from another_s3_manager.auth import (
     verify_csrf_token,
     verify_password,
 )
-from another_s3_manager.config import load_config, resolve_presigned_ttls, save_config
+from another_s3_manager.config import load_config, resolve_max_file_size, resolve_presigned_ttls, save_config
 from another_s3_manager.constants import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     APP_DESCRIPTION,
@@ -286,18 +286,44 @@ app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION, lifespan=lifespan)
 # cap is guaranteed to exist on a bare `docker compose` deployment.
 
 
-def resolve_max_file_size() -> int:
-    """Resolve the upload size limit in bytes — the single source of truth.
+# resolve_max_file_size() itself now lives in config.py (imported above) — it
+# used to be hand-copied in mcp_server.py too, and the two could silently
+# drift apart. Both main.py's guard/route and mcp_server.py's upload_file
+# tool now call the single config.py implementation.
 
-    Precedence: admin-editable config `max_file_size` → `MAX_FILE_SIZE` env
-    var → 100 MB default. Shared by the upload body-guard middleware and the
-    upload route handler so the two enforcement points can never drift.
+
+# Fixed headroom (bytes) added on top of the base64 inflation below, for the
+# JSON-RPC envelope wrapped around content_base64: `{"jsonrpc":"2.0","id":...,
+# "method":"tools/call","params":{"name":"upload_file","arguments":{"role":
+# ...,"bucket":...,"path":...,"content_base64":"..."}}}` plus whatever
+# role/bucket/path strings the caller passes. Generous on purpose — role,
+# bucket, and path names are short in practice, and the cost of this headroom
+# is a few KB of RAM per request, not per byte of upload.
+MCP_JSON_ENVELOPE_OVERHEAD_BYTES = 8192
+
+
+def resolve_mcp_body_max_bytes() -> int:
+    """Bound the /mcp request body size so a legitimate upload_file call fits.
+
+    upload_file carries the file's bytes as base64 in `content_base64` — 4/3
+    of the raw byte count (rounded up to a multiple of 4 for padding) — inside
+    a JSON-RPC envelope. A body cap set equal to max_file_size would reject
+    uploads that are well WITHIN the operator's configured limit, because the
+    wire body is always larger than the decoded payload it carries.
+
+    DO NOT simplify this to `return resolve_max_file_size()` — that would
+    silently break every upload_file call whose file is bigger than ~75% of
+    max_file_size (the base64 overhead alone already exceeds a same-sized cap;
+    see the module's upload-guard tests for the regression this closes).
+
+    Every other MCP tool call (list_roles, list_buckets, delete_file, ...) is
+    small — role/bucket/path strings, no binary payload — and never
+    approaches this bound regardless of how generous it is.
     """
-    config = load_config(force_reload=False)
-    max_file_size = config.get("max_file_size")
-    if max_file_size is None:
-        return int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
-    return int(max_file_size)
+    max_file_size = resolve_max_file_size()
+    # ceil(n / 3) * 4 — exact base64-with-padding length for n raw bytes.
+    base64_len = ((max_file_size + 2) // 3) * 4
+    return base64_len + MCP_JSON_ENVELOPE_OVERHEAD_BYTES
 
 
 # Upload body-guard — MUST stay registered BEFORE _http_metrics in module
@@ -342,7 +368,9 @@ async def _upload_body_guard(request: Request, call_next):
         # relocated from disk to metrics-registry RAM. Set once, before any of
         # the three reject responses below, so all of them benefit. Must match
         # the route decorator's path exactly: @app.post("/api/buckets/{bucket_name}/upload").
-        request.scope["upload_guard_path_template"] = "/api/buckets/{bucket_name}/upload"
+        # Generic key name (`guard_path_template`, not `upload_*`) because
+        # _mcp_body_guard below stamps the same key for the same reason.
+        request.scope["guard_path_template"] = "/api/buckets/{bucket_name}/upload"
 
         # 1. Auth-gate. has_valid_session is a pure JWT decode (no DB query),
         #    so it's safe to call synchronously off the event loop. It cannot
@@ -386,6 +414,80 @@ async def _upload_body_guard(request: Request, call_next):
     return await call_next(request)
 
 
+# MCP body-guard — MUST stay registered BEFORE _http_metrics in module order,
+# same reasoning as _upload_body_guard above: the LAST-registered middleware
+# is outermost, so registering this one first keeps _http_metrics wrapped
+# AROUND it and a guard-rejected /mcp request is still counted in
+# as3m_http_requests_total.
+@app.middleware("http")
+async def _mcp_body_guard(request: Request, call_next):
+    """Reject oversize /mcp request bodies BEFORE they are read off the socket.
+
+    By the time an MCP tool body runs (including upload_file's own
+    FILE_TOO_LARGE check — see mcp_server.py), the JSON-RPC request has
+    already been fully read and parsed into a Python str/dict by FastMCP's
+    Streamable HTTP transport. A tool-level check cannot prevent that RAM
+    from being spent; only a transport-level body bound can. This mirrors
+    _upload_body_guard's posture for the web upload route: require
+    Content-Length (closes the chunked-transfer bypass — a body with no
+    declared size can't be size-checked before reading it) and 413 above a
+    ceiling derived from max_file_size (see resolve_mcp_body_max_bytes) before
+    call_next ever runs.
+
+    No auth-gate here, unlike _upload_body_guard: the web guard can cheaply
+    pre-check the session cookie with has_valid_session (a pure JWT decode).
+    MCP auth is a Bearer token validated per-tool-call inside the tool body
+    (authenticate_mcp_request, which does a DB lookup) — there is no
+    equivalent cheap pre-body check to hoist in front of the read, and this
+    guard's job is narrower anyway: bound the body size regardless of who is
+    asking, not decide who is allowed to ask.
+
+    The `request.method == "POST"` scoping below is LOAD-BEARING, not an
+    incidental narrowing: the MCP streamable-HTTP transport's SSE event
+    stream (and its resumption stream) is a GET, and session teardown is a
+    DELETE. Only the SDK's single POST verb ever carries a JSON-RPC body, and
+    that POST always sets Content-Length (verified independently during
+    review — see tests/test_mcp_upload_guard.py's GET-exemption test for the
+    same reasoning spelled out from the test side). If this guard is ever
+    changed to apply to GET, a 411 on the SSE stream breaks EVERY MCP
+    session, for every agent — do not widen this beyond POST.
+    """
+    path = request.url.path
+    if request.method == "POST" and (path == "/mcp" or path.startswith("/mcp/")):
+        # Stamp a BOUNDED path template into scope, same reasoning and same
+        # scope key as _upload_body_guard above: routing never runs for a
+        # guard-rejected request, so _http_metrics' route-less fallback would
+        # otherwise key on the concrete /mcp/<junk> path, minting one unbounded
+        # label series per distinct suffix an unauthenticated caller sends.
+        request.scope["guard_path_template"] = "/mcp"
+
+        content_length = request.headers.get("content-length")
+        try:
+            declared_size = int(content_length) if content_length is not None else None
+        except ValueError:
+            declared_size = None
+        # Same reasoning as _upload_body_guard: int("-5") is neither None nor
+        # > the ceiling, so a negative declared size must be rejected explicitly
+        # rather than relying on the framing layer to have already caught it.
+        if declared_size is None or declared_size < 0:
+            return JSONResponse(
+                status_code=411,
+                content={"detail": "Content-Length header is required for /mcp requests"},
+            )
+
+        max_body_bytes = resolve_mcp_body_max_bytes()
+        if declared_size > max_body_bytes:
+            # Same counter/reason the web upload guard uses — both are
+            # "an upload was refused before reaching S3", just via different
+            # transports.
+            upload_rejected_total.labels(reason="size_limit").inc()
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"Request body exceeds maximum allowed size of {max_body_bytes} bytes"},
+            )
+    return await call_next(request)
+
+
 # Exception handler to ensure all errors return JSON
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -407,16 +509,17 @@ async def _http_metrics(request: Request, call_next):
     duration = time.perf_counter() - start
     # path_template — bounded cardinality. Routed requests always use the route
     # pattern. When routing never ran (no-route 404, or a request rejected by
-    # _upload_body_guard before call_next), prefer a guard-stamped template
-    # over the concrete path — the guard stamps request.scope["upload_guard_path_template"]
-    # for upload requests so an attacker varying the bucket name can't mint
-    # unbounded label series. Falls back to the actual path for a genuine
-    # no-route 404 (not guard-stamped).
+    # _upload_body_guard / _mcp_body_guard before call_next), prefer a
+    # guard-stamped template over the concrete path — both guards stamp
+    # request.scope["guard_path_template"] (bucket-upload and /mcp
+    # respectively) so an attacker varying the bucket name or the /mcp
+    # suffix can't mint unbounded label series. Falls back to the actual
+    # path for a genuine no-route 404 (not guard-stamped).
     route = request.scope.get("route")
     if route is not None:
         path_template = route.path
     else:
-        path_template = request.scope.get("upload_guard_path_template") or request.url.path
+        path_template = request.scope.get("guard_path_template") or request.url.path
     method = request.method
     status_code = str(response.status_code)
     http_requests_total.labels(method=method, path_template=path_template, status_code=status_code).inc()
@@ -1932,7 +2035,10 @@ async def list_buckets(
 ):
     """List available S3 buckets - delegates to s3_client.list_buckets_for_role."""
     try:
-        return list_buckets_for_role(role, current_user)
+        # list_buckets_for_role does blocking boto3 I/O (list_buckets, or nothing
+        # at all if allowed_buckets is configured) — run off the event loop so a
+        # slow/unreachable S3 endpoint doesn't stall every other request.
+        return await run_in_threadpool(list_buckets_for_role, role, current_user)
     except HTTPException:
         raise
     except PermissionError as e:
@@ -2051,10 +2157,14 @@ async def list_files(
                 detail="search requires client_load=1",
             )
 
+        # All three branches below do blocking boto3 I/O (one or more
+        # list_objects_v2 calls) — run off the event loop so a slow bucket
+        # listing doesn't stall every other request.
         if client_load:
             cfg = load_config()
             chunk = max_keys if max_keys is not None else int(cfg.get("max_client_load", 10000))
-            page = list_objects_client_load_for_role(
+            page = await run_in_threadpool(
+                list_objects_client_load_for_role,
                 role,
                 bucket_name,
                 path,
@@ -2066,10 +2176,11 @@ async def list_files(
             return page
 
         if max_keys is None:
-            files = list_objects_for_role(role, bucket_name, path, current_user)
+            files = await run_in_threadpool(list_objects_for_role, role, bucket_name, path, current_user)
             return {"files": files, "path": path, "total_count": len(files)}
 
-        page = list_objects_paginated_for_role(
+        page = await run_in_threadpool(
+            list_objects_paginated_for_role,
             role,
             bucket_name,
             path,
@@ -2330,7 +2441,17 @@ async def download_file(
         # metadata-fetch time and returns a lazy iterator — MUST NOT be
         # materialized to bytes here so 100MB downloads don't get buffered
         # in process memory.
-        metadata, body_iter = iter_object_for_role(role, bucket_name, path, current_user)
+        #
+        # Only the INITIAL call (the blocking GetObject that fetches metadata
+        # + the body handle) is offloaded here. The returned body_iter is a
+        # plain sync generator handed to StreamingResponse below — Starlette's
+        # StreamingResponse already wraps a non-async iterator with
+        # iterate_in_threadpool (see starlette/responses.py), so every
+        # subsequent body.read() chunk is ALREADY run in the threadpool, one
+        # chunk at a time, during stream_response(). Wrapping the whole
+        # generator here too would double-hop each chunk through the
+        # threadpool for no benefit.
+        metadata, body_iter = await run_in_threadpool(iter_object_for_role, role, bucket_name, path, current_user)
         filename = path.split("/")[-1]
 
         from fastapi.responses import StreamingResponse
@@ -2437,7 +2558,12 @@ async def get_presigned_url(
     validated_role = validate_role_access(role, current_user) or role
 
     try:
-        url = s3_generate_presigned_url_for_role(
+        # generate_presigned_url itself is local crypto (no I/O) — but
+        # get_s3_client() underneath can do a blocking STS assume_role call or
+        # refresh expired credentials for assume_role/profile-typed roles, so
+        # the whole (retrying) call is offloaded, same as every other S3 op.
+        url = await run_in_threadpool(
+            s3_generate_presigned_url_for_role,
             validated_role,
             bucket_name,
             path,
@@ -2519,8 +2645,10 @@ async def delete_file(
         # role/bucket access validation, recursively deletes everything under
         # `path` when it ends with "/", otherwise deletes exactly that one key
         # (no prefix matching), and raises FileNotFoundError when nothing
-        # matches. Returns {"message": ..., "count": N}.
-        return delete_object_for_role(role, bucket_name, path, current_user)
+        # matches. Returns {"message": ..., "count": N}. Blocking boto3 I/O
+        # (list + delete_object(s)) — offloaded so a large recursive delete
+        # doesn't stall the event loop.
+        return await run_in_threadpool(delete_object_for_role, role, bucket_name, path, current_user)
     except HTTPException:
         raise
     except PermissionError as e:

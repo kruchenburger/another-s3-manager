@@ -395,6 +395,125 @@ async def test_upload_file_no_auth(tool_registry):
 
 
 # ---------------------------------------------------------------------------
+# upload_file — max_file_size enforcement (Layer 2: reject before decoding)
+#
+# Layer 1 is the transport-level _mcp_body_guard middleware in main.py
+# (tests/test_mcp_upload_guard.py) — by the time a tool body like this one
+# runs, the request has already been fully read. This layer is defense in
+# depth AND the only layer that gives the calling agent an actionable
+# McpError instead of a transport-level rejection it cannot interpret.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upload_file_over_max_file_size_rejected_before_decode(alice_user, tool_registry, monkeypatch):
+    """content_base64 whose ESTIMATED decoded size exceeds max_file_size ->
+    McpError(FILE_TOO_LARGE) raised BEFORE base64.b64decode ever runs — the
+    proof that the second (decoded-bytes) copy is never materialized."""
+    uid, plaintext = alice_user
+    import another_s3_manager.config as config_mod
+
+    original_load = config_mod.load_config
+
+    def _tiny_limit(force_reload=False):
+        cfg = original_load(force_reload=force_reload)
+        return {**cfg, "max_file_size": 10}
+
+    monkeypatch.setattr("another_s3_manager.mcp_server._config_module.load_config", _tiny_limit)
+
+    # 1000 raw bytes, comfortably over the 10-byte limit.
+    oversized = base64.b64encode(b"x" * 1000).decode()
+
+    with patch("another_s3_manager.mcp_server.base64.b64decode") as decode_spy:
+        with patch("another_s3_manager.s3_client.put_object_for_role") as put_spy:
+            with pytest.raises(McpError) as exc_info:
+                await _call(
+                    tool_registry,
+                    "upload_file",
+                    _fake_request(plaintext),
+                    role="Default",
+                    bucket="b",
+                    path="big.bin",
+                    content_base64=oversized,
+                )
+
+    assert exc_info.value.code == "FILE_TOO_LARGE"
+    assert "10" in str(exc_info.value)
+    decode_spy.assert_not_called()
+    put_spy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_file_within_max_file_size_still_succeeds(alice_user, tool_registry, monkeypatch):
+    """A payload comfortably under max_file_size must still upload normally —
+    the size-estimate check must not false-positive on legitimate uploads."""
+    uid, plaintext = alice_user
+    import another_s3_manager.config as config_mod
+
+    original_load = config_mod.load_config
+
+    def _limit_1000(force_reload=False):
+        cfg = original_load(force_reload=force_reload)
+        return {**cfg, "max_file_size": 1000}
+
+    monkeypatch.setattr("another_s3_manager.mcp_server._config_module.load_config", _limit_1000)
+
+    content = b"y" * 100
+    encoded = base64.b64encode(content).decode()
+
+    with patch("another_s3_manager.s3_client.put_object_for_role", return_value=None):
+        result = await _call(
+            tool_registry,
+            "upload_file",
+            _fake_request(plaintext),
+            role="Default",
+            bucket="b",
+            path="small.bin",
+            content_base64=encoded,
+        )
+
+    assert result == {"ok": True, "bucket": "b", "path": "small.bin", "size": len(content)}
+
+
+@pytest.mark.asyncio
+async def test_upload_file_just_under_max_file_size_still_succeeds(alice_user, tool_registry, monkeypatch):
+    """A payload whose base64 estimate lands just under max_file_size must
+    still succeed — proves the estimate isn't over-conservative (e.g. off by
+    the base64 inflation factor) and rejecting uploads that are genuinely
+    within the operator's limit."""
+    uid, plaintext = alice_user
+    import another_s3_manager.config as config_mod
+
+    original_load = config_mod.load_config
+
+    limit = 1000
+
+    def _limit(force_reload=False):
+        cfg = original_load(force_reload=force_reload)
+        return {**cfg, "max_file_size": limit}
+
+    monkeypatch.setattr("another_s3_manager.mcp_server._config_module.load_config", _limit)
+
+    # Exactly at the limit — must be accepted (the check is "estimated >
+    # max_file_size", strictly greater, not >=).
+    content = b"z" * limit
+    encoded = base64.b64encode(content).decode()
+
+    with patch("another_s3_manager.s3_client.put_object_for_role", return_value=None):
+        result = await _call(
+            tool_registry,
+            "upload_file",
+            _fake_request(plaintext),
+            role="Default",
+            bucket="b",
+            path="at-limit.bin",
+            content_base64=encoded,
+        )
+
+    assert result == {"ok": True, "bucket": "b", "path": "at-limit.bin", "size": len(content)}
+
+
+# ---------------------------------------------------------------------------
 # delete_file
 # ---------------------------------------------------------------------------
 
@@ -674,6 +793,44 @@ async def test_upload_file_returns_invalid_input_on_malformed_base64(alice_user,
             path="f.txt",
             content_base64="not-base64!!!@@@",
         )
+    assert exc_info.value.code == "INVALID_INPUT"
+
+
+def test_estimate_base64_decoded_size_never_negative_on_pathological_padding():
+    """_estimate_base64_decoded_size's docstring says padding is capped at 2
+    trailing '=' characters, so a string with a much longer run of '=' must
+    not make the estimate go negative (the pre-fix bug: unbounded
+    str.rstrip("=") stripped the whole run, and length*3//4 - padding went
+    negative for a long enough run)."""
+    from another_s3_manager.mcp_server import _estimate_base64_decoded_size
+
+    pathological = "A" * 4 + "=" * 1_000_000
+    estimate = _estimate_base64_decoded_size(pathological)
+
+    assert estimate >= 0
+
+
+@pytest.mark.asyncio
+async def test_upload_file_pathological_padding_rejected_as_invalid_input_not_bypass(alice_user, tool_registry):
+    """A content_base64 with a pathological run of trailing '=' padding must
+    not sail past the FILE_TOO_LARGE estimate check via a negative estimate
+    (the bug the estimator's rstrip-bound fix closes) and must not crash —
+    it is correctly rejected by b64decode(validate=True) as malformed input,
+    same as any other malformed base64 string."""
+    uid, plaintext = alice_user
+    pathological = "A" * 4 + "=" * 1_000_000
+
+    with pytest.raises(McpError) as exc_info:
+        await _call(
+            tool_registry,
+            "upload_file",
+            _fake_request(plaintext),
+            role="Default",
+            bucket="b",
+            path="f.txt",
+            content_base64=pathological,
+        )
+
     assert exc_info.value.code == "INVALID_INPUT"
 
 

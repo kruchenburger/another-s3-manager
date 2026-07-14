@@ -44,9 +44,14 @@ def test_resolve_max_file_size_config_wins_over_env(monkeypatch):
 
 
 def test_resolve_max_file_size_env_fallback_when_config_key_missing(monkeypatch, mocker):
-    """Config without the key (bypassing migration) falls back to MAX_FILE_SIZE."""
+    """Config without the key (bypassing migration) falls back to MAX_FILE_SIZE.
+
+    resolve_max_file_size() now lives in config.py (main.py just imports it —
+    see finding 4 of the MCP upload-guard review), so the patch target is
+    another_s3_manager.config.load_config, not main.load_config.
+    """
     main = reload_main()
-    mocker.patch("another_s3_manager.main.load_config", return_value={})
+    mocker.patch("another_s3_manager.config.load_config", return_value={})
     monkeypatch.setenv("MAX_FILE_SIZE", "777")
 
     assert main.resolve_max_file_size() == 777
@@ -55,7 +60,7 @@ def test_resolve_max_file_size_env_fallback_when_config_key_missing(monkeypatch,
 def test_resolve_max_file_size_default_100mb(monkeypatch, mocker):
     """No config key, no env var → 100 MB default."""
     main = reload_main()
-    mocker.patch("another_s3_manager.main.load_config", return_value={})
+    mocker.patch("another_s3_manager.config.load_config", return_value={})
     monkeypatch.delenv("MAX_FILE_SIZE", raising=False)
 
     assert main.resolve_max_file_size() == 100 * 1024 * 1024

@@ -198,15 +198,24 @@ The file's extension or content sniff suggests it's binary. Either:
 
 ### `FILE_TOO_LARGE`
 
-The file exceeds the smaller of (per-token cap, server-level
-`mcp_global_max_read_bytes`). Either:
+Reused for two different tools with two different limits — check which tool
+raised it:
 
-- Use the `presigned_url` tool to hand out a time-limited download link and
-  fetch the file directly — this bypasses the read cap and works for binary
-  files too (the same escape hatch `read_file` suggests on `BINARY_CONTENT`)
-- Make a new token with a higher `max_read_bytes` (admin can raise the
-  per-token cap up to 10 MB)
-- Use a non-MCP download path (web UI, direct S3 client) for large files
+- **`read_file`**: the file exceeds the smaller of (per-token cap,
+  server-level `mcp_global_max_read_bytes`). Either:
+  - Use the `presigned_url` tool to hand out a time-limited download link and
+    fetch the file directly — this bypasses the read cap and works for binary
+    files too (the same escape hatch `read_file` suggests on `BINARY_CONTENT`)
+  - Make a new token with a higher `max_read_bytes` (admin can raise the
+    per-token cap up to 10 MB)
+  - Use a non-MCP download path (web UI, direct S3 client) for large files
+- **`upload_file`**: the payload exceeds the server-wide `max_file_size`
+  setting (the same limit the web UI's upload form enforces — there is no
+  per-token override for uploads). Reduce the file size or ask an admin to
+  raise `max_file_size` in Settings. A request whose declared size is
+  clearly over the limit may instead be rejected at the transport level
+  (HTTP 413 on the `/mcp` request itself, before `upload_file` even runs) —
+  same limit, enforced earlier.
 
 ## Security best practices
 

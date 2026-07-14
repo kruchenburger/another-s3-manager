@@ -2,8 +2,11 @@
 Application constants and configuration
 """
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # File paths
 BASE_DIR = Path(__file__).parent
@@ -58,6 +61,27 @@ def get_bans_file() -> Path:
 def get_db_path() -> Path:
     """Get the SQLite DB file path. Lives next to users.json/bans.json under DATA_DIR."""
     return get_data_dir() / "another_s3_manager.db"
+
+
+# SQLite journal mode (see database.py's connect listener for where this is applied).
+# Default "wal": readers are never blocked by an in-flight writer (and vice versa),
+# which matters a lot now that boto3 calls — and the DB writes around them — run on
+# up to ~40 concurrent worker threads.
+#
+# WAL's -wal/-shm sidecar files need real POSIX locking and mmap support, which some
+# network filesystems (NFS, SMB) and Docker Desktop bind mounts on Windows/macOS do not
+# reliably provide — on those, WAL can silently corrupt the database. Operators whose
+# DATA_DIR lives on such a filesystem should set SQLITE_JOURNAL_MODE=delete to keep
+# SQLite's traditional rollback-journal mode instead.
+_valid_journal_modes = ("wal", "delete")
+SQLITE_JOURNAL_MODE = os.getenv("SQLITE_JOURNAL_MODE", "wal").strip().lower()
+if SQLITE_JOURNAL_MODE not in _valid_journal_modes:
+    logger.warning(
+        "Invalid SQLITE_JOURNAL_MODE=%r (expected one of %s) — falling back to 'wal'.",
+        SQLITE_JOURNAL_MODE,
+        _valid_journal_modes,
+    )
+    SQLITE_JOURNAL_MODE = "wal"
 
 
 # Security settings
