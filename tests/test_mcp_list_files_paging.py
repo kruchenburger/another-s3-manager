@@ -258,3 +258,58 @@ async def test_non_recursive_agent_max_keys_zero_floors_to_one(alice_user, tool_
         )
     assert result["files"] == fake_files[:1]
     assert result["is_truncated"] is True
+
+
+# ---------------------------------------------------------------------------
+# Trailing-slash normalization (2026-07-14 review, Important-3(b)):
+# list_objects_for_role appends "/" onto path itself
+# (`prefix = path + "/" if path else ""`), so a caller-supplied trailing
+# slash used to double up into "//" and S3 silently returned an empty
+# listing — no error, just nothing. bucket_summary's own path description
+# demonstrates the trailing-slash form, so this tool actively steered agents
+# into the broken call shape. mcp_server.py must strip a trailing slash
+# before calling list_objects_for_role, the same way the recursive branch
+# already normalizes via path.strip("/").
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_non_recursive_trailing_slash_normalized_same_as_without(alice_user, tool_registry):
+    """A trailing-slash path must produce the SAME listing as the same path
+    without one — both by result and by what's actually sent to S3."""
+    uid, plaintext = alice_user
+    fake_files = [{"name": "f0.txt", "is_directory": False, "size": 0}]
+    with patch("another_s3_manager.s3_client.list_objects_for_role", return_value=fake_files) as helper:
+        result_with_slash = await _call(
+            tool_registry,
+            "list_files",
+            _fake_request(plaintext),
+            role="Default",
+            bucket="b",
+            path="some/subdir/",
+        )
+        result_without_slash = await _call(
+            tool_registry,
+            "list_files",
+            _fake_request(plaintext),
+            role="Default",
+            bucket="b",
+            path="some/subdir",
+        )
+
+    assert result_with_slash == result_without_slash == {"files": fake_files}
+    # Both calls must reach the S3 helper with the identical, slash-stripped
+    # path — not "some/subdir/" for one call and "some/subdir" for the other.
+    assert helper.call_args_list[0].args[2] == "some/subdir"
+    assert helper.call_args_list[1].args[2] == "some/subdir"
+
+
+@pytest.mark.asyncio
+async def test_non_recursive_root_path_still_lists_bucket_root(alice_user, tool_registry):
+    """Regression guard: normalizing path must not turn "" into something
+    else — the bucket root listing (path="") must keep calling
+    list_objects_for_role with path="", exactly as before."""
+    uid, plaintext = alice_user
+    with patch("another_s3_manager.s3_client.list_objects_for_role", return_value=[]) as helper:
+        await _call(tool_registry, "list_files", _fake_request(plaintext), role="Default", bucket="b", path="")
+    assert helper.call_args.args[2] == ""

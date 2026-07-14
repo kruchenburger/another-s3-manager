@@ -464,8 +464,8 @@ BucketParam = Annotated[
     Field(
         description=(
             "Bucket name. Must be one of the buckets `role` is allowed to access — call "
-            "list_buckets(role) to list them. An unknown or unauthorized bucket raises "
-            "BUCKET_NOT_ALLOWED."
+            "list_buckets(role) to list them. An unauthorized bucket raises BUCKET_NOT_ALLOWED; a "
+            "bucket that simply doesn't exist (for an unrestricted role) raises S3_NOT_FOUND instead."
         )
     ),
 ]
@@ -677,10 +677,12 @@ async def list_files(
         str,
         Field(
             description=(
-                'S3 key PREFIX to scope the listing (not a full key). "" (default) lists the bucket '
-                "root. Non-recursive mode returns one level directly under the prefix, with "
-                "sub-directories as `is_directory: true` entries; recursive mode returns a flat list "
-                "of every key under the prefix."
+                "Directory-style prefix (a full path segment, not a partial name) to scope the "
+                'listing, normalized to end with "/". "rep" will NOT match a key like "reports.csv" — '
+                'use "reports" to scope to that directory. "" (default) lists the bucket root. '
+                "Non-recursive mode returns one level directly under the prefix, with sub-directories "
+                "as `is_directory: true` entries; recursive mode returns a flat list of every key "
+                "under the prefix."
             )
         ),
     ] = "",
@@ -703,7 +705,8 @@ async def list_files(
                 "server-configured page size (`mcp_list_page_size`, normally 1000). Values above the "
                 "server ceiling (`mcp_list_max_page_size`, normally 10000) are CLAMPED down to that "
                 "ceiling, not rejected — you will never get an error for asking too big, just fewer "
-                "keys than requested."
+                "keys than requested. Values of 0 or below are floored up to 1 — you will never get "
+                "zero results back because of this parameter."
             )
         ),
     ] = None,
@@ -806,7 +809,18 @@ async def list_files(
                 # returns. No continuation token exists for a non-recursive
                 # listing, so we do not invent one — the hint below points at
                 # the two real alternatives instead.
-                files = _s3_client.list_objects_for_role(role, bucket, path, user)
+                #
+                # Normalize away a trailing slash before calling
+                # list_objects_for_role: that helper appends "/" onto path
+                # itself (`prefix = path + "/" if path else ""`), so a
+                # caller-supplied trailing slash used to double up into "//"
+                # and S3 silently returned an empty listing — no error, just
+                # nothing. bucket_summary's own path description shows the
+                # trailing-slash form, so this tool was steering agents
+                # straight into it. The recursive branch already normalizes
+                # via path.strip("/") above; mirror that here.
+                normalized_path = path.strip("/")
+                files = _s3_client.list_objects_for_role(role, bucket, normalized_path, user)
                 result = {"files": files}
                 if len(files) > effective_max_keys:
                     result["files"] = files[:effective_max_keys]
@@ -886,8 +900,10 @@ async def bucket_summary(
         str,
         Field(
             description=(
-                'S3 key PREFIX to scope the summary (not a full key). "" (default) summarizes the '
-                'whole bucket. Pass a prefix like "some/subdir/" to drill into just that subtree.'
+                "Directory-style prefix (a full path segment, not a partial name) to scope the "
+                'summary, normalized to end with "/". "" (default) summarizes the whole bucket. Pass '
+                '"some/subdir" to drill into just that subtree — a partial name like "some/sub" will '
+                "NOT match it."
             )
         ),
     ] = "",
@@ -1000,11 +1016,13 @@ async def upload_file(
         str,
         Field(
             description=(
-                "File content, base64-encoded (standard alphabet, padded); decoded losslessly on the "
-                "server before upload. No MCP-specific size ceiling is enforced today — the object is "
-                "written in a single S3 PutObject call, so the practical limit is S3's own 5 GB "
-                "single-request cap (unlike the web UI's upload route, which is bounded by the "
-                "operator-configured max_file_size)."
+                "File content, base64-encoded (standard alphabet, padded; no embedded newlines/whitespace "
+                "— those are rejected as INVALID_INPUT). The whole string is decoded FULLY INTO SERVER "
+                "MEMORY before upload — keep this to the low-MB range. There is NO server-enforced size "
+                "ceiling on this path (unlike the web UI's upload route, which is bounded by the "
+                "operator-configured max_file_size): a multi-GB payload will not be rejected, it will "
+                "exhaust server RAM. S3's 5 GB single-PutObject cap is only the absolute hard stop, not a "
+                "safe practical target."
             )
         ),
     ],
