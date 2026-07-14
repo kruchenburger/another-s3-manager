@@ -38,6 +38,20 @@ class _FakeTtyStdin:
         return True
 
 
+class _FakeNonTtyStdin:
+    """Stands in for a non-interactive session (docker compose exec -T, CI): isatty() -> False.
+
+    Used explicitly by the non-TTY tests instead of relying on pytest's own stdin capture
+    (which happens to be a non-TTY under the default capture mode, but is the REAL terminal
+    — and thus a TTY — under `pytest -s`). Without this explicit monkeypatch, running the
+    suite with `-s` would make input()/getpass() block on the real terminal, hanging exactly
+    the tests written to prove the CLI can't hang.
+    """
+
+    def isatty(self) -> bool:
+        return False
+
+
 # --- service function -------------------------------------------------------
 
 
@@ -152,25 +166,33 @@ def test_cli_warns_loudly_when_force_is_still_set(monkeypatch, capsys):
     assert "StaleEnvPw123" not in err
 
 
-def test_cli_non_tty_without_yes_exits_2():
-    """docker compose exec -T / CI: input() would block forever — exit(2) instead."""
+def test_cli_non_tty_without_yes_exits_2(monkeypatch):
+    """docker compose exec -T / CI: input() would block forever — exit(2) instead.
+
+    Explicitly monkeypatches a non-TTY stdin rather than relying on pytest's own capture
+    behaviour, so this test still exercises (and pins) the guard under `pytest -s`.
+    """
     from another_s3_manager.auth import verify_password
     from another_s3_manager.reset_admin_password import main
 
     _seed_admin("change_me_pls")
+    monkeypatch.setattr(sys, "stdin", _FakeNonTtyStdin())
 
     with pytest.raises(SystemExit) as exc:
-        main(["NewPassword1"])  # no --yes; pytest's stdin is not a TTY
+        main(["NewPassword1"])  # no --yes
 
     assert exc.value.code == 2
     assert verify_password("change_me_pls", _admin()["password_hash"])  # untouched
 
 
-def test_cli_non_tty_without_password_exits_2():
+def test_cli_non_tty_without_password_exits_2(monkeypatch):
+    """Explicit non-TTY stdin — see test_cli_non_tty_without_yes_exits_2 for why."""
     from another_s3_manager.reset_admin_password import main
 
+    monkeypatch.setattr(sys, "stdin", _FakeNonTtyStdin())
+
     with pytest.raises(SystemExit) as exc:
-        main(["--yes"])  # no positional password and stdin is not a TTY
+        main(["--yes"])  # no positional password
 
     assert exc.value.code == 2
 
@@ -244,13 +266,17 @@ def test_cli_enforces_password_policy(capsys):
     assert verify_password("change_me_pls", _admin()["password_hash"])  # untouched
 
 
-def test_cli_rejects_whitespace_only_password():
+def test_cli_rejects_whitespace_only_password(capsys):
+    """Pins the dedicated empty/whitespace guard itself — the default policy (min length 8 +
+    upper/lower/digit) also rejects "   ", so an exit-code-only assertion would still pass
+    with the guard deleted. Assert the guard's own message to pin the right code path."""
     from another_s3_manager.reset_admin_password import main
 
     with pytest.raises(SystemExit) as exc:
         main(["   ", "--yes"])
 
     assert exc.value.code == 1
+    assert "empty or whitespace-only" in capsys.readouterr().err
 
 
 def test_cli_creates_missing_admin(capsys):
@@ -260,3 +286,52 @@ def test_cli_creates_missing_admin(capsys):
 
     assert "created" in capsys.readouterr().out
     assert _admin()["is_admin"] is True
+
+
+# --- OperationalError handling ------------------------------------------------
+# reset_admin_password() is imported inside main() via `from another_s3_manager.users import
+# reset_admin_password`, re-reading the current module attribute on every call — so patching
+# `another_s3_manager.users.reset_admin_password` here is picked up.
+
+
+def test_cli_no_such_table_gets_friendly_message(monkeypatch, capsys):
+    """Schema genuinely missing (fresh DB, migrations never ran) — the one case that gets the
+    "start the app once" advice, because it is actually the right advice here."""
+    from sqlalchemy.exc import OperationalError
+
+    from another_s3_manager import users as users_module
+    from another_s3_manager.reset_admin_password import main
+
+    def _raise(*_args, **_kwargs):
+        raise OperationalError("statement", {}, Exception("no such table: users"))
+
+    monkeypatch.setattr(users_module, "reset_admin_password", _raise)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["NewPassword1", "--yes"])
+
+    assert exc.value.code == 1
+    assert "not initialized" in capsys.readouterr().err
+
+
+def test_cli_other_operational_errors_pass_through(monkeypatch, capsys):
+    """A locked DB (app container running — WAL contention), a bad DATA_DIR, or a disk I/O error
+    must NOT be reported as "schema missing" — that sends a locked-out operator chasing the wrong
+    problem. Every OperationalError other than "no such table" must surface its real message."""
+    from sqlalchemy.exc import OperationalError
+
+    from another_s3_manager import users as users_module
+    from another_s3_manager.reset_admin_password import main
+
+    def _raise(*_args, **_kwargs):
+        raise OperationalError("statement", {}, Exception("database is locked"))
+
+    monkeypatch.setattr(users_module, "reset_admin_password", _raise)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["NewPassword1", "--yes"])
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "database is locked" in err
+    assert "not initialized" not in err

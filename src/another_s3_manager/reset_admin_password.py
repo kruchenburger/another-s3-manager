@@ -65,15 +65,18 @@ def _resolve_password(arg_password: str | None) -> str:
 
 def _check_policy(password: str) -> None:
     """Enforce the same password policy the UI enforces (main._enforce_password_policy)."""
-    try:
-        from another_s3_manager.config import load_config
-        from another_s3_manager.utils import validate_password
+    from another_s3_manager.config import load_config
+    from another_s3_manager.utils import validate_password
 
-        failures = validate_password(password, load_config(force_reload=True))
+    try:
+        config = load_config(force_reload=True)
     except Exception as exc:
         # Break-glass tool: an unreadable/corrupt config.json must not block recovery.
+        # Only the config load is guarded — validate_password() itself runs unguarded below,
+        # so a real bug there still surfaces instead of being downgraded to this warning.
         print(f"warning: could not load the password policy ({exc}); skipping the policy check", file=sys.stderr)
         return
+    failures = validate_password(password, config)
     if failures:
         for failure in failures:
             print(f"policy: {failure}", file=sys.stderr)
@@ -126,6 +129,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m another_s3_manager.reset_admin_password",
         description="Reset the password of the built-in 'admin' user (recreates the user if it was deleted).",
+        # RawDescriptionHelpFormatter + the module docstring as epilog: --help is the operator's
+        # only reference right now (docs land in a later task), so it must be self-sufficient —
+        # the Docker invocations, why the interactive form is preferred, and the exit codes all
+        # need to show up here, not just in a docstring argparse would otherwise never print.
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
     )
     parser.add_argument("password", nargs="?", default=None, help="new password (omit to be prompted securely)")
     parser.add_argument(
@@ -145,16 +154,23 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         outcome = reset_admin_password(hash_password(password))
-    except OperationalError:
-        _fail(
-            "the database is not initialized (no users table). Start the app once so migrations create "
-            "the schema, then re-run this command."
-        )
+    except OperationalError as exc:
+        # "no such table" means the schema genuinely hasn't been migrated yet — that specific
+        # message gets the friendly fix. Every other OperationalError (database is locked because
+        # the app container is running, unable to open database file — wrong DATA_DIR or bind-mount
+        # permissions, disk I/O error, ...) must NOT be told "schema is missing" — that sends a
+        # locked-out operator chasing the wrong problem. Pass the real error through instead.
+        if "no such table" in str(exc):
+            _fail(
+                "the database is not initialized (no users table). Start the app once so migrations create "
+                "the schema, then re-run this command."
+            )
+        _fail(f"database error: {exc}")
 
     if outcome == "created":
-        print("user 'admin' did not exist — created it with the new password.")
+        print("user 'admin' did not exist — created it with the new password. Log in as 'admin' with it now.")
     else:
-        print("the password for user 'admin' has been reset.")
+        print("the password for user 'admin' has been reset. No restart needed — log in as 'admin' with it now.")
     _warn_about_environment()
     return EXIT_OK
 
