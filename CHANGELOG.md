@@ -59,6 +59,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   will not help — botocore caps each role's connection pool at 10, so extra
   threads churn connections rather than adding throughput. Raise both together.
 
+- **The MCP `upload_file` tool ignored the operator's `max_file_size` limit and
+  held the payload in memory twice.** The web upload route was hardened
+  against oversized/unbounded uploads in a previous fix (streaming
+  `upload_fileobj`, a body-guard middleware ahead of the route), but the MCP
+  path was left behind: an authenticated write-capable MCP token could upload
+  a file of any size, and by the time the tool body even started running, the
+  base64-encoded payload had already been fully read into a Python string by
+  the JSON-RPC transport, plus a second full copy once decoded to bytes — a
+  1 GB upload cost roughly 2.3 GB of RAM before a single byte reached S3.
+  Fixed in two layers: a new body-guard middleware on `/mcp` now rejects
+  oversized requests (413) or a missing `Content-Length` (411) before the
+  request body is read off the socket at all — the only point that can
+  actually prevent the RAM from being spent — with a ceiling derived from
+  `max_file_size` plus the base64 (4/3x) and JSON-RPC envelope overhead, so
+  legitimate uploads at the operator's configured limit are still accepted.
+  As defense in depth, `upload_file` now also estimates the decoded size from
+  the base64 string's length and rejects with `FILE_TOO_LARGE` before calling
+  `b64decode`, so the second in-memory copy is never made for an oversized
+  request and the calling agent gets an actionable error instead of an opaque
+  transport-level rejection.
+
 - **Deleting a file could silently delete its siblings too — including a
   bucket-wipe from a single MCP call.** `delete_object_for_role` listed S3
   with `Prefix=path` to find the object to delete, and — treating that as a
