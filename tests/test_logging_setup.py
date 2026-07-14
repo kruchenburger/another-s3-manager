@@ -89,3 +89,39 @@ def test_invalid_log_level_falls_back_to_info(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "VERBOSE" in captured.err
     assert "INFO" in captured.err
+
+
+def test_alembic_upgrade_does_not_silence_the_app(monkeypatch, tmp_path):
+    """THE regression this fix exists for, and the reason it went unnoticed.
+
+    migrations/env.py calls logging.config.fileConfig(), whose stdlib default is
+    disable_existing_loggers=True. Migrations run at startup, AFTER logging is configured
+    and after every module-level logging.getLogger(__name__) has already run -- so it used
+    to set .disabled = True on every another_s3_manager.* logger AND on uvicorn's own
+    (uvicorn.error, uvicorn.access), and to replace root's handler with alembic.ini's
+    (stderr, alembic's format, level WARNING). The process went essentially log-silent for
+    the rest of its life: no auth events, no MCP audit lines, no security warnings, no
+    access log, and LOG_FORMAT=json silently stopped working. It shipped in v1.1.1.
+
+    Nothing failed, because nothing asserted it. This test does.
+    """
+    from another_s3_manager.main import _run_alembic_upgrade
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    monkeypatch.setenv("LOG_FORMAT", "text")
+    configure_logging()
+
+    # Loggers that exist BEFORE the migration runs -- exactly the situation at startup.
+    app_logger = logging.getLogger("another_s3_manager.main")
+    uvicorn_logger = logging.getLogger("uvicorn.error")
+    assert not app_logger.disabled
+    assert not uvicorn_logger.disabled
+
+    _run_alembic_upgrade()
+
+    assert not app_logger.disabled, "alembic's fileConfig disabled the app's loggers -- the app is now mute"
+    assert not uvicorn_logger.disabled, "alembic's fileConfig disabled uvicorn's loggers -- no access log"
+    root = logging.getLogger()
+    assert any(h.name == HANDLER_NAME for h in root.handlers), "our root handler was replaced by alembic.ini's"
+    assert root.level == logging.INFO, "root's level was overwritten by alembic.ini's"

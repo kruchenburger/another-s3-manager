@@ -144,7 +144,39 @@ def _run_alembic_upgrade() -> None:
         alembic_cfg_path = repo_root / "alembic.ini"
         cwd = repo_root
     cfg = Config(str(alembic_cfg_path))
+    # Force alembic to materialize `Config.file_config` (its parsed view of alembic.ini) NOW,
+    # while `config_file_name` still points at the real file. `file_config` is a
+    # `@util.memoized_property`: the FIRST access parses the ini (if `config_file_name` is set)
+    # or falls back to a bare, section-only ConfigParser (if it is None) -- and either way, the
+    # result is cached on this Config instance forever, unaffected by later reassignments of
+    # `config_file_name`. `set_main_option`/`get_main_option` below (and env.py's own
+    # `set_main_option("sqlalchemy.url", ...)`) all read/write through this same cached object,
+    # so the entire [alembic] section (script_location, prepend_sys_path, etc.) only survives
+    # nulling `config_file_name` below because it was materialized from the real ini right here.
+    # Without this explicit call, that survival would depend on `set_main_option` two lines down
+    # happening to be the thing that triggers the first access -- true today, but a silent trap
+    # for anyone reordering this function (verified against alembic 1.18.4: materializing AFTER
+    # nulling `config_file_name` yields an empty file_config -- `prepend_sys_path`/
+    # `sqlalchemy.url` both come back None instead of the ini's values, no exception raised).
+    _ = cfg.file_config
     cfg.set_main_option("script_location", str(cwd / "migrations"))
+    # migrations/env.py calls `logging.config.fileConfig(config.config_file_name)` when this
+    # attribute is set. fileConfig's stdlib default (disable_existing_loggers=True) sets
+    # .disabled = True on EVERY already-created logger not named in alembic.ini's [loggers]
+    # section. Migrations run at app startup, after logging is configured and after every
+    # module-level `logging.getLogger(__name__)` has run -- so this silently kills every
+    # another_s3_manager.* logger AND uvicorn's own loggers (uvicorn.error, uvicorn.access)
+    # for the remaining life of the process.
+    #
+    # alembic.ini's [loggers]/[handlers] sections exist for the standalone `alembic` CLI;
+    # when we drive `upgrade` programmatically we have already configured logging ourselves
+    # (logging_setup.configure_logging). Clearing config_file_name makes env.py's
+    # `if config.config_file_name is not None` guard skip fileConfig() -- alembic's own Config
+    # docstring sanctions exactly this ("the call to Python logging.fileConfig() is omitted if
+    # the programmatic configuration doesn't actually include logging directives"). This must run
+    # AFTER `cfg.file_config` above is materialized (see that comment) -- moving it earlier would
+    # silently drop the whole [alembic] section instead of raising.
+    cfg.config_file_name = None
     command.upgrade(cfg, "head")
 
 
