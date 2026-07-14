@@ -20,6 +20,10 @@ Exit codes: 0 success; 1 error (policy violation, prompt mismatch, operator abor
 password, database not initialized); 2 usage (non-interactive session without --yes or
 without a password argument).
 
+If your password starts with "-", argparse will treat it as an option and reject it —
+pass it after a literal "--" (e.g. `... -- '-Weird1Pass'`), or just use the interactive
+prompt, which never parses the password as an argument at all.
+
 This module talks to the operator via print()/getpass on stdout/stderr — a deliberate,
 documented exception to the project's "no print(), use logging" backend rule: this is an
 interactive terminal tool whose output IS its interface, not server code. It never prints
@@ -32,7 +36,7 @@ import os
 import sys
 from typing import NoReturn
 
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from another_s3_manager.constants import DEFAULT_ADMIN_PASSWORD
 
@@ -154,21 +158,31 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         outcome = reset_admin_password(hash_password(password))
-    except OperationalError as exc:
-        # "no such table" means the schema genuinely hasn't been migrated yet — that specific
-        # message gets the friendly fix. Every other OperationalError (database is locked because
-        # the app container is running, unable to open database file — wrong DATA_DIR or bind-mount
-        # permissions, disk I/O error, ...) must NOT be told "schema is missing" — that sends a
-        # locked-out operator chasing the wrong problem. Pass the real error through instead.
-        if "no such table" in str(exc):
+    except SQLAlchemyError as exc:
+        # SQLAlchemyError is the outer net: a corrupt database file raises DatabaseError (e.g.
+        # "database disk image is malformed"), a constraint violation raises IntegrityError — neither
+        # is an OperationalError, so both used to escape as a raw traceback. OperationalError with
+        # "no such table" is the one case that gets the friendly "not initialized" fix, because the
+        # schema genuinely hasn't been migrated yet. Every other error (database is locked because the
+        # app container is running, unable to open database file — wrong DATA_DIR or bind-mount
+        # permissions, disk I/O error, a corrupt file, ...) must NOT be told "schema is missing" —
+        # that sends a locked-out operator chasing the wrong problem. Pass the real error through.
+        if isinstance(exc, OperationalError) and "no such table" in str(exc):
             _fail(
                 "the database is not initialized (no users table). Start the app once so migrations create "
                 "the schema, then re-run this command."
             )
-        _fail(f"database error: {exc}")
+        # exc.orig is the underlying DBAPI exception's message — the part that actually helps
+        # diagnose. str(exc) on its own appends "[SQL: ...] [parameters: ...]", and by this point the
+        # bound parameters contain the new password's bcrypt HASH (never the plaintext, but still not
+        # something that belongs in a tee'd/CI log for no benefit).
+        _fail(f"database error: {getattr(exc, 'orig', None) or exc}")
 
     if outcome == "created":
-        print("user 'admin' did not exist — created it with the new password. Log in as 'admin' with it now.")
+        print(
+            "user 'admin' did not exist — created it with the new password. No restart needed — "
+            "log in as 'admin' with it now."
+        )
     else:
         print("the password for user 'admin' has been reset. No restart needed — log in as 'admin' with it now.")
     _warn_about_environment()

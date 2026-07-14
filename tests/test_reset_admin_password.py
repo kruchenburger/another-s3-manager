@@ -117,8 +117,27 @@ def test_reset_leaves_other_users_untouched():
 
 
 # --- CLI --------------------------------------------------------------------
-# Under pytest sys.stdin.isatty() is False, so the non-TTY paths need no mocking;
-# the TTY paths monkeypatch sys.stdin with _FakeTtyStdin.
+# Every non-TTY path below monkeypatches sys.stdin with _FakeNonTtyStdin EXPLICITLY, and this
+# must stay that way: pytest's own stdin capture is NOT a reliable source of "not a TTY" — under
+# `pytest -s` (capture disabled) sys.stdin IS the real terminal, so relying on it would make the
+# very tests written to prove the CLI can't hang, hang instead. The TTY paths monkeypatch
+# sys.stdin with _FakeTtyStdin for the same reason: explicit over implicit, either way.
+
+
+def test_cli_help_is_self_sufficient(capsys):
+    """Nothing else pins `formatter_class=RawDescriptionHelpFormatter, epilog=__doc__` on the
+    parser — drop either kwarg and the suite stays green, but --help silently regresses to just
+    the description + two arg helps. Docs for this tool land in a later task, so --help is the
+    operator's only reference right now; assert the things they actually need are in there."""
+    from another_s3_manager.reset_admin_password import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["--help"])
+
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "docker compose exec" in out
+    assert "Exit codes" in out
 
 
 def test_cli_resets_with_arg_and_yes(capsys):
@@ -300,7 +319,10 @@ def test_cli_no_such_table_gets_friendly_message(monkeypatch, capsys):
     from sqlalchemy.exc import OperationalError
 
     from another_s3_manager import users as users_module
+    from another_s3_manager.auth import verify_password
     from another_s3_manager.reset_admin_password import main
+
+    _seed_admin("change_me_pls")
 
     def _raise(*_args, **_kwargs):
         raise OperationalError("statement", {}, Exception("no such table: users"))
@@ -312,6 +334,7 @@ def test_cli_no_such_table_gets_friendly_message(monkeypatch, capsys):
 
     assert exc.value.code == 1
     assert "not initialized" in capsys.readouterr().err
+    assert verify_password("change_me_pls", _admin()["password_hash"])  # untouched
 
 
 def test_cli_other_operational_errors_pass_through(monkeypatch, capsys):
@@ -321,7 +344,10 @@ def test_cli_other_operational_errors_pass_through(monkeypatch, capsys):
     from sqlalchemy.exc import OperationalError
 
     from another_s3_manager import users as users_module
+    from another_s3_manager.auth import verify_password
     from another_s3_manager.reset_admin_password import main
+
+    _seed_admin("change_me_pls")
 
     def _raise(*_args, **_kwargs):
         raise OperationalError("statement", {}, Exception("database is locked"))
@@ -335,3 +361,84 @@ def test_cli_other_operational_errors_pass_through(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "database is locked" in err
     assert "not initialized" not in err
+    assert verify_password("change_me_pls", _admin()["password_hash"])  # untouched
+
+
+def test_cli_database_error_gets_clean_message_not_traceback(monkeypatch, capsys):
+    """DatabaseError (e.g. a corrupt database file: "database disk image is malformed") is NOT an
+    OperationalError. Before the outer SQLAlchemyError net, this escaped main() entirely and dumped
+    a raw Python traceback at the operator instead of a clean "database error: ..." line."""
+    from sqlalchemy.exc import DatabaseError
+
+    from another_s3_manager import users as users_module
+    from another_s3_manager.auth import verify_password
+    from another_s3_manager.reset_admin_password import main
+
+    _seed_admin("change_me_pls")
+
+    def _raise(*_args, **_kwargs):
+        raise DatabaseError("statement", {}, Exception("database disk image is malformed"))
+
+    monkeypatch.setattr(users_module, "reset_admin_password", _raise)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["NewPassword1", "--yes"])
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "database disk image is malformed" in err
+    assert "not initialized" not in err
+    assert verify_password("change_me_pls", _admin()["password_hash"])  # untouched
+
+
+def test_cli_integrity_error_gets_clean_message_not_traceback(monkeypatch, capsys):
+    """IntegrityError is also not an OperationalError and used to escape as a raw traceback too."""
+    from sqlalchemy.exc import IntegrityError
+
+    from another_s3_manager import users as users_module
+    from another_s3_manager.auth import verify_password
+    from another_s3_manager.reset_admin_password import main
+
+    _seed_admin("change_me_pls")
+
+    def _raise(*_args, **_kwargs):
+        raise IntegrityError("statement", {}, Exception("UNIQUE constraint failed: users.username"))
+
+    monkeypatch.setattr(users_module, "reset_admin_password", _raise)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["NewPassword1", "--yes"])
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "UNIQUE constraint failed" in err
+    assert verify_password("change_me_pls", _admin()["password_hash"])  # untouched
+
+
+def test_cli_database_error_message_omits_sql_and_bound_parameters(monkeypatch, capsys):
+    """By the time reset_admin_password() runs, the password has been hashed — so the bound
+    parameters SQLAlchemy would append via str(exc) (the "[SQL: ...] [parameters: ...]" suffix)
+    contain the new password's bcrypt HASH. _fail() must print only exc.orig (the DBAPI message),
+    never the full exception string, so that hash never reaches a tee'd/CI log."""
+    from sqlalchemy.exc import OperationalError
+
+    from another_s3_manager import users as users_module
+    from another_s3_manager.reset_admin_password import main
+
+    def _raise(*_args, **_kwargs):
+        raise OperationalError(
+            "UPDATE users SET password_hash=:password_hash",
+            {"password_hash": "$2b$12$notarealhashvalueusedonlyintests"},
+            Exception("database is locked"),
+        )
+
+    monkeypatch.setattr(users_module, "reset_admin_password", _raise)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["NewPassword1", "--yes"])
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "database is locked" in err
+    assert "notarealhashvalueusedonlyintests" not in err
+    assert "[SQL:" not in err
