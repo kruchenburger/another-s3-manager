@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP: `list_files` in non-recursive mode returned an **empty list, with no error**,
+  if the path had a trailing slash — it built the S3 prefix `some/subdir//`.
+  Recursive mode and `bucket_summary` both normalized the path; this branch did
+  not. Agents had no way to tell "this folder is empty" from "you passed the path
+  in the wrong shape".
+
+### Added
+
+- MCP: every tool parameter now carries a description in its JSON Schema. There
+  were **34 parameters across the 10 tools and not one description** — an agent
+  saw `"role": {"type": "string"}` and nothing about what a role is or where to
+  get one. (FastMCP builds the schema from the signature; it does not read the
+  `Args:` blocks in our docstrings, so none of that text ever reached the agent.)
+  Each parameter now names the tool that produces valid values, the error you get
+  when it is wrong, and the config key that governs any limit.
+
 ## [1.1.2] - 2026-07-14
 
 ### Fixed
