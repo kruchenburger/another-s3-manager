@@ -1893,7 +1893,10 @@ async def list_buckets(
 ):
     """List available S3 buckets - delegates to s3_client.list_buckets_for_role."""
     try:
-        return list_buckets_for_role(role, current_user)
+        # list_buckets_for_role does blocking boto3 I/O (list_buckets, or nothing
+        # at all if allowed_buckets is configured) — run off the event loop so a
+        # slow/unreachable S3 endpoint doesn't stall every other request.
+        return await run_in_threadpool(list_buckets_for_role, role, current_user)
     except HTTPException:
         raise
     except PermissionError as e:
@@ -2012,10 +2015,14 @@ async def list_files(
                 detail="search requires client_load=1",
             )
 
+        # All three branches below do blocking boto3 I/O (one or more
+        # list_objects_v2 calls) — run off the event loop so a slow bucket
+        # listing doesn't stall every other request.
         if client_load:
             cfg = load_config()
             chunk = max_keys if max_keys is not None else int(cfg.get("max_client_load", 10000))
-            page = list_objects_client_load_for_role(
+            page = await run_in_threadpool(
+                list_objects_client_load_for_role,
                 role,
                 bucket_name,
                 path,
@@ -2027,10 +2034,11 @@ async def list_files(
             return page
 
         if max_keys is None:
-            files = list_objects_for_role(role, bucket_name, path, current_user)
+            files = await run_in_threadpool(list_objects_for_role, role, bucket_name, path, current_user)
             return {"files": files, "path": path, "total_count": len(files)}
 
-        page = list_objects_paginated_for_role(
+        page = await run_in_threadpool(
+            list_objects_paginated_for_role,
             role,
             bucket_name,
             path,
@@ -2291,7 +2299,17 @@ async def download_file(
         # metadata-fetch time and returns a lazy iterator — MUST NOT be
         # materialized to bytes here so 100MB downloads don't get buffered
         # in process memory.
-        metadata, body_iter = iter_object_for_role(role, bucket_name, path, current_user)
+        #
+        # Only the INITIAL call (the blocking GetObject that fetches metadata
+        # + the body handle) is offloaded here. The returned body_iter is a
+        # plain sync generator handed to StreamingResponse below — Starlette's
+        # StreamingResponse already wraps a non-async iterator with
+        # iterate_in_threadpool (see starlette/responses.py), so every
+        # subsequent body.read() chunk is ALREADY run in the threadpool, one
+        # chunk at a time, during stream_response(). Wrapping the whole
+        # generator here too would double-hop each chunk through the
+        # threadpool for no benefit.
+        metadata, body_iter = await run_in_threadpool(iter_object_for_role, role, bucket_name, path, current_user)
         filename = path.split("/")[-1]
 
         from fastapi.responses import StreamingResponse
@@ -2398,7 +2416,12 @@ async def get_presigned_url(
     validated_role = validate_role_access(role, current_user) or role
 
     try:
-        url = s3_generate_presigned_url_for_role(
+        # generate_presigned_url itself is local crypto (no I/O) — but
+        # get_s3_client() underneath can do a blocking STS assume_role call or
+        # refresh expired credentials for assume_role/profile-typed roles, so
+        # the whole (retrying) call is offloaded, same as every other S3 op.
+        url = await run_in_threadpool(
+            s3_generate_presigned_url_for_role,
             validated_role,
             bucket_name,
             path,
@@ -2480,8 +2503,10 @@ async def delete_file(
         # role/bucket access validation, recursively deletes everything under
         # `path` when it ends with "/", otherwise deletes exactly that one key
         # (no prefix matching), and raises FileNotFoundError when nothing
-        # matches. Returns {"message": ..., "count": N}.
-        return delete_object_for_role(role, bucket_name, path, current_user)
+        # matches. Returns {"message": ..., "count": N}. Blocking boto3 I/O
+        # (list + delete_object(s)) — offloaded so a large recursive delete
+        # doesn't stall the event loop.
+        return await run_in_threadpool(delete_object_for_role, role, bucket_name, path, current_user)
     except HTTPException:
         raise
     except PermissionError as e:

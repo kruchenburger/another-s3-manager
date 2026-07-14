@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One slow S3 request used to freeze the app for every user.** boto3 is
+  synchronous, and nearly every `*_for_role` helper — bucket listing, file
+  browsing, upload, download, delete, presigned URLs, and all ten MCP tools —
+  called it directly from an `async def` handler. That blocks the whole
+  event loop for the duration of the call, so while one request was talking
+  to S3, every other request (from every other user, including `/health` and
+  `/metrics`) had to wait its turn. The worst case was the MCP `bucket_summary`
+  tool: it can walk up to `mcp_summary_max_keys` (default 50,000) keys —
+  roughly 50 sequential S3 requests — during which the web UI was frozen for
+  everyone. Every blocking call site (7 in the web API, 13 across the MCP
+  tools) now runs in a worker thread instead, so a slow or unreachable S3
+  endpoint only delays the request that's actually waiting on it. Streamed
+  downloads were already partially offloaded (Starlette threads each chunk
+  read) — only the initial metadata fetch needed the same fix. No behavior,
+  arguments, or error responses changed; this is purely about which thread
+  the network call runs on.
+
 - **Deleting a file could silently delete its siblings too — including a
   bucket-wipe from a single MCP call.** `delete_object_for_role` listed S3
   with `Prefix=path` to find the object to delete, and — treating that as a

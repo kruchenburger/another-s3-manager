@@ -17,6 +17,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 
 import another_s3_manager.config as _config_module
@@ -560,7 +561,7 @@ async def list_buckets(role: str) -> dict:
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         try:
-            buckets = _s3_client.list_buckets_for_role(role, user)
+            buckets = await run_in_threadpool(_s3_client.list_buckets_for_role, role, user)
         except (PermissionError, RoleNotFoundError) as e:
             raise McpError(
                 "ROLE_NOT_ALLOWED",
@@ -693,7 +694,8 @@ async def list_files(
                 prefix = path.strip("/")
                 if prefix:
                     prefix += "/"
-                result = _s3_client.list_objects_recursive_for_role(
+                result = await run_in_threadpool(
+                    _s3_client.list_objects_recursive_for_role,
                     role,
                     bucket,
                     prefix,
@@ -719,7 +721,7 @@ async def list_files(
                 # returns. No continuation token exists for a non-recursive
                 # listing, so we do not invent one — the hint below points at
                 # the two real alternatives instead.
-                files = _s3_client.list_objects_for_role(role, bucket, path, user)
+                files = await run_in_threadpool(_s3_client.list_objects_for_role, role, bucket, path, user)
                 result = {"files": files}
                 if len(files) > effective_max_keys:
                     result["files"] = files[:effective_max_keys]
@@ -823,8 +825,14 @@ async def bucket_summary(role: str, bucket: str, path: str = "") -> dict:
         if prefix:
             prefix += "/"
         try:
-            result = _s3_client.summarize_bucket_for_role(
-                role, bucket, prefix, user, max_keys=max_keys, prefix_scan_pages=prefix_scan_pages
+            result = await run_in_threadpool(
+                _s3_client.summarize_bucket_for_role,
+                role,
+                bucket,
+                prefix,
+                user,
+                max_keys=max_keys,
+                prefix_scan_pages=prefix_scan_pages,
             )
         except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
@@ -900,7 +908,7 @@ async def upload_file(role: str, bucket: str, path: str, content_base64: str) ->
         except (binascii.Error, ValueError) as e:
             raise McpError("INVALID_INPUT", f"content_base64 is not valid base64: {e}", {"tool": "upload_file"})
         try:
-            _s3_client.put_object_for_role(role, bucket, path, content, user)
+            await run_in_threadpool(_s3_client.put_object_for_role, role, bucket, path, content, user)
         except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
@@ -976,7 +984,7 @@ async def delete_file(role: str, bucket: str, path: str) -> dict:
         config = _config_module.load_config(force_reload=False)
         assert_write_allowed(token, "delete_file", config)
         try:
-            _s3_client.delete_object_for_role(role, bucket, path, user)
+            await run_in_threadpool(_s3_client.delete_object_for_role, role, bucket, path, user)
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
         except (PermissionError, RoleNotFoundError) as e:
@@ -1061,7 +1069,7 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
         )
 
         try:
-            size = _s3_client.head_object_for_role(role, bucket, path, user)
+            size = await run_in_threadpool(_s3_client.head_object_for_role, role, bucket, path, user)
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
         except (PermissionError, RoleNotFoundError) as e:
@@ -1107,7 +1115,9 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
             elif kind == "text:extensionless":
                 decision = "extensionless"
             else:  # sniff
-                sample = _s3_client.read_object_range_for_role(role, bucket, path, 0, 8191, user)
+                sample = await run_in_threadpool(
+                    _s3_client.read_object_range_for_role, role, bucket, path, 0, 8191, user
+                )
                 if _is_likely_text_sample(sample):
                     decision = "sniffed"
                 else:
@@ -1124,7 +1134,7 @@ async def read_file(role: str, bucket: str, path: str, force_text: bool = False)
                         },
                     )
 
-        raw = _s3_client.read_object_for_role(role, bucket, path, user)
+        raw = await run_in_threadpool(_s3_client.read_object_for_role, role, bucket, path, user)
         mcp_bytes_read_total.labels(bucket=bucket).inc(len(raw))
 
         # Strip UTF-8 BOM silently if present.
@@ -1249,9 +1259,11 @@ async def copy_object(
                 {"tool": "copy_object"},
             )
         try:
-            _s3_client.copy_object_for_role(role, source_bucket, source_path, dest_bucket, dest_path, user)
+            await run_in_threadpool(
+                _s3_client.copy_object_for_role, role, source_bucket, source_path, dest_bucket, dest_path, user
+            )
             if delete_source:
-                _s3_client.delete_object_for_role(role, source_bucket, source_path, user)
+                await run_in_threadpool(_s3_client.delete_object_for_role, role, source_bucket, source_path, user)
         except FileNotFoundError as e:
             raise McpError("FILE_NOT_FOUND", str(e), {"bucket": source_bucket, "path": source_path})
         except (PermissionError, RoleNotFoundError) as e:
@@ -1335,7 +1347,7 @@ async def get_object_metadata(role: str, bucket: str, path: str) -> dict:
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         try:
-            meta = _s3_client.get_object_metadata_for_role(role, bucket, path, user)
+            meta = await run_in_threadpool(_s3_client.get_object_metadata_for_role, role, bucket, path, user)
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
         except (PermissionError, RoleNotFoundError) as e:
@@ -1402,7 +1414,12 @@ async def presigned_url(role: str, bucket: str, path: str, expires_in: int = 360
         max_ttl = int(config.get("presigned_url_max_ttl", 604800))
         clamped = max(60, min(int(expires_in), max_ttl))
         try:
-            url = _s3_client.generate_presigned_url_for_role(role, bucket, path, user, expires_in=clamped)
+            # generate_presigned_url_for_role is local crypto, but get_s3_client()
+            # underneath can perform a blocking STS assume_role call or refresh
+            # expired credentials for assume_role/profile-typed roles.
+            url = await run_in_threadpool(
+                _s3_client.generate_presigned_url_for_role, role, bucket, path, user, expires_in=clamped
+            )
         except (PermissionError, RoleNotFoundError) as e:
             if "bucket" in str(e).lower():
                 raise McpError("BUCKET_NOT_ALLOWED", str(e), {"bucket": bucket})
