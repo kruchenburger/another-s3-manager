@@ -320,8 +320,8 @@ async def _upload_body_guard(request: Request, call_next):
 
     The auth-gate below uses has_valid_session (a cheap, DB-free JWT decode),
     NOT get_current_user, because this is a bare synchronous call inside an
-    `async def` middleware: get_current_user runs load_users() (a blocking
-    SQLAlchemy query) and calling it here would block the event loop thread
+    `async def` middleware: get_current_user runs get_user_by_username() (a
+    blocking SQLAlchemy query) and calling it here would block the event loop thread
     on every upload request. The authoritative, DB-backed check still runs
     in the handler via Depends(get_current_user) — this guard only rejects
     the cheap, unauthenticated case before the body is read.
@@ -836,12 +836,15 @@ async def update_user_password(
     # every user just to change one password).
     from another_s3_manager.users import update_user as users_update_user
 
-    users_update_user(
-        username,
-        password_hash=hashed_password,
-        must_change_password=payload.must_change_password,
-        password_set_via=PASSWORD_SET_VIA_UI,
-    )
+    try:
+        users_update_user(
+            username,
+            password_hash=hashed_password,
+            must_change_password=payload.must_change_password,
+            password_set_via=PASSWORD_SET_VIA_UI,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="User not found") from exc
 
     return AdminResetPasswordResponse(message=f"Password updated successfully for user {username}")
 
@@ -1340,7 +1343,10 @@ async def update_user_theme(
     # every user just to change one theme preference).
     from another_s3_manager.users import update_user as users_update_user
 
-    users_update_user(username, theme=theme)
+    try:
+        users_update_user(username, theme=theme)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="User not found") from exc
 
     return {"message": f"Theme updated to {theme}", "theme": theme}
 

@@ -361,12 +361,21 @@ def test_get_current_user_theme_always_present(monkeypatch):
 
 
 def test_get_current_user_user_not_found(monkeypatch):
+    """Pins the real deleted-user-race behavior: mint a valid JWT for a real
+    user, delete that user's row, then drive get_current_user through the
+    actual get_user_by_username() lookup (no stub) and assert the 401. This
+    is the exact semantics the targeted-lookup refactor is riskiest
+    against, so it must exercise the real DB path, not a mocked function."""
     monkeypatch.setenv("JWT_SECRET_KEY", "secret")
     auth = reload_auth()
-
-    monkeypatch.setattr("another_s3_manager.users.get_user_by_username", lambda username: None)
+    ensure_user(username="ghost", password="password", is_admin=False)
 
     token = auth.create_access_token({"sub": "ghost"})
+
+    import another_s3_manager.users as users
+
+    users.delete_user("ghost")
+
     request = _make_request_with_cookie(token)
     with pytest.raises(HTTPException) as exc:
         auth.get_current_user(request)

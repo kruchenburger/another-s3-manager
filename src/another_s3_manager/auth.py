@@ -123,8 +123,8 @@ def _decode_session_payload(request: Request) -> Optional[Dict[str, Any]]:
 def has_valid_session(request: Request) -> bool:
     """Cheap, DB-free check that the request carries a valid, unexpired JWT
     session cookie. Used by the upload body-guard to reject unauthenticated
-    uploads BEFORE the body is read, WITHOUT the synchronous load_users() DB
-    query that get_current_user does (which must not run on the event loop).
+    uploads BEFORE the body is read, WITHOUT the synchronous get_user_by_username()
+    DB query that get_current_user does (which must not run on the event loop).
     A valid JWT whose user was since deleted still passes here; the handler's
     Depends(get_current_user) does the authoritative user lookup and rejects
     it — that is an authenticated actor, not an unauthenticated DoS vector.

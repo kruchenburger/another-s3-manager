@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Every authenticated request loaded every user in the database.** On an
   instance with hundreds or thousands of users, each request — web and API
   alike — was noticeably slower than it needed to be, because the
-  authentication dependency loaded the *entire* users table (plus each
+  authentication dependency loaded the _entire_ users table (plus each
   user's roles) just to find the one user who made the request, then
   discarded the rest. The same "load everyone, scan for one" pattern showed
   up on several other request paths: downloading a file, checking role
@@ -25,7 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rewritten every user in the database on a plain profile-fetch request —
   it never fires (the theme field is always present) and is gone now,
   along with the last usage that required loading the whole table just to
-  reach it.
+  reach it. Four admin write paths (resetting a user's password, editing
+  a user's permissions, changing a user's theme, deleting a user) were
+  also converted from loading and rewriting the entire users table to a
+  single-row write.
+
+  **Behavior change:** on a wiped users table, the authentication
+  dependency and the file-download auth path used to silently re-seed
+  the default `admin` account from `ADMIN_PASSWORD` and then serve the
+  request if the caller happened to hold a still-valid session cookie.
+  They now return 401 instead — logging back in re-seeds the admin
+  account, which is the more correct behavior, but it is a behavior
+  change worth calling out.
 
 - **Deleting a file could silently delete its siblings too — including a
   bucket-wipe from a single MCP call.** `delete_object_for_role` listed S3

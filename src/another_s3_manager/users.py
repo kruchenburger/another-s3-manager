@@ -11,7 +11,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, selectinload
 
 from another_s3_manager.constants import (
     DEFAULT_ADMIN_PASSWORD,
@@ -444,9 +444,21 @@ def save_users(users_data: Dict[str, Any]) -> None:
 
 
 def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
-    """Get user by username, or None if not found."""
+    """Get user by username, or None if not found.
+
+    Eager-loads roles via joinedload (single SQL statement, LEFT OUTER JOIN)
+    rather than selectinload — selectinload would still issue a second SELECT
+    for the roles batch, which is exactly the extra round trip this is meant
+    to remove. This runs on every authenticated request, so without eager
+    loading, _user_to_dict()'s access to user.roles would trigger a second,
+    lazy SELECT on every call.
+    """
     with session_scope() as session:
-        user = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
+        user = (
+            session.execute(select(User).options(joinedload(User.roles)).where(User.username == username))
+            .unique()
+            .scalar_one_or_none()
+        )
         return _user_to_dict(user) if user else None
 
 
