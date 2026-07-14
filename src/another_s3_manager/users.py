@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from another_s3_manager.constants import (
     DEFAULT_ADMIN_PASSWORD,
+    PASSWORD_SET_VIA_CLI,
     PASSWORD_SET_VIA_ENV,
     PASSWORD_SET_VIA_UI,
     PASSWORD_SET_VIA_UNKNOWN,
@@ -244,6 +245,44 @@ def sync_admin_password_from_env() -> bool:
             "Change the password in the UI (or via the reset CLI) to make the database authoritative."
         )
         return True
+
+
+def reset_admin_password(new_password_hash: str) -> str:
+    """Break-glass reset of the 'admin' user — used by the reset_admin_password CLI.
+
+    Updates the stored hash in place, or creates the user (is_admin=True, no roles) if it was
+    deleted. Stamps password_set_via="cli": the ordinary startup env sync will never overwrite it.
+    An operator who just recovered access at the console must not have that undone by the next
+    `docker compose up -d` — that restart is inevitable, and clobbering the reset would drop them
+    back into the lockout this CLI exists to break. (The one thing that CAN override it is an
+    explicit ADMIN_PASSWORD_FORCE — a deliberate human act, not a stale variable.)
+
+    Clears must_change_password: the operator chose this password.
+
+    Takes a HASH — plaintext handling (prompting, policy validation, hashing) is the CLI's job.
+    Deliberately does not log: the CLI runs in its own process (docker compose exec), so its
+    printed output — not container logs — is the audit surface the operator sees.
+
+    Returns "updated" or "created".
+    """
+    with session_scope() as session:
+        admin = session.execute(select(User).where(User.username == "admin")).scalar_one_or_none()
+        if admin is None:
+            session.add(
+                User(
+                    username="admin",
+                    password_hash=new_password_hash,
+                    is_admin=True,
+                    theme="auto",
+                    must_change_password=False,
+                    password_set_via=PASSWORD_SET_VIA_CLI,
+                )
+            )
+            return "created"
+        admin.password_hash = new_password_hash
+        admin.must_change_password = False
+        admin.password_set_via = PASSWORD_SET_VIA_CLI
+        return "updated"
 
 
 def load_users() -> Dict[str, Any]:
