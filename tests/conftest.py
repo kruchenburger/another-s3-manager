@@ -40,6 +40,10 @@ def isolated_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("S3_FILE_MANAGER_CONFIG", str(config_path))
     monkeypatch.setenv("DATA_DIR", str(data_dir))
     monkeypatch.setenv("ADMIN_PASSWORD", "admin123")
+    # A developer or CI runner with ADMIN_PASSWORD_FORCE set in their real environment would
+    # otherwise silently change the behavior of every test in the suite (several tests already
+    # delenv this by hand -- this makes the whole suite hermetic, not just the ones that noticed).
+    monkeypatch.delenv("ADMIN_PASSWORD_FORCE", raising=False)
     monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
 

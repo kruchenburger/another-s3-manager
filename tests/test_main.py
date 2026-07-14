@@ -5,6 +5,7 @@ import io
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 
 os.environ.setdefault("APP_VERSION", "0.1.0")
 
@@ -1524,6 +1525,84 @@ def test_startup_runs_migrations_and_json_import(monkeypatch, tmp_path):
     from another_s3_manager.users import get_user_by_username
 
     assert get_user_by_username("imported") is not None
+
+
+def test_run_alembic_upgrade_preserves_the_alembic_ini_section(monkeypatch):
+    """Regression test for the `_ = cfg.file_config` no-op in `_run_alembic_upgrade`.
+
+    `Config.file_config` is a `@util.memoized_property`: its FIRST access parses alembic.ini
+    (if `config_file_name` is still set) or falls back to a bare, section-less ConfigParser (if
+    `config_file_name` is already None) -- and either way the result is cached forever. The whole
+    `[alembic]` section (script_location, prepend_sys_path, ...) only survives nulling
+    `config_file_name` because `_ = cfg.file_config` forces that first access, from the real ini,
+    BEFORE the null happens. `script_location` alone would not catch a regression here (it is
+    explicitly re-set with `cfg.set_main_option(...)` a few lines later regardless of ini
+    parsing) -- `prepend_sys_path` is untouched by any explicit set, so it is proof the real ini
+    was parsed. Deleting the no-op line, or hoisting `cfg.config_file_name = None` above it,
+    raises nothing and silently drops this to None instead.
+    """
+    import another_s3_manager.main as main
+
+    captured = {}
+
+    def _fake_upgrade(cfg, revision):
+        captured["cfg"] = cfg
+
+    monkeypatch.setattr(main.command, "upgrade", _fake_upgrade)
+
+    main._run_alembic_upgrade()
+
+    cfg = captured.get("cfg")
+    assert cfg is not None, "command.upgrade was never called"
+    # Explicitly re-set by _run_alembic_upgrade -- would pass even with the bug, kept as a sanity check.
+    script_location = cfg.get_main_option("script_location")
+    assert script_location
+    assert Path(script_location).is_dir()
+    # NOT explicitly set anywhere -- only present if alembic.ini was actually parsed into
+    # file_config before config_file_name was nulled. This is what the bug drops to None.
+    assert cfg.get_main_option("prepend_sys_path") == ".", (
+        "the [alembic] section of alembic.ini was not preserved -- "
+        "cfg.file_config must be materialized before cfg.config_file_name is nulled"
+    )
+
+
+async def test_lifespan_runs_startup_tasks_then_enters_mcp(mocker):
+    """The lifespan's two jobs: run the startup work, then enter FastMCP's session manager.
+
+    All the actual startup BEHAVIOUR is tested by driving main.run_startup_tasks() directly
+    (see tests/test_admin_password_sync.py) -- this test only pins the WIRING, i.e. that
+    `lifespan` still calls it and still enters the MCP session manager, in that order.
+
+    Both collaborators are mocked, deliberately: FastMCP's StreamableHTTPSessionManager.run()
+    can be entered only ONCE per instance for the life of the process (a hard guard in the mcp
+    SDK), and the FastMCP instance is a module-level singleton the suite never reloads. That
+    one real entry is already spent by test_startup_runs_migrations_and_json_import above, so
+    a second real lifespan boot anywhere in the suite would raise RuntimeError. Mocking the
+    session manager keeps this test independent of that budget.
+    """
+    import contextlib
+
+    from another_s3_manager import main
+
+    calls = []
+
+    mocker.patch.object(main, "run_startup_tasks", side_effect=lambda: calls.append("startup"))
+
+    @contextlib.asynccontextmanager
+    async def _fake_run():
+        calls.append("mcp_enter")
+        yield
+        calls.append("mcp_exit")
+
+    # Patch the module-level FastMCP reference rather than its `session_manager` attribute:
+    # session_manager is a read-only property on FastMCP, so patch.object cannot restore it.
+    mocker.patch.object(main, "_mcp_instance", mocker.Mock(session_manager=mocker.Mock(run=_fake_run)))
+
+    async with main.lifespan(main.app):
+        # Startup work must be done -- and MCP entered -- before the app serves anything.
+        assert calls == ["startup", "mcp_enter"]
+
+    assert calls == ["startup", "mcp_enter", "mcp_exit"]
 
 
 def test_download_file_with_colon_in_key(app_client, moto_s3):
