@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `password_set_via` to `users`, backfilling non-admin users as `ui` and
   leaving the admin's provenance to be classified honestly at the next
   startup (see README) — the backfill never assigns `env` on its own.
+  **This classification only applies to deployments that were already on
+  SQLite.** A deployment upgrading straight from a legacy `users.json` file
+  has every imported user, including `admin`, stamped `ui` up front by the
+  JSON→SQLite migration — `ADMIN_PASSWORD` will not govern that admin's
+  password on its own; use `ADMIN_PASSWORD_FORCE=1` once to hand it back to
+  the environment (see README "Upgrading an existing deployment").
 
 ## [1.1.1] - 2026-07-13
 

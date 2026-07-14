@@ -158,6 +158,12 @@ place makes the environment permanently authoritative — any password you later
 would be reverted to `ADMIN_PASSWORD` on the next restart. Every start with it set logs a
 reminder to remove it.
 
+`ADMIN_PASSWORD_FORCE` alone does nothing: if `ADMIN_PASSWORD` is unset or is still the built-in
+default `change_me_pls`, the force override is **ignored** (with a warning) instead of installing
+the publicly-known default. Setting only `ADMIN_PASSWORD_FORCE=1`, hoping to reset the admin
+password back to the default, will not work — set `ADMIN_PASSWORD` to the value you actually want
+installed alongside it.
+
 #### Lost the admin password?
 
 Reset it from inside the container:
@@ -177,13 +183,29 @@ revert the reset (the CLI warns you if it is).
 
 #### Upgrading an existing deployment
 
-The admin password's origin is unknown for databases created before this feature, so the app
-classifies it once, on the first startup after the upgrade: if the stored password is still the
-built-in default (or is exactly the current `ADMIN_PASSWORD`), the environment keeps governing
-it; otherwise the password is treated as operator-chosen and `ADMIN_PASSWORD` is ignored from
-then on. The startup logs say which happened. **No upgrade path can overwrite a password you set
-yourself** — and if the classification was not what you wanted, `ADMIN_PASSWORD_FORCE` gets you
-back to environment management.
+There are two different upgrade paths, and they are classified differently. **Read the one that
+matches your deployment** — assuming the wrong one leaves you thinking rotation works when it
+doesn't, silently.
+
+- **Upgrading a database that already has a `users` table** (i.e. you were already on SQLite):
+  the admin password's origin is unknown, so the app classifies it once, on the first startup
+  after the upgrade: if the stored password is still the built-in default (or is exactly the
+  current `ADMIN_PASSWORD`), the environment keeps governing it; otherwise the password is
+  treated as operator-chosen and `ADMIN_PASSWORD` is ignored from then on. The startup logs say
+  which happened.
+- **Upgrading from a legacy `users.json` file** (pre-SQLite deployment): every user imported by
+  the one-shot migration — **including `admin`, including an admin still on the built-in
+  default** — is stamped operator-set (`ui`) up front, not classified. There is no reliable way
+  to tell "seeded from env, never touched" apart from "operator changed it" from a JSON file
+  alone, so the migration conservatively assumes the latter for everyone. **`ADMIN_PASSWORD`
+  will NOT govern a JSON-migrated admin, ever, on its own** — there is no classification step
+  that will later flip it to `env`. If you want the environment to manage this admin's password
+  going forward, you must explicitly hand it back with `ADMIN_PASSWORD_FORCE=1` once (see
+  below).
+
+**No upgrade path can overwrite a password you set yourself** — and if the classification (or,
+for the JSON case, the blanket `ui` stamp) was not what you wanted, `ADMIN_PASSWORD_FORCE` gets
+you back to environment management.
 
 ### Brute-force defense
 

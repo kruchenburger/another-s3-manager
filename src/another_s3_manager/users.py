@@ -231,6 +231,26 @@ def sync_admin_password_from_env() -> bool:
                 )
 
         if admin.password_set_via != PASSWORD_SET_VIA_ENV:
+            # "ui"/"cli" (or "unknown" that just got classified as "ui" above) is silent by
+            # design -- but silent forever, with ADMIN_PASSWORD actually set to something real,
+            # is exactly what made a JSON-origin admin (migration.py stamps every imported row
+            # "ui", including one still on the built-in default) undiagnosable: the operator sets
+            # ADMIN_PASSWORD, restarts, sees no error, and concludes rotation is broken.
+            #
+            # Narrowed to ADMIN_PASSWORD != the built-in default so the common, unremarkable case
+            # (no ADMIN_PASSWORD in the compose file at all, admin password changed through the
+            # UI) stays quiet on every boot -- that case needs no explanation and would otherwise
+            # make this fire for the majority of "ui" deployments.
+            if env_password != DEFAULT_ADMIN_PASSWORD and admin.password_set_via in (
+                PASSWORD_SET_VIA_UI,
+                PASSWORD_SET_VIA_CLI,
+            ):
+                logger.info(
+                    "ADMIN_PASSWORD is set but does not govern the 'admin' password (provenance: %s) -- "
+                    "it was set through the UI, the reset CLI, or migrated from a legacy users.json. "
+                    "Set ADMIN_PASSWORD_FORCE=1 once to hand it back to the environment.",
+                    admin.password_set_via,
+                )
             return False
         if env_password == DEFAULT_ADMIN_PASSWORD:
             return False

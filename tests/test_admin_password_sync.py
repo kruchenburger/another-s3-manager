@@ -194,6 +194,59 @@ def test_cli_password_is_never_overwritten(monkeypatch):
     assert verify_password("RecoveredPw1", _admin()["password_hash"])
 
 
+# --- diagnosability: INFO log when ADMIN_PASSWORD is set but doesn't govern -
+
+
+def test_ui_password_with_real_env_password_logs_info(monkeypatch, caplog):
+    """The undiagnosable case a JSON-origin admin (migration.py stamps every imported row 'ui')
+    used to hit silently: ADMIN_PASSWORD is set to something real, but this admin's password is
+    'ui'-governed, so nothing ever happens and nothing was ever said. Must now log at INFO."""
+    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+    from another_s3_manager.users import sync_admin_password_from_env
+
+    _seed_admin("OperatorChose1", PASSWORD_SET_VIA_UI)
+    monkeypatch.setenv("ADMIN_PASSWORD", ENV_PASSWORD)
+
+    with caplog.at_level(logging.INFO):
+        assert sync_admin_password_from_env() is False
+
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert any("does not govern" in r.message for r in info_records)
+    assert ENV_PASSWORD not in caplog.text  # never the password
+
+
+def test_cli_password_with_real_env_password_logs_info(monkeypatch, caplog):
+    """Same diagnosability for 'cli' provenance -- a break-glass reset is just as silent today."""
+    from another_s3_manager.constants import PASSWORD_SET_VIA_CLI
+    from another_s3_manager.users import sync_admin_password_from_env
+
+    _seed_admin("RecoveredPw1", PASSWORD_SET_VIA_CLI)
+    monkeypatch.setenv("ADMIN_PASSWORD", ENV_PASSWORD)
+
+    with caplog.at_level(logging.INFO):
+        assert sync_admin_password_from_env() is False
+
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert any("does not govern" in r.message for r in info_records)
+
+
+def test_ui_password_with_default_env_stays_silent(monkeypatch, caplog):
+    """The common, unremarkable case (no ADMIN_PASSWORD in the compose file, admin password
+    changed through the UI) must NOT log at INFO on every boot -- narrowing to
+    ADMIN_PASSWORD != default is what keeps this from being noisy for the majority of 'ui'
+    deployments."""
+    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+    from another_s3_manager.users import sync_admin_password_from_env
+
+    _seed_admin("OperatorChose1", PASSWORD_SET_VIA_UI)
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)  # conftest sets it; remove it
+
+    with caplog.at_level(logging.INFO):
+        assert sync_admin_password_from_env() is False
+
+    assert not any("does not govern" in r.message for r in caplog.records)
+
+
 # --- provenance "unknown": one-time legacy classification --------------------
 
 

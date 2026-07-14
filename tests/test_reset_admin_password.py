@@ -442,3 +442,35 @@ def test_cli_database_error_message_omits_sql_and_bound_parameters(monkeypatch, 
     assert "database is locked" in err
     assert "notarealhashvalueusedonlyintests" not in err
     assert "[SQL:" not in err
+
+
+def test_cli_database_error_fallback_omits_sql_and_parameters_when_orig_is_none(monkeypatch, capsys):
+    """`getattr(exc, "orig", None) or exc` used to fall back to `str(exc)` whenever `.orig` is
+    falsy. For a StatementError constructed with `orig=None` (a legitimate SQLAlchemy shape --
+    verified against the installed sqlalchemy: OperationalError(stmt, params, None) is
+    constructible and `.orig` is None), `str(exc)` still appends the full
+    "[SQL: ...] [parameters: ...]" tail -- which, by this point in main(), holds the new
+    password's bcrypt HASH. The fallback must never interpolate that string."""
+    from sqlalchemy.exc import OperationalError
+
+    from another_s3_manager import users as users_module
+    from another_s3_manager.reset_admin_password import main
+
+    def _raise(*_args, **_kwargs):
+        raise OperationalError(
+            "UPDATE users SET password_hash=:password_hash",
+            {"password_hash": "$2b$12$fallbackpathhashvalueusedonlyintests"},
+            None,  # falsy .orig -- the exact shape that used to leak
+        )
+
+    monkeypatch.setattr(users_module, "reset_admin_password", _raise)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["NewPassword1", "--yes"])
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "database error" in err
+    assert "fallbackpathhashvalueusedonlyintests" not in err
+    assert "[SQL:" not in err
+    assert "[parameters:" not in err

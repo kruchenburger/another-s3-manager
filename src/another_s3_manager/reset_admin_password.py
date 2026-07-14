@@ -176,7 +176,14 @@ def main(argv: list[str] | None = None) -> int:
         # diagnose. str(exc) on its own appends "[SQL: ...] [parameters: ...]", and by this point the
         # bound parameters contain the new password's bcrypt HASH (never the plaintext, but still not
         # something that belongs in a tee'd/CI log for no benefit).
-        _fail(f"database error: {getattr(exc, 'orig', None) or exc}")
+        #
+        # If .orig is falsy (None, or absent on a bare SQLAlchemyError with no DBAPI cause), do NOT
+        # fall back to str(exc)/f"{exc}" — for a StatementError that string is exactly the
+        # "[SQL: ...] [parameters: ...]" text this branch exists to avoid. Fall back to only the
+        # exception's class name instead; never interpolate the exception object itself.
+        orig = getattr(exc, "orig", None)
+        detail = str(orig) if orig else f"{type(exc).__name__} (no further detail available)"
+        _fail(f"database error: {detail}")
 
     if outcome == "created":
         print(
