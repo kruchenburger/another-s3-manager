@@ -62,6 +62,29 @@ def load_config(force_reload: bool = False) -> Dict[str, Any]:
     return _config_cache
 
 
+def resolve_max_file_size(config: Optional[Dict[str, Any]] = None) -> int:
+    """Resolve the upload size limit in bytes — the single source of truth.
+
+    Precedence: admin-editable config `max_file_size` -> `MAX_FILE_SIZE` env
+    var -> 100 MB default. Shared by main.py's upload body-guard middleware,
+    the web upload route handler, and mcp_server.py's upload_file tool, so
+    all three enforcement points can never drift from each other (see
+    backlog finding: the two resolvers used to be hand-copied and could
+    silently diverge).
+
+    `config` may be passed in by a caller that already loaded it this
+    request (e.g. mcp_server.py's upload_file, which needs the config dict
+    for assert_write_allowed anyway) to avoid a redundant load_config call.
+    Defaults to loading it fresh when omitted.
+    """
+    if config is None:
+        config = load_config(force_reload=False)
+    max_file_size = config.get("max_file_size")
+    if max_file_size is None:
+        return int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
+    return int(max_file_size)
+
+
 def _migrate_config() -> bool:
     """Migrate config by adding missing fields with default values."""
     global _config_cache

@@ -9,7 +9,6 @@ import binascii
 import hashlib
 import json
 import logging
-import os
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -882,22 +881,6 @@ async def bucket_summary(role: str, bucket: str, path: str = "") -> dict:
         mcp_tool_duration_seconds.labels(tool="bucket_summary").observe(time.perf_counter() - start)
 
 
-def _resolve_max_file_size(config: dict) -> int:
-    """Resolve the operator's upload size limit in bytes.
-
-    Precedence: admin-editable config `max_file_size` -> `MAX_FILE_SIZE` env
-    var -> 100 MB default — the SAME precedence main.resolve_max_file_size()
-    uses for the web upload route. Duplicated rather than imported: main.py
-    imports this module (for get_mcp_app()), so importing main.py from here
-    would be circular. Keep this in sync with main.resolve_max_file_size() if
-    that precedence ever changes.
-    """
-    max_file_size = config.get("max_file_size")
-    if max_file_size is None:
-        return int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
-    return int(max_file_size)
-
-
 def _estimate_base64_decoded_size(content_base64: str) -> int:
     """Estimate the decoded byte size of a base64 string WITHOUT decoding it.
 
@@ -908,10 +891,23 @@ def _estimate_base64_decoded_size(content_base64: str) -> int:
     does not validate the string is well-formed base64 — that check still
     happens in b64decode afterward) — its only job is to reject an oversized
     payload BEFORE paying for the full decode.
+
+    Padding is capped at 2 characters by construction (only the last two
+    characters of the string are ever inspected for '='): legitimate base64
+    padding is never more than two '=' characters, so a malformed string with
+    a longer run of '=' must not be allowed to inflate `padding` past 2 — that
+    would make the estimate go negative and sail past the size check below
+    without ever exercising it. A malformed tail instead makes the estimate
+    LARGER than the true decoded size (safe: more likely to reject, never to
+    under-count), and b64decode(validate=True) still rejects the malformed
+    input afterward regardless. The estimate is also clamped at 0 as a second,
+    independent guard against ever returning a negative value.
     """
     length = len(content_base64)
-    padding = len(content_base64) - len(content_base64.rstrip("="))
-    return (length * 3 // 4) - padding
+    tail = content_base64[-2:]
+    padding = len(tail) - len(tail.rstrip("="))
+    estimate = (length * 3 // 4) - padding
+    return max(estimate, 0)
 
 
 # ------------------------------------------------------------------
@@ -940,7 +936,11 @@ async def upload_file(role: str, bucket: str, path: str, content_base64: str) ->
         # through (its ceiling has JSON-envelope headroom baked in) and,
         # more importantly, gives the AGENT an actionable error instead of a
         # transport-level rejection it cannot interpret.
-        max_file_size = _resolve_max_file_size(config)
+        # Shared with main.py's web-upload guard/route (config.py's single
+        # implementation, passed the already-loaded config to avoid a
+        # redundant load_config call) — see config.resolve_max_file_size's
+        # docstring for why this used to be a hand-copy and isn't anymore.
+        max_file_size = _config_module.resolve_max_file_size(config)
         estimated_size = _estimate_base64_decoded_size(content_base64)
         if estimated_size > max_file_size:
             upload_rejected_total.labels(reason="size_limit").inc()

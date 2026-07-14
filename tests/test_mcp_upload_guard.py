@@ -229,9 +229,20 @@ def test_mcp_body_guard_admits_realistic_upload_at_exact_max_file_size(mocker):
 
 
 def test_mcp_body_guard_ignores_get_requests():
-    """Only POST bodies carry a JSON-RPC payload worth bounding — a GET to
-    /mcp (used elsewhere to check routing/mount status) must pass through
-    untouched regardless of any Content-Length header."""
+    """LOAD-BEARING: the guard's `request.method == "POST"` scoping must
+    never widen to cover GET.
+
+    This is not merely "GET carries no JSON-RPC payload worth bounding" —
+    the MCP streamable-HTTP transport's SSE event stream (and its resumption
+    stream) IS a GET to /mcp. Session teardown is a DELETE. The SDK's only
+    POST always sets Content-Length (verified independently during review).
+    If a future change applies this guard's 411/413 rejections to GET, every
+    MCP session for every agent breaks the moment its SSE stream opens —
+    there is no smaller blast radius to discover this by, because the
+    failure only shows up once a real client tries to hold a session open.
+    Do not remove or generalize this exemption without re-verifying that
+    invariant against the current MCP SDK transport.
+    """
     main = reload_main()
 
     async def _call_next(_request):
@@ -300,17 +311,54 @@ def test_mcp_post_without_content_length_gets_411_via_http(app_client):
     assert response.status_code == 411
 
 
+def test_mcp_guard_rejections_across_junk_suffixes_collapse_to_one_series(app_client):
+    """Cardinality-bounding regression proof, mirroring
+    test_upload_guard.py's test_guard_rejections_across_bucket_names_collapse_to_one_series
+    for the /mcp guard. _mcp_body_guard rejects BEFORE routing ever runs, so
+    without a guard-stamped request.scope["guard_path_template"],
+    _http_metrics' route-less fallback would key on the concrete request
+    path — an unauthenticated caller varying the /mcp/<suffix> would mint one
+    unbounded label series per suffix in as3m_http_requests_total (and ~15
+    per series in the duration histogram), held forever in the registry.
+    Two guard-rejected (411) requests to DIFFERENT /mcp/<junk> paths must
+    collapse into the SAME single template-labeled series ("/mcp", not the
+    concrete path)."""
+    from another_s3_manager.metrics import REGISTRY
+
+    labels = {"method": "POST", "path_template": "/mcp", "status_code": "411"}
+    before = REGISTRY.get_sample_value("as3m_http_requests_total", labels) or 0.0
+
+    for suffix in ("aaa", "bbb"):
+        response = app_client.post(
+            f"/mcp/{suffix}",
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            content=iter([b'{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}']),
+        )
+        assert response.status_code == 411
+
+    after = REGISTRY.get_sample_value("as3m_http_requests_total", labels) or 0.0
+    assert after - before == 2
+
+
 def test_mcp_body_guard_does_not_reject_small_tool_calls():
     """A normal, small MCP call (list_roles-shaped JSON-RPC body) must sail
-    past the body guard untouched — it must not receive 411/413. Whatever
-    happens further downstream (FastMCP's task-group RuntimeError under a
-    bare TestClient — a documented, pre-existing limitation, see
-    test_mcp_protocol.py's module docstring) is out of scope here; this only
-    proves the new guard does not collaterally break ordinary tool calls."""
+    past the body guard untouched — it must not receive 411/413.
+
+    The expected status here IS 500, not merely "anything but 411/413":
+    under a bare TestClient the mounted FastMCP sub-app never gets its own
+    lifespan, so its task group is uninitialized and any request that
+    actually reaches it surfaces as 500 (documented in
+    test_mcp_protocol.py's module docstring and its own `_mount_client`
+    helper, mirrored here). Asserting the concrete value means this test
+    would notice a regression it would otherwise miss — e.g. the kill-switch
+    firing unexpectedly (503) or some other guard rejecting the call — both
+    of which also satisfy "not in (411, 413)" but are not "the guard let a
+    small call through untouched".
+    """
     client = _mount_client()
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_roles", "arguments": {}}}
 
     response = client.post("/mcp", headers=headers, json=body)
 
-    assert response.status_code not in (411, 413)
+    assert response.status_code == 500

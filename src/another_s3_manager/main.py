@@ -59,7 +59,7 @@ from another_s3_manager.auth import (
     verify_csrf_token,
     verify_password,
 )
-from another_s3_manager.config import load_config, resolve_presigned_ttls, save_config
+from another_s3_manager.config import load_config, resolve_max_file_size, resolve_presigned_ttls, save_config
 from another_s3_manager.constants import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     APP_DESCRIPTION,
@@ -285,18 +285,10 @@ app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION, lifespan=lifespan)
 # cap is guaranteed to exist on a bare `docker compose` deployment.
 
 
-def resolve_max_file_size() -> int:
-    """Resolve the upload size limit in bytes — the single source of truth.
-
-    Precedence: admin-editable config `max_file_size` → `MAX_FILE_SIZE` env
-    var → 100 MB default. Shared by the upload body-guard middleware and the
-    upload route handler so the two enforcement points can never drift.
-    """
-    config = load_config(force_reload=False)
-    max_file_size = config.get("max_file_size")
-    if max_file_size is None:
-        return int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
-    return int(max_file_size)
+# resolve_max_file_size() itself now lives in config.py (imported above) — it
+# used to be hand-copied in mcp_server.py too, and the two could silently
+# drift apart. Both main.py's guard/route and mcp_server.py's upload_file
+# tool now call the single config.py implementation.
 
 
 # Fixed headroom (bytes) added on top of the base64 inflation below, for the
@@ -375,7 +367,9 @@ async def _upload_body_guard(request: Request, call_next):
         # relocated from disk to metrics-registry RAM. Set once, before any of
         # the three reject responses below, so all of them benefit. Must match
         # the route decorator's path exactly: @app.post("/api/buckets/{bucket_name}/upload").
-        request.scope["upload_guard_path_template"] = "/api/buckets/{bucket_name}/upload"
+        # Generic key name (`guard_path_template`, not `upload_*`) because
+        # _mcp_body_guard below stamps the same key for the same reason.
+        request.scope["guard_path_template"] = "/api/buckets/{bucket_name}/upload"
 
         # 1. Auth-gate. has_valid_session is a pure JWT decode (no DB query),
         #    so it's safe to call synchronously off the event loop. It cannot
@@ -446,9 +440,26 @@ async def _mcp_body_guard(request: Request, call_next):
     equivalent cheap pre-body check to hoist in front of the read, and this
     guard's job is narrower anyway: bound the body size regardless of who is
     asking, not decide who is allowed to ask.
+
+    The `request.method == "POST"` scoping below is LOAD-BEARING, not an
+    incidental narrowing: the MCP streamable-HTTP transport's SSE event
+    stream (and its resumption stream) is a GET, and session teardown is a
+    DELETE. Only the SDK's single POST verb ever carries a JSON-RPC body, and
+    that POST always sets Content-Length (verified independently during
+    review — see tests/test_mcp_upload_guard.py's GET-exemption test for the
+    same reasoning spelled out from the test side). If this guard is ever
+    changed to apply to GET, a 411 on the SSE stream breaks EVERY MCP
+    session, for every agent — do not widen this beyond POST.
     """
     path = request.url.path
     if request.method == "POST" and (path == "/mcp" or path.startswith("/mcp/")):
+        # Stamp a BOUNDED path template into scope, same reasoning and same
+        # scope key as _upload_body_guard above: routing never runs for a
+        # guard-rejected request, so _http_metrics' route-less fallback would
+        # otherwise key on the concrete /mcp/<junk> path, minting one unbounded
+        # label series per distinct suffix an unauthenticated caller sends.
+        request.scope["guard_path_template"] = "/mcp"
+
         content_length = request.headers.get("content-length")
         try:
             declared_size = int(content_length) if content_length is not None else None
@@ -497,16 +508,17 @@ async def _http_metrics(request: Request, call_next):
     duration = time.perf_counter() - start
     # path_template — bounded cardinality. Routed requests always use the route
     # pattern. When routing never ran (no-route 404, or a request rejected by
-    # _upload_body_guard before call_next), prefer a guard-stamped template
-    # over the concrete path — the guard stamps request.scope["upload_guard_path_template"]
-    # for upload requests so an attacker varying the bucket name can't mint
-    # unbounded label series. Falls back to the actual path for a genuine
-    # no-route 404 (not guard-stamped).
+    # _upload_body_guard / _mcp_body_guard before call_next), prefer a
+    # guard-stamped template over the concrete path — both guards stamp
+    # request.scope["guard_path_template"] (bucket-upload and /mcp
+    # respectively) so an attacker varying the bucket name or the /mcp
+    # suffix can't mint unbounded label series. Falls back to the actual
+    # path for a genuine no-route 404 (not guard-stamped).
     route = request.scope.get("route")
     if route is not None:
         path_template = route.path
     else:
-        path_template = request.scope.get("upload_guard_path_template") or request.url.path
+        path_template = request.scope.get("guard_path_template") or request.url.path
     method = request.method
     status_code = str(response.status_code)
     http_requests_total.labels(method=method, path_template=path_template, status_code=status_code).inc()

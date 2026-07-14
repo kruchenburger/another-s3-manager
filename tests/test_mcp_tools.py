@@ -796,6 +796,44 @@ async def test_upload_file_returns_invalid_input_on_malformed_base64(alice_user,
     assert exc_info.value.code == "INVALID_INPUT"
 
 
+def test_estimate_base64_decoded_size_never_negative_on_pathological_padding():
+    """_estimate_base64_decoded_size's docstring says padding is capped at 2
+    trailing '=' characters, so a string with a much longer run of '=' must
+    not make the estimate go negative (the pre-fix bug: unbounded
+    str.rstrip("=") stripped the whole run, and length*3//4 - padding went
+    negative for a long enough run)."""
+    from another_s3_manager.mcp_server import _estimate_base64_decoded_size
+
+    pathological = "A" * 4 + "=" * 1_000_000
+    estimate = _estimate_base64_decoded_size(pathological)
+
+    assert estimate >= 0
+
+
+@pytest.mark.asyncio
+async def test_upload_file_pathological_padding_rejected_as_invalid_input_not_bypass(alice_user, tool_registry):
+    """A content_base64 with a pathological run of trailing '=' padding must
+    not sail past the FILE_TOO_LARGE estimate check via a negative estimate
+    (the bug the estimator's rstrip-bound fix closes) and must not crash —
+    it is correctly rejected by b64decode(validate=True) as malformed input,
+    same as any other malformed base64 string."""
+    uid, plaintext = alice_user
+    pathological = "A" * 4 + "=" * 1_000_000
+
+    with pytest.raises(McpError) as exc_info:
+        await _call(
+            tool_registry,
+            "upload_file",
+            _fake_request(plaintext),
+            role="Default",
+            bucket="b",
+            path="f.txt",
+            content_base64=pathological,
+        )
+
+    assert exc_info.value.code == "INVALID_INPUT"
+
+
 # ---------------------------------------------------------------------------
 # Response-bytes histogram (LLM-context proxy)
 # ---------------------------------------------------------------------------
