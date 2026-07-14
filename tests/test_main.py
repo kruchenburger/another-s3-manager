@@ -1498,14 +1498,36 @@ def test_validate_role_access_denied():
     assert exc.value.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_delete_file_root_path_forbidden(app_client):
+@pytest.mark.parametrize("raw_path", ["", "/", "//", "  /  ", "../"])
+def test_delete_file_root_path_forbidden(app_client, moto_s3, raw_path):
+    """The root-delete guard (`if not path: raise 400`) in main.py fires
+    BEFORE the trailing-slash restoration step that re-appends "/" after
+    sanitize_path strips it — that ORDERING is the entire reason an input
+    that sanitizes to "" can never be resurrected into "/", a bucket-root
+    recursive-delete prefix. The previous version of this test only covered
+    `path=""`, so a refactor that moved the restoration above the guard
+    would have stayed green right up until it deleted a whole bucket.
+
+    Parametrized over shapes that could plausibly collapse to "" or "/" —
+    bare empty, one or more bare slashes, a whitespace-padded slash, and a
+    traversal attempt — each seeded against a real (moto) bucket and
+    asserted to leave every object untouched. Checking only the response
+    status would still pass even if the delete had already happened; the
+    survival assertion is what actually proves the guard held."""
     _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="root-guard-bucket")
+    moto_s3.put_object(Bucket="root-guard-bucket", Key="keep-me.txt", Body=b"data")
+    moto_s3.put_object(Bucket="root-guard-bucket", Key="also-keep.txt", Body=b"data2")
+
     response = app_client.delete(
-        "/api/buckets/test-bucket/files",
-        params={"path": ""},
+        "/api/buckets/root-guard-bucket/files",
+        params={"path": raw_path},
         headers=headers,
     )
     assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="root-guard-bucket").get("Contents", [])}
+    assert remaining == {"keep-me.txt", "also-keep.txt"}
 
 
 def test_delete_file_disabled(app_client, mocker):

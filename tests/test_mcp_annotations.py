@@ -66,18 +66,26 @@ def test_delete_file_is_annotated_destructive():
 
 
 def test_delete_file_idempotent_hint_left_unset():
-    """A repeat delete_file on a SINGLE KEY actually SUCCEEDS: when the
-    target is already gone, delete_object_for_role's prefix listing comes
-    back empty, so the non-directory branch falls through to a plain S3
-    DeleteObject on that key — and AWS S3's DeleteObject returns 204 (no
-    error) for a key that doesn't exist, so deleted_count is 1 and the tool
-    reports success again on every repeat call. A repeat delete_file on a
-    DIRECTORY path (`path` ending in "/") behaves differently: an empty
-    prefix listing there leaves deleted_count at 0, which
-    delete_object_for_role turns into FileNotFoundError. Same tool, same
-    "target already gone" starting state, two different outcomes depending
-    on whether `path` names a file or a directory — not uniformly idempotent
-    across its argument space, so the hint stays unset."""
+    """A repeat delete_file now raises FileNotFoundError uniformly, whether
+    `path` names a single key or a directory: delete_object_for_role
+    establishes existence itself from a listing (single-key case: one
+    list_objects_v2(Prefix=path, MaxKeys=1) call, checked for an exact-match
+    Key; directory case: the paginated "prefix/" subtree listing) and raises
+    when nothing matches, regardless of which branch it came from.
+
+    (Pre-fix, the single-key branch instead fell through to a plain S3
+    DeleteObject when the listing came back empty — and real S3's
+    DeleteObject is idempotent-success, 204, even for a key that no longer
+    exists, so a repeat call silently reported success again. That
+    fall-through is gone: it was also why the original prefix-match bug
+    existed in the first place, since "hope DeleteObject raises for a
+    missing key" was the only existence check before this fix.)
+
+    The idempotentHint conclusion is unchanged (still left unset) but for a
+    simpler reason than before: it no longer needs the "two branches
+    disagree" argument, because they don't anymore — both raise. A tool that
+    errors on every repeat call for an already-deleted target is simply not
+    idempotent, so there is nothing to hint as true."""
     assert _annotations("delete_file").idempotentHint is None
 
 

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Deleting a file could silently delete its siblings too — including a
+  bucket-wipe from a single MCP call.** `delete_object_for_role` listed S3
+  with `Prefix=path` to find the object to delete, and — treating that as a
+  prefix match rather than an exact-key lookup — deleted every key the
+  listing returned, not just the one requested. Three call sites shared the
+  helper, so all three were affected:
+
+  - **Web UI:** deleting `report.pdf` in the file browser also destroyed
+    `report.pdf.bak` and `report.pdf.old` — anything whose key merely
+    started with the same string as the file you clicked delete on.
+  - **MCP `delete_file`:** the tool never called `sanitize_path`, so
+    `delete_file(path="")` reached the helper with an empty prefix, which
+    matched — and deleted — every key in the bucket. An agent could wipe an
+    entire bucket with a single empty-string argument. It now raises
+    `FILE_NOT_FOUND` instead.
+  - **MCP `copy_object(delete_source=True)`:** moving `notes.txt` to
+    `notes.txt.new` within the same bucket prefix-matched the copy's own
+    destination and deleted the file the move had just created, alongside
+    the intended source.
+
+  A single-key delete now keeps only the listing entry whose key matches the
+  requested path exactly; the recursive folder-delete behavior (`path`
+  ending in `/`) is unchanged.
+
+  **Behavior change MCP agents will notice:** a repeat `delete_file` call on
+  a key that's already gone used to return success (`count: 1`) — real S3's
+  `DeleteObject` doesn't error for a missing key, so the old code read that
+  as "nothing to do, all good." It now returns `FILE_NOT_FOUND`. An agent
+  that retries a `delete_file` call after a timeout will see an error where
+  it previously saw quiet success — this is intentional (existence is now
+  checked explicitly instead of assumed), but it is a visible change in
+  behavior for anything scripting against this tool.
+
+- A second bug was found while fixing the first: the web UI's delete route
+  sanitizes `path` before use, and that sanitization unconditionally strips
+  every leading/trailing slash — so a folder-delete request (signaled by a
+  trailing `/`) could never actually reach the delete helper as a folder
+  once the exact-match fix above landed; it would have 404'd instead. The
+  route now captures the trailing-slash signal from the raw query value
+  before sanitizing, and restores it afterward, so folder deletes keep
+  working through the web UI.
+
 ## [1.1.2] - 2026-07-14
 
 ### Fixed

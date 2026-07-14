@@ -1390,16 +1390,17 @@ def test_delete_object_for_role_single_file(mocker):
         return_value={"roles": [{"name": "RoleA", "type": "default"}]},
     )
     fake_client = mocker.MagicMock()
-    # Listing returns exactly the requested key (an exact match, not merely a
-    # prefix match) -> triggers the single delete_object path.
-    fake_paginator = mocker.MagicMock()
-    fake_paginator.paginate.return_value = [{"Contents": [{"Key": "file.txt"}]}]
-    fake_client.get_paginator.return_value = fake_paginator
+    # Single-key existence + exact-match check is now ONE list_objects_v2
+    # call (Prefix=path, MaxKeys=1), not a paginated walk -- its lone result
+    # is the exact key (an exact match, not merely a prefix match), which
+    # triggers the single delete_object path.
+    fake_client.list_objects_v2.return_value = {"Contents": [{"Key": "file.txt"}]}
     fake_client.delete_object.return_value = {}
     mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
 
     result = mod.delete_object_for_role("RoleA", "bucket", "file.txt", _make_user(allowed_roles=["RoleA"]))
     assert result["count"] == 1
+    fake_client.list_objects_v2.assert_called_once_with(Bucket="bucket", Prefix="file.txt", MaxKeys=1)
     fake_client.delete_object.assert_called_once_with(Bucket="bucket", Key="file.txt")
 
 
@@ -1415,9 +1416,28 @@ def test_delete_object_for_role_not_found(mocker):
     # DeleteObject is idempotent (it does NOT raise for a missing key), so
     # existence must be established from the listing itself, not by hoping
     # delete_object errors.
-    fake_paginator = mocker.MagicMock()
-    fake_paginator.paginate.return_value = []
-    fake_client.get_paginator.return_value = fake_paginator
+    fake_client.list_objects_v2.return_value = {"Contents": []}
+    mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
+
+    with pytest.raises(FileNotFoundError):
+        mod.delete_object_for_role("RoleA", "bucket", "gone.txt", _make_user(allowed_roles=["RoleA"]))
+    fake_client.delete_object.assert_not_called()
+
+
+def test_delete_object_for_role_single_file_prefix_match_not_exact(mocker):
+    """The single-key list_objects_v2(MaxKeys=1) call can return a key that
+    merely STARTS WITH the requested path (its lexicographically-nearest
+    match) when the exact key doesn't exist -- e.g. deleting "gone.txt" in a
+    bucket that only has "gone.txt.bak". That must still raise
+    FileNotFoundError and must NOT delete the sibling it happened to see."""
+    import another_s3_manager.s3_client as mod
+
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}]},
+    )
+    fake_client = mocker.MagicMock()
+    fake_client.list_objects_v2.return_value = {"Contents": [{"Key": "gone.txt.bak"}]}
     mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
 
     with pytest.raises(FileNotFoundError):

@@ -977,6 +977,8 @@ async def delete_file(role: str, bucket: str, path: str) -> dict:
         assert_write_allowed(token, "delete_file", config)
         try:
             _s3_client.delete_object_for_role(role, bucket, path, user)
+        except FileNotFoundError:
+            raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
         except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
