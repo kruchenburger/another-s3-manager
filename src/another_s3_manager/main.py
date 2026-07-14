@@ -299,6 +299,40 @@ def resolve_max_file_size() -> int:
     return int(max_file_size)
 
 
+# Fixed headroom (bytes) added on top of the base64 inflation below, for the
+# JSON-RPC envelope wrapped around content_base64: `{"jsonrpc":"2.0","id":...,
+# "method":"tools/call","params":{"name":"upload_file","arguments":{"role":
+# ...,"bucket":...,"path":...,"content_base64":"..."}}}` plus whatever
+# role/bucket/path strings the caller passes. Generous on purpose — role,
+# bucket, and path names are short in practice, and the cost of this headroom
+# is a few KB of RAM per request, not per byte of upload.
+MCP_JSON_ENVELOPE_OVERHEAD_BYTES = 8192
+
+
+def resolve_mcp_body_max_bytes() -> int:
+    """Bound the /mcp request body size so a legitimate upload_file call fits.
+
+    upload_file carries the file's bytes as base64 in `content_base64` — 4/3
+    of the raw byte count (rounded up to a multiple of 4 for padding) — inside
+    a JSON-RPC envelope. A body cap set equal to max_file_size would reject
+    uploads that are well WITHIN the operator's configured limit, because the
+    wire body is always larger than the decoded payload it carries.
+
+    DO NOT simplify this to `return resolve_max_file_size()` — that would
+    silently break every upload_file call whose file is bigger than ~75% of
+    max_file_size (the base64 overhead alone already exceeds a same-sized cap;
+    see the module's upload-guard tests for the regression this closes).
+
+    Every other MCP tool call (list_roles, list_buckets, delete_file, ...) is
+    small — role/bucket/path strings, no binary payload — and never
+    approaches this bound regardless of how generous it is.
+    """
+    max_file_size = resolve_max_file_size()
+    # ceil(n / 3) * 4 — exact base64-with-padding length for n raw bytes.
+    base64_len = ((max_file_size + 2) // 3) * 4
+    return base64_len + MCP_JSON_ENVELOPE_OVERHEAD_BYTES
+
+
 # Upload body-guard — MUST stay registered BEFORE _http_metrics in module
 # order. Starlette's add_middleware() prepends, so the LAST-registered
 # middleware is outermost; registering the guard first keeps _http_metrics
@@ -381,6 +415,63 @@ async def _upload_body_guard(request: Request, call_next):
             return JSONResponse(
                 status_code=413,
                 content={"detail": f"File size exceeds maximum allowed size of {size_mb}MB"},
+            )
+    return await call_next(request)
+
+
+# MCP body-guard — MUST stay registered BEFORE _http_metrics in module order,
+# same reasoning as _upload_body_guard above: the LAST-registered middleware
+# is outermost, so registering this one first keeps _http_metrics wrapped
+# AROUND it and a guard-rejected /mcp request is still counted in
+# as3m_http_requests_total.
+@app.middleware("http")
+async def _mcp_body_guard(request: Request, call_next):
+    """Reject oversize /mcp request bodies BEFORE they are read off the socket.
+
+    By the time an MCP tool body runs (including upload_file's own
+    FILE_TOO_LARGE check — see mcp_server.py), the JSON-RPC request has
+    already been fully read and parsed into a Python str/dict by FastMCP's
+    Streamable HTTP transport. A tool-level check cannot prevent that RAM
+    from being spent; only a transport-level body bound can. This mirrors
+    _upload_body_guard's posture for the web upload route: require
+    Content-Length (closes the chunked-transfer bypass — a body with no
+    declared size can't be size-checked before reading it) and 413 above a
+    ceiling derived from max_file_size (see resolve_mcp_body_max_bytes) before
+    call_next ever runs.
+
+    No auth-gate here, unlike _upload_body_guard: the web guard can cheaply
+    pre-check the session cookie with has_valid_session (a pure JWT decode).
+    MCP auth is a Bearer token validated per-tool-call inside the tool body
+    (authenticate_mcp_request, which does a DB lookup) — there is no
+    equivalent cheap pre-body check to hoist in front of the read, and this
+    guard's job is narrower anyway: bound the body size regardless of who is
+    asking, not decide who is allowed to ask.
+    """
+    path = request.url.path
+    if request.method == "POST" and (path == "/mcp" or path.startswith("/mcp/")):
+        content_length = request.headers.get("content-length")
+        try:
+            declared_size = int(content_length) if content_length is not None else None
+        except ValueError:
+            declared_size = None
+        # Same reasoning as _upload_body_guard: int("-5") is neither None nor
+        # > the ceiling, so a negative declared size must be rejected explicitly
+        # rather than relying on the framing layer to have already caught it.
+        if declared_size is None or declared_size < 0:
+            return JSONResponse(
+                status_code=411,
+                content={"detail": "Content-Length header is required for /mcp requests"},
+            )
+
+        max_body_bytes = resolve_mcp_body_max_bytes()
+        if declared_size > max_body_bytes:
+            # Same counter/reason the web upload guard uses — both are
+            # "an upload was refused before reaching S3", just via different
+            # transports.
+            upload_rejected_total.labels(reason="size_limit").inc()
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"Request body exceeds maximum allowed size of {max_body_bytes} bytes"},
             )
     return await call_next(request)
 

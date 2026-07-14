@@ -9,6 +9,7 @@ import binascii
 import hashlib
 import json
 import logging
+import os
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -38,6 +39,7 @@ from another_s3_manager.metrics import (
     mcp_tool_calls_total,
     mcp_tool_duration_seconds,
     mcp_writes_denied_total,
+    upload_rejected_total,
 )
 
 logger = logging.getLogger(__name__)
@@ -880,6 +882,38 @@ async def bucket_summary(role: str, bucket: str, path: str = "") -> dict:
         mcp_tool_duration_seconds.labels(tool="bucket_summary").observe(time.perf_counter() - start)
 
 
+def _resolve_max_file_size(config: dict) -> int:
+    """Resolve the operator's upload size limit in bytes.
+
+    Precedence: admin-editable config `max_file_size` -> `MAX_FILE_SIZE` env
+    var -> 100 MB default — the SAME precedence main.resolve_max_file_size()
+    uses for the web upload route. Duplicated rather than imported: main.py
+    imports this module (for get_mcp_app()), so importing main.py from here
+    would be circular. Keep this in sync with main.resolve_max_file_size() if
+    that precedence ever changes.
+    """
+    max_file_size = config.get("max_file_size")
+    if max_file_size is None:
+        return int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
+    return int(max_file_size)
+
+
+def _estimate_base64_decoded_size(content_base64: str) -> int:
+    """Estimate the decoded byte size of a base64 string WITHOUT decoding it.
+
+    Base64 encodes 3 raw bytes as 4 characters, padded with '=' at the end so
+    the encoded length is always a multiple of 4. This inverts that: strip up
+    to two trailing '=' padding characters from the count, then convert the
+    remaining character count back to bytes. Deliberately approximate (it
+    does not validate the string is well-formed base64 — that check still
+    happens in b64decode afterward) — its only job is to reject an oversized
+    payload BEFORE paying for the full decode.
+    """
+    length = len(content_base64)
+    padding = len(content_base64) - len(content_base64.rstrip("="))
+    return (length * 3 // 4) - padding
+
+
 # ------------------------------------------------------------------
 # upload_file — upload a file to a bucket. Content as base64.
 # WRITE TOOL: gated by assert_write_allowed.
@@ -888,13 +922,38 @@ async def bucket_summary(role: str, bucket: str, path: str = "") -> dict:
 async def upload_file(role: str, bucket: str, path: str, content_base64: str) -> dict:
     """Upload a file to a bucket (WRITE operation — creates or overwrites the
     object at `path`). Content must be base64-encoded. Blocked for read-only
-    tokens and when the server disables MCP writes."""
+    tokens and when the server disables MCP writes. Rejected with
+    FILE_TOO_LARGE before decoding if the payload exceeds the server's
+    max_file_size limit."""
     error_code = "none"
     start = time.perf_counter()
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         config = _config_module.load_config(force_reload=False)
         assert_write_allowed(token, "upload_file", config)
+
+        # Layer 2 (defense in depth): reject an oversized upload BEFORE
+        # b64decode ever runs — the real transport-level bound lives in
+        # main.py's _mcp_body_guard middleware (Layer 1), which rejects the
+        # request before its body is even read off the socket. This check
+        # exists for the cases the middleware ceiling deliberately allows
+        # through (its ceiling has JSON-envelope headroom baked in) and,
+        # more importantly, gives the AGENT an actionable error instead of a
+        # transport-level rejection it cannot interpret.
+        max_file_size = _resolve_max_file_size(config)
+        estimated_size = _estimate_base64_decoded_size(content_base64)
+        if estimated_size > max_file_size:
+            upload_rejected_total.labels(reason="size_limit").inc()
+            raise McpError(
+                "FILE_TOO_LARGE",
+                f"Upload of ~{estimated_size} bytes exceeds the server's max_file_size limit of {max_file_size}",
+                {
+                    "estimated_size": estimated_size,
+                    "max_file_size": max_file_size,
+                    "hint": "Reduce the file size, or ask the operator to raise max_file_size.",
+                },
+            )
+
         try:
             content = base64.b64decode(content_base64, validate=True)
         except (binascii.Error, ValueError) as e:
