@@ -19,12 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tool: it can walk up to `mcp_summary_max_keys` (default 50,000) keys —
   roughly 50 sequential S3 requests — during which the web UI was frozen for
   everyone. Every blocking call site (7 in the web API, 13 across the MCP
-  tools) now runs in a worker thread instead, so a slow or unreachable S3
+  tools; the web upload route was already done) now runs in a worker thread instead, so a slow or unreachable S3
   endpoint only delays the request that's actually waiting on it. Streamed
   downloads were already partially offloaded (Starlette threads each chunk
   read) — only the initial metadata fetch needed the same fix. No behavior,
   arguments, or error responses changed; this is purely about which thread
   the network call runs on.
+
+  The failure mode changes rather than disappearing: enough simultaneous slow
+  S3 operations can now exhaust the worker pool and make requests _queue_,
+  where before they _froze_. That is a strictly better place to be, but if you
+  run this at a scale where it bites, note that raising the thread count alone
+  will not help — botocore caps each role's connection pool at 10, so extra
+  threads churn connections rather than adding throughput. Raise both together.
 
 - **Deleting a file could silently delete its siblings too — including a
   bucket-wipe from a single MCP call.** `delete_object_for_role` listed S3
