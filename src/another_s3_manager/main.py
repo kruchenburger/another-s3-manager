@@ -2451,6 +2451,12 @@ async def delete_file(
     if disable_deletion_env or disable_deletion_config:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File deletion is disabled by administrator")
     try:
+        # A trailing "/" is the directory-delete signal delete_object_for_role
+        # relies on (recursive delete vs. exact single-key delete) — capture it
+        # from the RAW query value before sanitize_path strips every leading
+        # and trailing "/" for path-traversal safety.
+        wants_recursive_delete = path.rstrip().endswith("/")
+
         # Validate and sanitize inputs
         try:
             bucket_name = sanitize_bucket_name(bucket_name)
@@ -2461,10 +2467,20 @@ async def delete_file(
         if not path:
             raise HTTPException(status_code=400, detail="Cannot delete root path")
 
+        # Restore the directory signal sanitize_path just stripped. Without
+        # this, a folder delete would reach delete_object_for_role as a bare
+        # key (no trailing slash) and either 404 (exact-key miss) or, pre-fix,
+        # silently prefix-match and delete unrelated siblings. Guarded by
+        # `not path.endswith("/")` so this stays a no-op if sanitize_path ever
+        # stops stripping the trailing slash (e.g. under test monkeypatching).
+        if wants_recursive_delete and not path.endswith("/"):
+            path = path + "/"
+
         # Delegate to s3_client.delete_object_for_role. The helper does its own
-        # role/bucket access validation, paginates list_objects_v2, falls back
-        # to delete_object for single-file paths, and raises FileNotFoundError
-        # when nothing matches. Returns {"message": ..., "count": N}.
+        # role/bucket access validation, recursively deletes everything under
+        # `path` when it ends with "/", otherwise deletes exactly that one key
+        # (no prefix matching), and raises FileNotFoundError when nothing
+        # matches. Returns {"message": ..., "count": N}.
         return delete_object_for_role(role, bucket_name, path, current_user)
     except HTTPException:
         raise

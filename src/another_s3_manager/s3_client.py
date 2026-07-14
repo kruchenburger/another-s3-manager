@@ -2091,12 +2091,17 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
     Delete a file or recursively delete a directory from `bucket`.
 
     `path` ending with "/" is treated as a directory (recursive delete).
+    Without a trailing "/", exactly ONE key is deleted — the key must match
+    `path` verbatim. This is NOT a prefix match: deleting "notes.txt" must
+    never also remove "notes.txt.bak" just because the latter starts with the
+    former (a real data-loss bug this function used to have, when it treated
+    the single-file case as "delete everything list_objects_v2 returned for
+    Prefix=path").
+
     Raises PermissionError on role/bucket access violation.
     Raises FileNotFoundError if the object/directory does not exist.
     Returns {"message": ..., "count": N}.
     """
-    from botocore.exceptions import ClientError as _ClientError
-
     from another_s3_manager.metrics import s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
@@ -2107,33 +2112,50 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
 
     def do_delete(s3_client):
         deleted_count = 0
-        paginator = s3_client.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=bucket, Prefix=prefix + ("/" if is_directory else ""))
 
-        objects_to_delete = []
-        for page in pages:
-            if "Contents" in page:
-                for obj in page["Contents"]:
-                    objects_to_delete.append({"Key": obj["Key"]})
+        if is_directory:
+            # Directory delete lists the "prefix/" subtree and takes every key
+            # under it (recursive) — this genuinely needs every page.
+            paginator = s3_client.get_paginator("list_objects_v2")
+            pages = paginator.paginate(Bucket=bucket, Prefix=prefix + "/")
 
-        if not is_directory and not objects_to_delete:
-            try:
-                s3_client.delete_object(Bucket=bucket, Key=prefix)
-                deleted_count = 1
-            except _ClientError as e:
-                error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
-                if error_code in ("404", "NoSuchKey"):
-                    raise FileNotFoundError(f"File or directory '{path}' not found") from e
-                raise
+            objects_to_delete = [{"Key": obj["Key"]} for page in pages for obj in page.get("Contents", []) or []]
+
+            if not objects_to_delete:
+                # Note: we deliberately do NOT fall back to a blind
+                # delete_object() call here and hope it raises for a missing
+                # key — real S3's DeleteObject is idempotent and succeeds
+                # silently even when the key does not exist, so existence
+                # must be established from the listing above.
+                raise FileNotFoundError(f"File or directory '{path}' not found")
+
+            for i in range(0, len(objects_to_delete), 1000):
+                batch = objects_to_delete[i : i + 1000]
+                s3_client.delete_objects(Bucket=bucket, Delete={"Objects": batch, "Quiet": True})
+                deleted_count += len(batch)
         else:
-            if objects_to_delete:
-                for i in range(0, len(objects_to_delete), 1000):
-                    batch = objects_to_delete[i : i + 1000]
-                    s3_client.delete_objects(Bucket=bucket, Delete={"Objects": batch, "Quiet": True})
-                    deleted_count += len(batch)
+            # Single-key existence + exact-match check in ONE list call
+            # instead of paginating the entire prefix subtree. S3 returns
+            # Contents in UTF-8 lexicographic key order, and a string that is
+            # a strict prefix of another always sorts before it — so if
+            # `prefix` exists as an exact key, it is necessarily the FIRST
+            # result of Prefix=prefix, MaxKeys=1. That settles existence
+            # without walking hundreds of pages under a hot prefix (e.g.
+            # deleting "logs/2026" out of 200k keys named "logs/2026...").
+            # head_object(Bucket, Key=prefix) would work too (one request,
+            # no listing) — list_objects_v2 is used here so a NoSuchKey
+            # ClientError never has to be threaded through as "not found"
+            # for this branch, keeping existence-detection uniform with the
+            # directory branch above (both derive it from a Contents list).
+            response = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=1)
+            contents = response.get("Contents", []) or []
+            if not contents or contents[0]["Key"] != prefix:
+                raise FileNotFoundError(f"File or directory '{path}' not found")
 
-        if deleted_count == 0:
-            raise FileNotFoundError(f"File or directory '{path}' not found")
+            # Exact match confirmed — delete_object is equivalent to, and
+            # cheaper than, the batch API for a single key.
+            s3_client.delete_object(Bucket=bucket, Key=prefix)
+            deleted_count = 1
 
         s3_objects_total.labels(
             role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="delete"

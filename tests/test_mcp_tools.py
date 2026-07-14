@@ -540,6 +540,40 @@ async def test_delete_file_no_auth(tool_registry):
     assert exc_info.value.code == "INVALID_TOKEN"
 
 
+@pytest.mark.asyncio
+async def test_delete_file_empty_path_does_not_wipe_bucket(alice_user, tool_registry, moto_s3):
+    """Regression for the bucket-wipe bug: delete_file never called
+    sanitize_path, so path="" reached delete_object_for_role verbatim. Before
+    the exact-match fix, listing with Prefix="" matches every key in the
+    bucket, and the (then-missing) existence check meant that whole listing
+    was handed to the batch-delete branch — an agent could wipe an entire
+    bucket with an empty path. This runs the REAL helper against a moto
+    bucket (no mocking delete_object_for_role) and asserts every object
+    survives. Post-fix, list_objects_v2(Prefix="", MaxKeys=1) returns the
+    lexicographically-first key in the bucket, which is never equal to "",
+    so the single-key branch raises FileNotFoundError — mapped here to
+    McpError(FILE_NOT_FOUND) — instead of deleting anything."""
+    uid, plaintext = alice_user
+    moto_s3.create_bucket(Bucket="wipe-guard-bucket")
+    moto_s3.put_object(Bucket="wipe-guard-bucket", Key="alpha.txt", Body=b"a")
+    moto_s3.put_object(Bucket="wipe-guard-bucket", Key="beta.txt", Body=b"b")
+    moto_s3.put_object(Bucket="wipe-guard-bucket", Key="nested/gamma.txt", Body=b"c")
+
+    with pytest.raises(McpError) as exc_info:
+        await _call(
+            tool_registry,
+            "delete_file",
+            _fake_request(plaintext),
+            role="Default",
+            bucket="wipe-guard-bucket",
+            path="",
+        )
+    assert exc_info.value.code == "FILE_NOT_FOUND"
+
+    remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="wipe-guard-bucket").get("Contents", [])}
+    assert remaining == {"alpha.txt", "beta.txt", "nested/gamma.txt"}
+
+
 # ---------------------------------------------------------------------------
 # _RequestCaptureMiddleware unit test
 # ---------------------------------------------------------------------------
