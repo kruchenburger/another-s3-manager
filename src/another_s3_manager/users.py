@@ -555,7 +555,14 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
             user.default_role = kwargs["default_role"]
         if "allowed_roles" in kwargs:
             new_roles = list(kwargs["allowed_roles"])
+            # Flush after clear() so the orphan DELETEs hit the DB before the new
+            # INSERTs — otherwise re-setting the same role(s) (a no-op edit, or any
+            # edit that keeps a role in the set) collides on the
+            # uq_user_role(user_id, role_name) UNIQUE constraint, because SQLAlchemy
+            # emits INSERTs before processing the orphan-disconnect. Same fix as
+            # save_users()'s bulk-upsert path.
             user.roles.clear()
+            session.flush()
             for role_name in new_roles:
                 user.roles.append(UserRole(role_name=role_name))
             user.default_role = _reconcile_default_role(user.default_role, new_roles)

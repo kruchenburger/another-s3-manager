@@ -103,6 +103,7 @@ from another_s3_manager.s3_client import (
 )
 from another_s3_manager.users import (
     count_users,
+    get_user_by_username,
     get_users_for_admin,
     load_bans,
     load_users,
@@ -592,8 +593,17 @@ async def login(
                 detail=f"Account is banned. Try again in {remaining} minutes.",
             )
 
-        users = load_users()
-        user = next((u for u in users.get("users", []) if u.get("username") == username), None)
+        user = get_user_by_username(username)
+        if user is None and count_users() == 0:
+            # Fresh deployment, empty users table: load_users() lazily seeds
+            # the default admin from ADMIN_PASSWORD on its first call — that
+            # bootstrap has to happen somewhere, and login is the only
+            # request a truly empty install can make before anyone exists to
+            # log in as. Gated on count_users() (a cheap COUNT query) so this
+            # full load only ever runs once, not on every wrong-username
+            # login attempt against a populated table.
+            load_users()
+            user = get_user_by_username(username)
 
         if user is None:
             record_login_attempt(username, False)
@@ -734,6 +744,13 @@ async def create_user(
     csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Create a new user (admin only)"""
+    # Note: this still loads the full user list rather than a targeted lookup.
+    # save_users() below has full-replace semantics (any user present in the
+    # DB but absent from the list it's given gets deleted), so the full list
+    # has to be loaded anyway to append the new user and save it back without
+    # losing everyone else. The existence check just below is a free in-memory
+    # scan over that already-loaded list, not a second DB query. Admin-only,
+    # low-frequency — not the per-request hot path this fix targets.
     users = load_users()
 
     # Check if user already exists
@@ -806,10 +823,7 @@ async def update_user_password(
     if len(payload.password.strip()) == 0:
         raise HTTPException(status_code=400, detail="Password cannot be empty")
 
-    users = load_users()
-    user = next((u for u in users.get("users", []) if u.get("username") == username), None)
-
-    if not user:
+    if not get_user_by_username(username):
         raise HTTPException(status_code=404, detail="User not found")
 
     _enforce_password_policy(payload.password)
@@ -817,10 +831,17 @@ async def update_user_password(
     # Hash password using auth module
     hashed_password = hash_password(payload.password)
 
-    user["password_hash"] = hashed_password
-    user["must_change_password"] = payload.must_change_password
-    user["password_set_via"] = PASSWORD_SET_VIA_UI
-    save_users(users)
+    # Targeted single-row update — this only touches the one user being reset,
+    # not the whole table (load_users()/save_users() would load and rewrite
+    # every user just to change one password).
+    from another_s3_manager.users import update_user as users_update_user
+
+    users_update_user(
+        username,
+        password_hash=hashed_password,
+        must_change_password=payload.must_change_password,
+        password_set_via=PASSWORD_SET_VIA_UI,
+    )
 
     return AdminResetPasswordResponse(message=f"Password updated successfully for user {username}")
 
@@ -876,8 +897,7 @@ async def change_my_password(
     # Re-fetch the password hash from storage — current_user dict from the JWT
     # path doesn't carry it (and shouldn't).
     username = current_user.get("username")
-    users = load_users()
-    user = next((u for u in users.get("users", []) if u.get("username") == username), None)
+    user = get_user_by_username(username)
     if not user:
         # Defensive: should be unreachable since get_current_user already resolved the user.
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
@@ -1255,10 +1275,7 @@ async def update_user(
     is_admin_raw = form.get("is_admin")
     allowed_roles_raw = form.get("allowed_roles")
 
-    users = load_users()
-    user = next((u for u in users.get("users", []) if u.get("username") == username), None)
-
-    if not user:
+    if not get_user_by_username(username):
         raise HTTPException(status_code=404, detail="User not found")
 
     # Coerce only when the form value is a non-empty string. An empty value
@@ -1277,17 +1294,28 @@ async def update_user(
             detail="You can't remove your own admin rights.",
         )
 
+    update_kwargs: Dict[str, Any] = {}
     if is_admin is not None:
-        user["is_admin"] = is_admin
+        update_kwargs["is_admin"] = is_admin
 
     # Presence of the form key means the client wants to set roles — possibly
     # to an empty list. Absence means leave the field alone.
     if "allowed_roles" in form:
         raw = str(allowed_roles_raw or "")
         roles_list = [r.strip() for r in raw.split(",") if r.strip()]
-        user["allowed_roles"] = roles_list
+        update_kwargs["allowed_roles"] = roles_list
 
-    save_users(users)
+    if update_kwargs:
+        # Targeted single-row update — this only touches the one user being
+        # edited, not the whole table (load_users()/save_users() would load
+        # and rewrite every user just to change one).
+        from another_s3_manager.users import update_user as users_update_user
+
+        try:
+            users_update_user(username, **update_kwargs)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="User not found") from exc
+
     return {"message": f"User {username} updated successfully"}
 
 
@@ -1303,14 +1331,16 @@ async def update_user_theme(
     if theme not in ["light", "dark"]:
         raise HTTPException(status_code=400, detail="Theme must be 'light' or 'dark'")
 
-    users = load_users()
-    user = next((u for u in users.get("users", []) if u.get("username") == current_user.get("username")), None)
-
-    if not user:
+    username = current_user.get("username")
+    if not get_user_by_username(username):
         raise HTTPException(status_code=404, detail="User not found")
 
-    user["theme"] = theme
-    save_users(users)
+    # Targeted single-row update — this only touches the caller's own row,
+    # not the whole table (load_users()/save_users() would load and rewrite
+    # every user just to change one theme preference).
+    from another_s3_manager.users import update_user as users_update_user
+
+    users_update_user(username, theme=theme)
 
     return {"message": f"Theme updated to {theme}", "theme": theme}
 
@@ -1326,9 +1356,13 @@ async def delete_user(
     if username == current_user.get("username"):
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
 
-    users = load_users()
-    users["users"] = [u for u in users.get("users", []) if u.get("username") != username]
-    save_users(users)
+    # Targeted single-row delete (no-op if already missing) — this only
+    # touches the one user being removed, not the whole table
+    # (load_users()/save_users() would load and rewrite every remaining user
+    # just to delete one).
+    from another_s3_manager.users import delete_user as users_delete_user
+
+    users_delete_user(username)
 
     return {"message": f"User {username} deleted successfully"}
 
@@ -1463,8 +1497,7 @@ async def get_config(
         return safe_config
 
     # For regular users, filter roles by permissions
-    users = load_users()
-    user = next((u for u in users.get("users", []) if u.get("username") == current_user.get("username")), None)
+    user = get_user_by_username(current_user.get("username"))
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -1871,9 +1904,9 @@ def validate_role_access(role_name: Optional[str], current_user: Dict[str, Any])
     if current_user.get("is_admin", False):
         return role_name
 
-    # Check if user has access to this role
-    users = load_users()
-    user = next((u for u in users.get("users", []) if u.get("username") == current_user.get("username")), None)
+    # Check if user has access to this role — targeted lookup, not a full-table
+    # load_users() scan (this runs on most bucket/file requests for non-admins).
+    user = get_user_by_username(current_user.get("username"))
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -2223,7 +2256,7 @@ def get_user_for_download(token: Optional[str] = Query(None), request: Request =
 
     from another_s3_manager.auth import get_jwt_secret_key
     from another_s3_manager.constants import JWT_ALGORITHM
-    from another_s3_manager.users import load_users
+    from another_s3_manager.users import get_user_by_username
 
     # Try token from URL first (for direct link downloads without buffering)
     if token:
@@ -2231,8 +2264,9 @@ def get_user_for_download(token: Optional[str] = Query(None), request: Request =
             payload = jwt.decode(token, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
             username = payload.get("sub")
             if username:
-                users = load_users()
-                user = next((u for u in users.get("users", []) if u.get("username") == username), None)
+                # Targeted lookup — this runs on every download request, so a
+                # load_users() full-table scan would be an O(N) DB read per download.
+                user = get_user_by_username(username)
                 if user:
                     user["csrf_token"] = payload.get("csrf_token")
                     return user
@@ -2255,8 +2289,7 @@ def get_user_for_download(token: Optional[str] = Query(None), request: Request =
                 payload = jwt.decode(candidate, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
                 username = payload.get("sub")
                 if username:
-                    users = load_users()
-                    user = next((u for u in users.get("users", []) if u.get("username") == username), None)
+                    user = get_user_by_username(username)
                     if user:
                         user["csrf_token"] = payload.get("csrf_token")
                         return user

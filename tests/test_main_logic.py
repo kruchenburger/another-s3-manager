@@ -106,16 +106,12 @@ async def test_get_config_non_admin_filters_roles(monkeypatch, reload_main):
 
     patch_load_config(monkeypatch, main, base_config)
 
-    users_data = {
-        "users": [
-            {
-                "username": "demo",
-                "allowed_roles": ["RoleB"],
-            }
-        ]
+    user_dict = {
+        "username": "demo",
+        "allowed_roles": ["RoleB"],
     }
 
-    monkeypatch.setattr(main, "load_users", lambda: copy.deepcopy(users_data))
+    monkeypatch.setattr(main, "get_user_by_username", lambda username: copy.deepcopy(user_dict))
 
     result = await main.get_config(False, {"username": "demo", "is_admin": False})
 
@@ -133,7 +129,7 @@ async def test_get_config_user_missing(monkeypatch, reload_main):
     }
 
     patch_load_config(monkeypatch, main, base_config)
-    monkeypatch.setattr(main, "load_users", lambda: {"users": []})
+    monkeypatch.setattr(main, "get_user_by_username", lambda username: None)
 
     with pytest.raises(HTTPException) as exc:
         await main.get_config(False, {"username": "ghost", "is_admin": False})
@@ -143,16 +139,12 @@ async def test_get_config_user_missing(monkeypatch, reload_main):
 def test_validate_role_access_denied(monkeypatch, reload_main):
     main = reload_main
 
-    users_data = {
-        "users": [
-            {
-                "username": "demo",
-                "allowed_roles": ["RoleA"],
-            }
-        ]
+    user_dict = {
+        "username": "demo",
+        "allowed_roles": ["RoleA"],
     }
 
-    monkeypatch.setattr(main, "load_users", lambda: copy.deepcopy(users_data))
+    monkeypatch.setattr(main, "get_user_by_username", lambda username: copy.deepcopy(user_dict))
 
     with pytest.raises(HTTPException) as exc:
         main.validate_role_access("RoleB", {"username": "demo", "is_admin": False})
@@ -162,7 +154,7 @@ def test_validate_role_access_denied(monkeypatch, reload_main):
 def test_validate_role_access_user_missing(monkeypatch, reload_main):
     main = reload_main
 
-    monkeypatch.setattr(main, "load_users", lambda: {"users": []})
+    monkeypatch.setattr(main, "get_user_by_username", lambda username: None)
 
     with pytest.raises(HTTPException) as exc:
         main.validate_role_access("RoleA", {"username": "demo", "is_admin": False})
@@ -184,16 +176,29 @@ def test_validate_role_access_none(monkeypatch, reload_main):
 def test_validate_role_access_allowed(monkeypatch, reload_main):
     main = reload_main
 
-    users_data = {
-        "users": [
-            {
-                "username": "demo",
-                "allowed_roles": ["RoleA"],
-            }
-        ]
+    user_dict = {
+        "username": "demo",
+        "allowed_roles": ["RoleA"],
     }
 
-    monkeypatch.setattr(main, "load_users", lambda: copy.deepcopy(users_data))
+    monkeypatch.setattr(main, "get_user_by_username", lambda username: copy.deepcopy(user_dict))
+
+    assert main.validate_role_access("RoleA", {"username": "demo", "is_admin": False}) == "RoleA"
+
+
+def test_validate_role_access_never_calls_load_users(monkeypatch, reload_main):
+    """validate_role_access runs on most bucket/file requests for non-admin
+    users. Assert it uses the targeted get_user_by_username() lookup instead
+    of loading every user row via load_users()."""
+    main = reload_main
+
+    user_dict = {"username": "demo", "allowed_roles": ["RoleA"]}
+    monkeypatch.setattr(main, "get_user_by_username", lambda username: copy.deepcopy(user_dict))
+
+    def _boom():
+        raise AssertionError("validate_role_access must not call load_users()")
+
+    monkeypatch.setattr(main, "load_users", _boom)
 
     assert main.validate_role_access("RoleA", {"username": "demo", "is_admin": False}) == "RoleA"
 

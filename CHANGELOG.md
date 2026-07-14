@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every authenticated request loaded every user in the database.** On an
+  instance with hundreds or thousands of users, each request — web and API
+  alike — was noticeably slower than it needed to be, because the
+  authentication dependency loaded the *entire* users table (plus each
+  user's roles) just to find the one user who made the request, then
+  discarded the rest. The same "load everyone, scan for one" pattern showed
+  up on several other request paths: downloading a file, checking role
+  access on a bucket/file listing, reading `/api/config`, changing your own
+  password, and the login/brute-force-ban paths. All of these now do a
+  single targeted lookup by username instead. Admin bulk actions that
+  genuinely need every user (creating a user, the one-time legacy
+  `default_role` migration) are unaffected. Also removed a dead
+  "theme migration" code branch that, had it ever fired, would have
+  rewritten every user in the database on a plain profile-fetch request —
+  it never fires (the theme field is always present) and is gone now,
+  along with the last usage that required loading the whole table just to
+  reach it.
+
 - **Deleting a file could silently delete its siblings too — including a
   bucket-wipe from a single MCP call.** `delete_object_for_role` listed S3
   with `Prefix=path` to find the object to delete, and — treating that as a

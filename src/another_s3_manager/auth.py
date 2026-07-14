@@ -134,9 +134,16 @@ def has_valid_session(request: Request) -> bool:
 
 
 def get_current_user(request: Request) -> Dict[str, Any]:
-    """Get current authenticated user from JWT token in httpOnly cookie."""
+    """Get current authenticated user from JWT token in httpOnly cookie.
+
+    Uses the targeted `get_user_by_username` lookup (a single indexed query)
+    rather than loading every user row — this dependency runs on every
+    authenticated request, so an O(N) `load_users()` scan would mean loading
+    the entire users table (plus a roles join) just to find the one user who
+    made the request.
+    """
     # Import here to avoid circular dependency
-    from another_s3_manager.users import load_users, save_users
+    from another_s3_manager.users import get_user_by_username
 
     token = request.cookies.get("access_token")
     if not token:
@@ -158,8 +165,7 @@ def get_current_user(request: Request) -> Dict[str, Any]:
             detail="Invalid authentication credentials",
         )
 
-    users = load_users()
-    user = next((u for u in users.get("users", []) if u.get("username") == username), None)
+    user = get_user_by_username(username)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -168,15 +174,6 @@ def get_current_user(request: Request) -> Dict[str, Any]:
 
     # Add CSRF token from JWT to user dict for validation
     user["csrf_token"] = payload.get("csrf_token")
-
-    # Ensure theme field exists (migration for old users)
-    if "theme" not in user:
-        user["theme"] = "auto"
-        # Update in users file
-        for u in users.get("users", []):
-            if u.get("username") == username:
-                u["theme"] = "auto"
-        save_users(users)
 
     return user
 
@@ -234,7 +231,7 @@ def record_login_attempt(username: str, success: bool) -> None:
     # Import here to avoid circular dependency
     from datetime import datetime
 
-    from another_s3_manager.users import load_bans, load_users, save_bans
+    from another_s3_manager.users import count_users, get_user_by_username, load_bans, load_users, save_bans
 
     if username not in _login_attempts:
         _login_attempts[username] = {"attempts": [], "failed_count": 0}
@@ -258,10 +255,17 @@ def record_login_attempt(username: str, success: bool) -> None:
 
         # Ban if too many failures — but never ban an admin (DoS-on-admin protection).
         if user_attempts["failed_count"] >= MAX_LOGIN_ATTEMPTS:
-            user_record = next(
-                (u for u in load_users().get("users", []) if u.get("username") == username),
-                None,
-            )
+            # Targeted lookup — this only needs to know whether the ONE username
+            # being banned belongs to an admin, not every user in the system.
+            # Falls back to load_users() only in the genuinely empty-table case
+            # (mirrors login()'s identical fallback): load_users() lazily seeds
+            # the default admin, and without this a fresh deployment's very
+            # first failed "admin" login would incorrectly get banned instead
+            # of hitting the admin exemption below.
+            user_record = get_user_by_username(username)
+            if user_record is None and count_users() == 0:
+                load_users()
+                user_record = get_user_by_username(username)
             if user_record and user_record.get("is_admin"):
                 # Admin — log the burst but don't ban.
                 logger.warning(

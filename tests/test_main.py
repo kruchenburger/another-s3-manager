@@ -468,6 +468,46 @@ def test_delete_user(app_client):
     assert response.status_code == status.HTTP_200_OK
 
 
+def test_single_user_admin_routes_do_not_rewrite_the_whole_table(app_client, mocker):
+    """update_user_password, update_user, update_user_theme, and delete_user
+    each touch exactly one row. None of them should call save_users() (a
+    full-table load-and-rewrite) just to change or remove one user."""
+    create_user("targetuser", is_admin=False, allowed_roles=["Default"])
+    _, headers = login(app_client)
+
+    save_users_spy = mocker.patch("another_s3_manager.main.save_users", side_effect=AssertionError("must not run"))
+
+    resp = app_client.put(
+        "/api/admin/users/targetuser/password",
+        json={"password": "NewPass123"},
+        headers=headers,
+    )
+    assert resp.status_code == status.HTTP_200_OK
+
+    resp = app_client.put(
+        "/api/admin/users/targetuser",
+        data={"is_admin": "false", "allowed_roles": "Default"},
+        headers=headers,
+    )
+    assert resp.status_code == status.HTTP_200_OK
+
+    login_response = app_client.post("/api/login", data={"username": "targetuser", "password": "NewPass123"})
+    assert login_response.status_code == status.HTTP_200_OK
+    csrf = app_client.get("/api/me").json()["csrf_token"]
+    resp = app_client.put(
+        "/api/user/theme",
+        json={"theme": "dark"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == status.HTTP_200_OK
+
+    _, headers = login(app_client)
+    resp = app_client.delete("/api/admin/users/targetuser", headers=headers)
+    assert resp.status_code == status.HTTP_200_OK
+
+    save_users_spy.assert_not_called()
+
+
 def test_list_bans(app_client):
     _, headers = login(app_client)
     response = app_client.get("/api/admin/bans", headers=headers)
@@ -906,12 +946,25 @@ def test_login_user_not_found(app_client):
 
 
 def test_login_handles_unexpected_error(app_client, mocker):
-    mocker.patch("another_s3_manager.main.load_users", side_effect=RuntimeError("boom"))
+    mocker.patch("another_s3_manager.main.get_user_by_username", side_effect=RuntimeError("boom"))
     response = app_client.post(
         "/api/login",
         data={"username": "admin", "password": "admin123"},
     )
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+def test_login_does_not_call_load_users_once_a_user_exists(app_client, mocker):
+    """login() must use the targeted get_user_by_username() lookup once the
+    users table is populated — load_users() is only a fallback for the
+    genuinely-empty-table bootstrap case (see login()'s count_users() guard)."""
+    load_users_spy = mocker.patch("another_s3_manager.main.load_users", side_effect=AssertionError("must not run"))
+    response = app_client.post(
+        "/api/login",
+        data={"username": "admin", "password": "admin123"},
+    )
+    assert response.status_code == status.HTTP_200_OK
+    load_users_spy.assert_not_called()
 
 
 def test_create_user_truncates_long_password(app_client):
@@ -973,7 +1026,7 @@ def test_update_user_theme_invalid_value(app_client):
 
 def test_update_user_theme_user_missing(app_client, mocker):
     _, headers = login(app_client)
-    mocker.patch("another_s3_manager.main.load_users", return_value={"users": []})
+    mocker.patch("another_s3_manager.main.get_user_by_username", return_value=None)
     response = app_client.put(
         "/api/user/theme",
         json={"theme": "light"},
@@ -2537,19 +2590,53 @@ def test_get_user_for_download_does_not_swallow_db_errors(monkeypatch):
     }
     token = jwt.encode(payload, get_jwt_secret_key(), algorithm=JWT_ALGORITHM)
 
-    # Patch load_users to raise OperationalError (transient DB error). The
-    # function imports load_users INSIDE its body, so patch the source module.
+    # Patch get_user_by_username to raise OperationalError (transient DB
+    # error). The function imports it INSIDE its body, so patch the source
+    # module.
     import another_s3_manager.users as users_module
 
-    def _boom():
+    def _boom(username):
         raise OperationalError("statement", "params", Exception("db down"))
 
-    monkeypatch.setattr(users_module, "load_users", _boom)
+    monkeypatch.setattr(users_module, "get_user_by_username", _boom)
 
     # Old behaviour: silent catch → returns 401.
     # New behaviour: re-raise OperationalError (transient infra → caller sees real error).
     with pytest.raises(OperationalError):
         get_user_for_download(token=token, request=None)
+
+
+def test_get_user_for_download_never_calls_load_users(monkeypatch):
+    """get_user_for_download runs on every download request. It must use the
+    targeted get_user_by_username() lookup, not load_users() (which would
+    load every user row plus a roles join just to find the one downloading)."""
+    from datetime import datetime, timedelta, timezone
+
+    from jose import jwt
+
+    from another_s3_manager.auth import get_jwt_secret_key
+    from another_s3_manager.constants import JWT_ALGORITHM
+    from another_s3_manager.main import get_user_for_download
+    from another_s3_manager.users import create_user
+
+    create_user(username="bob", password_hash="x")
+
+    payload = {
+        "sub": "bob",
+        "csrf_token": "csrf-x",
+        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+    }
+    token = jwt.encode(payload, get_jwt_secret_key(), algorithm=JWT_ALGORITHM)
+
+    import another_s3_manager.users as users_module
+
+    def _boom():
+        raise AssertionError("get_user_for_download must not call load_users()")
+
+    monkeypatch.setattr(users_module, "load_users", _boom)
+
+    user = get_user_for_download(token=token, request=None)
+    assert user["username"] == "bob"
 
 
 def test_get_config_exposes_extension_lists_for_non_admin(app_client):
