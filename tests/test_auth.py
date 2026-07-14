@@ -346,43 +346,36 @@ def test_get_current_user_missing_sub(monkeypatch):
     assert exc.value.status_code == status.HTTP_401_UNAUTHORIZED
 
 
-def test_get_current_user_adds_missing_theme(monkeypatch):
+def test_get_current_user_theme_always_present(monkeypatch):
+    """_user_to_dict() always renders `theme` (the DB column is NOT NULL with
+    a default), so a real get_user_by_username() result never lacks it —
+    there is no dead "migration" branch to exercise anymore."""
     monkeypatch.setenv("JWT_SECRET_KEY", "secret")
     auth = reload_auth()
-
-    def fake_load_users():
-        return {
-            "users": [
-                {
-                    "username": "noteheme",
-                    "password_hash": auth.hash_password("password"),
-                    "is_admin": False,
-                }
-            ]
-        }
-
-    saved = {}
-
-    def fake_save_users(data):
-        saved["data"] = data
-
-    monkeypatch.setattr("another_s3_manager.users.load_users", fake_load_users)
-    monkeypatch.setattr("another_s3_manager.users.save_users", fake_save_users)
+    ensure_user(username="noteheme", password="password", is_admin=False)
 
     token = auth.create_access_token({"sub": "noteheme"})
     request = _make_request_with_cookie(token)
     user = auth.get_current_user(request)
     assert user["theme"] == "auto"
-    assert saved["data"]["users"][0]["theme"] == "auto"
 
 
 def test_get_current_user_user_not_found(monkeypatch):
+    """Pins the real deleted-user-race behavior: mint a valid JWT for a real
+    user, delete that user's row, then drive get_current_user through the
+    actual get_user_by_username() lookup (no stub) and assert the 401. This
+    is the exact semantics the targeted-lookup refactor is riskiest
+    against, so it must exercise the real DB path, not a mocked function."""
     monkeypatch.setenv("JWT_SECRET_KEY", "secret")
     auth = reload_auth()
-
-    monkeypatch.setattr("another_s3_manager.users.load_users", lambda: {"users": []})
+    ensure_user(username="ghost", password="password", is_admin=False)
 
     token = auth.create_access_token({"sub": "ghost"})
+
+    import another_s3_manager.users as users
+
+    users.delete_user("ghost")
+
     request = _make_request_with_cookie(token)
     with pytest.raises(HTTPException) as exc:
         auth.get_current_user(request)
@@ -448,8 +441,7 @@ def test_record_login_attempt_logs(caplog):
 def test_get_current_user_reads_from_cookie(monkeypatch, valid_jwt_token, valid_user_dict):
     """get_current_user pulls the token from request.cookies['access_token']."""
     auth = reload_auth()
-    monkeypatch.setattr("another_s3_manager.users.load_users", lambda: {"users": [valid_user_dict]})
-    monkeypatch.setattr("another_s3_manager.users.save_users", lambda _: None)
+    monkeypatch.setattr("another_s3_manager.users.get_user_by_username", lambda username: dict(valid_user_dict))
 
     request = _make_request_with_cookie(valid_jwt_token)
     user = auth.get_current_user(request)
@@ -527,7 +519,7 @@ def test_has_valid_session_false_when_sub_missing(monkeypatch):
 
 def test_has_valid_session_never_touches_load_users(monkeypatch, valid_jwt_token):
     """The whole point of has_valid_session is to be DB-free — assert it never
-    calls load_users(), unlike get_current_user."""
+    calls load_users()."""
     import another_s3_manager.users as users_module
 
     def _boom():
@@ -537,6 +529,31 @@ def test_has_valid_session_never_touches_load_users(monkeypatch, valid_jwt_token
     auth = reload_auth()
     request = _make_request_with_cookie(valid_jwt_token)
     assert auth.has_valid_session(request) is True
+
+
+def test_get_current_user_never_calls_load_users(monkeypatch):
+    """get_current_user runs on every authenticated request. Before this fix
+    it called load_users() — which loads every user row (plus a roles join)
+    from the DB just to linearly scan for the one making the request. Assert
+    it now only ever calls the targeted get_user_by_username() lookup."""
+    monkeypatch.setenv("JWT_SECRET_KEY", "secret")
+    auth = reload_auth()
+    users_module = reload_users()
+
+    # Seed several users so a regression back to load_users() would have
+    # real O(N) rows to scan, not an empty/trivial table.
+    for name in ("alice", "bob", "carol", "dave"):
+        users_module.create_user(username=name, password_hash="x")
+
+    def _boom():
+        raise AssertionError("get_current_user must not call load_users()")
+
+    monkeypatch.setattr(users_module, "load_users", _boom)
+
+    token = auth.create_access_token({"sub": "carol"})
+    request = _make_request_with_cookie(token)
+    user = auth.get_current_user(request)
+    assert user["username"] == "carol"
 
 
 def test_verify_password_warn_logs_when_hash_is_corrupt(caplog):
