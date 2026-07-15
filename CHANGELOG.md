@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Alembic migrations could silently wipe `user_roles`, `bans`, and `api_tokens` on any migration that recreates the `users` table.** `migrations/env.py` ran with SQLite foreign key enforcement on and `render_as_batch=True`, which implements unsupported ALTERs (like `drop_column`) by recreating the whole table — create new, copy rows, `DROP TABLE users`, rename. With FK enforcement on, that `DROP TABLE` fired every `ON DELETE CASCADE` pointing at `users`, deleting all role assignments, bans, and API tokens even though the users themselves survived (they'd already been copied). This was reachable via the documented `alembic downgrade -1` rollback and via any forward migration that drops a `users` column. FK enforcement is now explicitly forced off for the duration of a migration run and verified clean afterwards with `PRAGMA foreign_key_check` before commit; runtime FK enforcement (used by the running app) is unaffected.
+
 ## [1.1.3] - 2026-07-15
 
 ### Changed
