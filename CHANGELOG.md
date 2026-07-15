@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hardened `users.update_user()`'s password provenance stamping against a future
+  refactor.** It used to stamp `password_set_via` on the mere presence of a
+  `password_hash` keyword argument, regardless of whether the value actually
+  changed — unlike `save_users()`, which only stamps on a real hash change. No
+  current caller was affected (every one only passes `password_hash` when it
+  genuinely changes), but a natural future rewrite of the admin user-update route
+  as `update_user(username, **user_dict)` — where `user_dict` round-trips through
+  the same load/save helpers and therefore always carries the (possibly
+  unchanged) hash — would have silently reclassified an environment-governed
+  admin password as UI-set on every no-op edit, permanently disabling
+  `ADMIN_PASSWORD` rotation for that admin. `update_user()` now mirrors
+  `save_users()`'s hash-value comparison (stamping only when the stored hash actually
+  changes, not merely when a `password_hash` is present).
+
 ## [1.1.3] - 2026-07-15
 
 ### Changed
