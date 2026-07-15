@@ -2023,6 +2023,124 @@ def test_get_s3_client_concurrent_threads_same_role_no_corruption(mocker):
     )
 
 
+def test_get_s3_client_survives_concurrent_invalidate_no_keyerror(mocker):
+    """A cached client read must never KeyError against a concurrent,
+    unsynchronized `invalidate_s3_client`.
+
+    Two layers, both real multi-threading:
+
+    1. A background "invalidator" thread genuinely hammers
+       `invalidate_s3_client()` for the role in a tight loop, concurrently
+       with N "getter" threads hammering `get_s3_client()` for the same
+       role — real organic concurrent traffic, released together via a
+       `threading.Barrier`. This alone was tried first (plus dropping
+       `sys.setswitchinterval` to widen GIL handoff frequency, up to 24
+       getter + 3 invalidator threads x 1000 iterations): it produced ZERO
+       crashes on the buggy pre-fix pattern in ~8s of wall time. The window
+       between the `in` check and the `[]` subscript is a couple of
+       bytecodes wide, and pure GIL-scheduling luck essentially never lands
+       there — the same empirical finding the reviewer made for the sibling
+       config-cache theatre test.
+    2. So the cache dict is swapped for `_RaceForcingCache`, a `dict`
+       subclass whose overridden `__contains__` — invoked by `key in
+       cache`, which is exactly the first half of the old `if key in
+       cache: return cache[key]` pattern — spins up a genuinely separate
+       thread that calls `invalidate_s3_client` (a real pop on this same
+       dict) and joins it BEFORE returning, forcing the precise
+       interleaving the old pattern is vulnerable to on (effectively)
+       every hit. Critically, `dict.get()` — what the fixed code uses — is
+       a C-level method that bypasses a subclass's overridden
+       `__contains__`/`__getitem__` entirely (verified directly: calling
+       `.get()`/`.pop()` on an instrumented subclass does not invoke the
+       overridden dunder methods), so this hook is fully inert against the
+       fixed code — it neither triggers nor perturbs it.
+
+    On the pre-fix `if cache_key in _s3_clients_cache: return
+    _s3_clients_cache[cache_key]` pattern (both the lock-free fast path and
+    the in-lock double-check use it), the forced pop between the `in`
+    check and the subscript raises `KeyError`, which escapes
+    `get_s3_client` uncaught — a getter thread crashes (in production: an
+    uncaught 500). On the fixed code (`dict.get()`, a single atomic read),
+    no `KeyError` is possible. Verified by reverting to the `in`/`[]`
+    pattern and re-running this exact test (see fix-round-1 in the
+    concurrent-caches report for the pasted failure).
+    """
+    module = reload_s3_client()
+
+    fake_client = mocker.MagicMock()
+    fake_client.list_buckets.return_value = {"Buckets": []}
+    session_mock = mocker.MagicMock()
+    session_mock.client.return_value = fake_client
+    mocker.patch("boto3.Session", return_value=session_mock)
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RaceRole", "type": "default"}]},
+    )
+
+    cache_key = "RaceRole"
+
+    class _RaceForcingCache(dict):
+        """See the module-level test docstring above: forces the exact
+        interleaving the old `in`/`[]` cache-read pattern is vulnerable to,
+        via a genuinely separate thread — and is fully inert against the
+        fixed `dict.get()` pattern.
+        """
+
+        def __contains__(self, key: object) -> bool:
+            present = super().__contains__(key)
+            if present and key == cache_key:
+                racer = threading.Thread(target=module.invalidate_s3_client, args=(cache_key,))
+                racer.start()
+                racer.join(timeout=5)
+            return present
+
+    module._s3_clients_cache = _RaceForcingCache(module._s3_clients_cache)
+
+    stop = threading.Event()
+    n_getters = 8
+    iterations = 50
+    barrier = threading.Barrier(n_getters + 1)
+    errors: list = []
+
+    def getter() -> None:
+        try:
+            barrier.wait(timeout=5)
+        except threading.BrokenBarrierError:
+            return
+        for _ in range(iterations):
+            try:
+                module.get_s3_client(cache_key)
+            except Exception as exc:  # noqa: BLE001 - captured for the assertion below
+                errors.append(exc)
+                return
+
+    def invalidator() -> None:
+        # Real, independent concurrent invalidation traffic on top of the
+        # deterministic hook above — exercises the fixed code's actual
+        # locking discipline, not just the forced-race path.
+        try:
+            barrier.wait(timeout=5)
+        except threading.BrokenBarrierError:
+            return
+        while not stop.is_set():
+            module.invalidate_s3_client(cache_key)
+
+    getters = [threading.Thread(target=getter) for _ in range(n_getters)]
+    inv_thread = threading.Thread(target=invalidator)
+
+    try:
+        inv_thread.start()
+        for t in getters:
+            t.start()
+        for t in getters:
+            t.join(timeout=30)
+    finally:
+        stop.set()
+        inv_thread.join(timeout=5)
+
+    assert not errors, f"get_s3_client raised under concurrent invalidate: {errors!r}"
+
+
 def test_create_s3_client_default_builds_explicit_session_not_default(mocker):
     """Client construction must NOT go through boto3's module-level default-session
     helper (`boto3.client(...)`) — boto3 documents that helper as sharing a

@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     keys the migration would have added. The reload now fully loads and
     migrates the config into a local variable first, and only publishes it
     with a single atomic rebind once it is complete.
+  - Closed a follow-up gap in the S3 client cache read path: both the
+    lock-free fast path and the in-lock double-check checked `if cache_key
+    in _s3_clients_cache` before indexing into it — two separate,
+    non-atomic dict operations. A concurrent `invalidate_s3_client` /
+    `clear_s3_clients_cache` (neither of which took a lock) could remove
+    the entry in between, raising an uncaught `KeyError` under real
+    worker-thread concurrency. Both read sites now use a single atomic
+    `dict.get()`, and the two mutators now also take the cache lock.
 
 ## [1.1.3] - 2026-07-15
 

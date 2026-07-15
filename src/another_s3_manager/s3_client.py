@@ -97,9 +97,21 @@ def _clear_boto3_cached_credentials() -> None:
 
 
 def invalidate_s3_client(role_name: Optional[str] = None) -> None:
-    """Remove cached S3 client for the specified role."""
+    """Remove cached S3 client for the specified role.
+
+    Takes `_s3_clients_lock` so this mutation can never interleave with a
+    concurrent get_s3_client build-and-store: without it, a thread could
+    finish building+caching a fresh client for this exact role right as this
+    pop drops it, silently discarding work that was just done and forcing an
+    immediate, avoidable rebuild on the very next call for the role. The read
+    side (get_s3_client's fast path and in-lock double-check) uses a plain
+    `dict.get()`, which is atomic under the GIL on its own and therefore safe
+    even without this lock; taking it here as well is cheap (no network I/O
+    in this function) and removes that build-vs-invalidate thrash too.
+    """
     cache_key = role_name or "default"
-    _s3_clients_cache.pop(cache_key, None)
+    with _s3_clients_lock:
+        _s3_clients_cache.pop(cache_key, None)
 
 
 def _is_expired_credentials_error(error: BaseException) -> bool:
@@ -589,6 +601,17 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     ever applies to that rare cold-start window — every cache HIT (the
     overwhelming majority of calls) returns before the lock is ever touched.
 
+    Both the lock-free fast path and the in-lock double-check read the cache
+    with a single `dict.get()` rather than `if key in cache: return
+    cache[key]`. The two-step form is NOT atomic even though
+    `invalidate_s3_client`/`clear_s3_clients_cache` now also take
+    `_s3_clients_lock`: the fast-path read here is deliberately lock-free
+    (see above), so it can still race an invalidate/clear regardless of
+    whether those hold the lock. A bare `dict.get()` is a single atomic
+    operation under the GIL, so it can never observe a key that another
+    thread is mid-way through popping — the read is either the client or
+    `None`, never a `KeyError`.
+
     Args:
         role_name: Name of the role to use, or None for default
 
@@ -607,15 +630,20 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     # Use cache key based on role name
     cache_key = role_name or "default"
 
-    # Return cached client if available (lock-free fast path)
-    if cache_key in _s3_clients_cache:
-        return _s3_clients_cache[cache_key]
+    # Return cached client if available (lock-free fast path). A single
+    # dict.get() is atomic under the GIL; an `in` check followed by a
+    # separate `[]` subscript is not, and can KeyError if invalidate_s3_client
+    # / clear_s3_clients_cache pops or clears the entry in between.
+    cached_client = _s3_clients_cache.get(cache_key)
+    if cached_client is not None:
+        return cached_client
 
     with _s3_clients_lock:
         # Double-checked locking: another thread may have built and cached
         # this exact role's client while we were waiting for the lock.
-        if cache_key in _s3_clients_cache:
-            return _s3_clients_cache[cache_key]
+        cached_client = _s3_clients_cache.get(cache_key)
+        if cached_client is not None:
+            return cached_client
 
         # Load config and find role
         config = load_config(force_reload=False)
@@ -869,9 +897,17 @@ def clear_s3_clients_cache() -> None:
     inherit the OLD assumed-role / profile credentials until they naturally
     expire (~1h for STS). The credential flush matches what the per-role
     `invalidate_s3_client + _clear_boto3_cached_credentials` retry sites do.
+
+    The dict `.clear()` itself is taken under `_s3_clients_lock`, same
+    reasoning as `invalidate_s3_client`: it prevents a concurrent
+    get_s3_client build-and-store from being silently discarded the instant
+    after it completes. The credential-cache flush runs after the lock is
+    released — it touches boto3/botocore session state, not this dict, and
+    doesn't need to be inside the critical section.
     """
     global _s3_clients_cache
-    _s3_clients_cache.clear()
+    with _s3_clients_lock:
+        _s3_clients_cache.clear()
     _clear_boto3_cached_credentials()
 
 
