@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Hardened `users.update_user()`'s password provenance stamping against a future
+  refactor.** It used to stamp `password_set_via` on the mere presence of a
+  `password_hash` keyword argument, regardless of whether the value actually
+  changed — unlike `save_users()`, which only stamps on a real hash change. No
+  current caller was affected (every one only passes `password_hash` when it
+  genuinely changes), but a natural future rewrite of the admin user-update route
+  as `update_user(username, **user_dict)` — where `user_dict` round-trips through
+  the same load/save helpers and therefore always carries the (possibly
+  unchanged) hash — would have silently reclassified an environment-governed
+  admin password as UI-set on every no-op edit, permanently disabling
+  `ADMIN_PASSWORD` rotation for that admin. `update_user()` now mirrors
+  `save_users()`'s hash-value comparison (stamping only when the stored hash actually
+  changes, not merely when a `password_hash` is present).
 - **Hardened two module-global caches (S3 clients, config) against the
   concurrent access a recent change (moving every boto3 call onto a worker
   thread) exposed them to.** Both were previously safe only because a
@@ -23,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     explicit `boto3.Session()` per build, so concurrent builds for
     different roles no longer share mutable session state either.
   - The config cache's reload path used to rebind the module-level cache to
-    the raw, just-loaded JSON *before* running the migration step that adds
+    the raw, just-loaded JSON _before_ running the migration step that adds
     missing keys, leaving a window where a concurrent reader could observe
     an unmigrated config and silently fall back to defaults for whatever
     keys the migration would have added. The reload now fully loads and
@@ -31,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     with a single atomic rebind once it is complete.
   - Closed a follow-up gap in the S3 client cache read path: both the
     lock-free fast path and the in-lock double-check checked `if cache_key
-    in _s3_clients_cache` before indexing into it — two separate,
+in _s3_clients_cache` before indexing into it — two separate,
     non-atomic dict operations. A concurrent `invalidate_s3_client` /
     `clear_s3_clients_cache` (neither of which took a lock) could remove
     the entry in between, raising an uncaught `KeyError` under real
