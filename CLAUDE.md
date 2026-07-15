@@ -61,6 +61,17 @@ uv run alembic upgrade head
 uv run alembic downgrade -1
 ```
 
+FK enforcement is explicitly forced OFF for the duration of any migration run
+(`migrations/env.py`), then verified clean afterwards via `PRAGMA foreign_key_check`
+before the transaction commits. This is a migration-context-only setting: SQLite's
+`render_as_batch` (needed for `drop_column`/`alter_column` on SQLite) implements those
+ops by recreating the whole table — create new → copy rows → `DROP TABLE` old → rename
+— and with FK enforcement on, that `DROP TABLE` fired every `ON DELETE CASCADE`
+pointing at the recreated table, silently wiping unrelated child rows (e.g. a `users`
+column drop/add used to wipe `user_roles`/`bans`/`api_tokens`). Runtime FK enforcement
+(`database.py`'s connect-listener) is untouched — `upgrade head` / `downgrade -1` are
+safe to run against a populated database.
+
 ## Development Commands
 
 ```bash
@@ -188,27 +199,27 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 
 ## Environment Variables
 
-| Variable                          | Required | Default                                 | Description                                                                                                                                                                 |
-| --------------------------------- | -------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `JWT_SECRET_KEY`                  | Yes      | —                                       | JWT signing secret                                                                                                                                                          |
-| `PORT`                            | No       | `8080`                                  | Server port                                                                                                                                                                 |
-| `UVICORN_HOST`                    | No       | `0.0.0.0`                               | Server bind address                                                                                                                                                         |
-| `LOG_LEVEL`                       | No       | `info`                                  | Logging level                                                                                                                                                               |
-| `ADMIN_PASSWORD`                  | No       | `change_me_pls`                         | Admin password — seeds `admin` on first boot, re-applied on every restart while the env still governs it (see README "Admin password lifecycle")                            |
-| `ADMIN_PASSWORD_FORCE`            | No       | unset                                   | One-shot override: `1`/`true`/`yes` forces `ADMIN_PASSWORD` to overwrite the admin password (even if set via UI/CLI) and hands governance back to the env. Remove after use |
-| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | No       | `180`                                   | JWT expiration (minutes)                                                                                                                                                    |
-| `DISABLE_DELETION`                | No       | `false`                                 | Disable file deletion                                                                                                                                                       |
-| `MAX_FILE_SIZE`                   | No       | `104857600`                             | Max upload file size (bytes, 100MB)                                                                                                                                         |
-| `PRESIGNED_URL_DEFAULT_TTL`       | No       | `3600`                                  | Default presigned-URL lifetime (seconds). Overridable per link up to the max.                                                                                               |
-| `PRESIGNED_URL_MAX_TTL`           | No       | `604800`                                | Max presigned-URL lifetime (seconds; 7-day SigV4 ceiling). Requests above this are rejected (400).                                                                          |
-| `ENABLE_LAZY_LOADING`             | No       | `true`                                  | Enable lazy loading for file lists                                                                                                                                          |
-| `AWS_REGION`                      | No       | from env                                | Default AWS region                                                                                                                                                          |
-| `S3_FILE_MANAGER_CONFIG`          | No       | `./data/config.json`                    | Path to config file (under DATA_DIR by convention)                                                                                                                          |
-| `DATA_DIR`                        | No       | `./data` (native), `/app/data` (Docker) | Data dir (SQLite DB + runtime data)                                                                                                                                         |
-| `SQLITE_JOURNAL_MODE`              | No       | `wal`                                   | SQLite journal mode (`wal`/`delete`). WAL removes reader/writer blocking but needs real POSIX locking + mmap; set `delete` if `DATA_DIR` is on NFS/SMB or a Docker Desktop bind mount on Windows/macOS |
-| `COOKIE_SECURE`                   | No       | `true`                                  | `Secure` flag on auth cookie. MUST be `false` on local HTTP, else browser drops the cookie                                                                                  |
-| `LOG_FORMAT`                      | No       | `text`                                  | Log output format: `text` or `json` (structured, for log aggregators)                                                                                                       |
-| `METRICS_PASSWORD`                | No       | —                                       | Optional basic-auth password for `/metrics` (username `metrics`). If unset, endpoint is open                                                                                |
+| Variable                          | Required | Default                                 | Description                                                                                                                                                                                            |
+| --------------------------------- | -------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `JWT_SECRET_KEY`                  | Yes      | —                                       | JWT signing secret                                                                                                                                                                                     |
+| `PORT`                            | No       | `8080`                                  | Server port                                                                                                                                                                                            |
+| `UVICORN_HOST`                    | No       | `0.0.0.0`                               | Server bind address                                                                                                                                                                                    |
+| `LOG_LEVEL`                       | No       | `info`                                  | Logging level                                                                                                                                                                                          |
+| `ADMIN_PASSWORD`                  | No       | `change_me_pls`                         | Admin password — seeds `admin` on first boot, re-applied on every restart while the env still governs it (see README "Admin password lifecycle")                                                       |
+| `ADMIN_PASSWORD_FORCE`            | No       | unset                                   | One-shot override: `1`/`true`/`yes` forces `ADMIN_PASSWORD` to overwrite the admin password (even if set via UI/CLI) and hands governance back to the env. Remove after use                            |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | No       | `180`                                   | JWT expiration (minutes)                                                                                                                                                                               |
+| `DISABLE_DELETION`                | No       | `false`                                 | Disable file deletion                                                                                                                                                                                  |
+| `MAX_FILE_SIZE`                   | No       | `104857600`                             | Max upload file size (bytes, 100MB)                                                                                                                                                                    |
+| `PRESIGNED_URL_DEFAULT_TTL`       | No       | `3600`                                  | Default presigned-URL lifetime (seconds). Overridable per link up to the max.                                                                                                                          |
+| `PRESIGNED_URL_MAX_TTL`           | No       | `604800`                                | Max presigned-URL lifetime (seconds; 7-day SigV4 ceiling). Requests above this are rejected (400).                                                                                                     |
+| `ENABLE_LAZY_LOADING`             | No       | `true`                                  | Enable lazy loading for file lists                                                                                                                                                                     |
+| `AWS_REGION`                      | No       | from env                                | Default AWS region                                                                                                                                                                                     |
+| `S3_FILE_MANAGER_CONFIG`          | No       | `./data/config.json`                    | Path to config file (under DATA_DIR by convention)                                                                                                                                                     |
+| `DATA_DIR`                        | No       | `./data` (native), `/app/data` (Docker) | Data dir (SQLite DB + runtime data)                                                                                                                                                                    |
+| `SQLITE_JOURNAL_MODE`             | No       | `wal`                                   | SQLite journal mode (`wal`/`delete`). WAL removes reader/writer blocking but needs real POSIX locking + mmap; set `delete` if `DATA_DIR` is on NFS/SMB or a Docker Desktop bind mount on Windows/macOS |
+| `COOKIE_SECURE`                   | No       | `true`                                  | `Secure` flag on auth cookie. MUST be `false` on local HTTP, else browser drops the cookie                                                                                                             |
+| `LOG_FORMAT`                      | No       | `text`                                  | Log output format: `text` or `json` (structured, for log aggregators)                                                                                                                                  |
+| `METRICS_PASSWORD`                | No       | —                                       | Optional basic-auth password for `/metrics` (username `metrics`). If unset, endpoint is open                                                                                                           |
 
 ## Features
 
