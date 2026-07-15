@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged) hash — would have silently reclassified an environment-governed
   admin password as UI-set on every no-op edit, permanently disabling
   `ADMIN_PASSWORD` rotation for that admin. `update_user()` now mirrors
-  `save_users()`'s hash-value comparison exactly.
+  `save_users()`'s hash-value comparison (stamping only when the stored hash actually
+  changes, not merely when a `password_hash` is present).
 
 ## [1.1.3] - 2026-07-15
 

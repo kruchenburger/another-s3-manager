@@ -545,7 +545,7 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
 
         if "password_hash" in kwargs:
             new_hash = kwargs["password_hash"]
-            # Mirrors save_users()'s upsert comparison exactly: provenance only moves
+            # Mirrors save_users()'s hash-VALUE comparison (not its branch shape): provenance only moves
             # when the HASH VALUE actually changes, never on the mere presence of a
             # password_hash kwarg. This matters because a future refactor of the admin
             # update route as `update_user(username, **user_dict)` -- where user_dict
