@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hardened two module-global caches (S3 clients, config) against the
+  concurrent access a recent change (moving every boto3 call onto a worker
+  thread) exposed them to.** Both were previously safe only because a
+  single-threaded event loop serialized access to them; that assumption no
+  longer holds with up to ~40 concurrent worker threads.
+  - The S3 client cache's check-build-store sequence is now guarded by a
+    lock with double-checked locking (same shape as the existing DB engine
+    lock), so concurrent cache misses for the same role can no longer race
+    each other's writes. Client construction was also moved off boto3's
+    module-level `boto3.client(...)` helper — documented by boto3 as
+    sharing a single, non-thread-safe session process-wide — onto an
+    explicit `boto3.Session()` per build, so concurrent builds for
+    different roles no longer share mutable session state either.
+  - The config cache's reload path used to rebind the module-level cache to
+    the raw, just-loaded JSON *before* running the migration step that adds
+    missing keys, leaving a window where a concurrent reader could observe
+    an unmigrated config and silently fall back to defaults for whatever
+    keys the migration would have added. The reload now fully loads and
+    migrates the config into a local variable first, and only publishes it
+    with a single atomic rebind once it is complete.
+
 ## [1.1.3] - 2026-07-15
 
 ### Changed

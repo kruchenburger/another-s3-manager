@@ -23,6 +23,30 @@ def _client_error(code: str, message: str = "boom", http_status: int = 400) -> C
     )
 
 
+def _fake_sts_session(monkeypatch, service_clients: dict, s3_client_module=None):
+    """Patch `boto3.Session` so `_new_boto3_session().client(service, ...)`
+    dispatches to `service_clients[service]` (a dict like {"sts": fake_sts}).
+
+    STS creation was moved off the module-level `boto3.client(...)` helper
+    onto an explicit `boto3.Session()` per build (see s3_client._new_boto3_session,
+    added to route around boto3's non-thread-safe shared default session).
+    Patching `boto3.client` directly (the old pattern in this file) no longer
+    intercepts that call — it would fall through to a REAL, unmocked Session
+    and either hit the network or raise a real (and misleadingly similar)
+    NoCredentialsError instead of exercising the fake STS response under test.
+    """
+    if s3_client_module is None:
+        from another_s3_manager import s3_client as s3_client_module
+
+    class _FakeSession:
+        def client(self, service, **kwargs):
+            if service in service_clients:
+                return service_clients[service]
+            raise NotImplementedError(f"Unexpected session.client('{service}')")
+
+    monkeypatch.setattr(s3_client_module.boto3, "Session", _FakeSession)
+
+
 def test_probe_failure_raises_typed_error_and_does_not_cache(monkeypatch, tmp_path):
     """An InvalidRegion at probe time raises S3ConfigError; client is not cached."""
     from another_s3_manager import s3_client as s3_client_module
@@ -382,12 +406,7 @@ def test_assume_role_access_denied_includes_iam_trust_policy_hint(monkeypatch):
                 operation_name="AssumeRole",
             )
 
-    def _fake_boto_client(service, **kwargs):
-        if service == "sts":
-            return _FakeSTS()
-        raise NotImplementedError(f"Unexpected boto3.client('{service}')")
-
-    monkeypatch.setattr(s3_client_module.boto3, "client", _fake_boto_client)
+    _fake_sts_session(monkeypatch, {"sts": _FakeSTS()}, s3_client_module)
 
     with pytest.raises(S3AccessDeniedError) as exc_info:
         s3_client_module._create_s3_client_from_role(role)
@@ -426,12 +445,7 @@ def test_assume_role_invalid_arn_raises_s3configerror(monkeypatch):
                 operation_name="AssumeRole",
             )
 
-    def _fake_boto_client(service, **kwargs):
-        if service == "sts":
-            return _FakeSTS()
-        raise NotImplementedError(f"Unexpected boto3.client('{service}')")
-
-    monkeypatch.setattr(s3_client_module.boto3, "client", _fake_boto_client)
+    _fake_sts_session(monkeypatch, {"sts": _FakeSTS()}, s3_client_module)
 
     with pytest.raises(S3ConfigError) as exc_info:
         s3_client_module._create_s3_client_from_role(role)
@@ -465,12 +479,7 @@ def test_assume_role_expired_token_raises_credentials_expired(monkeypatch):
                 operation_name="AssumeRole",
             )
 
-    def _fake_boto_client(service, **kwargs):
-        if service == "sts":
-            return _FakeSTS()
-        raise NotImplementedError(f"Unexpected boto3.client('{service}')")
-
-    monkeypatch.setattr(s3_client_module.boto3, "client", _fake_boto_client)
+    _fake_sts_session(monkeypatch, {"sts": _FakeSTS()}, s3_client_module)
 
     with pytest.raises(CredentialsExpiredError):
         s3_client_module._create_s3_client_from_role(role)

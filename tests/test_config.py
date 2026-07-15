@@ -2,6 +2,8 @@ import builtins
 import importlib
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -326,4 +328,80 @@ def test_migrate_config_adds_big_bucket_mcp_fields(monkeypatch, tmp_path):
     assert loaded["mcp_summary_max_keys"] == 50_000
     assert loaded["mcp_summary_prefix_scan_pages"] == 20
     assert loaded["mcp_list_page_size"] == 1000
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: _config_cache reload must be atomic (R001 moved every request
+# onto a worker-thread pool, so a reader hitting load_config() mid-reload is
+# now a real scenario, not a theoretical one).
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_reload_never_exposes_partially_migrated_dict(monkeypatch, tmp_path):
+    """No reader may ever observe a config dict that's missing a migration-added key.
+
+    Real concurrency, not a mock: a legacy config.json (missing `mcp_enabled`,
+    a migration-added key) is force-reloaded on the main thread while several
+    reader threads busy-poll `_config_cache` throughout. `_migrate_config` is
+    wrapped to sleep AFTER it finishes migrating (widening the race window
+    well past a few dict-key assignments) so readers get real scheduler time
+    during exactly the window that used to be unsafe.
+
+    This discriminates for real: the pre-fix code did
+    `_config_cache = json.load(f)` (rebinding to the RAW dict) BEFORE calling
+    `_migrate_config`, so during that window (including the injected sleep,
+    since it wraps _migrate_config and therefore runs after the old rebind
+    already happened) a reader's `_config_cache` snapshot was the raw,
+    unmigrated dict — `"mcp_enabled" in snapshot` would be False. The fixed
+    code builds the fully-migrated dict in a LOCAL variable and only rebinds
+    `_config_cache` once, at the very end, so a reader here only ever sees
+    the OLD complete dict (falsy/empty before the reload starts, since the
+    test starts from `_config_cache = {}`) or the NEW complete one — never a
+    dict bound mid-migration. Verified by temporarily reverting the
+    load_config fix and observing this test fail.
+    """
+    from another_s3_manager import config as config_module
+
+    legacy = tmp_path / "config.json"
+    # Deliberately missing "mcp_enabled" and friends — the migration must add them.
+    legacy.write_text(json.dumps({"roles": []}))
+    monkeypatch.setattr(config_module, "CONFIG_FILE", legacy)
+    config_module._config_cache = {}
+    config_module._config_mtime = 0
+
+    orig_migrate_config = config_module._migrate_config
+
+    def slow_migrate_config(cfg):
+        result = orig_migrate_config(cfg)
+        # Widen the race window between "migration finished on the local
+        # dict" and "the reload path decides what to publish" — this is
+        # exactly the window that was unsafe pre-fix.
+        time.sleep(0.1)
+        return result
+
+    monkeypatch.setattr(config_module, "_migrate_config", slow_migrate_config)
+
+    observations: list = []
+    stop = threading.Event()
+
+    def reader() -> None:
+        while not stop.is_set():
+            snapshot = config_module._config_cache
+            if snapshot:
+                observations.append("mcp_enabled" in snapshot)
+
+    readers = [threading.Thread(target=reader) for _ in range(8)]
+    for t in readers:
+        t.start()
+
+    try:
+        loaded = config_module.load_config(force_reload=True)
+    finally:
+        stop.set()
+        for t in readers:
+            t.join(timeout=5)
+
+    assert "mcp_enabled" in loaded
+    assert observations, "reader threads never observed a populated cache — widen the race window"
+    assert all(observations), "a reader observed a config dict missing a migration-added key mid-reload"
     assert loaded["mcp_list_max_page_size"] == 10_000
