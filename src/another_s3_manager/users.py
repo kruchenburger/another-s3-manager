@@ -544,19 +544,29 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
             raise ValueError(f"User {username} not found")
 
         if "password_hash" in kwargs:
-            user.password_hash = kwargs["password_hash"]
-            # Safety net (fails CLOSED): a password write with no stated provenance is
-            # assumed human-driven, so the startup env sync will never overwrite it.
-            # Callers that mean something else (the seed, the CLI) pass password_set_via.
-            #
-            # No standalone `elif "password_set_via" in kwargs` branch here on purpose:
-            # a value-only stamp with no accompanying password_hash change has no real
-            # caller today, and it would be a dormant fail-open -- a future
-            # `update_user(username, **user_dict)` could carry a stale round-tripped
-            # "env"/"cli" through it without ever proving a password actually changed.
-            # If Task 3/5 need to set provenance without touching the hash, they should
-            # write it directly (or extend this call explicitly, not resurrect this elif).
-            user.password_set_via = kwargs.get("password_set_via", PASSWORD_SET_VIA_UI)
+            new_hash = kwargs["password_hash"]
+            # Mirrors save_users()'s upsert comparison exactly: provenance only moves
+            # when the HASH VALUE actually changes, never on the mere presence of a
+            # password_hash kwarg. This matters because a future refactor of the admin
+            # update route as `update_user(username, **user_dict)` -- where user_dict
+            # round-trips through load_users()/_user_to_dict() -- would always carry the
+            # (possibly unchanged) password_hash. Stamping on presence would silently
+            # flip an "env"-governed admin to "ui" on every no-op edit, permanently
+            # killing ADMIN_PASSWORD rotation for that admin.
+            if new_hash != user.password_hash:
+                # Safety net (fails CLOSED): a password write with no stated provenance is
+                # assumed human-driven, so the startup env sync will never overwrite it.
+                # Callers that mean something else (the seed, the CLI) pass password_set_via.
+                #
+                # No standalone `elif "password_set_via" in kwargs` branch here on purpose:
+                # a value-only stamp with no accompanying password_hash change has no real
+                # caller today, and it would be a dormant fail-open -- a future
+                # `update_user(username, **user_dict)` could carry a stale round-tripped
+                # "env"/"cli" through it without ever proving a password actually changed.
+                # If Task 3/5 need to set provenance without touching the hash, they should
+                # write it directly (or extend this call explicitly, not resurrect this elif).
+                user.password_set_via = kwargs.get("password_set_via", PASSWORD_SET_VIA_UI)
+            user.password_hash = new_hash
         if "is_admin" in kwargs:
             user.is_admin = kwargs["is_admin"]
         if "theme" in kwargs:

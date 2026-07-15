@@ -183,6 +183,67 @@ def test_update_user_without_password_write_preserves_provenance(monkeypatch):
     assert _provenance("admin") == PASSWORD_SET_VIA_ENV
 
 
+def test_update_user_unchanged_password_hash_preserves_provenance(monkeypatch):
+    """THE regression test for the provenance trap: update_user must mirror save_users'
+    hash-VALUE comparison, not stamp on the mere presence of a password_hash kwarg.
+
+    A future refactor of the admin update route as `update_user(username, **user_dict)`
+    would pass the CURRENT (unchanged) password_hash on every edit, since user_dict
+    round-trips through load_users()/_user_to_dict(). If update_user stamped 'ui'
+    whenever "password_hash" is in kwargs -- regardless of whether the value actually
+    changed -- that refactor would silently downgrade this env-governed admin on every
+    no-op edit, permanently killing ADMIN_PASSWORD rotation for it.
+
+    Fails on pre-fix code: the old implementation stamped on presence alone.
+    """
+    from another_s3_manager.constants import PASSWORD_SET_VIA_ENV
+    from another_s3_manager.users import get_user_by_username, load_users, update_user
+
+    monkeypatch.setenv("ADMIN_PASSWORD", "EnvSecret123")
+    load_users()  # seeds admin as "env"
+
+    stored_hash = get_user_by_username("admin")["password_hash"]
+    update_user("admin", password_hash=stored_hash)  # byte-identical -- not a real change
+
+    assert _provenance("admin") == PASSWORD_SET_VIA_ENV
+
+
+def test_update_user_changed_password_hash_defaults_to_ui():
+    """A genuine hash change with no explicit password_set_via still stamps 'ui'."""
+    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+    from another_s3_manager.users import create_user, update_user
+
+    create_user(username="rehash", password_hash="old-hash", is_admin=False)
+    update_user("rehash", password_hash="new-hash")
+
+    assert _provenance("rehash") == PASSWORD_SET_VIA_UI
+
+
+def test_update_user_changed_password_hash_honours_explicit_provenance():
+    """The reset CLI's call shape: a genuine hash change with an explicit
+    password_set_via must stamp that value, not the 'ui' default."""
+    from another_s3_manager.constants import PASSWORD_SET_VIA_CLI
+    from another_s3_manager.users import create_user, update_user
+
+    create_user(username="clitarget", password_hash="old-hash", is_admin=False)
+    update_user("clitarget", password_hash="new-hash", password_set_via=PASSWORD_SET_VIA_CLI)
+
+    assert _provenance("clitarget") == PASSWORD_SET_VIA_CLI
+
+
+def test_update_user_without_password_hash_kwarg_preserves_provenance():
+    """No password_hash key at all (e.g. editing roles/theme) must never touch
+    provenance. Pins the same contract as test_update_user_without_password_write_
+    preserves_provenance above, against a non-"env" starting point."""
+    from another_s3_manager.constants import PASSWORD_SET_VIA_UI
+    from another_s3_manager.users import create_user, update_user
+
+    create_user(username="untouched", password_hash="h", is_admin=False)
+    update_user("untouched", theme="dark")
+
+    assert _provenance("untouched") == PASSWORD_SET_VIA_UI
+
+
 def test_save_users_password_change_with_stale_provenance_stamps_ui(monkeypatch):
     """Fail-closed safety net on the admin bulk-upsert path (C1).
 
