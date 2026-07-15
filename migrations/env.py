@@ -66,8 +66,13 @@ def run_migrations_online() -> None:
         with context.begin_transaction():
             context.run_migrations()
         # Safety net: FK enforcement was off for the whole run, so verify no migration
-        # introduced a real dangling reference (e.g. a bad manual op.execute) before
-        # persisting. Returns one row per violation; empty result means clean.
+        # introduced a real dangling reference (e.g. a bad manual op.execute).
+        # NOTE: this DETECTS, it does not prevent — SQLite here is in
+        # non-transactional DDL mode (see the explicit commit below), so a
+        # migration's schema changes have already auto-committed by the time this
+        # runs. Raising turns silent corruption into a loud deploy-time failure
+        # (and withholds the alembic_version stamp, so the run isn't marked done),
+        # but it does not roll the damage back. Returns one row per violation.
         violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
         if violations:
             raise RuntimeError(f"Migration left dangling foreign key references: {violations}")
