@@ -1,4 +1,6 @@
 import importlib
+import threading
+import time
 from unittest.mock import Mock
 
 import pytest
@@ -13,6 +15,26 @@ def reload_s3_client():
     return s3_client
 
 
+def _mock_session_client(mocker, return_value=None, side_effect=None):
+    """Patch `boto3.Session` so `_new_boto3_session().client(...)` is intercepted.
+
+    The client-build code paths were moved off the module-level
+    `boto3.client(...)` (shared, non-thread-safe default session) onto an
+    explicit `boto3.Session()` per build — see `_new_boto3_session`. Tests
+    that used to patch `boto3.client` directly now patch `boto3.Session`
+    instead and assert against the returned Mock's `.client` attribute,
+    which behaves identically to the old `boto3.client` mock for call_args
+    purposes (same positional/keyword arguments are passed through).
+    """
+    session_mock = mocker.MagicMock()
+    if side_effect is not None:
+        session_mock.client.side_effect = side_effect
+    else:
+        session_mock.client.return_value = return_value
+    mocker.patch("boto3.Session", return_value=session_mock)
+    return session_mock.client
+
+
 def test_get_boto3_config():
     module = reload_s3_client()
     config = module._get_boto3_config()
@@ -23,7 +45,7 @@ def test_get_boto3_config():
 def test_create_s3_client_default(mocker):
     module = reload_s3_client()
     mock_client = Mock("default")
-    patched_client = mocker.patch("boto3.client", return_value=mock_client)
+    patched_client = _mock_session_client(mocker, return_value=mock_client)
 
     client = module._create_s3_client_from_role({"type": "default"})
     assert client is mock_client
@@ -78,7 +100,7 @@ def test_create_s3_client_assume_role(mocker):
         captured_kwargs.update(kwargs)
         return s3_client_mock
 
-    mocker.patch("boto3.client", side_effect=client_side_effect)
+    _mock_session_client(mocker, side_effect=client_side_effect)
 
     # Mock RefreshableCredentials
     refreshable_creds_mock = mocker.MagicMock()
@@ -132,7 +154,7 @@ def test_create_s3_client_assume_role_with_datetime_expiration(mocker):
         captured_kwargs.update(kwargs)
         return s3_client_mock
 
-    mocker.patch("boto3.client", side_effect=client_side_effect)
+    _mock_session_client(mocker, side_effect=client_side_effect)
 
     # Mock BotocoreSession and its create_client method
     botocore_session_mock = mocker.MagicMock()
@@ -169,7 +191,7 @@ def test_create_s3_client_assume_role_with_datetime_expiration(mocker):
 def test_create_s3_client_credentials(mocker):
     module = reload_s3_client()
     mock_client = mocker.MagicMock()
-    patched_client = mocker.patch("boto3.client", return_value=mock_client)
+    patched_client = _mock_session_client(mocker, return_value=mock_client)
 
     role = {
         "type": "credentials",
@@ -193,7 +215,7 @@ def test_create_s3_client_credentials(mocker):
 def test_create_s3_client_custom_endpoint_and_path_style(mocker):
     module = reload_s3_client()
     mock_client = mocker.MagicMock()
-    patched_client = mocker.patch("boto3.client", return_value=mock_client)
+    patched_client = _mock_session_client(mocker, return_value=mock_client)
 
     role = {
         "type": "credentials",
@@ -217,7 +239,7 @@ def test_create_s3_client_custom_endpoint_and_path_style(mocker):
 def test_get_s3_client_caches_results(mocker):
     module = reload_s3_client()
     mock_client = mocker.MagicMock()
-    mocker.patch("boto3.client", return_value=mock_client)
+    _mock_session_client(mocker, return_value=mock_client)
 
     client1 = module.get_s3_client()
     client2 = module.get_s3_client()
@@ -227,7 +249,7 @@ def test_get_s3_client_caches_results(mocker):
 def test_get_s3_client_with_named_role(mocker):
     module = reload_s3_client()
     mock_client = mocker.MagicMock()
-    mocker.patch("boto3.client", return_value=mock_client)
+    _mock_session_client(mocker, return_value=mock_client)
 
     import another_s3_manager.config as config_module
 
@@ -258,7 +280,7 @@ def test_clear_s3_clients_cache(mocker):
     # Mock client must answer list_buckets() — get_s3_client probes it on cache miss.
     fake = mocker.MagicMock()
     fake.list_buckets.return_value = {"Buckets": []}
-    mocker.patch("boto3.client", return_value=fake)
+    _mock_session_client(mocker, return_value=fake)
     module.get_s3_client()
     assert module._s3_clients_cache
     module.clear_s3_clients_cache()
@@ -306,7 +328,7 @@ def test_get_s3_client_without_roles_uses_default(mocker):
     # Mock client must answer list_buckets() — get_s3_client probes it on cache miss.
     fake = mocker.MagicMock()
     fake.list_buckets.return_value = {"Buckets": []}
-    mocker.patch("boto3.client", return_value=fake)
+    _mock_session_client(mocker, return_value=fake)
     import another_s3_manager.config as config_module
 
     config_module.save_config(
@@ -323,7 +345,7 @@ def test_get_s3_client_without_roles_uses_default(mocker):
 
 def test_get_s3_client_missing_named_role_raises(mocker):
     module = reload_s3_client()
-    mocker.patch("boto3.client", return_value="client")
+    _mock_session_client(mocker, return_value="client")
     import another_s3_manager.config as config_module
 
     config_module.save_config(
@@ -349,7 +371,7 @@ def test_parse_bool_helper():
 def test_create_s3_client_s3_compatible(mocker):
     module = reload_s3_client()
     mock_client = mocker.MagicMock()
-    patched_client = mocker.patch("boto3.client", return_value=mock_client)
+    patched_client = _mock_session_client(mocker, return_value=mock_client)
 
     role = {
         "type": "s3_compatible",
@@ -377,7 +399,7 @@ def test_create_s3_client_s3_compatible(mocker):
 def test_create_s3_client_s3_compatible_defaults(mocker):
     module = reload_s3_client()
     mock_client = mocker.MagicMock()
-    patched_client = mocker.patch("boto3.client", return_value=mock_client)
+    patched_client = _mock_session_client(mocker, return_value=mock_client)
 
     role = {
         "type": "s3_compatible",
@@ -450,7 +472,7 @@ def test_assume_role_retries_once_on_expired_credentials(mocker):
         CredentialRetrievalError(provider="x", error_msg="token expired"),
         {"Credentials": creds},
     ]
-    mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    _mock_session_client(mocker, return_value=sts)
     fake_client = mocker.Mock()
     mocker.patch.object(s3_client.BotocoreSession, "create_client", return_value=fake_client)
     clear = mocker.patch.object(s3_client, "_clear_boto3_cached_credentials")
@@ -472,7 +494,7 @@ def test_assume_role_raises_typed_when_both_attempts_expired(mocker):
 
     sts = mocker.Mock()
     sts.assume_role.side_effect = CredentialRetrievalError(provider="x", error_msg="token expired")
-    mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    _mock_session_client(mocker, return_value=sts)
     mocker.patch.object(s3_client, "_clear_boto3_cached_credentials")
 
     role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
@@ -499,7 +521,7 @@ def test_assume_role_refreshes_via_refreshable_credentials(mocker):
     }
     sts = mocker.Mock()
     sts.assume_role.side_effect = [{"Credentials": first}, {"Credentials": second}]
-    mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    _mock_session_client(mocker, return_value=sts)
 
     captured = {}
 
@@ -546,7 +568,7 @@ def test_assume_role_metrics_attribute_initial_and_refresh_to_separate_counters(
     }
     sts = mocker.Mock()
     sts.assume_role.side_effect = [{"Credentials": first}, {"Credentials": second}]
-    mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    _mock_session_client(mocker, return_value=sts)
 
     captured = {}
 
@@ -605,7 +627,7 @@ def test_assume_role_sts_region_falls_back_to_aws_region_env(mocker, monkeypatch
     }
     sts = mocker.Mock()
     sts.assume_role.return_value = {"Credentials": creds}
-    boto_client = mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    boto_client = _mock_session_client(mocker, return_value=sts)
     create_client = mocker.patch.object(s3_client.BotocoreSession, "create_client", return_value=mocker.Mock())
 
     role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
@@ -630,7 +652,7 @@ def test_assume_role_role_region_beats_aws_region_env(mocker, monkeypatch):
     }
     sts = mocker.Mock()
     sts.assume_role.return_value = {"Credentials": creds}
-    boto_client = mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    boto_client = _mock_session_client(mocker, return_value=sts)
     mocker.patch.object(s3_client.BotocoreSession, "create_client", return_value=mocker.Mock())
 
     role = {
@@ -658,7 +680,7 @@ def test_assume_role_region_none_without_any_source(mocker, monkeypatch):
     }
     sts = mocker.Mock()
     sts.assume_role.return_value = {"Credentials": creds}
-    boto_client = mocker.patch.object(s3_client.boto3, "client", return_value=sts)
+    boto_client = _mock_session_client(mocker, return_value=sts)
     create_client = mocker.patch.object(s3_client.BotocoreSession, "create_client", return_value=mocker.Mock())
 
     role = {"name": "r", "type": "assume_role", "role_arn": "arn:aws:iam::000000000000:role/x"}
@@ -671,7 +693,7 @@ def test_assume_role_region_none_without_any_source(mocker, monkeypatch):
 def test_create_s3_client_s3_compatible_path_style_backward_compat(mocker):
     module = reload_s3_client()
     mock_client = mocker.MagicMock()
-    patched_client = mocker.patch("boto3.client", return_value=mock_client)
+    patched_client = _mock_session_client(mocker, return_value=mock_client)
 
     role = {
         "type": "s3_compatible",
@@ -1930,3 +1952,211 @@ def test_get_object_metadata_for_role_missing_raises(moto_s3):
     moto_s3.create_bucket(Bucket="md2")
     with pytest.raises(FileNotFoundError):
         get_object_metadata_for_role(None, "md2", "nope.txt", _ADMIN)
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: _s3_clients_cache under real multi-threaded access (R001
+# moved every boto3 call onto a worker-thread pool, making this a genuine
+# hazard instead of a theoretical one).
+# ---------------------------------------------------------------------------
+
+
+def test_get_s3_client_concurrent_threads_same_role_no_corruption(mocker):
+    """N real threads race get_s3_client() for the same role at the same instant.
+
+    Uses a threading.Barrier so every thread hits the cache-miss check at
+    genuinely the same time, plus an artificial delay inside the client
+    build to widen the race window well past the size of a dict lookup —
+    without both, two threads could easily interleave "by luck" without
+    ever exercising the lock. All threads must succeed, return the exact
+    same client object, and the client must have been built exactly ONCE:
+    with the double-checked lock, every thread but the first blocks on
+    `_s3_clients_lock` and then finds the cache already populated. Without
+    the lock, the injected delay makes it near-certain multiple threads
+    pass the `cache_key in _s3_clients_cache` check before any of them
+    finishes building+caching, so this discriminates for real (verified by
+    temporarily reverting the lock and observing build_count > 1).
+    """
+    module = reload_s3_client()
+
+    fake_client = mocker.MagicMock()
+    fake_client.list_buckets.return_value = {"Buckets": []}
+
+    build_count = {"n": 0}
+    build_count_lock = threading.Lock()
+
+    def slow_client(*_args, **_kwargs):
+        with build_count_lock:
+            build_count["n"] += 1
+        # Widen the race window far past a dict lookup so concurrent misses
+        # genuinely overlap instead of serializing incidentally.
+        time.sleep(0.05)
+        return fake_client
+
+    session_mock = mocker.MagicMock()
+    session_mock.client.side_effect = slow_client
+    mocker.patch("boto3.Session", return_value=session_mock)
+
+    n_threads = 20
+    barrier = threading.Barrier(n_threads)
+    results: list = [None] * n_threads
+    errors: list = []
+
+    def worker(idx: int) -> None:
+        try:
+            barrier.wait(timeout=5)
+            results[idx] = module.get_s3_client()
+        except Exception as exc:  # noqa: BLE001 - captured for the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, f"get_s3_client raised under concurrency: {errors}"
+    assert all(r is fake_client for r in results), "not every thread got the same cached client"
+    assert build_count["n"] == 1, (
+        f"expected exactly 1 client build across {n_threads} concurrent misses, got {build_count['n']} "
+        "— the check-build-store sequence is not properly serialized"
+    )
+
+
+def test_get_s3_client_survives_concurrent_invalidate_no_keyerror(mocker):
+    """A cached client read must never KeyError against a concurrent,
+    unsynchronized `invalidate_s3_client`.
+
+    Two layers, both real multi-threading:
+
+    1. A background "invalidator" thread genuinely hammers
+       `invalidate_s3_client()` for the role in a tight loop, concurrently
+       with N "getter" threads hammering `get_s3_client()` for the same
+       role — real organic concurrent traffic, released together via a
+       `threading.Barrier`. This alone was tried first (plus dropping
+       `sys.setswitchinterval` to widen GIL handoff frequency, up to 24
+       getter + 3 invalidator threads x 1000 iterations): it produced ZERO
+       crashes on the buggy pre-fix pattern in ~8s of wall time. The window
+       between the `in` check and the `[]` subscript is a couple of
+       bytecodes wide, and pure GIL-scheduling luck essentially never lands
+       there — the same empirical finding the reviewer made for the sibling
+       config-cache theatre test.
+    2. So the cache dict is swapped for `_RaceForcingCache`, a `dict`
+       subclass whose overridden `__contains__` — invoked by `key in
+       cache`, which is exactly the first half of the old `if key in
+       cache: return cache[key]` pattern — spins up a genuinely separate
+       thread that calls `invalidate_s3_client` (a real pop on this same
+       dict) and joins it BEFORE returning, forcing the precise
+       interleaving the old pattern is vulnerable to on (effectively)
+       every hit. Critically, `dict.get()` — what the fixed code uses — is
+       a C-level method that bypasses a subclass's overridden
+       `__contains__`/`__getitem__` entirely (verified directly: calling
+       `.get()`/`.pop()` on an instrumented subclass does not invoke the
+       overridden dunder methods), so this hook is fully inert against the
+       fixed code — it neither triggers nor perturbs it.
+
+    On the pre-fix `if cache_key in _s3_clients_cache: return
+    _s3_clients_cache[cache_key]` pattern (both the lock-free fast path and
+    the in-lock double-check use it), the forced pop between the `in`
+    check and the subscript raises `KeyError`, which escapes
+    `get_s3_client` uncaught — a getter thread crashes (in production: an
+    uncaught 500). On the fixed code (`dict.get()`, a single atomic read),
+    no `KeyError` is possible. Verified by reverting to the `in`/`[]`
+    pattern and re-running this exact test (see fix-round-1 in the
+    concurrent-caches report for the pasted failure).
+    """
+    module = reload_s3_client()
+
+    fake_client = mocker.MagicMock()
+    fake_client.list_buckets.return_value = {"Buckets": []}
+    session_mock = mocker.MagicMock()
+    session_mock.client.return_value = fake_client
+    mocker.patch("boto3.Session", return_value=session_mock)
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RaceRole", "type": "default"}]},
+    )
+
+    cache_key = "RaceRole"
+
+    class _RaceForcingCache(dict):
+        """See the module-level test docstring above: forces the exact
+        interleaving the old `in`/`[]` cache-read pattern is vulnerable to,
+        via a genuinely separate thread — and is fully inert against the
+        fixed `dict.get()` pattern.
+        """
+
+        def __contains__(self, key: object) -> bool:
+            present = super().__contains__(key)
+            if present and key == cache_key:
+                racer = threading.Thread(target=module.invalidate_s3_client, args=(cache_key,))
+                racer.start()
+                racer.join(timeout=5)
+            return present
+
+    module._s3_clients_cache = _RaceForcingCache(module._s3_clients_cache)
+
+    stop = threading.Event()
+    n_getters = 8
+    iterations = 50
+    barrier = threading.Barrier(n_getters + 1)
+    errors: list = []
+
+    def getter() -> None:
+        try:
+            barrier.wait(timeout=5)
+        except threading.BrokenBarrierError:
+            return
+        for _ in range(iterations):
+            try:
+                module.get_s3_client(cache_key)
+            except Exception as exc:  # noqa: BLE001 - captured for the assertion below
+                errors.append(exc)
+                return
+
+    def invalidator() -> None:
+        # Real, independent concurrent invalidation traffic on top of the
+        # deterministic hook above — exercises the fixed code's actual
+        # locking discipline, not just the forced-race path.
+        try:
+            barrier.wait(timeout=5)
+        except threading.BrokenBarrierError:
+            return
+        while not stop.is_set():
+            module.invalidate_s3_client(cache_key)
+
+    getters = [threading.Thread(target=getter) for _ in range(n_getters)]
+    inv_thread = threading.Thread(target=invalidator)
+
+    try:
+        inv_thread.start()
+        for t in getters:
+            t.start()
+        for t in getters:
+            t.join(timeout=30)
+    finally:
+        stop.set()
+        inv_thread.join(timeout=5)
+
+    assert not errors, f"get_s3_client raised under concurrent invalidate: {errors!r}"
+
+
+def test_create_s3_client_default_builds_explicit_session_not_default(mocker):
+    """Client construction must NOT go through boto3's module-level default-session
+    helper (`boto3.client(...)`) — boto3 documents that helper as sharing a
+    process-wide, non-thread-safe session. It must build an explicit,
+    unshared `boto3.Session()` per client instead (see _new_boto3_session).
+
+    This discriminates directly against the pre-fix code, which called
+    `boto3.client("s3", **client_kwargs)` here — `default_session_client`
+    would have been called and this assertion would fail.
+    """
+    module = reload_s3_client()
+    default_session_client = mocker.patch("boto3.client")
+    session_mock = mocker.MagicMock()
+    mocker.patch("boto3.Session", return_value=session_mock)
+
+    module._create_s3_client_from_role({"type": "default"})
+
+    default_session_client.assert_not_called()
+    session_mock.client.assert_called_once()

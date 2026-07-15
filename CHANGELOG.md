@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Hardened `users.update_user()`'s password provenance stamping against a future
+  refactor.** It used to stamp `password_set_via` on the mere presence of a
+  `password_hash` keyword argument, regardless of whether the value actually
+  changed — unlike `save_users()`, which only stamps on a real hash change. No
+  current caller was affected (every one only passes `password_hash` when it
+  genuinely changes), but a natural future rewrite of the admin user-update route
+  as `update_user(username, **user_dict)` — where `user_dict` round-trips through
+  the same load/save helpers and therefore always carries the (possibly
+  unchanged) hash — would have silently reclassified an environment-governed
+  admin password as UI-set on every no-op edit, permanently disabling
+  `ADMIN_PASSWORD` rotation for that admin. `update_user()` now mirrors
+  `save_users()`'s hash-value comparison (stamping only when the stored hash actually
+  changes, not merely when a `password_hash` is present).
+- **Hardened two module-global caches (S3 clients, config) against the
+  concurrent access a recent change (moving every boto3 call onto a worker
+  thread) exposed them to.** Both were previously safe only because a
+  single-threaded event loop serialized access to them; that assumption no
+  longer holds with up to ~40 concurrent worker threads.
+  - The S3 client cache's check-build-store sequence is now guarded by a
+    lock with double-checked locking (same shape as the existing DB engine
+    lock), so concurrent cache misses for the same role can no longer race
+    each other's writes. Client construction was also moved off boto3's
+    module-level `boto3.client(...)` helper — documented by boto3 as
+    sharing a single, non-thread-safe session process-wide — onto an
+    explicit `boto3.Session()` per build, so concurrent builds for
+    different roles no longer share mutable session state either.
+  - The config cache's reload path used to rebind the module-level cache to
+    the raw, just-loaded JSON _before_ running the migration step that adds
+    missing keys, leaving a window where a concurrent reader could observe
+    an unmigrated config and silently fall back to defaults for whatever
+    keys the migration would have added. The reload now fully loads and
+    migrates the config into a local variable first, and only publishes it
+    with a single atomic rebind once it is complete.
+  - Closed a follow-up gap in the S3 client cache read path: both the
+    lock-free fast path and the in-lock double-check checked `if cache_key
+in _s3_clients_cache` before indexing into it — two separate,
+    non-atomic dict operations. A concurrent `invalidate_s3_client` /
+    `clear_s3_clients_cache` (neither of which took a lock) could remove
+    the entry in between, raising an uncaught `KeyError` under real
+    worker-thread concurrency. Both read sites now use a single atomic
+    `dict.get()`, and the two mutators now also take the cache lock.
 - **Alembic migrations could silently wipe `user_roles`, `bans`, and `api_tokens` on any migration that recreates the `users` table.** `migrations/env.py` ran with SQLite foreign key enforcement on and `render_as_batch=True`, which implements unsupported ALTERs (like `drop_column`) by recreating the whole table — create new, copy rows, `DROP TABLE users`, rename. With FK enforcement on, that `DROP TABLE` fired every `ON DELETE CASCADE` pointing at `users`, deleting all role assignments, bans, and API tokens even though the users themselves survived (they'd already been copied). This was reachable via the documented `alembic downgrade -1` rollback and via any forward migration that drops a `users` column. FK enforcement is now explicitly forced off for the duration of a migration run — so a table recreate no longer cascades — and a `PRAGMA foreign_key_check` afterwards turns any migration that genuinely orphaned a row into a loud deploy-time failure rather than silent corruption (it detects, it does not roll back). Runtime FK enforcement (used by the running app, where a real `ON DELETE CASCADE` is wanted) is unaffected.
 
 ## [1.1.3] - 2026-07-15

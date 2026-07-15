@@ -75,7 +75,7 @@ def test_migrate_config_adds_ttl_fields(monkeypatch):
     monkeypatch.delenv("PRESIGNED_URL_DEFAULT_TTL", raising=False)
     monkeypatch.delenv("PRESIGNED_URL_MAX_TTL", raising=False)
     config_module._config_cache = {"roles": []}
-    modified = config_module._migrate_config()
+    modified = config_module._migrate_config(config_module._config_cache)
     assert modified is True
     assert config_module._config_cache["presigned_url_default_ttl"] == 3600
     assert config_module._config_cache["presigned_url_max_ttl"] == 604800
