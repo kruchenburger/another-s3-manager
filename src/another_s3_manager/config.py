@@ -5,6 +5,7 @@ Configuration management module
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -17,49 +18,82 @@ _config_cache: Dict[str, Any] = {}
 _config_mtime: float = 0
 _migrating: bool = False  # Flag to prevent recursive migration
 
+# Serializes the reload path (read file + migrate + persist) across threads.
+# R001 moved every request onto a worker-thread pool, so concurrent reloads
+# are now real: without this, two threads could both read the file, both
+# migrate their own copy, and both write config.json back-to-back. The lock
+# does not protect plain reads of `_config_cache` below (those stay lock-free
+# and rely on the atomic-rebind argument documented in load_config).
+_config_lock = threading.Lock()
+
 
 def load_config(force_reload: bool = False) -> Dict[str, Any]:
     """
     Load configuration from file with caching.
+
+    Concurrency: the reload branch (file read + migrate + persist) is
+    serialized by `_config_lock` so two threads never race each other's
+    reads/writes of config.json. The published cache itself is swapped with a
+    single `_config_cache = new_config` assignment — atomic under the GIL —
+    only AFTER the freshly-loaded dict has been fully migrated. A concurrent
+    reader hitting the `return _config_cache` fast path therefore only ever
+    observes the OLD fully-migrated dict or the NEW fully-migrated dict, never
+    a dict rebound to the raw JSON before migration filled in missing keys.
     """
     global _config_cache, _config_mtime
 
-    if CONFIG_FILE.exists():
-        current_mtime = CONFIG_FILE.stat().st_mtime
-        if force_reload or current_mtime > _config_mtime or not _config_cache:
-            # Load main config file
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                _config_cache = json.load(f)
-            _config_mtime = current_mtime
-
-            # Migrate config: add missing fields if they don't exist
-            # Prevent recursive migration calls
-            global _migrating
-            if not _migrating:
-                _migrating = True
-                try:
-                    if _migrate_config():
-                        # Try to save migrated config, but skip if file is read-only
-                        # Use internal function to avoid recursion if save_config is wrapped
-                        try:
-                            _save_config_internal(_config_cache, skip_migration=True)
-                            # Update mtime after save to prevent reload
-                            if CONFIG_FILE.exists():
-                                _config_mtime = CONFIG_FILE.stat().st_mtime
-                        except PermissionError:
-                            # Config file is read-only, migration applied in memory only
-                            pass
-                finally:
-                    _migrating = False
-
-            return _config_cache
+    if not CONFIG_FILE.exists():
+        # Default config if file doesn't exist
+        default_config = _get_default_config()
+        if not _config_cache:
+            _config_cache = default_config
         return _config_cache
 
-    # Default config if file doesn't exist
-    default_config = _get_default_config()
-    if not _config_cache:
-        _config_cache = default_config
-    return _config_cache
+    current_mtime = CONFIG_FILE.stat().st_mtime
+    if not (force_reload or current_mtime > _config_mtime or not _config_cache):
+        return _config_cache
+
+    with _config_lock:
+        # Double-checked locking: another thread may have completed the
+        # reload (and the migration + persist that comes with it) while this
+        # thread was waiting for the lock — re-check before doing it again.
+        current_mtime = CONFIG_FILE.stat().st_mtime if CONFIG_FILE.exists() else current_mtime
+        if not (force_reload or current_mtime > _config_mtime or not _config_cache):
+            return _config_cache
+
+        # Load main config file into a LOCAL variable — NOT the module cache —
+        # so migration completes before anything becomes visible to readers.
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            new_config = json.load(f)
+
+        # Migrate config: add missing fields if they don't exist.
+        # Prevent recursive migration calls.
+        global _migrating
+        if not _migrating:
+            _migrating = True
+            try:
+                if _migrate_config(new_config):
+                    # Try to save migrated config, but skip if file is read-only.
+                    # Use internal function to avoid recursion if save_config is wrapped.
+                    try:
+                        _save_config_internal(new_config, skip_migration=True)
+                        # _save_config_internal already performs the atomic
+                        # rebind of _config_cache/_config_mtime — nothing left
+                        # to do here.
+                        return _config_cache
+                    except PermissionError:
+                        # Config file is read-only, migration applied in memory only.
+                        pass
+            finally:
+                _migrating = False
+
+        # Atomic publish: a bare attribute rebind is a single bytecode op
+        # under the GIL, so this is the moment concurrent readers flip from
+        # seeing the old complete dict to the new complete (already-migrated)
+        # one — there is no half-built state for them to observe.
+        _config_cache = new_config
+        _config_mtime = current_mtime
+        return _config_cache
 
 
 def resolve_max_file_size(config: Optional[Dict[str, Any]] = None) -> int:
@@ -85,19 +119,25 @@ def resolve_max_file_size(config: Optional[Dict[str, Any]] = None) -> int:
     return int(max_file_size)
 
 
-def _migrate_config() -> bool:
-    """Migrate config by adding missing fields with default values."""
-    global _config_cache
+def _migrate_config(config: Dict[str, Any]) -> bool:
+    """Migrate `config` in place by adding missing fields with default values.
+
+    Takes the dict to migrate as an explicit argument (rather than reaching
+    for the module-level `_config_cache`) so callers can migrate a LOCAL,
+    not-yet-published dict to completion before ever exposing it as
+    `_config_cache` — see load_config's atomic-rebind comment for why that
+    matters under concurrent readers.
+    """
     config_modified = False
 
-    if "enable_lazy_loading" not in _config_cache:
-        _config_cache["enable_lazy_loading"] = os.getenv("ENABLE_LAZY_LOADING", "true").lower() == "true"
+    if "enable_lazy_loading" not in config:
+        config["enable_lazy_loading"] = os.getenv("ENABLE_LAZY_LOADING", "true").lower() == "true"
         config_modified = True
-    if "max_file_size" not in _config_cache:
-        _config_cache["max_file_size"] = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
+    if "max_file_size" not in config:
+        config["max_file_size"] = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
         config_modified = True
-    if "max_client_load" not in _config_cache:
-        _config_cache["max_client_load"] = int(os.getenv("MAX_CLIENT_LOAD", "10000"))
+    if "max_client_load" not in config:
+        config["max_client_load"] = int(os.getenv("MAX_CLIENT_LOAD", "10000"))
         config_modified = True
     # Split the legacy `auto_inline_extensions` key (which conflated two unrelated
     # features) into two:
@@ -106,17 +146,17 @@ def _migrate_config() -> bool:
     #     (so they open in the browser when served via CDN / presigned URL)
     # Presence of `preview_text_extensions` is the "already migrated" marker, so
     # an admin who clears either list to [] keeps it empty (no re-seed).
-    if "preview_text_extensions" not in _config_cache:
+    if "preview_text_extensions" not in config:
         from another_s3_manager.constants import (
             DEFAULT_PREVIEW_TEXT_EXTENSIONS,
             DEFAULT_UPLOAD_INLINE_EXTENSIONS,
         )
 
-        legacy = _config_cache.get("auto_inline_extensions")
+        legacy = config.get("auto_inline_extensions")
         legacy_list = list(legacy) if isinstance(legacy, list) else None
         # Preserve the current preview behavior verbatim; fall back to the text
         # defaults for fresh installs / configs that never had the key.
-        _config_cache["preview_text_extensions"] = (
+        config["preview_text_extensions"] = (
             legacy_list if legacy_list is not None else list(DEFAULT_PREVIEW_TEXT_EXTENSIONS)
         )
         # Upload-inline: preserve every extension the legacy list already made
@@ -124,70 +164,70 @@ def _migrate_config() -> bool:
         # pdf+images defaults, so browser-open PDFs are restored even when the
         # legacy list was the text-only re-seed. Fresh installs get just the
         # defaults.
-        if "upload_inline_extensions" not in _config_cache:
+        if "upload_inline_extensions" not in config:
             if legacy_list is not None:
-                _config_cache["upload_inline_extensions"] = legacy_list + [
+                config["upload_inline_extensions"] = legacy_list + [
                     e for e in DEFAULT_UPLOAD_INLINE_EXTENSIONS if e not in legacy_list
                 ]
             else:
-                _config_cache["upload_inline_extensions"] = list(DEFAULT_UPLOAD_INLINE_EXTENSIONS)
+                config["upload_inline_extensions"] = list(DEFAULT_UPLOAD_INLINE_EXTENSIONS)
         # Drop the obsolete legacy keys so config.json stops carrying them.
-        _config_cache.pop("auto_inline_extensions", None)
-        _config_cache.pop("_auto_inline_seeded", None)
+        config.pop("auto_inline_extensions", None)
+        config.pop("_auto_inline_seeded", None)
         config_modified = True
     # Password policy defaults — added Phase 4d. Conservative baseline:
     # require length+uppercase+lowercase+digit, leave special opt-in.
-    if "password_min_length" not in _config_cache:
-        _config_cache["password_min_length"] = 8
+    if "password_min_length" not in config:
+        config["password_min_length"] = 8
         config_modified = True
-    if "password_min_uppercase" not in _config_cache:
-        _config_cache["password_min_uppercase"] = 1
+    if "password_min_uppercase" not in config:
+        config["password_min_uppercase"] = 1
         config_modified = True
-    if "password_min_lowercase" not in _config_cache:
-        _config_cache["password_min_lowercase"] = 1
+    if "password_min_lowercase" not in config:
+        config["password_min_lowercase"] = 1
         config_modified = True
-    if "password_min_digits" not in _config_cache:
-        _config_cache["password_min_digits"] = 1
+    if "password_min_digits" not in config:
+        config["password_min_digits"] = 1
         config_modified = True
-    if "password_min_special" not in _config_cache:
-        _config_cache["password_min_special"] = 0
+    if "password_min_special" not in config:
+        config["password_min_special"] = 0
         config_modified = True
     # MCP server defaults — added Phase 5
-    if "mcp_enabled" not in _config_cache:
-        _config_cache["mcp_enabled"] = True
+    if "mcp_enabled" not in config:
+        config["mcp_enabled"] = True
         config_modified = True
-    if "mcp_disable_writes" not in _config_cache:
-        _config_cache["mcp_disable_writes"] = False
+    if "mcp_disable_writes" not in config:
+        config["mcp_disable_writes"] = False
         config_modified = True
-    if "mcp_text_extensions" not in _config_cache:
-        _config_cache["mcp_text_extensions"] = []
+    if "mcp_text_extensions" not in config:
+        config["mcp_text_extensions"] = []
         config_modified = True
-    if "mcp_global_max_read_bytes" not in _config_cache:
-        _config_cache["mcp_global_max_read_bytes"] = 10_485_760
+    if "mcp_global_max_read_bytes" not in config:
+        config["mcp_global_max_read_bytes"] = 10_485_760
         config_modified = True
     # MCP big-bucket ergonomics — added 2026-07-12.
-    if "mcp_summary_max_keys" not in _config_cache:
-        _config_cache["mcp_summary_max_keys"] = 50_000
+    if "mcp_summary_max_keys" not in config:
+        config["mcp_summary_max_keys"] = 50_000
         config_modified = True
-    if "mcp_summary_prefix_scan_pages" not in _config_cache:
-        _config_cache["mcp_summary_prefix_scan_pages"] = 20
+    if "mcp_summary_prefix_scan_pages" not in config:
+        config["mcp_summary_prefix_scan_pages"] = 20
         config_modified = True
-    if "mcp_list_page_size" not in _config_cache:
-        _config_cache["mcp_list_page_size"] = 1000
+    if "mcp_list_page_size" not in config:
+        config["mcp_list_page_size"] = 1000
         config_modified = True
-    if "mcp_list_max_page_size" not in _config_cache:
-        _config_cache["mcp_list_max_page_size"] = 10_000
+    if "mcp_list_max_page_size" not in config:
+        config["mcp_list_max_page_size"] = 10_000
         config_modified = True
-    if "presigned_url_default_ttl" not in _config_cache or "presigned_url_max_ttl" not in _config_cache:
+    if "presigned_url_default_ttl" not in config or "presigned_url_max_ttl" not in config:
         from another_s3_manager.constants import DEFAULT_PRESIGNED_URL_DEFAULT_TTL, DEFAULT_PRESIGNED_URL_MAX_TTL
 
-        if "presigned_url_default_ttl" not in _config_cache:
-            _config_cache["presigned_url_default_ttl"] = int(
+        if "presigned_url_default_ttl" not in config:
+            config["presigned_url_default_ttl"] = int(
                 os.getenv("PRESIGNED_URL_DEFAULT_TTL", str(DEFAULT_PRESIGNED_URL_DEFAULT_TTL))
             )
             config_modified = True
-        if "presigned_url_max_ttl" not in _config_cache:
-            _config_cache["presigned_url_max_ttl"] = int(
+        if "presigned_url_max_ttl" not in config:
+            config["presigned_url_max_ttl"] = int(
                 os.getenv("PRESIGNED_URL_MAX_TTL", str(DEFAULT_PRESIGNED_URL_MAX_TTL))
             )
             config_modified = True

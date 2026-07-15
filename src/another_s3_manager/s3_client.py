@@ -5,6 +5,7 @@ S3 client management module
 import heapq
 import logging
 import os
+import threading
 import time
 from datetime import datetime
 from typing import Any, BinaryIO, Callable, Dict, Iterator, Optional, Tuple, TypeVar
@@ -21,6 +22,12 @@ from another_s3_manager.constants import S3_USE_SSL, S3_VERIFY_SSL
 
 # Cache for S3 clients per role
 _s3_clients_cache: Dict[str, AnyType] = {}
+# Guards the check-build-store sequence in get_s3_client (double-checked
+# locking, same shape as database.py's get_engine). R001 moved every boto3
+# call onto a worker-thread pool, so concurrent cache misses for the same
+# role are now real — without this lock two threads could both miss, both
+# assume the same role / build a client, and race the dict write.
+_s3_clients_lock = threading.Lock()
 T = TypeVar("T")
 
 # Set up logging
@@ -90,9 +97,21 @@ def _clear_boto3_cached_credentials() -> None:
 
 
 def invalidate_s3_client(role_name: Optional[str] = None) -> None:
-    """Remove cached S3 client for the specified role."""
+    """Remove cached S3 client for the specified role.
+
+    Takes `_s3_clients_lock` so this mutation can never interleave with a
+    concurrent get_s3_client build-and-store: without it, a thread could
+    finish building+caching a fresh client for this exact role right as this
+    pop drops it, silently discarding work that was just done and forcing an
+    immediate, avoidable rebuild on the very next call for the role. The read
+    side (get_s3_client's fast path and in-lock double-check) uses a plain
+    `dict.get()`, which is atomic under the GIL on its own and therefore safe
+    even without this lock; taking it here as well is cheap (no network I/O
+    in this function) and removes that build-vs-invalidate thrash too.
+    """
     cache_key = role_name or "default"
-    _s3_clients_cache.pop(cache_key, None)
+    with _s3_clients_lock:
+        _s3_clients_cache.pop(cache_key, None)
 
 
 def _is_expired_credentials_error(error: BaseException) -> bool:
@@ -187,6 +206,23 @@ def _get_boto3_config(addressing_style: Optional[str] = None) -> Config:
     return Config(**config_kwargs)
 
 
+def _new_boto3_session() -> boto3.Session:
+    """Build a fresh, explicit boto3 Session for a single client build.
+
+    boto3's module-level helpers (`boto3.client(...)`, `boto3.resource(...)`)
+    are documented as NOT thread-safe: they lazily create and share
+    `boto3.DEFAULT_SESSION` across every caller in the process. R001 moved
+    every S3/STS call onto a worker-thread pool, so concurrent client builds
+    (e.g. two roles cold-starting, or two threads racing a cache miss for the
+    same role before the lock in get_s3_client is acquired) now genuinely
+    race on that shared default session. Building each client from its own
+    unshared Session sidesteps that entirely, at the cost of a cheap
+    in-memory object per build — cache misses are rare (first request per
+    role, or after explicit invalidation), so this is not a hot path.
+    """
+    return boto3.Session()
+
+
 def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
     """Create S3 client from role configuration."""
     role_type = role.get("type")
@@ -209,7 +245,7 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
         }
         if endpoint_url:
             client_kwargs["endpoint_url"] = endpoint_url
-        return boto3.client("s3", **client_kwargs)
+        return _new_boto3_session().client("s3", **client_kwargs)
 
     elif role_type == "profile":
         profile_name = role.get("profile_name")
@@ -242,8 +278,9 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
             """Refresh credentials by assuming the role again using current pod identity credentials."""
             try:
                 logger.debug(f"Refreshing credentials for assumed role: {role_arn}")
-                # Create a fresh STS client that will use current pod identity credentials
-                sts_client = boto3.client(
+                # Create a fresh STS client that will use current pod identity credentials.
+                # Explicit session (not the module-level default) — see _new_boto3_session.
+                sts_client = _new_boto3_session().client(
                     "sts", region_name=region, use_ssl=use_ssl, verify=verify_ssl, config=boto_config
                 )
 
@@ -287,8 +324,9 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
         while sts_attempts < 2:
             try:
                 logger.info(f"Creating STS client for assume_role: {role_arn} (attempt {sts_attempts + 1})")
-                # Get initial credentials
-                sts_client = boto3.client(
+                # Get initial credentials. Explicit session (not the module-level
+                # default) — see _new_boto3_session.
+                sts_client = _new_boto3_session().client(
                     "sts", region_name=region, use_ssl=use_ssl, verify=verify_ssl, config=boto_config
                 )
 
@@ -495,7 +533,7 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
         if endpoint_url:
             client_kwargs["endpoint_url"] = endpoint_url
 
-        return boto3.client("s3", **client_kwargs)
+        return _new_boto3_session().client("s3", **client_kwargs)
 
     elif role_type == "s3_compatible":
         access_key_id = role.get("access_key_id")
@@ -535,7 +573,7 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
         if region and region.strip():
             client_kwargs["region_name"] = region.strip()
 
-        return boto3.client("s3", **client_kwargs)
+        return _new_boto3_session().client("s3", **client_kwargs)
 
     else:
         raise ValueError(f"Unknown role type: {role_type}")
@@ -551,6 +589,28 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     client is NOT cached and the failure is propagated as a typed
     S3OperationError so callers see the real error code immediately
     instead of caching a broken client.
+
+    Concurrency: the whole check-build-probe-store sequence on a cache miss
+    is guarded by `_s3_clients_lock` (double-checked locking, same shape as
+    database.py's get_engine). The lock is held ACROSS the network I/O
+    (client build + probe) rather than released and re-acquired — see the
+    module-level design note above `_s3_clients_lock` for why that's the
+    right tradeoff here: misses are rare (first request per role, or after
+    invalidation), so serializing them avoids duplicate STS AssumeRole calls
+    / duplicate probes for concurrent first-requests, at a cost that only
+    ever applies to that rare cold-start window — every cache HIT (the
+    overwhelming majority of calls) returns before the lock is ever touched.
+
+    Both the lock-free fast path and the in-lock double-check read the cache
+    with a single `dict.get()` rather than `if key in cache: return
+    cache[key]`. The two-step form is NOT atomic even though
+    `invalidate_s3_client`/`clear_s3_clients_cache` now also take
+    `_s3_clients_lock`: the fast-path read here is deliberately lock-free
+    (see above), so it can still race an invalidate/clear regardless of
+    whether those hold the lock. A bare `dict.get()` is a single atomic
+    operation under the GIL, so it can never observe a key that another
+    thread is mid-way through popping — the read is either the client or
+    `None`, never a `KeyError`.
 
     Args:
         role_name: Name of the role to use, or None for default
@@ -570,112 +630,123 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     # Use cache key based on role name
     cache_key = role_name or "default"
 
-    # Return cached client if available
-    if cache_key in _s3_clients_cache:
-        return _s3_clients_cache[cache_key]
+    # Return cached client if available (lock-free fast path). A single
+    # dict.get() is atomic under the GIL; an `in` check followed by a
+    # separate `[]` subscript is not, and can KeyError if invalidate_s3_client
+    # / clear_s3_clients_cache pops or clears the entry in between.
+    cached_client = _s3_clients_cache.get(cache_key)
+    if cached_client is not None:
+        return cached_client
 
-    # Load config and find role
-    config = load_config(force_reload=False)
-    roles = config.get("roles", [])
+    with _s3_clients_lock:
+        # Double-checked locking: another thread may have built and cached
+        # this exact role's client while we were waiting for the lock.
+        cached_client = _s3_clients_cache.get(cache_key)
+        if cached_client is not None:
+            return cached_client
 
-    if role_name:
-        role = next((r for r in roles if r.get("name") == role_name), None)
-        if not role:
-            raise RoleNotFoundError(f"Role '{role_name}' not found in configuration")
-    else:
-        # Use first role
-        role = roles[0] if roles else None
+        # Load config and find role
+        config = load_config(force_reload=False)
+        roles = config.get("roles", [])
 
-        if not role:
-            # Fallback to default AWS credentials
-            role = {"name": "Default", "type": "default", "description": "Use default AWS credentials"}
+        if role_name:
+            role = next((r for r in roles if r.get("name") == role_name), None)
+            if not role:
+                raise RoleNotFoundError(f"Role '{role_name}' not found in configuration")
+        else:
+            # Use first role
+            role = roles[0] if roles else None
 
-    # Create client
-    try:
-        role_type = role.get("type", "unknown")
-        logger.debug(f"Creating S3 client for role '{role_name or 'default'}' (type: {role_type})")
-        client = _create_s3_client_from_role(role)
-    except Exception:
-        logger.error(
-            f"Failed to create S3 client for role '{role_name or 'default'}'",
-            extra={
-                "role_name": role_name,
-                "role_type": role.get("type"),
-                "role_arn": role.get("role_arn") if role.get("type") == "assume_role" else None,
-            },
-            exc_info=True,
-        )
-        raise
+            if not role:
+                # Fallback to default AWS credentials
+                role = {"name": "Default", "type": "default", "description": "Use default AWS credentials"}
 
-    # Probe the client to surface bad config (invalid region, unreachable
-    # endpoint, expired credentials) BEFORE caching. Roles with
-    # allowed_buckets configured are expected to lack ListAllMyBuckets
-    # permission — fall back to head_bucket. We iterate ALL allowed_buckets
-    # (not just the first) so a single deleted/renamed bucket out-of-band
-    # doesn't brick the entire role for users who only access the others.
-    try:
-        client.list_buckets()
-    except Exception as probe_error:
-        typed = classify_boto_error(probe_error)
-        if isinstance(typed, S3AccessDeniedError):
-            allowed_buckets = role.get("allowed_buckets") or []
-            if isinstance(allowed_buckets, list) and allowed_buckets:
-                # Try each allowed bucket until one succeeds. As long as at
-                # least ONE responds, the credentials are valid — cache the
-                # client. Per-bucket NoSuchBucket / AccessDenied for the rest
-                # will surface on the actual operation, not at probe time.
-                head_failures: list[tuple[str, S3OperationError]] = []
-                for bucket_name in allowed_buckets:
-                    try:
-                        client.head_bucket(Bucket=str(bucket_name))
-                        break  # success — fall through to cache
-                    except Exception as head_error:
-                        head_failures.append((str(bucket_name), classify_boto_error(head_error)))
+        # Create client
+        try:
+            role_type = role.get("type", "unknown")
+            logger.debug(f"Creating S3 client for role '{role_name or 'default'}' (type: {role_type})")
+            client = _create_s3_client_from_role(role)
+        except Exception:
+            logger.error(
+                f"Failed to create S3 client for role '{role_name or 'default'}'",
+                extra={
+                    "role_name": role_name,
+                    "role_type": role.get("type"),
+                    "role_arn": role.get("role_arn") if role.get("type") == "assume_role" else None,
+                },
+                exc_info=True,
+            )
+            raise
+
+        # Probe the client to surface bad config (invalid region, unreachable
+        # endpoint, expired credentials) BEFORE caching. Roles with
+        # allowed_buckets configured are expected to lack ListAllMyBuckets
+        # permission — fall back to head_bucket. We iterate ALL allowed_buckets
+        # (not just the first) so a single deleted/renamed bucket out-of-band
+        # doesn't brick the entire role for users who only access the others.
+        try:
+            client.list_buckets()
+        except Exception as probe_error:
+            typed = classify_boto_error(probe_error)
+            if isinstance(typed, S3AccessDeniedError):
+                allowed_buckets = role.get("allowed_buckets") or []
+                if isinstance(allowed_buckets, list) and allowed_buckets:
+                    # Try each allowed bucket until one succeeds. As long as at
+                    # least ONE responds, the credentials are valid — cache the
+                    # client. Per-bucket NoSuchBucket / AccessDenied for the rest
+                    # will surface on the actual operation, not at probe time.
+                    head_failures: list[tuple[str, S3OperationError]] = []
+                    for bucket_name in allowed_buckets:
+                        try:
+                            client.head_bucket(Bucket=str(bucket_name))
+                            break  # success — fall through to cache
+                        except Exception as head_error:
+                            head_failures.append((str(bucket_name), classify_boto_error(head_error)))
+                    else:
+                        # Loop exhausted without break — every allowed bucket failed.
+                        # Surface the most-recent typed error with context about which
+                        # buckets were tried, so admins can spot config-vs-runtime issues.
+                        last_typed = head_failures[-1][1]
+                        bucket_summary = ", ".join(f"{name} ({err.code})" for name, err in head_failures)
+                        logger.error(
+                            f"S3 client probe (head_bucket) failed for ALL allowed_buckets on role "
+                            f"'{role_name or 'default'}': {bucket_summary}"
+                        )
+                        raise type(last_typed)(
+                            code=last_typed.code,
+                            message=(
+                                f"All allowed_buckets failed for this role: {bucket_summary}. "
+                                "Check the bucket names + credentials in the role config."
+                            ),
+                        ) from probe_error
                 else:
-                    # Loop exhausted without break — every allowed bucket failed.
-                    # Surface the most-recent typed error with context about which
-                    # buckets were tried, so admins can spot config-vs-runtime issues.
-                    last_typed = head_failures[-1][1]
-                    bucket_summary = ", ".join(f"{name} ({err.code})" for name, err in head_failures)
+                    # No allowed_buckets configured AND the role's creds can't
+                    # list all buckets. Wrap with the same friendly message that
+                    # the legacy /api/buckets handler used (PR #14 contract) so
+                    # frontend keeps showing actionable guidance, and add the
+                    # fix path for admins.
                     logger.error(
-                        f"S3 client probe (head_bucket) failed for ALL allowed_buckets on role "
-                        f"'{role_name or 'default'}': {bucket_summary}"
+                        f"S3 client probe denied for role '{role_name or 'default'}' and no allowed_buckets configured"
                     )
-                    raise type(last_typed)(
-                        code=last_typed.code,
+                    raise S3AccessDeniedError(
+                        code=typed.code,
                         message=(
-                            f"All allowed_buckets failed for this role: {bucket_summary}. "
-                            "Check the bucket names + credentials in the role config."
+                            "Your credentials don't have permission to list all buckets. "
+                            "This is normal for scoped tokens (R2, MinIO, AWS IAM with bucket-scoped policies). "
+                            "Edit this role and fill in 'Allowed Buckets' with the bucket names you want to access, "
+                            "or grant ListAllMyBuckets."
                         ),
                     ) from probe_error
             else:
-                # No allowed_buckets configured AND the role's creds can't
-                # list all buckets. Wrap with the same friendly message that
-                # the legacy /api/buckets handler used (PR #14 contract) so
-                # frontend keeps showing actionable guidance, and add the
-                # fix path for admins.
                 logger.error(
-                    f"S3 client probe denied for role '{role_name or 'default'}' and no allowed_buckets configured"
+                    f"S3 client probe failed for role '{role_name or 'default'}': "
+                    f"code={typed.code} status={typed.http_status}"
                 )
-                raise S3AccessDeniedError(
-                    code=typed.code,
-                    message=(
-                        "Your credentials don't have permission to list all buckets. "
-                        "This is normal for scoped tokens (R2, MinIO, AWS IAM with bucket-scoped policies). "
-                        "Edit this role and fill in 'Allowed Buckets' with the bucket names you want to access, "
-                        "or grant ListAllMyBuckets."
-                    ),
-                ) from probe_error
-        else:
-            logger.error(
-                f"S3 client probe failed for role '{role_name or 'default'}': "
-                f"code={typed.code} status={typed.http_status}"
-            )
-            raise typed from probe_error
+                raise typed from probe_error
 
-    _s3_clients_cache[cache_key] = client
-    logger.debug(f"Successfully created, probed and cached S3 client for role '{role_name or 'default'}'")
-    return client
+        _s3_clients_cache[cache_key] = client
+        logger.debug(f"Successfully created, probed and cached S3 client for role '{role_name or 'default'}'")
+        return client
 
 
 def _execute_with_retry_inner(role_name: Optional[str], callback: Callable[[AnyType], T]) -> T:
@@ -826,9 +897,17 @@ def clear_s3_clients_cache() -> None:
     inherit the OLD assumed-role / profile credentials until they naturally
     expire (~1h for STS). The credential flush matches what the per-role
     `invalidate_s3_client + _clear_boto3_cached_credentials` retry sites do.
+
+    The dict `.clear()` itself is taken under `_s3_clients_lock`, same
+    reasoning as `invalidate_s3_client`: it prevents a concurrent
+    get_s3_client build-and-store from being silently discarded the instant
+    after it completes. The credential-cache flush runs after the lock is
+    released — it touches boto3/botocore session state, not this dict, and
+    doesn't need to be inside the critical section.
     """
     global _s3_clients_cache
-    _s3_clients_cache.clear()
+    with _s3_clients_lock:
+        _s3_clients_cache.clear()
     _clear_boto3_cached_credentials()
 
 

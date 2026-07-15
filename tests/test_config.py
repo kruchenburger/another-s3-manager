@@ -2,6 +2,7 @@ import builtins
 import importlib
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -326,4 +327,89 @@ def test_migrate_config_adds_big_bucket_mcp_fields(monkeypatch, tmp_path):
     assert loaded["mcp_summary_max_keys"] == 50_000
     assert loaded["mcp_summary_prefix_scan_pages"] == 20
     assert loaded["mcp_list_page_size"] == 1000
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: _config_cache reload must be atomic (R001 moved every request
+# onto a worker-thread pool, so a reader hitting load_config() mid-reload is
+# now a real scenario, not a theoretical one).
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_reload_never_exposes_partially_migrated_dict(monkeypatch, tmp_path):
+    """No reader may ever observe `_config_cache` bound to a dict that's
+    missing a migration-added key.
+
+    This instruments the interpreter with `sys.settrace` and records every
+    DISTINCT dict object the module global `_config_cache` is ever bound to
+    while `load_config(force_reload=True)` runs on a legacy config file
+    (missing `mcp_enabled`, a migration-added key). A 'line' trace event
+    fires at every source-line boundary in every frame entered during the
+    call — not just `load_config`'s own frame, so it also sees the rebind
+    performed inside `_save_config_internal` — and we read the module
+    global directly (not `frame.f_globals`), so it doesn't matter which
+    function performs the assignment. This deterministically observes
+    every rebind the name ever goes through; it does not depend on thread
+    scheduling or an injected `time.sleep` widening a race window by luck.
+
+    Why the previous version of this test was theatre (see fix-round-1 in
+    the concurrent-caches report): it ran 8 reader threads busy-polling
+    `_config_cache` while `_migrate_config` was wrapped to `time.sleep(0.1)`
+    AFTER it returned. But by the time that sleep runs, migration has
+    already finished — the actual unsafe window in the pre-fix code (raw
+    dict published, then mutated in place by `_migrate_config`) is a few
+    bytecodes wide and closes long before the injected sleep ever starts.
+    The reviewer proved this passes on both the buggy and the fixed code
+    (0 false observations across ~16M reads over 5 runs).
+
+    This version instead observes the global directly, deterministically,
+    on every line boundary: on the pre-fix code, `_config_cache =
+    json.load(f)` publishes the raw dict to the global BEFORE
+    `_migrate_config()` mutates it in place, so the very next executed
+    line after that assignment already reveals `_config_cache` as the raw,
+    unmigrated dict — captured every single time, not probabilistically.
+    On the fixed code, `_config_cache` is only ever rebound to
+    `new_config` (in `load_config`) or `config` (in
+    `_save_config_internal`) AFTER `_migrate_config` has already completed
+    on that same local object, so every recorded binding is already fully
+    migrated.
+
+    Verified by temporarily reverting config.py's publish-then-migrate
+    ordering and re-running this exact test: it fails (see fix-round-1 in
+    the concurrent-caches report for the pasted output). Restored, it
+    passes.
+    """
+    from another_s3_manager import config as config_module
+
+    legacy = tmp_path / "config.json"
+    # Deliberately missing "mcp_enabled" and friends — the migration must add them.
+    legacy.write_text(json.dumps({"roles": []}))
+    monkeypatch.setattr(config_module, "CONFIG_FILE", legacy)
+    config_module._config_cache = {}
+    config_module._config_mtime = 0
+
+    snapshots: list[dict] = []
+    last_seen_id = [None]
+
+    def tracer(frame, event, arg):
+        if event == "line":
+            cache = config_module._config_cache
+            if isinstance(cache, dict) and cache and id(cache) != last_seen_id[0]:
+                last_seen_id[0] = id(cache)
+                snapshots.append(dict(cache))
+        return tracer
+
+    old_trace = sys.gettrace()
+    sys.settrace(tracer)
+    try:
+        loaded = config_module.load_config(force_reload=True)
+    finally:
+        sys.settrace(old_trace)
+
+    assert snapshots, "trace never observed a populated _config_cache during reload — test setup is broken"
+    assert all("mcp_enabled" in snap for snap in snapshots), (
+        "the global _config_cache was, at some point during the reload, rebound to a dict "
+        "missing a migration-added key ('mcp_enabled') — the reload is not atomic"
+    )
+    assert "mcp_enabled" in loaded
     assert loaded["mcp_list_max_page_size"] == 10_000
