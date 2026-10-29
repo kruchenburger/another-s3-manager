@@ -2911,7 +2911,7 @@ async def get_move_job(
     job_id: str, failures_offset: int = Query(0, ge=0), current_user: dict = Depends(get_current_user)
 ):
     job = await _move_call(move_jobs.registry.get, job_id, current_user)
-    return job.snapshot(failures_offset)
+    return await _move_call(job.snapshot, failures_offset)
 
 
 @app.post("/api/jobs/{job_id}/cleanup", response_model=MoveCleanupResponse)

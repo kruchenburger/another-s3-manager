@@ -9,6 +9,7 @@ import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Literal
 
 from boto3.s3.transfer import TransferConfig
@@ -107,7 +108,7 @@ def name_exists(client, bucket, key):
     )
 
 
-def roots_for(request: MoveRequest) -> tuple[tuple[str, str], ...]:
+def roots_for(request: MoveRequest) -> tuple[tuple[str, str, str], ...]:
     roots = []
     for item in request.items:
         target = build_destination_key(request.destination, item.path, item.kind, item.new_name)
@@ -116,23 +117,23 @@ def roots_for(request: MoveRequest) -> tuple[tuple[str, str], ...]:
             raise MoveError("SAME_LOCATION")
         if item.kind == "folder" and is_same_or_descendant(request.destination, item.path):
             raise MoveError("DESCENDANT")
-        roots.append((source, target))
-    for i, (source, target) in enumerate(roots):
-        for j, (other_source, other_target) in enumerate(roots):
+        roots.append((source, target, item.kind))
+    for i, (source, target, kind) in enumerate(roots):
+        for j, (other_source, other_target, other_kind) in enumerate(roots):
             if i != j and (
                 source == other_source
-                or (source.endswith("/") and other_source.startswith(source))
+                or (kind == "folder" and other_source.startswith(source))
                 or target.rstrip("/") == other_target.rstrip("/")
-                or (target.endswith("/") and other_target.startswith(target))
+                or (kind == "folder" and other_target.startswith(target))
             ):
                 raise MoveError("PLAN_CONFLICT", 409)
-            if target == other_source or (other_source.endswith("/") and target.startswith(other_source)):
+            if target == other_source or (other_kind == "folder" and target.startswith(other_source)):
                 raise MoveError("PLAN_CONFLICT", 409)
     return tuple(roots)
 
 
 def reservation_paths(role, bucket, request):
-    paths = [(role, bucket, key) for pair in roots_for(request) for key in pair]
+    paths = [(role, bucket, key) for source, target, _ in roots_for(request) for key in (source, target)]
     # Parent markers are writes too; reserve those parents while the move runs.
     for item in request.items:
         parent = item.path.rpartition("/")[0]
@@ -153,7 +154,7 @@ class Entry:
 @dataclass(frozen=True)
 class Plan:
     entries: tuple[Entry, ...]
-    roots: tuple[tuple[str, str], ...]
+    roots: tuple[tuple[str, str, str], ...]
     parents: tuple[str, ...]
 
     def summary(self):
@@ -171,8 +172,8 @@ def enumerate_sources(role, bucket, roots, *, allow_missing=False):
 
     def enumerate_all(client):
         found = {}
-        for source, target in roots:
-            if source.endswith("/"):
+        for source, target, kind in roots:
+            if kind == "folder":
                 pages = client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=source)
 
                 def page_objects(pages):
@@ -228,7 +229,7 @@ def build_plan(user, role, bucket, request):
         for index in range(1, len(parts)):
             if "/".join(parts[:index]) in destinations:
                 raise MoveError("PLAN_CONFLICT", 409)
-    for _, target in roots:
+    for _, target, _ in roots:
         if s3_unit(role, "head", lambda client: name_exists(client, bucket, target)):
             raise MoveError("CONFLICT", 409)
     parents = tuple(sorted({item.path.rpartition("/")[0] for item in request.items if "/" in item.path}))
@@ -278,10 +279,19 @@ def copy_entry(role, bucket, entry):
     return etag
 
 
+def owner_identity(user):
+    created_at = user["created_at"]
+    if created_at is not None:
+        # SQLite reloads UTC timestamps without the timezone attached at creation.
+        timestamp = datetime.fromisoformat(created_at)
+        created_at = timestamp.replace(tzinfo=timestamp.tzinfo or UTC).astimezone(UTC).isoformat()
+    return (user["id"], user["username"], created_at)
+
+
 @dataclass
 class Job:
     id: str
-    owner: int
+    owner: tuple[int, str, str | None]
     role: str
     bucket: str
     operation_id: str
@@ -301,6 +311,7 @@ class Job:
     ready: threading.Event = field(default_factory=threading.Event, repr=False)
     planning_error: MoveError | None = None
     lock: object = field(default_factory=threading.RLock, repr=False)
+    cleanup_lock: object = field(default_factory=threading.Lock, repr=False)
 
     def fail(self, error, phase, key=None):
         failure = safe_move_error(error, phase, key).detail()
@@ -331,8 +342,8 @@ class Job:
 
 
 def recheck(job):
-    user = users.get_user_by_id(job.owner)
-    if user is None:
+    user = users.get_user_by_id(job.owner[0])
+    if user is None or owner_identity(user) != job.owner:
         raise MoveError("ACCESS_DENIED", 403)
     require_access(user, job.role, job.bucket, deleting=True)
 
@@ -445,7 +456,7 @@ class MoveRegistry:
     def __init__(self):
         self.lock = threading.RLock()
         self.jobs: dict[str, Job] = {}
-        self.preflights: dict[int, deque] = {}
+        self.preflights: dict[tuple[int, str, str | None], deque] = {}
 
     def _run(self, job):
         run_job(job)
@@ -466,7 +477,7 @@ class MoveRegistry:
         require_access(user, role, bucket, deleting=True)
         with self.lock:
             self.prune()
-            times = self.preflights.setdefault(user["id"], deque())
+            times = self.preflights.setdefault(owner_identity(user), deque())
             now = time.monotonic()
             while times and now - times[0] >= 60:
                 times.popleft()
@@ -485,16 +496,16 @@ class MoveRegistry:
         with self.lock:
             self.prune()
             for job in self.jobs.values():
-                if (job.owner, job.operation_id) == (user["id"], operation_id):
+                if (job.owner, job.operation_id) == (owner_identity(user), operation_id):
                     if job.request_hash != digest:
                         raise MoveError("OPERATION_CONFLICT", 409)
                     existing = job
                     break
             if existing is None:
                 running = [j for j in self.jobs.values() if j.state == "running"]
-                if len(running) >= 4 or sum(j.owner == user["id"] for j in running) >= 2:
+                if len(running) >= 4 or sum(j.owner == owner_identity(user) for j in running) >= 2:
                     raise MoveError("TOO_MANY_JOBS", 429)
-                job = Job(secrets.token_urlsafe(), user["id"], role, bucket, operation_id, digest)
+                job = Job(secrets.token_urlsafe(), owner_identity(user), role, bucket, operation_id, digest)
                 acquire(job.id, reservation_paths(role, bucket, request))
                 self.jobs[job.id] = job
         if existing is not None:
@@ -519,7 +530,7 @@ class MoveRegistry:
         with self.lock:
             self.prune()
             job = self.jobs.get(job_id)
-            if job is None or job.owner != user["id"]:
+            if job is None or job.owner != owner_identity(user):
                 raise MoveError("NOT_FOUND", 404)
         require_access(user, job.role, job.bucket)
         return job
@@ -527,21 +538,26 @@ class MoveRegistry:
     def cleanup(self, job_id, user):
         job = self.get(job_id, user)
         recheck(job)
-        with job.lock:
-            if job.state == "running":
-                raise MoveError("BUSY", 409)
-            if job.delete_started:
-                raise MoveError("CLEANUP_UNSAFE", 409)
+        if not job.cleanup_lock.acquire(blocking=False):
+            raise MoveError("BUSY", 409)
+        try:
+            with job.lock:
+                if job.state == "running":
+                    raise MoveError("BUSY", 409)
+                if job.delete_started:
+                    raise MoveError("CLEANUP_UNSAFE", 409)
+                copied = list(job.copied.items())
             token = secrets.token_urlsafe()
-            with reserve(token, [(job.role, job.bucket, key) for key in job.copied]):
+            with reserve(token, [(job.role, job.bucket, key) for key, _ in copied]):
                 failures = []
                 removed = 0
-                for key, etag in list(job.copied.items()):
+                for key, etag in copied:
                     recheck(job)
                     try:
                         metadata = s3_unit(job.role, "head", lambda client: head(client, job.bucket, key))
                         if metadata is None:
-                            del job.copied[key]
+                            with job.lock:
+                                del job.copied[key]
                             continue
                         if metadata["ETag"] != etag:
                             raise MoveError("CLEANUP_CHANGED", 409, "cleanup", key)
@@ -554,7 +570,8 @@ class MoveRegistry:
                         )
                         if result.get("Errors") or key not in {x["Key"] for x in result.get("Deleted", [])}:
                             raise MoveError("STORAGE_ERROR", 502, "cleanup", key)
-                        del job.copied[key]
+                        with job.lock:
+                            del job.copied[key]
                         removed += 1
                         s3_objects_total.labels(
                             role=safe_role_label(job.role), bucket=job.bucket, operation="delete"
@@ -563,6 +580,8 @@ class MoveRegistry:
                         if len(failures) < 1000:
                             failures.append(safe_move_error(error, "cleanup", key).detail())
                 return {"removed": removed, "failures": failures}
+        finally:
+            job.cleanup_lock.release()
 
 
 registry = MoveRegistry()

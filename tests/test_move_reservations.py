@@ -79,3 +79,57 @@ async def test_mcp_busy(alice_user, tool_registry, tool, kwargs):
         with pytest.raises(McpError) as error:
             await _call(tool_registry, tool, _fake_request(alice_user[1]), role="Default", **kwargs)
         assert error.value.code == "BUSY"
+
+
+@pytest.mark.parametrize("operation", ["put", "upload", "delete", "copy_source", "copy_dest", "folder"])
+@pytest.mark.parametrize("denial", ["role", "bucket"])
+def test_write_authorization_precedes_busy(operation, denial, monkeypatch):
+    import io
+
+    from another_s3_manager import config, s3_client
+
+    cfg = config.load_config()
+    cfg["roles"][0]["allowed_buckets"] = ["allowed"]
+    config.save_config(cfg)
+    user = {"is_admin": False, "allowed_roles": [] if denial == "role" else ["Default"]}
+    bucket = "allowed" if denial == "role" else "forbidden"
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda *args: pytest.fail("unauthorized S3 access"))
+    with reservations.reserve("move", [("Default", bucket, "source/")]):
+        with pytest.raises(PermissionError):
+            if operation == "put":
+                s3_client.put_object_for_role("Default", bucket, "source/a", b"x", user)
+            elif operation == "upload":
+                s3_client.upload_fileobj_for_role("Default", bucket, "source/a", io.BytesIO(b"x"), user)
+            elif operation == "delete":
+                s3_client.delete_object_for_role("Default", bucket, "source/a", user)
+            elif operation == "folder":
+                s3_client.create_folder_for_role("Default", bucket, "source/a", user)
+            elif operation == "copy_source":
+                s3_client.copy_object_for_role("Default", bucket, "source/a", "allowed", "target/a", user)
+            else:
+                s3_client.copy_object_for_role("Default", "allowed", "target/a", bucket, "source/a", user)
+
+
+@pytest.mark.parametrize("method", ["upload", "delete"])
+def test_web_unauthorized_reserved_path_is_403(app_client, method):
+    from another_s3_manager import auth, users
+    from tests.test_main import login
+
+    users.create_user("restricted", auth.hash_password("password123"), allowed_roles=[], must_change_password=False)
+    _, headers = login(app_client, "restricted", "password123")
+    with reservations.reserve("move", [("Default", "bucket", "source/")]):
+        if method == "upload":
+            response = app_client.post(
+                "/api/buckets/bucket/upload",
+                data={"key": "source/a", "role": "Default"},
+                files={"file": ("a", b"body")},
+                headers=headers,
+            )
+        else:
+            response = app_client.delete(
+                "/api/buckets/bucket/files",
+                params={"path": "source/a", "role": "Default"},
+                headers=headers,
+            )
+    assert response.status_code == 403
+    assert "BUSY" not in response.text

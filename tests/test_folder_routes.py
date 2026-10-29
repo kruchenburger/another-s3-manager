@@ -212,3 +212,68 @@ def test_move_limit_config_is_preserved_and_validated(session):
     assert client.get("/api/config").json()["move_max_objects"] == 17
     response = client.post("/api/config", json={**body, "move_max_objects": 0}, headers=headers)
     assert response.status_code == 400
+
+
+def test_recreated_owner_cannot_read_or_cleanup_job(session):
+    from another_s3_manager import auth, users
+
+    client, s3, _ = session
+    password_hash = auth.hash_password("password123")
+    owner = users.create_user("owner", password_hash, allowed_roles=["Default"], must_change_password=False)
+    _, headers = login(client, "owner", "password123")
+    s3.put_object(Bucket="folder-routes", Key="source", Body=b"x")
+    response = client.post(
+        "/api/buckets/folder-routes/move?role=Default",
+        json={"items": [{"path": "source", "kind": "file"}], "destination": "dest", "operation_id": str(uuid.uuid4())},
+        headers=headers,
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    moves.registry.jobs[job_id].future.result(timeout=10)
+    users.delete_user("owner")
+    replacement = users.create_user("owner", password_hash, allowed_roles=["Default"], must_change_password=False)
+    assert replacement["id"] == owner["id"]
+    assert replacement["created_at"] != owner["created_at"]
+    _, headers = login(client, "owner", "password123")
+    assert client.get("/api/jobs/" + job_id).status_code == 404
+    assert client.post("/api/jobs/" + job_id + "/cleanup", headers=headers).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_polling_snapshot_does_not_block_event_loop(session, monkeypatch):
+    import asyncio
+    import threading
+
+    from another_s3_manager import main, users
+
+    _, s3, _ = session
+    owner = users.load_users()["users"][0]
+    s3.put_object(Bucket="folder-routes", Key="source", Body=b"x")
+    job = moves.registry.start(
+        owner,
+        "Default",
+        "folder-routes",
+        moves.MoveRequest(items=[{"path": "source", "kind": "file"}], destination="dest"),
+        str(uuid.uuid4()),
+    )
+    job.future.result(timeout=10)
+    entered, loop_progress = threading.Event(), threading.Event()
+    snapshot = job.snapshot
+
+    def waiting_snapshot(offset):
+        entered.set()
+        assert loop_progress.wait(2), "polling blocked the event loop"
+        return snapshot(offset)
+
+    async def advance_loop():
+        assert await asyncio.to_thread(entered.wait, 5)
+        loop_progress.set()
+
+    monkeypatch.setattr(job, "snapshot", waiting_snapshot)
+    heartbeat = asyncio.create_task(advance_loop())
+    try:
+        result = await main.get_move_job(job.id, failures_offset=0, current_user=owner)
+        assert result["state"] == "done"
+    finally:
+        loop_progress.set()
+        await heartbeat

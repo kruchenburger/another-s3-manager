@@ -1,4 +1,6 @@
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from botocore.exceptions import ClientError
@@ -370,7 +372,7 @@ def test_registry_quotas_and_retention(storage, monkeypatch):
     assert error.value.code == "PREFLIGHT_LIMIT"
     registry = moves.MoveRegistry()
     for index in range(4):
-        owner = user["id"] if index < 2 else user["id"] + 1
+        owner = moves.owner_identity(user if index < 2 else {**user, "id": user["id"] + 1})
         job = moves.Job(str(index), owner, "Default", "move-bucket", str(index), "hash")
         registry.jobs[job.id] = job
     with pytest.raises(MoveError) as error:
@@ -379,7 +381,14 @@ def test_registry_quotas_and_retention(storage, monkeypatch):
     registry.jobs.clear()
     for index in range(202):
         job = moves.Job(
-            str(index), user["id"], "Default", "move-bucket", str(index), "hash", state="done", finished_at=100 + index
+            str(index),
+            moves.owner_identity(user),
+            "Default",
+            "move-bucket",
+            str(index),
+            "hash",
+            state="done",
+            finished_at=100 + index,
         )
         registry.jobs[job.id] = job
     monkeypatch.setattr(moves.time, "monotonic", lambda: 3500)
@@ -392,7 +401,7 @@ def test_registry_quotas_and_retention(storage, monkeypatch):
 
 
 def test_failure_storage_and_pagination():
-    job = moves.Job("id", 1, "Default", "bucket", "op", "hash")
+    job = moves.Job("id", (1, "owner", None), "Default", "bucket", "op", "hash")
     for _ in range(1005):
         job.fail(MoveError("SOURCE_CHANGED"), "verify")
     assert len(job.failures) == 1000
@@ -406,12 +415,12 @@ def test_access_rechecked_after_100_copies(storage, monkeypatch):
     entries = tuple(moves.Entry("source/" + str(i), "dest/" + str(i), "etag", 1, None) for i in range(101))
     job = moves.Job(
         "batch-check",
-        user["id"],
+        moves.owner_identity(user),
         "Default",
         "move-bucket",
         "op",
         "hash",
-        plan=moves.Plan(entries, (("source/", "dest/"),), ()),
+        plan=moves.Plan(entries, (("source/", "dest/", "folder"),), ()),
     )
     original = moves.users.get_user_by_id
     checks = []
@@ -490,3 +499,105 @@ def test_truncated_listing_without_token_is_rejected(storage, monkeypatch):
     with pytest.raises(MoveError) as error:
         moves.build_plan(user, "Default", "move-bucket", request([{"path": "source", "kind": "folder"}]))
     assert error.value.code == "LISTING_INCOMPLETE"
+
+
+def test_file_with_trailing_slash_does_not_move_prefix(storage):
+    s3, user = storage
+    s3.put_object(Bucket="move-bucket", Key="a/", Body=b"marker")
+    s3.put_object(Bucket="move-bucket", Key="a/private.txt", Body=b"private")
+    job = start(user, request([{"path": "a/", "kind": "file"}]))
+    job.future.result(timeout=10)
+    assert job.state == "done"
+    assert job.snapshot()["total"] == 1
+    assert s3.get_object(Bucket="move-bucket", Key="a/private.txt")["Body"].read() == b"private"
+    assert s3.get_object(Bucket="move-bucket", Key="dest/")["Body"].read() == b"marker"
+    assert {obj["Key"] for obj in s3.list_objects_v2(Bucket="move-bucket")["Contents"]} == {"a/private.txt", "dest/"}
+
+
+def test_snapshot_available_during_cleanup(storage, monkeypatch):
+    s3, user = storage
+    s3.put_object(Bucket="move-bucket", Key="source/file", Body=b"abc")
+    monkeypatch.setattr(moves.registry, "_run", lambda job: None)
+    job = start(user, request())
+    job.future.result(timeout=10)
+    job.state = "failed_copy"
+    moves.release(job.id)
+    job.copied["dest/file"] = s3.put_object(Bucket="move-bucket", Key="dest/file", Body=b"abc")["ETag"]
+    entered, resume = threading.Event(), threading.Event()
+    original = moves.s3_unit
+
+    def blocked(role, operation, callback):
+        if operation == "head":
+            entered.set()
+            assert resume.wait(5)
+        return original(role, operation, callback)
+
+    monkeypatch.setattr(moves, "s3_unit", blocked)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        cleanup = pool.submit(moves.registry.cleanup, job.id, user)
+        try:
+            assert entered.wait(5)
+            assert pool.submit(job.snapshot).result(timeout=1)["state"] == "failed_copy"
+            with pytest.raises(MoveError) as error:
+                pool.submit(moves.registry.cleanup, job.id, user).result(timeout=1)
+            assert error.value.code == "BUSY"
+        finally:
+            resume.set()
+        assert cleanup.result(timeout=5) == {"removed": 1, "failures": []}
+    assert moves.registry.cleanup(job.id, user) == {"removed": 0, "failures": []}
+    job.copied["dest/file"] = s3.put_object(Bucket="move-bucket", Key="dest/file", Body=b"abc")["ETag"]
+    recheck = moves.recheck
+    checks = 0
+
+    def revoke_during_cleanup(job):
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise MoveError("ACCESS_DENIED", 403)
+        recheck(job)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(moves, "recheck", revoke_during_cleanup)
+        with pytest.raises(MoveError) as error:
+            moves.registry.cleanup(job.id, user)
+        assert error.value.code == "ACCESS_DENIED"
+    assert moves.registry.cleanup(job.id, user) == {"removed": 1, "failures": []}
+
+
+@pytest.mark.parametrize("replacement_name", ["replacement", "owner"])
+def test_reused_user_id_cancels_job(storage, monkeypatch, replacement_name):
+    from another_s3_manager import users
+
+    s3, _ = storage
+    owner = users.create_user("owner", "unused", allowed_roles=["Default"])
+    s3.put_object(Bucket="move-bucket", Key="source/file", Body=b"abc")
+    original = moves.copy_entry
+
+    def replace_owner(*args):
+        etag = original(*args)
+        users.delete_user("owner")
+        replacement = users.create_user(replacement_name, "unused", allowed_roles=["Default"])
+        assert replacement["id"] == owner["id"]
+        assert replacement["created_at"] != owner["created_at"]
+        return etag
+
+    monkeypatch.setattr(moves, "copy_entry", replace_owner)
+    job = start(owner, request())
+    job.future.result(timeout=10)
+    assert job.state == "cancelled_access"
+    assert not job.delete_started
+    assert job.done == 1
+    assert job.removed == 0
+    assert s3.get_object(Bucket="move-bucket", Key="source/file")["Body"].read() == b"abc"
+    replacement = users.get_user_by_id(owner["id"])
+    for lookup in (moves.registry.get, moves.registry.cleanup):
+        with pytest.raises(MoveError) as error:
+            lookup(job.id, replacement)
+        assert error.value.http_status == 404
+    monkeypatch.setattr(moves, "copy_entry", original)
+    next_job = moves.registry.start(
+        replacement, "Default", "move-bucket", request(destination="other"), job.operation_id
+    )
+    assert next_job.id != job.id
+    next_job.future.result(timeout=10)
+    assert next_job.state == "done"

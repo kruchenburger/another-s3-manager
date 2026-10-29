@@ -54,8 +54,12 @@ def guarded_write(*, copy: bool = False):
 
         @wraps(function)
         def wrapped(*args, **kwargs):
+            from another_s3_manager.s3_client import _validate_bucket_access, validate_role_access
+
             values = signature.bind(*args, **kwargs).arguments
             role = values["role"]
+            user = values["user_dict"]
+            validate_role_access(role, user)
             if copy:
                 paths = [
                     (role, values["source_bucket"], values["source_path"]),
@@ -63,6 +67,8 @@ def guarded_write(*, copy: bool = False):
                 ]
             else:
                 paths = [(role, values["bucket"], values["path"])]
+            for _, bucket, _ in paths:
+                _validate_bucket_access(role, bucket, user)
             with reserve(secrets.token_urlsafe(), paths):
                 return function(*args, **kwargs)
 
