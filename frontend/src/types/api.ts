@@ -33,6 +33,7 @@ export type MoveState =
   | "failed_delete"
   | "cancelled_access";
 export interface MoveJob {
+  delete_started?: boolean;
   job_id: string;
   state: MoveState;
   phase: string;

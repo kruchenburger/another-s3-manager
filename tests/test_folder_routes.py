@@ -277,3 +277,25 @@ async def test_polling_snapshot_does_not_block_event_loop(session, monkeypatch):
     finally:
         loop_progress.set()
         await heartbeat
+
+
+@pytest.mark.parametrize("delete_started", [False, True])
+def test_job_snapshot_exposes_delete_started(session, delete_started):
+    client, s3, headers = session
+    s3.put_object(Bucket="folder-routes", Key="source", Body=b"x")
+    response = client.post(
+        "/api/buckets/folder-routes/move?role=Default",
+        json={"items": [{"path": "source", "kind": "file"}], "destination": "dest", "operation_id": str(uuid.uuid4())},
+        headers=headers,
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    job = moves.registry.jobs[job_id]
+    job.future.result(timeout=10)
+    with job.lock:
+        job.state = "cancelled_access"
+        job.delete_started = delete_started
+    result = client.get("/api/jobs/" + job_id, headers=headers)
+    assert result.status_code == 200
+    assert result.json()["state"] == "cancelled_access"
+    assert result.json()["delete_started"] is delete_started

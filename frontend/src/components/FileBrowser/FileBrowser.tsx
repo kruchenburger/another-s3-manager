@@ -67,9 +67,7 @@ import classes from "./FileBrowser.module.css";
 import {
   decodeIdentity,
   entryIdentity,
-  entryItem,
   itemName,
-  itemIdentity,
 } from "@/features/files/utils/folderOperations";
 import { useFolderOperations } from "@/features/files/hooks/useFolderOperations";
 import { useInternalFileDrag } from "@/features/files/hooks/useInternalFileDrag";
@@ -230,14 +228,9 @@ export function FileBrowser() {
     disableDeletion,
     clearSelection,
   );
-  const moveItems = useMemo(
-    () => items.map((entry) => entryItem(pathFromUrl, entry)),
-    [items, pathFromUrl],
-  );
   const drag = useInternalFileDrag({
     bucket,
     role: roleId,
-    items: moveItems,
     selected,
     disabled: disableDeletion,
     onDrop: (request) => {
@@ -1241,11 +1234,7 @@ export function FileBrowser() {
         </Text>
       )}
       <BulkActionBar
-        onMove={() =>
-          operations.open(
-            moveItems.filter((item) => selected.has(itemIdentity(item))),
-          )
-        }
+        onMove={() => operations.open(Array.from(selected, decodeIdentity))}
         modalOpen={
           !!operations.picker ||
           !!operations.confirmation ||

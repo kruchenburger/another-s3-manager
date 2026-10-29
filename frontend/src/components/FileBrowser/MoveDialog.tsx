@@ -72,6 +72,8 @@ export function MoveDialog({
     <>
       <Modal
         opened
+        closeOnEscape={!creating}
+        trapFocus={!creating}
         onClose={onClose}
         title="Move to…"
         closeButtonProps={{ "aria-label": "Close" }}

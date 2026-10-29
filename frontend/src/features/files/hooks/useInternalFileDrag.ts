@@ -4,6 +4,7 @@ import type { MoveItem, MoveRequest } from "@/types/api";
 import {
   INTERNAL_DRAG_TYPE,
   itemIdentity,
+  decodeIdentity,
   targetError,
 } from "@/features/files/utils/folderOperations";
 interface Payload {
@@ -19,14 +20,14 @@ export interface InternalFileDrag {
 export function useInternalFileDrag({
   bucket,
   role,
-  items,
   selected,
   disabled,
   onDrop,
 }: {
   bucket: string;
   role: string;
-  items: MoveItem[];
+  // Retained for callers that provide visible rows; selection identities are authoritative.
+  items?: MoveItem[];
   selected: Set<string>;
   disabled: boolean;
   onDrop: (request: MoveRequest) => void;
@@ -117,7 +118,7 @@ export function useInternalFileDrag({
           return;
         }
         const chosen = selected.has(itemIdentity(item))
-          ? items.filter((entry) => selected.has(itemIdentity(entry)))
+          ? Array.from(selected, decodeIdentity)
           : [item];
         const payload = { bucket, role, items: chosen };
         active.current = payload;

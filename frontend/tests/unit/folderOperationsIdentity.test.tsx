@@ -93,6 +93,81 @@ describe("exact object identity and move rules", () => {
       getData: (type: string) => data[type] ?? "",
     };
   }
+  it.each(["dialog", "drag"])(
+    "keeps hidden server-search selections for %s moves",
+    async (mode) => {
+      vi.spyOn(window, "matchMedia").mockReturnValue({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+      } as unknown as MediaQueryList);
+      vi.spyOn(api, "listFiles").mockImplementation(
+        async (_b, _r, _p, opts) => ({
+          directories: opts?.search
+            ? []
+            : [{ name: "dest", is_directory: true, size: 0 }],
+          files: [
+            {
+              name: opts?.search ? "z.txt" : "a.txt",
+              is_directory: false,
+              size: 1,
+            },
+          ],
+          truncated: !opts?.search,
+          next_token: opts?.search ? null : "more",
+        }),
+      );
+      const preflight = vi
+        .spyOn(api, "movePreflight")
+        .mockResolvedValue({
+          objects: 2,
+          bytes: 2,
+          largest: 1,
+          conflicts: [],
+          blocked_reason: null,
+        });
+      browser();
+      await screen.findByLabelText("Select a.txt");
+      const input = screen.getByPlaceholderText(/filter|search/i);
+      fireEvent.change(input, { target: { value: "z" } });
+      fireEvent.click(await screen.findByText(/search "z" on server/i));
+      fireEvent.click(await screen.findByLabelText("Select z.txt"));
+      fireEvent.click(screen.getByLabelText("Exit server search"));
+      fireEvent.change(input, { target: { value: "" } });
+      const file = await screen.findByLabelText("Select a.txt");
+      fireEvent.click(file);
+      expect(screen.getByText("2 selected")).toBeInTheDocument();
+      if (mode === "dialog") {
+        fireEvent.click(
+          within(
+            screen.getByRole("region", {
+              name: "Bulk actions for selected files",
+            }),
+          ).getByRole("button", { name: "Move to…" }),
+        );
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Open folder dest" }),
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Move here" }));
+      } else {
+        const dataTransfer = transfer();
+        fireEvent.dragStart(file.closest("tr")!, { dataTransfer });
+        fireEvent.drop(screen.getByLabelText("Select dest").closest("tr")!, {
+          dataTransfer,
+        });
+      }
+      await screen.findByRole("dialog", { name: "Confirm move" });
+      expect(preflight).toHaveBeenLastCalledWith("b", "r", {
+        items: [
+          { path: "a/z.txt", kind: "file" },
+          { path: "a/a.txt", kind: "file" },
+        ],
+        destination: "a/dest",
+      });
+    },
+  );
   it("keeps a file x and folder x/ independently selected", () => {
     const file = entryIdentity("a", {
       name: "x",
@@ -253,15 +328,13 @@ describe("exact object identity and move rules", () => {
       truncated: false,
       next_token: null,
     });
-    const preflight = vi
-      .spyOn(api, "movePreflight")
-      .mockResolvedValue({
-        objects: 2,
-        bytes: 100,
-        largest: 100,
-        conflicts: [],
-        blocked_reason: null,
-      });
+    const preflight = vi.spyOn(api, "movePreflight").mockResolvedValue({
+      objects: 2,
+      bytes: 100,
+      largest: 100,
+      conflicts: [],
+      blocked_reason: null,
+    });
     const start = vi.spyOn(api, "startMove");
     browser();
     const folder = (await screen.findByLabelText("Select x")).closest("tr")!;
@@ -319,15 +392,13 @@ describe("exact object identity and move rules", () => {
       truncated: false,
       next_token: null,
     });
-    const preflight = vi
-      .spyOn(api, "movePreflight")
-      .mockResolvedValue({
-        objects: 1,
-        bytes: 1,
-        largest: 1,
-        conflicts: [],
-        blocked_reason: null,
-      });
+    const preflight = vi.spyOn(api, "movePreflight").mockResolvedValue({
+      objects: 1,
+      bytes: 1,
+      largest: 1,
+      conflicts: [],
+      blocked_reason: null,
+    });
     browser();
     const file = (await screen.findByLabelText("Select x")).closest(
       ".mantine-Card-root",

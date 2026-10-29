@@ -95,19 +95,22 @@ export function MoveJobDetails({
             Load more failures
           </Button>
         )}
-        {job?.state === "failed_copy" && (
-          <Tooltip label={MOVE_DISABLED} disabled={!disableDeletion}>
-            <Button
-              variant="light"
-              color="red"
-              disabled={disableDeletion}
-              loading={cleanup.isPending}
-              onClick={() => cleanup.mutate()}
-            >
-              Remove partial copies
-            </Button>
-          </Tooltip>
-        )}
+        {job &&
+          (job.state === "failed_copy" || job.state === "cancelled_access") &&
+          job.delete_started === false &&
+          !disableDeletion && (
+            <Tooltip label={MOVE_DISABLED} disabled={!disableDeletion}>
+              <Button
+                variant="light"
+                color="red"
+                disabled={disableDeletion}
+                loading={cleanup.isPending}
+                onClick={() => cleanup.mutate()}
+              >
+                Remove partial copies
+              </Button>
+            </Tooltip>
+          )}
         {cleanup.error && (
           <Alert color="red" role="alert">
             {getErrorMessage(cleanup.error)}

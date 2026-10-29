@@ -1,4 +1,11 @@
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  renderHook,
+  waitFor,
+  screen,
+  fireEvent,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -70,6 +77,173 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("app-level move jobs", () => {
+  it("keeps independent tab jobs on reload and syncs storage changes and removals", async () => {
+    vi.spyOn(api, "getJob").mockResolvedValue({
+      ...snapshot,
+      state: "running",
+    });
+    const first = setup();
+    const second = setup();
+    act(() => first.result.current.add(saved));
+    act(() => second.result.current.add({ ...saved, job_id: "k" }));
+    first.unmount();
+    second.unmount();
+    const resumed = setup();
+    expect(resumed.result.current.jobs.map((j) => j.job_id).sort()).toEqual([
+      "j",
+      "k",
+    ]);
+    const key = Array.from(
+      { length: localStorage.length },
+      (_, i) => localStorage.key(i)!,
+    ).find((k) => k.includes("v2") && k.endsWith(":j"))!;
+    expect(key).toBeTruthy();
+    const otherKey = key.slice(0, -1) + "remote";
+    const remote = { ...saved, job_id: "remote" };
+    localStorage.setItem(otherKey, JSON.stringify(remote));
+    act(() =>
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: otherKey,
+          newValue: JSON.stringify(remote),
+        }),
+      ),
+    );
+    expect(resumed.result.current.jobs.map((j) => j.job_id)).toContain(
+      "remote",
+    );
+    localStorage.setItem(
+      otherKey,
+      JSON.stringify({ ...remote, notified: true }),
+    );
+    act(() =>
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: otherKey,
+          newValue: localStorage.getItem(otherKey),
+        }),
+      ),
+    );
+    expect(
+      resumed.result.current.jobs.find((j) => j.job_id === "remote")?.notified,
+    ).toBe(true);
+    localStorage.removeItem(key);
+    act(() =>
+      window.dispatchEvent(
+        new StorageEvent("storage", { key, newValue: null }),
+      ),
+    );
+    expect(resumed.result.current.jobs.map((j) => j.job_id)).not.toContain("j");
+    expect(localStorage.getItem(key)).toBeNull();
+    act(() => resumed.result.current.dismiss("remote"));
+    expect(localStorage.getItem(otherKey)).toBeNull();
+    localStorage.clear();
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key: null })));
+    expect(resumed.result.current.jobs).toEqual([]);
+  });
+  it.each(["ROLE_NOT_FOUND", "ROLE_REQUIRED"])(
+    "stops and exposes dismiss after HTTP 400 %s with stale progress",
+    async (code) => {
+      vi.useFakeTimers();
+      const get = vi
+        .spyOn(api, "getJob")
+        .mockResolvedValueOnce({ ...snapshot, state: "running" })
+        .mockRejectedValue(
+          new ApiError(400, "Bad Request", {
+            detail: { code, message: "Role unavailable" },
+          }),
+        );
+      const hook = setup();
+      await act(async () => hook.result.current.add(saved));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(hook.result.current.jobs[0].unavailable).toContain(code);
+      expect(screen.getByText(new RegExp(code))).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(get).toHaveBeenCalledTimes(2);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Dismiss move result" }),
+      );
+      expect(hook.result.current.jobs).toEqual([]);
+    },
+  );
+  it("keeps retrying other HTTP 400 errors", async () => {
+    vi.useFakeTimers();
+    const get = vi
+      .spyOn(api, "getJob")
+      .mockRejectedValue(
+        new ApiError(400, "Bad Request", {
+          detail: { code: "OTHER", message: "Try later" },
+        }),
+      );
+    const hook = setup();
+    await act(async () => hook.result.current.add(saved));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(get.mock.calls.length).toBeGreaterThan(1);
+    expect(hook.result.current.jobs[0].unavailable).toBeUndefined();
+  });
+  it.each(["getItem", "key", "removeItem"] as const)(
+    "survives storage %s failures",
+    async (method) => {
+      localStorage.setItem("unrelated", "value");
+      vi.spyOn(api, "getJob").mockResolvedValue({
+        ...snapshot,
+        state: "running",
+      });
+      vi.spyOn(localStorage, method).mockImplementation(() => {
+        throw new Error("Storage denied");
+      });
+      const hook = setup();
+      act(() => hook.result.current.add(saved));
+      await waitFor(() =>
+        expect(hook.result.current.jobs[0].snapshot?.state).toBe("running"),
+      );
+      act(() => hook.result.current.dismiss("j"));
+      expect(hook.result.current.jobs).toEqual([]);
+    },
+  );
+  it("does not revive a dismissed job from a late poll or queued storage add", async () => {
+    let resolve!: (job: MoveJob) => void;
+    vi.spyOn(api, "getJob").mockImplementation(
+      () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+    );
+    const hook = setup();
+    act(() => hook.result.current.add(saved));
+    const key = jobsStorageKey("alice", "j");
+    localStorage.removeItem(key);
+    act(() =>
+      window.dispatchEvent(
+        new StorageEvent("storage", { key, newValue: null }),
+      ),
+    );
+    await act(async () => resolve(snapshot));
+    act(() =>
+      window.dispatchEvent(
+        new StorageEvent("storage", { key, newValue: JSON.stringify(saved) }),
+      ),
+    );
+    expect(hook.result.current.jobs).toEqual([]);
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+  it("ignores storage entries belonging to another user", () => {
+    const hook = setup();
+    const key = jobsStorageKey("bob", "j");
+    localStorage.setItem(key, JSON.stringify(saved));
+    act(() =>
+      window.dispatchEvent(
+        new StorageEvent("storage", { key, newValue: JSON.stringify(saved) }),
+      ),
+    );
+    expect(hook.result.current.jobs).toEqual([]);
+  });
   it("refreshes cached listings on a resumed terminal job even after its toast was shown", async () => {
     localStorage.setItem(
       jobsStorageKey("alice"),
@@ -130,7 +304,7 @@ describe("app-level move jobs", () => {
     expect(
       qc.getQueryState(["files", "list", "other", "b", "a"])?.isInvalidated,
     ).toBe(false);
-    expect(localStorage.getItem(jobsStorageKey("alice"))).toContain(
+    expect(localStorage.getItem(jobsStorageKey("alice", "j"))).toContain(
       '"job_id":"j"',
     );
     hook.unmount();
@@ -229,11 +403,9 @@ describe("app-level move jobs", () => {
     auth.username = "bob";
     hook.rerender();
     expect(hook.result.current.jobs).toEqual([]);
-    expect(localStorage.getItem(jobsStorageKey("alice"))).toContain(
+    expect(localStorage.getItem(jobsStorageKey("alice", "j"))).toContain(
       '"job_id":"j"',
     );
-    expect(localStorage.getItem(jobsStorageKey("bob"))).not.toContain(
-      '"job_id":"j"',
-    );
+    expect(localStorage.getItem(jobsStorageKey("bob", "j"))).toBeNull();
   });
 });

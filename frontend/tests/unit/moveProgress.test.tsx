@@ -23,6 +23,7 @@ const job: MoveJob = {
   job_id: "j",
   state: "failed_copy",
   phase: "copy",
+  delete_started: false,
   done: 0,
   total: 1,
   bytes_done: 0,
@@ -82,13 +83,60 @@ describe("move results", () => {
       await screen.findByText(/Removed 2 partial copies/),
     ).toBeInTheDocument();
   });
-  it.each([
-    "done",
-    "done_with_warnings",
-    "failed_delete",
-    "cancelled_access",
-  ] as const)("does not offer cleanup after %s", (state) => {
-    details(state);
+  it.each(["done", "done_with_warnings", "failed_delete"] as const)(
+    "does not offer cleanup after %s",
+    (state) => {
+      details(state);
+      expect(
+        screen.queryByRole("button", { name: "Remove partial copies" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+  it.each([false, true, undefined])(
+    "offers cancelled cleanup only before deletion: %s",
+    async (delete_started) => {
+      const cleanup = vi
+        .spyOn(api, "cleanupJob")
+        .mockResolvedValue({ removed: 1, failures: [] });
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <MantineProvider>
+            <MoveJobDetails
+              record={{
+                ...record,
+                snapshot: { ...job, state: "cancelled_access", delete_started },
+              }}
+              onClose={vi.fn()}
+              disableDeletion={false}
+            />
+          </MantineProvider>
+        </QueryClientProvider>,
+      );
+      const button = screen.queryByRole("button", {
+        name: "Remove partial copies",
+      });
+      if (delete_started === false) {
+        expect(button).toBeInTheDocument();
+        fireEvent.click(button!);
+        await waitFor(() => expect(cleanup).toHaveBeenCalledWith("j"));
+      } else expect(button).not.toBeInTheDocument();
+    },
+  );
+  it("does not offer cleanup when deletion is disabled", () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MantineProvider>
+          <MoveJobDetails
+            record={{
+              ...record,
+              snapshot: { ...job, state: "cancelled_access" },
+            }}
+            onClose={vi.fn()}
+            disableDeletion
+          />
+        </MantineProvider>
+      </QueryClientProvider>,
+    );
     expect(
       screen.queryByRole("button", { name: "Remove partial copies" }),
     ).not.toBeInTheDocument();

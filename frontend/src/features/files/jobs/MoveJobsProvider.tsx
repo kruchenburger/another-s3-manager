@@ -15,7 +15,7 @@ import {
 import { useMe, meQueryKey } from "@/features/auth/hooks/useMe";
 import { getJob } from "@/features/files/api/filesApi";
 import type { MoveItem, MoveJob } from "@/types/api";
-import { ApiError } from "@/utils/apiError";
+import { ApiError, getErrorCode } from "@/utils/apiError";
 import { showToast } from "@/utils/toast";
 import { MoveJobsPanel } from "@/components/FileBrowser/MoveProgress";
 
@@ -36,8 +36,12 @@ interface JobsContext {
   disableDeletion: boolean;
 }
 const Context = createContext<JobsContext | null>(null);
-export const jobsStorageKey = (username: string) =>
-  `as3m:move-jobs:v1:${encodeURIComponent(username)}`;
+const jobsPrefix = (username: string) =>
+  `as3m:move-jobs:v2:${encodeURIComponent(username)}:`;
+export const jobsStorageKey = (username: string, id?: string) =>
+  id === undefined
+    ? `as3m:move-jobs:v1:${encodeURIComponent(username)}`
+    : `${jobsPrefix(username)}${encodeURIComponent(id)}`;
 export function invalidateMoveFiles(
   qc: QueryClient,
   bucket: string,
@@ -51,55 +55,98 @@ export function invalidateMoveFiles(
       k[3] === bucket,
   });
 }
+function storedRecord(data: unknown): MoveRecord | null {
+  if (!data || typeof data !== "object") return null;
+  const j = data as Partial<MoveRecord>;
+  if (
+    typeof j.job_id !== "string" ||
+    !j.job_id ||
+    typeof j.bucket !== "string" ||
+    !j.bucket ||
+    typeof j.role !== "string" ||
+    !j.role ||
+    typeof j.destination !== "string" ||
+    !Array.isArray(j.items) ||
+    !j.items.length ||
+    j.items.length > 1000 ||
+    !j.items.every(
+      (item) =>
+        typeof item?.path === "string" &&
+        (item.kind === "file" || item.kind === "folder"),
+    )
+  )
+    return null;
+  return {
+    job_id: j.job_id,
+    bucket: j.bucket,
+    role: j.role,
+    items: j.items,
+    destination: j.destination,
+    notified: j.notified === true,
+  };
+}
+function readStored(key: string): MoveRecord | null {
+  try {
+    return storedRecord(JSON.parse(localStorage.getItem(key) ?? "null"));
+  } catch {
+    return null;
+  }
+}
 function restore(username?: string): MoveRecord[] {
   if (!username) return [];
+  const records = new Map<string, MoveRecord>();
   try {
-    const data: unknown = JSON.parse(
+    const legacy: unknown = JSON.parse(
       localStorage.getItem(jobsStorageKey(username)) ?? "null",
     );
     if (
-      !data ||
-      typeof data !== "object" ||
-      !("version" in data) ||
-      data.version !== 1 ||
-      !("jobs" in data) ||
-      !Array.isArray(data.jobs)
-    )
-      return [];
-    return data.jobs
-      .slice(-200)
-      .filter((job): job is MoveRecord => {
-        if (!job || typeof job !== "object") return false;
-        const j = job as Partial<MoveRecord>;
-        return (
-          typeof j.job_id === "string" &&
-          !!j.job_id &&
-          typeof j.bucket === "string" &&
-          !!j.bucket &&
-          typeof j.role === "string" &&
-          !!j.role &&
-          typeof j.destination === "string" &&
-          Array.isArray(j.items) &&
-          j.items.length > 0 &&
-          j.items.length <= 1000 &&
-          j.items.every(
-            (item) =>
-              typeof item?.path === "string" &&
-              (item.kind === "file" || item.kind === "folder"),
-          )
-        );
-      })
-      .map(({ job_id, bucket, role, items, destination, notified }) => ({
-        job_id,
-        bucket,
-        role,
-        items,
-        destination,
-        notified: notified === true,
-      }));
+      legacy &&
+      typeof legacy === "object" &&
+      "version" in legacy &&
+      legacy.version === 1 &&
+      "jobs" in legacy &&
+      Array.isArray(legacy.jobs)
+    ) {
+      for (const raw of legacy.jobs.slice(-200)) {
+        const record = storedRecord(raw);
+        if (record) records.set(record.job_id, record);
+      }
+    }
   } catch {
-    return [];
+    /* Corrupt legacy data does not prevent reading independent jobs. */
   }
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith(jobsPrefix(username))) continue;
+      const record = readStored(key);
+      if (record && key === jobsStorageKey(username, record.job_id))
+        records.set(record.job_id, record);
+    }
+  } catch {
+    /* Storage can be unavailable; keep tracking in memory. */
+  }
+  return [...records.values()].slice(-200);
+}
+function persist(username: string, job: MoveRecord) {
+  try {
+    localStorage.setItem(
+      jobsStorageKey(username, job.job_id),
+      JSON.stringify(storedRecord(job)),
+    );
+  } catch {
+    /* Storage can be unavailable; keep tracking in memory. */
+  }
+}
+function terminalError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    ([401, 403, 404].includes(error.status) ||
+      (error.status === 400 &&
+        ["ROLE_NOT_FOUND", "ROLE_REQUIRED"].includes(
+          getErrorCode(error) ?? "",
+        )))
+  );
 }
 function JobPoller({
   record,
@@ -123,8 +170,7 @@ function JobPoller({
       const error = q.state.error;
       if (q.state.data?.state !== undefined && q.state.data.state !== "running")
         return false;
-      if (error instanceof ApiError && [401, 403, 404].includes(error.status))
-        return false;
+      if (terminalError(error)) return false;
       return error
         ? Math.min(30_000, 1000 * 2 ** Math.min(q.state.errorUpdateCount, 5))
         : 1000;
@@ -163,12 +209,14 @@ function JobPoller({
       void qc.invalidateQueries({ queryKey: meQueryKey });
       return;
     }
-    if (query.error.status === 404 || query.error.status === 403) {
+    if (terminalError(query.error)) {
       update(record.job_id, {
         unavailable:
           query.error.status === 404
             ? "Result no longer available"
-            : "Access to this move is no longer available",
+            : query.error.status === 403
+              ? "Access to this move is no longer available"
+              : `Result unavailable: ${getErrorCode(query.error)}. The role is no longer available.`,
       });
       void invalidateMoveFiles(qc, record.bucket, record.role);
     }
@@ -201,49 +249,114 @@ function JobsSession({
   children: ReactNode;
 }) {
   const [jobs, setJobs] = useState(() => restore(username));
+  const jobsRef = useRef(jobs);
+  const replace = useCallback((next: MoveRecord[]) => {
+    jobsRef.current = next;
+    setJobs(next);
+  }, []);
   const update = useCallback(
-    (id: string, patch: Partial<MoveRecord>) =>
-      setJobs((prev) =>
-        prev.map((job) => (job.job_id === id ? { ...job, ...patch } : job)),
-      ),
-    [],
+    (id: string, patch: Partial<MoveRecord>) => {
+      const existing = jobsRef.current.find((job) => job.job_id === id);
+      if (!existing) return;
+      const next = { ...existing, ...patch };
+      // Polling may finish after another tab dismissed this job. Never recreate its key.
+      if (username && patch.notified && !existing.notified) {
+        try {
+          if (localStorage.getItem(jobsStorageKey(username, id)) !== null)
+            persist(username, next);
+        } catch {
+          /* Keep progress in memory when storage is unavailable. */
+        }
+      }
+      replace(jobsRef.current.map((job) => (job.job_id === id ? next : job)));
+    },
+    [username, replace],
   );
   const add = useCallback(
-    (job: MoveRecord) =>
-      setJobs((prev) =>
-        prev.some((existing) => existing.job_id === job.job_id)
-          ? prev
-          : [...prev, job],
-      ),
-    [],
+    (job: MoveRecord) => {
+      if (jobsRef.current.some((existing) => existing.job_id === job.job_id))
+        return;
+      if (username) persist(username, job);
+      replace([...jobsRef.current, job]);
+    },
+    [username, replace],
   );
   const dismiss = useCallback(
-    (id: string) => setJobs((prev) => prev.filter((job) => job.job_id !== id)),
-    [],
+    (id: string) => {
+      if (username) {
+        try {
+          localStorage.removeItem(jobsStorageKey(username, id));
+        } catch {
+          /* Dismiss still works in memory. */
+        }
+      }
+      replace(jobsRef.current.filter((job) => job.job_id !== id));
+    },
+    [username, replace],
   );
   useEffect(() => {
     if (!username) return;
+    // Import v1 once, without overwriting entries already written by another tab.
     try {
-      localStorage.setItem(
-        jobsStorageKey(username),
-        JSON.stringify({
-          version: 1,
-          jobs: jobs.map(
-            ({ job_id, bucket, role, items, destination, notified }) => ({
-              job_id,
-              bucket,
-              role,
-              items,
-              destination,
-              notified,
-            }),
-          ),
-        }),
+      const legacy: unknown = JSON.parse(
+        localStorage.getItem(jobsStorageKey(username)) ?? "null",
       );
+      if (
+        legacy &&
+        typeof legacy === "object" &&
+        "version" in legacy &&
+        legacy.version === 1 &&
+        "jobs" in legacy &&
+        Array.isArray(legacy.jobs)
+      ) {
+        for (const raw of legacy.jobs.slice(-200)) {
+          const job = storedRecord(raw);
+          if (!job) continue;
+          const key = jobsStorageKey(username, job.job_id);
+          if (localStorage.getItem(key) === null) {
+            localStorage.setItem(key, JSON.stringify(job));
+          }
+        }
+        localStorage.removeItem(jobsStorageKey(username));
+      }
     } catch {
-      /* Storage may be unavailable; keep tracking in memory. */
+      /* Leave legacy data intact if migration cannot finish. */
     }
-  }, [jobs, username]);
+    const sync = (event: StorageEvent) => {
+      try {
+        if (event.storageArea && event.storageArea !== localStorage) return;
+        if (event.key === null) {
+          replace(restore(username));
+          return;
+        }
+        if (!event.key.startsWith(jobsPrefix(username))) return;
+        // Read current storage: a queued add event may arrive after its removal.
+        const record = readStored(event.key);
+        if (!record || jobsStorageKey(username, record.job_id) !== event.key) {
+          replace(
+            jobsRef.current.filter(
+              (job) => jobsStorageKey(username, job.job_id) !== event.key,
+            ),
+          );
+          return;
+        }
+        const existing = jobsRef.current.find(
+          (job) => job.job_id === record.job_id,
+        );
+        replace(
+          existing
+            ? jobsRef.current.map((job) =>
+                job.job_id === record.job_id ? { ...job, ...record } : job,
+              )
+            : [...jobsRef.current, record],
+        );
+      } catch {
+        /* Storage events must not interrupt the active session. */
+      }
+    };
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, [username, replace]);
   return (
     <Context.Provider value={{ jobs, add, dismiss, disableDeletion }}>
       {children}

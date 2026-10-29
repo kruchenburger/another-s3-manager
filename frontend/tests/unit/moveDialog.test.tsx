@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -38,6 +39,48 @@ function setup(items: MoveItem[] = [{ path: "a/x", kind: "folder" }]) {
   return onChoose;
 }
 describe("Move picker", () => {
+  it("Escape closes only the nested folder modal and preserves the move", async () => {
+    vi.spyOn(api, "listFiles").mockResolvedValue({
+      directories: [],
+      files: [],
+      truncated: false,
+      next_token: null,
+    });
+    const close = vi.fn();
+    const choose = vi.fn();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MantineProvider>
+          <MoveDialog
+            bucket="b"
+            role="r"
+            path="a"
+            items={[{ path: "a/x", kind: "file" }]}
+            onClose={close}
+            onChoose={choose}
+          />
+        </MantineProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "b" }));
+    fireEvent.change(screen.getByLabelText("New name"), {
+      target: { value: "new-x" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "New folder" }));
+    const input = await screen.findByLabelText("Folder name");
+    input.focus();
+    fireEvent.keyDown(input, { key: "Escape", code: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Folder name")).not.toBeInTheDocument(),
+    );
+    expect(close).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("New name")).toHaveValue("new-x");
+    fireEvent.click(screen.getByRole("button", { name: "Move here" }));
+    expect(choose).toHaveBeenCalledWith({
+      items: [{ path: "a/x", kind: "file", new_name: "new-x" }],
+      destination: "",
+    });
+  });
   it("follows files-only pages, disables self/current and permits a different name", async () => {
     const list = vi
       .spyOn(api, "listFiles")

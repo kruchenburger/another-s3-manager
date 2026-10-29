@@ -326,6 +326,7 @@ class Job:
             return {
                 "job_id": self.id,
                 "state": self.state,
+                "delete_started": self.delete_started,
                 "phase": self.phase,
                 "done": self.done,
                 "total": total["objects"],

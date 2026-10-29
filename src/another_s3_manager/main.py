@@ -2811,6 +2811,7 @@ class MovePreflightResponse(BaseModel):
 
 
 class MoveJobResponse(MoveStartResponse):
+    delete_started: bool
     state: str
     phase: str
     done: int
