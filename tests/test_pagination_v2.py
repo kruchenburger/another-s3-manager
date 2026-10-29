@@ -35,7 +35,7 @@ def test_paginated_first_page_returns_directories_and_first_files(moto_s3):
     )
 
     result = list_objects_paginated_for_role(
-        role=None,
+        role="Default",
         bucket="paginated-alpha",
         path="",
         user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
@@ -69,7 +69,7 @@ def test_paginated_continuation_excludes_directories(moto_s3):
     )
 
     page1 = list_objects_paginated_for_role(
-        role=None,
+        role="Default",
         bucket="paginated-beta",
         path="",
         user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
@@ -78,7 +78,7 @@ def test_paginated_continuation_excludes_directories(moto_s3):
     assert page1["has_more"] is True
 
     page2 = list_objects_paginated_for_role(
-        role=None,
+        role="Default",
         bucket="paginated-beta",
         path="",
         user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
@@ -101,14 +101,14 @@ def test_paginated_last_page_clears_token(moto_s3):
     )
 
     page1 = list_objects_paginated_for_role(
-        role=None,
+        role="Default",
         bucket="paginated-gamma",
         path="",
         user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
         max_keys=2,
     )
     page2 = list_objects_paginated_for_role(
-        role=None,
+        role="Default",
         bucket="paginated-gamma",
         path="",
         user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
@@ -135,7 +135,7 @@ def test_paginated_files_sorted_case_insensitive(moto_s3):
     )
 
     result = list_objects_paginated_for_role(
-        role=None,
+        role="Default",
         bucket="paginated-sort",
         path="",
         user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
@@ -153,7 +153,7 @@ def test_route_legacy_mode_unchanged(app_client, moto_s3):
     _seed(moto_s3, "legacy-bucket", files=["a.txt", "b.txt"], directories=[])
 
     response = app_client.get(
-        "/api/buckets/legacy-bucket/files",
+        "/api/buckets/legacy-bucket/files?role=Default",
         headers=headers,
     )
     assert response.status_code == 200
@@ -180,7 +180,7 @@ def test_route_paginated_mode_returns_new_envelope(app_client, moto_s3):
     )
 
     response = app_client.get(
-        "/api/buckets/paginated-route/files?max_keys=2",
+        "/api/buckets/paginated-route/files?max_keys=2&role=Default",
         headers=headers,
     )
     assert response.status_code == 200
@@ -199,7 +199,7 @@ def test_route_max_keys_out_of_range_rejected(app_client, moto_s3):
     moto_s3.create_bucket(Bucket="rejected")
 
     response = app_client.get(
-        "/api/buckets/rejected/files?max_keys=5000",
+        "/api/buckets/rejected/files?max_keys=5000&role=Default",
         headers=headers,
     )
     assert response.status_code == 422  # FastAPI validation error code
@@ -213,7 +213,7 @@ def test_route_continuation_without_max_keys_rejected(app_client, moto_s3):
     moto_s3.create_bucket(Bucket="orphan-token")
 
     response = app_client.get(
-        "/api/buckets/orphan-token/files?continuation_token=abc",
+        "/api/buckets/orphan-token/files?continuation_token=abc&role=Default",
         headers=headers,
     )
     assert response.status_code == 400
@@ -230,7 +230,7 @@ def test_client_load_returns_all_when_under_limit(moto_s3):
     )
 
     result = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="client-small",
         path="",
         user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
@@ -253,7 +253,7 @@ def test_client_load_truncates_at_limit(moto_s3):
     )
 
     result = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="client-big",
         path="",
         user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
@@ -276,14 +276,14 @@ def test_client_load_continuation_appends_next_chunk(moto_s3):
     )
 
     page1 = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="client-cont",
         path="",
         user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
         max_client_load=5,
     )
     page2 = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="client-cont",
         path="",
         user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
@@ -318,7 +318,7 @@ def test_client_load_folder_heavy_paginates_and_terminates(moto_s3):
     user = {"username": "admin", "is_admin": True, "allowed_roles": []}
 
     page1 = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="folder-heavy",
         path="",
         user_dict=user,
@@ -335,7 +335,7 @@ def test_client_load_folder_heavy_paginates_and_terminates(moto_s3):
 
     # Load more: the continuation returns the remaining folders and finishes.
     page2 = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="folder-heavy",
         path="",
         user_dict=user,
@@ -376,7 +376,7 @@ def test_client_load_folder_heavy_makes_few_s3_calls(monkeypatch):
     monkeypatch.setattr(s3_client, "get_s3_client", lambda role_name=None: FakeS3())
 
     result = s3_client.list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="whatever",
         path="",
         user_dict={"username": "admin", "is_admin": True, "allowed_roles": []},
@@ -416,7 +416,7 @@ def test_route_client_load_mode_under_limit(app_client, moto_s3):
     _seed(moto_s3, "cl-small", files=["a.txt", "b.txt"], directories=["d1"])
 
     response = app_client.get(
-        "/api/buckets/cl-small/files?client_load=1",
+        "/api/buckets/cl-small/files?client_load=1&role=Default",
         headers=headers,
     )
     assert response.status_code == 200
@@ -435,7 +435,7 @@ def test_route_client_load_mode_truncates(app_client, moto_s3):
     _seed(moto_s3, "cl-big", files=[f"f{i:03d}.txt" for i in range(8)], directories=[])
 
     response = app_client.get(
-        "/api/buckets/cl-big/files?client_load=1&max_keys=3",
+        "/api/buckets/cl-big/files?client_load=1&max_keys=3&role=Default",
         headers=headers,
     )
     assert response.status_code == 200

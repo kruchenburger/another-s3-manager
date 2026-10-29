@@ -25,7 +25,7 @@ def test_get_buckets_lists_moto_buckets(app_client, moto_s3):
     moto_s3.create_bucket(Bucket="reference-alpha")
     moto_s3.create_bucket(Bucket="reference-beta")
 
-    response = app_client.get("/api/buckets", headers=headers)
+    response = app_client.get("/api/buckets?role=Default", headers=headers)
 
     assert response.status_code == 200
     names = response.json()
@@ -41,7 +41,7 @@ def test_post_upload_writes_to_moto_bucket(app_client, moto_s3):
 
     response = app_client.post(
         "/api/buckets/reference-up/upload",
-        data={"key": "ref.txt"},
+        data={"role": "Default", "key": "ref.txt"},
         files={"file": ("ref.txt", payload, "text/plain")},
         headers=headers,
     )
@@ -58,7 +58,7 @@ def test_delete_removes_from_moto_bucket(app_client, moto_s3):
     moto_s3.put_object(Bucket="reference-del", Key="goodbye.txt", Body=b"bye")
 
     response = app_client.delete(
-        "/api/buckets/reference-del/files?path=goodbye.txt",
+        "/api/buckets/reference-del/files?path=goodbye.txt&role=Default",
         headers=headers,
     )
 
@@ -80,7 +80,7 @@ def test_moto_fixture_smoke(moto_s3):
     from another_s3_manager.s3_client import list_buckets_for_role
 
     buckets = list_buckets_for_role(
-        None,
+        "Default",
         {"username": "admin", "is_admin": True, "allowed_roles": []},
     )
     assert "smoke-bucket" in buckets

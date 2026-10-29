@@ -887,10 +887,24 @@ def _make_user(is_admin=False, allowed_roles=None):
 # --- validate_role_access ---
 
 
-def test_validate_role_access_none_returns_none():
+@pytest.mark.parametrize("role", [None, "", " \t "])
+def test_validate_role_access_requires_role(role):
     import another_s3_manager.s3_client as mod
 
-    assert mod.validate_role_access(None, _make_user()) is None
+    with pytest.raises(PermissionError):
+        mod.validate_role_access(role, _make_user())
+
+
+@pytest.mark.parametrize("role", [None, "", " \t ", "Unknown"])
+@pytest.mark.parametrize("is_admin", [False, True])
+def test_validate_bucket_access_requires_configured_role(mocker, role, is_admin):
+    import another_s3_manager.s3_client as mod
+    from another_s3_manager.errors import RoleNotFoundError
+
+    factory = mocker.patch.object(mod, "get_s3_client")
+    with pytest.raises((PermissionError, RoleNotFoundError)):
+        mod._validate_bucket_access(role, "test-bucket", _make_user(is_admin=is_admin, allowed_roles=["Unknown"]))
+    factory.assert_not_called()
 
 
 def test_validate_role_access_admin_allows_any():
@@ -1192,7 +1206,7 @@ def test_iter_object_for_role_streams_body(moto_s3):
     from another_s3_manager.s3_client import iter_object_for_role
 
     metadata, body_iter = iter_object_for_role(
-        None,
+        "Default",
         "stream-b",
         "x.bin",
         {"username": "admin", "is_admin": True, "allowed_roles": []},
@@ -1215,7 +1229,7 @@ def test_iter_object_for_role_missing_raises_filenotfound(moto_s3):
 
     with pytest.raises(FileNotFoundError):
         iter_object_for_role(
-            None,
+            "Default",
             "missing-b",
             "absent.txt",
             {"username": "admin", "is_admin": True, "allowed_roles": []},
@@ -1231,11 +1245,11 @@ def test_iter_object_for_role_increments_metric(moto_s3):
     from another_s3_manager.metrics import s3_bytes_total, safe_role_label
     from another_s3_manager.s3_client import iter_object_for_role
 
-    labels = {"role": safe_role_label("unknown"), "bucket": "metric-b", "direction": "download"}
+    labels = {"role": safe_role_label("Default"), "bucket": "metric-b", "direction": "download"}
     before = s3_bytes_total.labels(**labels)._value.get()
 
     metadata, body_iter = iter_object_for_role(
-        None,
+        "Default",
         "metric-b",
         "m.bin",
         {"username": "admin", "is_admin": True, "allowed_roles": []},
@@ -1980,7 +1994,7 @@ def test_copy_object_for_role_copies_body(moto_s3):
     moto_s3.create_bucket(Bucket="copybkt")
     moto_s3.put_object(Bucket="copybkt", Key="src.txt", Body=b"hello")
 
-    copy_object_for_role(None, "copybkt", "src.txt", "copybkt", "dst.txt", _ADMIN)
+    copy_object_for_role("Default", "copybkt", "src.txt", "copybkt", "dst.txt", _ADMIN)
 
     assert moto_s3.get_object(Bucket="copybkt", Key="dst.txt")["Body"].read() == b"hello"
     # Copy (not move) — source is still there.
@@ -1992,7 +2006,7 @@ def test_copy_object_for_role_missing_source_raises(moto_s3):
 
     moto_s3.create_bucket(Bucket="cp2")
     with pytest.raises(FileNotFoundError):
-        copy_object_for_role(None, "cp2", "nope.txt", "cp2", "x.txt", _ADMIN)
+        copy_object_for_role("Default", "cp2", "nope.txt", "cp2", "x.txt", _ADMIN)
 
 
 def test_get_object_metadata_for_role_returns_fields(moto_s3):
@@ -2001,7 +2015,7 @@ def test_get_object_metadata_for_role_returns_fields(moto_s3):
     moto_s3.create_bucket(Bucket="metabkt")
     moto_s3.put_object(Bucket="metabkt", Key="a.txt", Body=b"12345", ContentType="text/plain")
 
-    meta = get_object_metadata_for_role(None, "metabkt", "a.txt", _ADMIN)
+    meta = get_object_metadata_for_role("Default", "metabkt", "a.txt", _ADMIN)
     assert meta["size"] == 5
     assert meta["content_type"] == "text/plain"
     assert meta["last_modified"] is not None
@@ -2013,7 +2027,7 @@ def test_get_object_metadata_for_role_missing_raises(moto_s3):
 
     moto_s3.create_bucket(Bucket="md2")
     with pytest.raises(FileNotFoundError):
-        get_object_metadata_for_role(None, "md2", "nope.txt", _ADMIN)
+        get_object_metadata_for_role("Default", "md2", "nope.txt", _ADMIN)
 
 
 # ---------------------------------------------------------------------------

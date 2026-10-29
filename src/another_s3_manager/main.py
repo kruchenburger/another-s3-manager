@@ -73,7 +73,7 @@ from another_s3_manager.constants import (
     PRESIGNED_URL_MIN_TTL,
     STATIC_DIR,
 )
-from another_s3_manager.errors import S3OperationError
+from another_s3_manager.errors import RoleNotFoundError, S3OperationError
 from another_s3_manager.metrics import (
     REGISTRY,
     _seed_zero_series,
@@ -2009,10 +2009,19 @@ def _s3_error_to_http(error: S3OperationError) -> HTTPException:
     )
 
 
-def validate_role_access(role_name: Optional[str], current_user: Dict[str, Any]) -> Optional[str]:
+def _require_role(role_name: Optional[str]) -> str:
+    """Require an explicit role before dispatching a bucket request."""
+    if role_name is None or not role_name.strip():
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "ROLE_REQUIRED", "message": "A role is required for this request."},
+        )
+    return role_name
+
+
+def validate_role_access(role_name: Optional[str], current_user: Dict[str, Any]) -> str:
     """Validate that user has access to the specified role"""
-    if role_name is None:
-        return None
+    role_name = _require_role(role_name)
 
     # Admins have access to all roles
     if current_user.get("is_admin", False):
@@ -2039,6 +2048,7 @@ async def list_buckets(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """List available S3 buckets - delegates to s3_client.list_buckets_for_role."""
+    role = _require_role(role)
     try:
         # list_buckets_for_role does blocking boto3 I/O (list_buckets, or nothing
         # at all if allowed_buckets is configured) — run off the event loop so a
@@ -2142,6 +2152,7 @@ async def list_files(
         `{directories, files, truncated, next_token}` for the /v2 UI to hold in
         memory and paginate client-side. Directories only on the first chunk.
     """
+    role = _require_role(role)
     try:
         try:
             bucket_name = sanitize_bucket_name(bucket_name)
@@ -2241,6 +2252,7 @@ async def upload_file(
     the multipart parser's SpooledTemporaryFile to the streaming helper — the
     body is never copied into a bytes object. The helper does role validation,
     bucket-access validation, and metric accounting."""
+    role = _require_role(role)
     size: Optional[int] = None
     try:
         # Validate and sanitize inputs
@@ -2433,6 +2445,7 @@ async def download_file(
     current_user: Dict[str, Any] = Depends(get_user_for_download),
 ):
     """Download a file from S3 - delegates to s3_client.iter_object_for_role for true streaming."""
+    role = _require_role(role)
     try:
         # Validate and sanitize inputs
         try:
@@ -2504,7 +2517,7 @@ async def download_file(
 async def get_presigned_url(
     bucket_name: str,
     path: str = Query(..., description="Object key to sign"),
-    role: str = Query(..., description="Role name to use (required)"),
+    role: Optional[str] = Query(None, description="Role name to use (required)"),
     op: str = Query("get", description="Presign operation; only 'get' is supported"),
     expires_in: Optional[int] = Query(
         None,
@@ -2523,10 +2536,11 @@ async def get_presigned_url(
     that the link may expire when the role's session ends.
 
     `role` is required. The frontend always passes it explicitly. Direct API
-    callers that omit it get 422 from FastAPI's query validation.
+    callers that omit it get a structured HTTP 400 response.
     """
     from datetime import datetime, timedelta, timezone
 
+    role = validate_role_access(role, current_user)
     if op != "get":
         raise HTTPException(
             status_code=400,
@@ -2560,7 +2574,7 @@ async def get_presigned_url(
 
     # Validate the role belongs to the user; on success, validated_role is the
     # canonical role string the helper expects.
-    validated_role = validate_role_access(role, current_user) or role
+    validated_role = role
 
     try:
         # generate_presigned_url itself is local crypto (no I/O) — but
@@ -2575,6 +2589,8 @@ async def get_presigned_url(
             current_user,
             expires_in=granted_ttl,
         )
+    except RoleNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except FileNotFoundError as e:
@@ -2613,6 +2629,7 @@ async def delete_file(
     csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Delete a file or recursively delete a directory from S3"""
+    role = _require_role(role)
     # Check if deletion is disabled (from environment variable or config)
     config = load_config(force_reload=False)
     disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
