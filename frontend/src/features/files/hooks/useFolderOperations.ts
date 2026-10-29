@@ -11,7 +11,7 @@ import {
   newMoveAction,
   targetError,
 } from "@/features/files/utils/folderOperations";
-import { getErrorMessage } from "@/utils/apiError";
+import { ApiError, getErrorCode, getErrorMessage } from "@/utils/apiError";
 
 export function useFolderOperations(
   bucket: string,
@@ -61,7 +61,10 @@ export function useFolderOperations(
     try {
       const preflight = await movePreflight(bucket, role, request);
       if (revision !== version.current) return;
-      setConfirmation({ action: newMoveAction(request), preflight });
+      setConfirmation({
+        action: newMoveAction(request, preflight.plan_fingerprint),
+        preflight,
+      });
     } catch (e) {
       if (revision === version.current) setError(getErrorMessage(e));
     } finally {
@@ -96,7 +99,34 @@ export function useFolderOperations(
         close();
       }
     } catch (e) {
-      if (revision === version.current) setError(getErrorMessage(e));
+      if (revision !== version.current) return;
+      if (
+        e instanceof ApiError &&
+        e.status === 409 &&
+        getErrorCode(e) === "PLAN_CHANGED"
+      ) {
+        const request: MoveRequest = {
+          items: confirmation.action.items,
+          destination: confirmation.action.destination,
+        };
+        setConfirmation(null);
+        try {
+          const preflight = await movePreflight(bucket, role, request);
+          if (revision !== version.current) return;
+          setConfirmation({
+            action: newMoveAction(request, preflight.plan_fingerprint),
+            preflight,
+          });
+          setError(
+            "The source changed. Review the updated counts and confirm again.",
+          );
+        } catch (refreshError) {
+          if (revision === version.current)
+            setError(getErrorMessage(refreshError));
+        }
+      } else {
+        setError(getErrorMessage(e));
+      }
     } finally {
       inFlight.current = false;
       if (revision === version.current) setBusy(false);

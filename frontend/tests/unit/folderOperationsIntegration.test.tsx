@@ -12,6 +12,7 @@ import { FileActions } from "@/components/FileBrowser/FileActions";
 import { FileRowActionsMenu } from "@/components/FileBrowser/FileRowActionsMenu";
 import { BulkActionBar } from "@/components/FileBrowser/BulkActionBar";
 import { describe, expect, it, vi, afterEach } from "vitest";
+import { ApiError } from "@/utils/apiError";
 import { useFolderOperations } from "@/features/files/hooks/useFolderOperations";
 import * as api from "@/features/files/api/filesApi";
 vi.mock("@/features/files/jobs/MoveJobsProvider", () => ({
@@ -101,6 +102,7 @@ describe("shared move flow", () => {
       largest: 5,
       conflicts: [],
       blocked_reason: null,
+      plan_fingerprint: "a".repeat(64),
     });
     const start = vi
       .spyOn(api, "startMove")
@@ -152,9 +154,56 @@ describe("shared move flow", () => {
         largest: 1,
         conflicts: [],
         blocked_reason: null,
+        plan_fingerprint: "a".repeat(64),
       });
       await pending;
     });
     expect(result.current.confirmation).toBeNull();
   });
+});
+
+it("refreshes a changed plan and requires a fresh confirmation", async () => {
+  const preflight = vi
+    .spyOn(api, "movePreflight")
+    .mockResolvedValueOnce({
+      objects: 1,
+      bytes: 1,
+      largest: 1,
+      conflicts: [],
+      blocked_reason: null,
+      plan_fingerprint: "a".repeat(64),
+    })
+    .mockResolvedValueOnce({
+      objects: 2,
+      bytes: 3,
+      largest: 2,
+      conflicts: [],
+      blocked_reason: null,
+      plan_fingerprint: "b".repeat(64),
+    });
+  const start = vi
+    .spyOn(api, "startMove")
+    .mockRejectedValueOnce(
+      new ApiError(409, "Conflict", {
+        detail: { code: "PLAN_CHANGED", message: "Plan changed" },
+      }),
+    )
+    .mockResolvedValue({ job_id: "j" });
+  const { result } = renderHook(() => useFolderOperations("b", "r", "", false));
+  const request = {
+    items: [{ path: "source", kind: "folder" as const }],
+    destination: "dest",
+  };
+  await act(async () => result.current.choose(request));
+  await act(async () => result.current.confirm());
+  expect(preflight).toHaveBeenLastCalledWith("b", "r", request);
+  expect(result.current.confirmation?.preflight.objects).toBe(2);
+  expect(result.current.error).toMatch(/changed/i);
+  expect(start).toHaveBeenCalledTimes(1);
+  expect(start.mock.calls[0][2].plan_fingerprint).toBe("a".repeat(64));
+  await act(async () => result.current.confirm());
+  expect(start.mock.calls[1][2].plan_fingerprint).toBe("b".repeat(64));
+  expect(start.mock.calls[1][2].operation_id).not.toBe(
+    start.mock.calls[0][2].operation_id,
+  );
 });

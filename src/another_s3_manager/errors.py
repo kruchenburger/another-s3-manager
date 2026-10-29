@@ -73,6 +73,8 @@ class MoveError(S3OperationError):
     ):
         messages = {
             "BUSY": "A move or write is in progress in this folder.",
+            "NAME_DOT_DOT": "Names cannot contain '..'.",
+            "PLAN_CHANGED": "The source changed. Review the updated move plan and confirm again.",
             "INVALID_NAME": "Choose a valid name of at most 255 characters.",
             "INVALID_KEY": "The object key is unsupported.",
             "KEY_TOO_LONG": "The object key exceeds 1024 UTF-8 bytes.",

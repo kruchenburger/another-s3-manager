@@ -8,6 +8,8 @@ from typing import Optional, Union
 
 def validate_new_name(name: str) -> str:
     """Validate a newly chosen name without changing existing S3 keys."""
+    if ".." in name:
+        raise ValueError("NAME_DOT_DOT")
     if (
         not name
         or len(name) > 255
@@ -41,6 +43,8 @@ def is_same_or_descendant(candidate: str, parent: str) -> bool:
 
 
 def build_destination_key(destination: str, path: str, kind: str, new_name: Optional[str] = None) -> str:
+    if ".." in destination:
+        raise ValueError("NAME_DOT_DOT")
     validate_source_key(destination, allow_root=True)
     validate_source_key(path)
     name = validate_new_name(new_name) if new_name is not None else path.rsplit("/", 1)[-1]

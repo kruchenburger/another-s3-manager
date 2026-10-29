@@ -26,13 +26,11 @@ function setup() {
 }
 describe("New folder", () => {
   it("validates before sending and displays server conflict messages", async () => {
-    const create = vi
-      .spyOn(api, "createFolder")
-      .mockRejectedValue(
-        new ApiError(409, "Conflict", {
-          detail: { message: "A file already exists with this name" },
-        }),
-      );
+    const create = vi.spyOn(api, "createFolder").mockRejectedValue(
+      new ApiError(409, "Conflict", {
+        detail: { message: "A file already exists with this name" },
+      }),
+    );
     setup();
     fireEvent.change(screen.getByLabelText("Folder name"), {
       target: { value: "bad/name" },
@@ -60,4 +58,17 @@ describe("New folder", () => {
       expect(api.createFolder).toHaveBeenCalledWith("b", "r", "a/new"),
     );
   });
+});
+
+it("rejects dot pairs before creating a folder", async () => {
+  const create = vi.spyOn(api, "createFolder");
+  setup();
+  fireEvent.change(screen.getByLabelText("Folder name"), {
+    target: { value: "report..csv" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
+  expect(
+    await screen.findByText("Names cannot contain '..'."),
+  ).toBeInTheDocument();
+  expect(create).not.toHaveBeenCalled();
 });

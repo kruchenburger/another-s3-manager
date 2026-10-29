@@ -35,6 +35,7 @@ describe("folder operations transport", () => {
       items: [{ path: "x", kind: "folder" as const }],
       destination: "dest",
       operation_id: crypto.randomUUID(),
+      plan_fingerprint: "a".repeat(64),
     };
     vi.mocked(apiRequest)
       .mockRejectedValueOnce(new TypeError("offline"))

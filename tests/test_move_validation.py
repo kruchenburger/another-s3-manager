@@ -3,12 +3,12 @@ import pytest
 from another_s3_manager import utils
 
 
-@pytest.mark.parametrize("name", ["новая 📁", "a..b", "#+%"])
+@pytest.mark.parametrize("name", ["новая 📁", "#+%"])
 def test_new_names(name):
     assert utils.validate_new_name(name) == name
 
 
-@pytest.mark.parametrize("name", ["", ".", "..", "a/b", " x", "x ", "x\n", "a" * 256])
+@pytest.mark.parametrize("name", ["", ".", "..", "a..b", "a/b", " x", "x ", "x\n", "a" * 256])
 def test_invalid_names(name):
     with pytest.raises(ValueError):
         utils.validate_new_name(name)

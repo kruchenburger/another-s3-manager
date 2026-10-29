@@ -10,6 +10,7 @@ export interface MoveRequest {
   destination: string;
 }
 export interface MoveStartRequest extends MoveRequest {
+  plan_fingerprint: string;
   operation_id: string;
 }
 export interface MoveFailure {
@@ -19,6 +20,7 @@ export interface MoveFailure {
   key: string | null;
 }
 export interface MovePreflight {
+  plan_fingerprint: string;
   objects: number;
   bytes: number;
   largest: number;

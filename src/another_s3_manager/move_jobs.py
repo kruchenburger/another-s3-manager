@@ -56,6 +56,8 @@ class MoveRequest(BaseModel):
     @field_validator("destination")
     @classmethod
     def destination_valid(cls, value):
+        if ".." in value:
+            raise ValueError("NAME_DOT_DOT")
         return validate_source_key(value, allow_root=True)
 
     @model_validator(mode="after")
@@ -156,6 +158,15 @@ class Plan:
     entries: tuple[Entry, ...]
     roots: tuple[tuple[str, str, str], ...]
     parents: tuple[str, ...]
+
+    def fingerprint(self, role, bucket, request):
+        payload = [
+            role,
+            bucket,
+            request.model_dump(),
+            sorted((entry.source, entry.destination, entry.size, entry.etag) for entry in self.entries),
+        ]
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
     def summary(self):
         return {
@@ -486,12 +497,15 @@ class MoveRegistry:
                 raise MoveError("PREFLIGHT_LIMIT", 429)
             times.append(now)
         with reserve(secrets.token_urlsafe(), reservation_paths(role, bucket, request)):
-            return build_plan(user, role, bucket, request).summary()
+            plan = build_plan(user, role, bucket, request)
+            return {**plan.summary(), "plan_fingerprint": plan.fingerprint(role, bucket, request)}
 
-    def start(self, user, role, bucket, request, operation_id):
+    def start(self, user, role, bucket, request, operation_id, plan_fingerprint):
         require_access(user, role, bucket, deleting=True)
         digest = hashlib.sha256(
-            json.dumps([role, bucket, request.model_dump()], sort_keys=True, ensure_ascii=False).encode()
+            json.dumps(
+                [role, bucket, request.model_dump(), plan_fingerprint], sort_keys=True, ensure_ascii=False
+            ).encode()
         ).hexdigest()
         existing = None
         with self.lock:
@@ -515,7 +529,14 @@ class MoveRegistry:
                 raise existing.planning_error
             return existing
         try:
-            job.plan = build_plan(user, role, bucket, request)
+            try:
+                job.plan = build_plan(user, role, bucket, request)
+            except MoveError as error:
+                if error.code == "NoSuchKey":
+                    raise MoveError("PLAN_CHANGED", 409) from None
+                raise
+            if job.plan.fingerprint(role, bucket, request) != plan_fingerprint:
+                raise MoveError("PLAN_CHANGED", 409)
             job.future = _executor.submit(self._run, job)
             return job
         except Exception as error:

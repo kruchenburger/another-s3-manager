@@ -6,7 +6,7 @@ import { Anchor, Badge, CloseButton, Group, Text } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
 import { DelayedLoader } from "@/components/DelayedLoader/DelayedLoader";
 import { notifications } from "@mantine/notifications";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useFiles } from "@/features/files/hooks/useFiles";
 import {
   useFileSearch,
@@ -22,7 +22,7 @@ import {
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { useConfig } from "@/hooks/useConfig";
-import { joinPath, decodePath } from "@/utils/pathUtils";
+import { joinPath, decodePath, encodePath } from "@/utils/pathUtils";
 import { ApiError, getErrorMessage } from "@/utils/apiError";
 import { formatBytes } from "@/utils/formatBytes";
 import { formatTimeOfDay } from "@/utils/formatDate";
@@ -76,10 +76,12 @@ import { MoveDialog } from "./MoveDialog";
 import { ConfirmMoveModal } from "./ConfirmMoveModal";
 
 export function FileBrowser() {
-  const params = useParams<{ roleId: string; bucket: string; "*": string }>();
-  const roleId = decodeURIComponent(params.roleId ?? "");
-  const bucket = decodeURIComponent(params.bucket ?? "");
-  const pathFromUrl = decodePath(params["*"] ?? "");
+  // Router params have already been decoded and collapse literal %2F into /.
+  // Read the encoded pathname to preserve the exact S3 key with one decode.
+  const segments = useLocation().pathname.split("/");
+  const roleId = decodeURIComponent(segments[2] ?? "");
+  const bucket = decodeURIComponent(segments[4] ?? "");
+  const pathFromUrl = decodePath(segments.slice(6).join("/"));
   const navigate = useNavigate();
 
   const { data: config } = useConfig();
@@ -266,7 +268,7 @@ export function FileBrowser() {
     setSearchQuery("");
     setServerSearchTerm(null);
     const next = joinPath(pathFromUrl, folderName);
-    const encoded = next.split("/").map(encodeURIComponent).join("/");
+    const encoded = encodePath(next);
     navigate(
       `/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(bucket)}/p/${encoded}`,
     );

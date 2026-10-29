@@ -27,6 +27,8 @@ export const itemName = (item: MoveItem) =>
 export const itemParent = (item: MoveItem) =>
   item.path.slice(0, Math.max(0, item.path.lastIndexOf("/")));
 export function validateName(name: string, parent?: string): string | null {
+  if (name.includes("..") || parent?.includes(".."))
+    return "Names cannot contain '..'.";
   // Python str.strip() includes NEL and excludes the JavaScript-only BOM.
   const stripped = name.replace(
     /^[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/gu,
@@ -53,6 +55,7 @@ export function targetError(
   items: MoveItem[],
   destination: string,
 ): string | null {
+  if (destination.includes("..")) return "Names cannot contain '..'.";
   if (
     items.some(
       (item) =>
@@ -77,10 +80,11 @@ export function moveExplanation(objects: number, bytes: number) {
     formatBytes(bytes),
   );
 }
-export function newMoveAction(request: MoveRequest) {
+export function newMoveAction(request: MoveRequest, planFingerprint: string) {
   return {
     ...request,
     items: request.items.map((item) => ({ ...item })),
     operation_id: crypto.randomUUID(),
+    plan_fingerprint: planFingerprint,
   };
 }

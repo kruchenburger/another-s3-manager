@@ -156,3 +156,30 @@ describe("Move picker", () => {
     });
   });
 });
+
+it("rejects a new dot-pair name while preserving an existing source name", async () => {
+  vi.spyOn(api, "listFiles").mockResolvedValue({
+    directories: [],
+    files: [],
+    truncated: false,
+    next_token: null,
+  });
+  const choose = setup([{ path: "a/a..b", kind: "file" }]);
+  fireEvent.click(screen.getByRole("button", { name: "b" }));
+  fireEvent.change(screen.getByLabelText("New name"), {
+    target: { value: "report..csv" },
+  });
+  expect(
+    (await screen.findAllByText("Names cannot contain '..'."))[0],
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Move here" })).toBeDisabled();
+  expect(choose).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("New name"), {
+    target: { value: "a..b" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Move here" }));
+  expect(choose).toHaveBeenCalledWith({
+    items: [{ path: "a/a..b", kind: "file" }],
+    destination: "",
+  });
+});

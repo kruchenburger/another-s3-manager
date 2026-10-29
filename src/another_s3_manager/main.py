@@ -2772,6 +2772,8 @@ class FolderRequest(BaseModel):
     def validate_folder_path(cls, value):
         from another_s3_manager.utils import validate_new_name, validate_source_key
 
+        if ".." in value:
+            raise ValueError("NAME_DOT_DOT")
         validate_source_key(value)
         validate_new_name(value.rsplit("/", 1)[-1])
         validate_source_key(value + "/")
@@ -2779,6 +2781,7 @@ class FolderRequest(BaseModel):
 
 
 class MoveStartRequest(move_jobs.MoveRequest):
+    plan_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     operation_id: str = Field(max_length=1024)
 
     @field_validator("operation_id")
@@ -2803,6 +2806,7 @@ class MoveFailure(BaseModel):
 
 
 class MovePreflightResponse(BaseModel):
+    plan_fingerprint: str
     objects: int
     bytes: int
     largest: int
@@ -2839,7 +2843,7 @@ async def _move_payload(request: Request, schema):
         code = "INVALID_REQUEST"
         for failure in error.errors():
             reason = str(failure.get("ctx", {}).get("error", ""))
-            if reason in {"INVALID_NAME", "INVALID_KEY", "KEY_TOO_LONG"}:
+            if reason in {"INVALID_NAME", "NAME_DOT_DOT", "INVALID_KEY", "KEY_TOO_LONG"}:
                 code = reason
                 break
         raise HTTPException(400, detail=MoveError(code).detail()) from None
@@ -2902,8 +2906,10 @@ async def start_move(
     bucket = _move_bucket(bucket_name)
     await _move_call(move_jobs.require_access, current_user, role, bucket)
     payload = await _move_payload(request, MoveStartRequest)
-    move = move_jobs.MoveRequest.model_validate(payload.model_dump(exclude={"operation_id"}))
-    job = await _move_call(move_jobs.registry.start, current_user, role, bucket, move, payload.operation_id)
+    move = move_jobs.MoveRequest.model_validate(payload.model_dump(exclude={"operation_id", "plan_fingerprint"}))
+    job = await _move_call(
+        move_jobs.registry.start, current_user, role, bucket, move, payload.operation_id, payload.plan_fingerprint
+    )
     return MoveStartResponse(job_id=job.id)
 
 

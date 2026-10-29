@@ -15,6 +15,7 @@ describe("move confirmation", () => {
             largest: 20,
             conflicts: [],
             blocked_reason: null,
+            plan_fingerprint: "a".repeat(64),
           }}
           onConfirm={confirm}
           onClose={vi.fn()}
@@ -41,6 +42,7 @@ describe("move confirmation", () => {
             largest: 1,
             conflicts: [],
             blocked_reason: "Busy",
+            plan_fingerprint: "a".repeat(64),
           }}
           onConfirm={vi.fn()}
           onClose={vi.fn()}

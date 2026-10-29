@@ -57,6 +57,7 @@ import {
   targetError,
   validateName,
 } from "@/features/files/utils/folderOperations";
+import { ApiError } from "@/utils/apiError";
 import { useShiftSelect } from "@/components/FileBrowser/useShiftSelect";
 describe("exact object identity and move rules", () => {
   function browser() {
@@ -119,15 +120,14 @@ describe("exact object identity and move rules", () => {
           next_token: opts?.search ? null : "more",
         }),
       );
-      const preflight = vi
-        .spyOn(api, "movePreflight")
-        .mockResolvedValue({
-          objects: 2,
-          bytes: 2,
-          largest: 1,
-          conflicts: [],
-          blocked_reason: null,
-        });
+      const preflight = vi.spyOn(api, "movePreflight").mockResolvedValue({
+        objects: 2,
+        bytes: 2,
+        largest: 1,
+        conflicts: [],
+        blocked_reason: null,
+        plan_fingerprint: "a".repeat(64),
+      });
       browser();
       await screen.findByLabelText("Select a.txt");
       const input = screen.getByPlaceholderText(/filter|search/i);
@@ -166,6 +166,90 @@ describe("exact object identity and move rules", () => {
         ],
         destination: "a/dest",
       });
+    },
+  );
+  it.each(["dialog", "drag"])(
+    "requires confirmation of changed counts for %s moves",
+    async (mode) => {
+      vi.spyOn(window, "matchMedia").mockReturnValue({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+      } as unknown as MediaQueryList);
+      vi.spyOn(api, "listFiles").mockResolvedValue({
+        directories: [{ name: "dest", is_directory: true, size: 0 }],
+        files: [{ name: "file", is_directory: false, size: 1 }],
+        truncated: false,
+        next_token: null,
+      });
+      vi.spyOn(api, "movePreflight")
+        .mockResolvedValueOnce({
+          objects: 1,
+          bytes: 1,
+          largest: 1,
+          conflicts: [],
+          blocked_reason: null,
+          plan_fingerprint: "a".repeat(64),
+        })
+        .mockResolvedValueOnce({
+          objects: 2,
+          bytes: 3,
+          largest: 2,
+          conflicts: [],
+          blocked_reason: null,
+          plan_fingerprint: "b".repeat(64),
+        });
+      const start = vi
+        .spyOn(api, "startMove")
+        .mockRejectedValueOnce(
+          new ApiError(409, "Conflict", { detail: { code: "PLAN_CHANGED" } }),
+        )
+        .mockResolvedValue({ job_id: "j" });
+      vi.spyOn(api, "getJob").mockReturnValue(new Promise(() => {}));
+      browser();
+      const file = await screen.findByLabelText("Select file");
+      if (mode === "drag") {
+        const dataTransfer = transfer();
+        fireEvent.dragStart(file.closest("tr")!, { dataTransfer });
+        fireEvent.drop(screen.getByLabelText("Select dest").closest("tr")!, {
+          dataTransfer,
+        });
+      } else {
+        fireEvent.click(file);
+        fireEvent.click(
+          within(
+            await screen.findByRole("region", {
+              name: "Bulk actions for selected files",
+            }),
+          ).getByRole("button", { name: "Move to…" }),
+        );
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Open folder dest" }),
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Move here" }));
+      }
+      expect(
+        await screen.findByText(/This moves 1 objects/),
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Start move" }));
+      expect(
+        await screen.findByText(/This moves 2 objects/),
+      ).toBeInTheDocument();
+      expect(start).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole("button", { name: "Start move" }));
+      await waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+      expect(start.mock.calls[1][2]).toEqual(
+        expect.objectContaining({
+          items: [{ path: "a/file", kind: "file" }],
+          destination: "a/dest",
+          plan_fingerprint: "b".repeat(64),
+        }),
+      );
+      expect(start.mock.calls[1][2].operation_id).not.toBe(
+        start.mock.calls[0][2].operation_id,
+      );
     },
   );
   it("keeps a file x and folder x/ independently selected", () => {
@@ -211,7 +295,8 @@ describe("exact object identity and move rules", () => {
   it("counts Unicode code points and the complete marker key bytes", () => {
     expect(validateName("😀".repeat(255))).toBeNull();
     expect(validateName("😀".repeat(255), "abcd")).toBeTruthy();
-    expect(validateName("a..b")).toBeNull();
+    // New names may not contain ".." (older routes reject such keys); existing keys stay exact.
+    expect(validateName("a..b")).toBe("Names cannot contain '..'.");
     expect(validateName("\u0085x")).toBeTruthy();
     expect(validateName("\ufeffx")).toBeNull();
   });
@@ -228,6 +313,7 @@ describe("exact object identity and move rules", () => {
       largest: 1,
       conflicts: [],
       blocked_reason: null,
+      plan_fingerprint: "a".repeat(64),
     });
     const start = vi
       .spyOn(api, "startMove")
@@ -334,6 +420,7 @@ describe("exact object identity and move rules", () => {
       largest: 100,
       conflicts: [],
       blocked_reason: null,
+      plan_fingerprint: "a".repeat(64),
     });
     const start = vi.spyOn(api, "startMove");
     browser();
@@ -398,6 +485,7 @@ describe("exact object identity and move rules", () => {
       largest: 1,
       conflicts: [],
       blocked_reason: null,
+      plan_fingerprint: "a".repeat(64),
     });
     browser();
     const file = (await screen.findByLabelText("Select x")).closest(
@@ -418,3 +506,85 @@ describe("exact object identity and move rules", () => {
     expect(screen.queryByText("Drop here to upload")).not.toBeInTheDocument();
   });
 });
+
+it.each(["a%2Fb", "100%done", "a b", "#", "?", "資料", "😀"])(
+  "opens %s through a built link and moves its exact keys",
+  async (name) => {
+    const list = vi
+      .spyOn(api, "listFiles")
+      .mockImplementation(async (_b, _r, path) => ({
+        directories:
+          path === "a"
+            ? [
+                { name, is_directory: true, size: 0 },
+                { name: "a", is_directory: true, size: 0 },
+              ]
+            : [],
+        files:
+          path === "a" ? [] : [{ name: "file", is_directory: false, size: 1 }],
+        truncated: false,
+        next_token: null,
+      }));
+    vi.spyOn(api, "movePreflight").mockResolvedValue({
+      objects: 1,
+      bytes: 1,
+      largest: 1,
+      conflicts: [],
+      blocked_reason: null,
+      plan_fingerprint: "a".repeat(64),
+    });
+    const start = vi.spyOn(api, "startMove").mockResolvedValue({ job_id: "j" });
+    vi.spyOn(api, "getJob").mockReturnValue(new Promise(() => {}));
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <MantineProvider>
+          <MoveJobsProvider>
+            <MemoryRouter initialEntries={["/r/r/b/b/p/a"]}>
+              <Routes>
+                <Route
+                  path="/r/:roleId/b/:bucket/p/*"
+                  element={<FileBrowser />}
+                />
+              </Routes>
+            </MemoryRouter>
+          </MoveJobsProvider>
+        </MantineProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.doubleClick(
+      (await screen.findByLabelText(`Select ${name}`)).closest("tr")!,
+    );
+    await screen.findByLabelText("Select file");
+    expect(list).toHaveBeenLastCalledWith(
+      "b",
+      "r",
+      `a/${name}`,
+      expect.anything(),
+    );
+    fireEvent.click(screen.getByLabelText("Select file"));
+    fireEvent.click(
+      within(
+        await screen.findByRole("region", {
+          name: "Bulk actions for selected files",
+        }),
+      ).getByRole("button", { name: "Move to…" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "b" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move here" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start move" }));
+    await waitFor(() =>
+      expect(start).toHaveBeenCalledWith(
+        "b",
+        "r",
+        expect.objectContaining({
+          items: [{ path: `a/${name}/file`, kind: "file" }],
+          destination: "",
+        }),
+      ),
+    );
+  },
+);

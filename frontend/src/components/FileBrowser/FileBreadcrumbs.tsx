@@ -1,7 +1,7 @@
 import { Anchor, Breadcrumbs, Text } from "@mantine/core";
 import { Link } from "react-router-dom";
 import { Home } from "lucide-react";
-import { splitCrumbs } from "@/utils/pathUtils";
+import { encodePath, splitCrumbs } from "@/utils/pathUtils";
 import classes from "./FileBrowser.module.css";
 
 import type { InternalFileDrag } from "@/features/files/hooks/useInternalFileDrag";
@@ -39,7 +39,7 @@ export function FileBreadcrumbs({
       </Anchor>
       {crumbs.map((c, i) => {
         const isLast = i === crumbs.length - 1;
-        const url = `${baseUrl}/p/${c.path.split("/").map(encodeURIComponent).join("/")}`;
+        const url = `${baseUrl}/p/${encodePath(c.path)}`;
         return isLast ? (
           <Text
             {...drag?.target(c.path)}

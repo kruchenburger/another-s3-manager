@@ -48,6 +48,7 @@ def test_move_happy_paths(session, path, kind, new_name):
     preflight = client.post("/api/buckets/folder-routes/move/preflight?role=Default", json=body, headers=headers)
     assert preflight.status_code == 200
     assert preflight.json()["bytes"] == 7
+    body["plan_fingerprint"] = preflight.json()["plan_fingerprint"]
     body["operation_id"] = str(uuid.uuid4())
     response = client.post("/api/buckets/folder-routes/move?role=Default", json=body, headers=headers)
     assert response.status_code == 202
@@ -84,7 +85,12 @@ def test_deletion_gate_allows_new_folder(session, monkeypatch, gate):
     )
     response = client.post(
         "/api/buckets/folder-routes/move?role=Default",
-        json={"items": [{"path": "file", "kind": "file"}], "destination": "dest", "operation_id": str(uuid.uuid4())},
+        json={
+            "items": [{"path": "file", "kind": "file"}],
+            "destination": "dest",
+            "operation_id": str(uuid.uuid4()),
+            "plan_fingerprint": "0" * 64,
+        },
         headers=headers,
     )
     assert response.status_code == 403
@@ -149,7 +155,16 @@ def test_folder_collision_and_owner_route_isolation(session):
     s3.put_object(Bucket="folder-routes", Key="source", Body=b"x")
     response = client.post(
         "/api/buckets/folder-routes/move?role=Default",
-        json={"items": [{"path": "source", "kind": "file"}], "destination": "dest", "operation_id": str(uuid.uuid4())},
+        json={
+            "items": [{"path": "source", "kind": "file"}],
+            "destination": "dest",
+            "operation_id": str(uuid.uuid4()),
+            "plan_fingerprint": client.post(
+                "/api/buckets/folder-routes/move/preflight?role=Default",
+                json={"items": [{"path": "source", "kind": "file"}], "destination": "dest"},
+                headers=headers,
+            ).json()["plan_fingerprint"],
+        },
         headers=headers,
     )
     job_id = response.json()["job_id"]
@@ -224,7 +239,16 @@ def test_recreated_owner_cannot_read_or_cleanup_job(session):
     s3.put_object(Bucket="folder-routes", Key="source", Body=b"x")
     response = client.post(
         "/api/buckets/folder-routes/move?role=Default",
-        json={"items": [{"path": "source", "kind": "file"}], "destination": "dest", "operation_id": str(uuid.uuid4())},
+        json={
+            "items": [{"path": "source", "kind": "file"}],
+            "destination": "dest",
+            "operation_id": str(uuid.uuid4()),
+            "plan_fingerprint": client.post(
+                "/api/buckets/folder-routes/move/preflight?role=Default",
+                json={"items": [{"path": "source", "kind": "file"}], "destination": "dest"},
+                headers=headers,
+            ).json()["plan_fingerprint"],
+        },
         headers=headers,
     )
     assert response.status_code == 202
@@ -255,6 +279,16 @@ async def test_polling_snapshot_does_not_block_event_loop(session, monkeypatch):
         "folder-routes",
         moves.MoveRequest(items=[{"path": "source", "kind": "file"}], destination="dest"),
         str(uuid.uuid4()),
+        moves.build_plan(
+            owner,
+            "Default",
+            "folder-routes",
+            moves.MoveRequest(items=[{"path": "source", "kind": "file"}], destination="dest"),
+        ).fingerprint(
+            "Default",
+            "folder-routes",
+            moves.MoveRequest(items=[{"path": "source", "kind": "file"}], destination="dest"),
+        ),
     )
     job.future.result(timeout=10)
     entered, loop_progress = threading.Event(), threading.Event()
@@ -285,7 +319,16 @@ def test_job_snapshot_exposes_delete_started(session, delete_started):
     s3.put_object(Bucket="folder-routes", Key="source", Body=b"x")
     response = client.post(
         "/api/buckets/folder-routes/move?role=Default",
-        json={"items": [{"path": "source", "kind": "file"}], "destination": "dest", "operation_id": str(uuid.uuid4())},
+        json={
+            "items": [{"path": "source", "kind": "file"}],
+            "destination": "dest",
+            "operation_id": str(uuid.uuid4()),
+            "plan_fingerprint": client.post(
+                "/api/buckets/folder-routes/move/preflight?role=Default",
+                json={"items": [{"path": "source", "kind": "file"}], "destination": "dest"},
+                headers=headers,
+            ).json()["plan_fingerprint"],
+        },
         headers=headers,
     )
     assert response.status_code == 202
@@ -299,3 +342,103 @@ def test_job_snapshot_exposes_delete_started(session, delete_started):
     assert result.status_code == 200
     assert result.json()["state"] == "cancelled_access"
     assert result.json()["delete_started"] is delete_started
+
+
+@pytest.mark.parametrize("change", ["add", "remove", "remove_all", "etag", "size"])
+def test_confirmed_plan_change_never_writes(session, monkeypatch, change):
+    client, s3, headers = session
+    for key in ("source/a", "source/b"):
+        s3.put_object(Bucket="folder-routes", Key=key, Body=b"x")
+    body = {"items": [{"path": "source", "kind": "folder"}], "destination": "dest"}
+    preflight = client.post("/api/buckets/folder-routes/move/preflight?role=Default", json=body, headers=headers)
+    fingerprint = preflight.json()["plan_fingerprint"]
+    if change in {"remove", "remove_all"}:
+        s3.delete_object(Bucket="folder-routes", Key="source/b")
+        if change == "remove_all":
+            s3.delete_object(Bucket="folder-routes", Key="source/a")
+    else:
+        s3.put_object(
+            Bucket="folder-routes",
+            Key="source/new" if change == "add" else "source/b",
+            Body=b"longer" if change == "size" else b"y",
+        )
+    original = moves.s3_unit
+    writes = []
+
+    def readonly(role, operation, callback):
+        if operation in {"put", "delete"}:
+            writes.append(operation)
+            raise AssertionError("changed plan must not write")
+        return original(role, operation, callback)
+
+    monkeypatch.setattr(moves, "s3_unit", readonly)
+    response = client.post(
+        "/api/buckets/folder-routes/move?role=Default",
+        json={**body, "operation_id": str(uuid.uuid4()), "plan_fingerprint": fingerprint},
+        headers=headers,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "PLAN_CHANGED"
+    assert writes == []
+    assert not moves.registry.jobs
+    assert not s3.list_objects_v2(Bucket="folder-routes", Prefix="dest/").get("Contents")
+
+
+@pytest.mark.parametrize(
+    "route,body",
+    [
+        ("folders", {"path": "report..csv"}),
+        ("folders", {"path": ".."}),
+        ("folders", {"path": "bad..parent/new"}),
+        (
+            "move/preflight",
+            {"items": [{"path": "source", "kind": "file", "new_name": "report..csv"}], "destination": "dest"},
+        ),
+        ("move/preflight", {"items": [{"path": "source", "kind": "file"}], "destination": "bad..parent"}),
+    ],
+)
+def test_new_dot_names_have_clear_error(session, route, body):
+    client, _, headers = session
+    response = client.post(f"/api/buckets/folder-routes/{route}?role=Default", json=body, headers=headers)
+    assert response.status_code == 400
+    assert response.json()["detail"]["message"] == "Names cannot contain '..'."
+
+
+@pytest.mark.parametrize("fingerprint", [None, "", "invalid", "a" * 63, "a" * 65])
+def test_start_requires_valid_plan_fingerprint(session, monkeypatch, fingerprint):
+    client, _, headers = session
+    body = {"items": [{"path": "source", "kind": "file"}], "destination": "dest", "operation_id": str(uuid.uuid4())}
+    if fingerprint is not None:
+        body["plan_fingerprint"] = fingerprint
+    monkeypatch.setattr(moves, "build_plan", lambda *args: pytest.fail("invalid token must not enumerate"))
+    response = client.post("/api/buckets/folder-routes/move?role=Default", json=body, headers=headers)
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "INVALID_REQUEST"
+
+
+def test_refreshed_plan_starts_and_retry_returns_same_job(session):
+    client, s3, headers = session
+    s3.put_object(Bucket="folder-routes", Key="source/a", Body=b"x")
+    body = {"items": [{"path": "source", "kind": "folder"}], "destination": "dest"}
+    url = "/api/buckets/folder-routes/move"
+    old = client.post(url + "/preflight?role=Default", json=body, headers=headers).json()["plan_fingerprint"]
+    s3.put_object(Bucket="folder-routes", Key="source/b", Body=b"yz")
+    rejected = client.post(
+        url + "?role=Default",
+        json={**body, "operation_id": str(uuid.uuid4()), "plan_fingerprint": old},
+        headers=headers,
+    )
+    assert rejected.status_code == 409
+    fresh = client.post(url + "/preflight?role=Default", json=body, headers=headers).json()
+    assert fresh["objects"] == 2
+    assert fresh["bytes"] == 3
+    assert fresh["plan_fingerprint"] != old
+    action = {**body, "operation_id": str(uuid.uuid4()), "plan_fingerprint": fresh["plan_fingerprint"]}
+    response = client.post(url + "?role=Default", json=action, headers=headers)
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    moves.registry.jobs[job_id].future.result(timeout=10)
+    assert client.post(url + "?role=Default", json=action, headers=headers).json() == {"job_id": job_id}
+    changed_token = client.post(url + "?role=Default", json={**action, "plan_fingerprint": old}, headers=headers)
+    assert changed_token.status_code == 409
+    assert changed_token.json()["detail"]["code"] == "OPERATION_CONFLICT"

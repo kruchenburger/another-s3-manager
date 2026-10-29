@@ -29,7 +29,10 @@ def request(items=None, destination="dest", **kwargs):
 
 
 def start(user, req):
-    return moves.registry.start(user, "Default", "move-bucket", req, str(uuid.uuid4()))
+    plan = moves.build_plan(user, "Default", "move-bucket", req)
+    return moves.registry.start(
+        user, "Default", "move-bucket", req, str(uuid.uuid4()), plan.fingerprint("Default", "move-bucket", req)
+    )
 
 
 def test_move_file_and_parent_marker(storage):
@@ -337,12 +340,15 @@ def test_concurrent_idempotency(storage, monkeypatch):
         assert proceed.wait(5)
         return original(*args)
 
+    fingerprint = original(user, "Default", "move-bucket", request()).fingerprint("Default", "move-bucket", request())
     monkeypatch.setattr(moves, "build_plan", blocked)
     operation = str(uuid.uuid4())
     with ThreadPoolExecutor(2) as executor:
-        first = executor.submit(moves.registry.start, user, "Default", "move-bucket", request(), operation)
+        first = executor.submit(moves.registry.start, user, "Default", "move-bucket", request(), operation, fingerprint)
         assert entered.wait(5)
-        second = executor.submit(moves.registry.start, user, "Default", "move-bucket", request(), operation)
+        second = executor.submit(
+            moves.registry.start, user, "Default", "move-bucket", request(), operation, fingerprint
+        )
         proceed.set()
         assert first.result().id == second.result().id
 
@@ -351,11 +357,14 @@ def test_owner_and_idempotency_hash(storage):
     s3, user = storage
     s3.put_object(Bucket="move-bucket", Key="source/file", Body=b"abc")
     operation = str(uuid.uuid4())
-    job = moves.registry.start(user, "Default", "move-bucket", request(), operation)
+    fingerprint = moves.build_plan(user, "Default", "move-bucket", request()).fingerprint(
+        "Default", "move-bucket", request()
+    )
+    job = moves.registry.start(user, "Default", "move-bucket", request(), operation, fingerprint)
     job.future.result(timeout=10)
-    assert moves.registry.start(user, "Default", "move-bucket", request(), operation).id == job.id
+    assert moves.registry.start(user, "Default", "move-bucket", request(), operation, fingerprint).id == job.id
     with pytest.raises(MoveError) as error:
-        moves.registry.start(user, "Default", "move-bucket", request(destination="other"), operation)
+        moves.registry.start(user, "Default", "move-bucket", request(destination="other"), operation, fingerprint)
     assert error.value.code == "OPERATION_CONFLICT"
     with pytest.raises(MoveError) as error:
         moves.registry.get(job.id, {**user, "id": user["id"] + 1})
@@ -376,7 +385,7 @@ def test_registry_quotas_and_retention(storage, monkeypatch):
         job = moves.Job(str(index), owner, "Default", "move-bucket", str(index), "hash")
         registry.jobs[job.id] = job
     with pytest.raises(MoveError) as error:
-        registry.start(user, "Default", "move-bucket", request(), "new")
+        registry.start(user, "Default", "move-bucket", request(), "new", "0" * 64)
     assert error.value.code == "TOO_MANY_JOBS"
     registry.jobs.clear()
     for index in range(202):
@@ -596,8 +605,37 @@ def test_reused_user_id_cancels_job(storage, monkeypatch, replacement_name):
         assert error.value.http_status == 404
     monkeypatch.setattr(moves, "copy_entry", original)
     next_job = moves.registry.start(
-        replacement, "Default", "move-bucket", request(destination="other"), job.operation_id
+        replacement,
+        "Default",
+        "move-bucket",
+        request(destination="other"),
+        job.operation_id,
+        moves.build_plan(replacement, "Default", "move-bucket", request(destination="other")).fingerprint(
+            "Default", "move-bucket", request(destination="other")
+        ),
     )
     assert next_job.id != job.id
     next_job.future.result(timeout=10)
     assert next_job.state == "done"
+
+
+def test_plan_fingerprint_is_stable_and_binds_entries_and_request():
+    from dataclasses import replace
+
+    req = request()
+    first = moves.Entry("source/a", "dest/a", '"etag-a"', 1, None)
+    second = moves.Entry("source/b", "dest/b", '"etag-b"', 2, None)
+    plan = moves.Plan((first, second), (), ())
+    fingerprint = plan.fingerprint("Default", "bucket", req)
+    assert len(fingerprint) == 64
+    assert moves.Plan((second, first), (), ()).fingerprint("Default", "bucket", req) == fingerprint
+    for changed in (
+        replace(first, source="source/c"),
+        replace(first, destination="dest/c"),
+        replace(first, size=3),
+        replace(first, etag='"changed"'),
+    ):
+        assert moves.Plan((changed, second), (), ()).fingerprint("Default", "bucket", req) != fingerprint
+    assert plan.fingerprint("Other", "bucket", req) != fingerprint
+    assert plan.fingerprint("Default", "other", req) != fingerprint
+    assert plan.fingerprint("Default", "bucket", request(destination="other")) != fingerprint
