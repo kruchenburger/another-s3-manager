@@ -12,7 +12,29 @@ specific guidance instead of a generic "something failed".
 
 from __future__ import annotations
 
+import logging
+import re
+from contextvars import ContextVar
 from typing import ClassVar
+
+safe_storage_logging = ContextVar("safe_storage_logging", default=False)
+
+
+class SafeStorageLogFilter(logging.Filter):
+    """Suppress raw SDK diagnostics only within the new folder/move operations."""
+
+    def filter(self, record):
+        if safe_storage_logging.get():
+            record.msg = "S3 operation during a folder operation; raw storage diagnostics suppressed"
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+            record.stack_info = None
+            standard = logging.LogRecord("", 0, "", 0, "", (), None).__dict__
+            for key in list(record.__dict__):
+                if key not in standard and key not in {"message", "asctime"}:
+                    record.__dict__[key] = "[redacted]"
+        return True
 
 
 class S3OperationError(Exception):
@@ -35,6 +57,78 @@ class S3ConfigError(S3OperationError):
     """Bad role config — invalid region, malformed endpoint, missing creds."""
 
     default_http_status: ClassVar[int] = 400
+
+
+class MoveError(S3OperationError):
+    """Safe boundary error: no storage messages or untrusted identifiers."""
+
+    def __init__(
+        self,
+        code: str,
+        status: int = 400,
+        phase: str = "validation",
+        key: str | None = None,
+        *,
+        objects: int | None = None,
+    ):
+        messages = {
+            "BUSY": "A move or write is in progress in this folder.",
+            "NAME_DOT_DOT": "Names cannot contain '..'.",
+            "PLAN_CHANGED": "The source changed. Review the updated move plan and confirm again.",
+            "INVALID_NAME": "Choose a valid name of at most 255 characters.",
+            "INVALID_KEY": "The object key is unsupported.",
+            "KEY_TOO_LONG": "The object key exceeds 1024 UTF-8 bytes.",
+            "INVALID_REQUEST": "The request is invalid.",
+            "ROLE_REQUIRED": "A storage role is required.",
+            "ROLE_NOT_FOUND": "The storage role does not exist.",
+            "ACCESS_DENIED": "Access to this storage location is not allowed.",
+            "DELETION_DISABLED": "Deletion is disabled by the administrator.",
+            "ALREADY_EXISTS": "A file or folder already exists with this name.",
+            "CONFLICT": "The destination already exists.",
+            "PLAN_CONFLICT": "Selected items have conflicting paths.",
+            "SAME_LOCATION": "Choose another location or name.",
+            "DESCENDANT": "A folder cannot be moved into itself.",
+            "TOO_MANY_OBJECTS": "The move exceeds the object limit; use the AWS CLI.",
+            "TOO_MANY_JOBS": "The concurrent move limit has been reached.",
+            "PREFLIGHT_LIMIT": "Too many preflights; try again in a minute.",
+            "OPERATION_CONFLICT": "This operation id was used for another request.",
+            "NOT_FOUND": "The requested resource is not available.",
+            "CLEANUP_UNSAFE": "Cleanup is unavailable after source deletion has started.",
+            "DESTINATION_APPEARED": "The destination appeared during the move; originals were left in place.",
+            "SOURCE_CHANGED": "The source changed during the move and was left in place; the destination has the earlier content.",
+            "NEW_IN_SOURCE": "New source objects appeared during the move and were left in place.",
+            "parent_marker_failed": "The move completed, but the source parent marker could not be created.",
+            "CLEANUP_CHANGED": "The destination changed and was left in place.",
+            "BODY_TOO_LARGE": "The JSON body exceeds 256 KiB.",
+            "AccessDenied": "Access denied by the storage for this S3 operation.",
+            "NoSuchKey": "The storage object is no longer available.",
+            "NoSuchBucket": "The storage bucket is no longer available.",
+            "ExpiredToken": "Storage credentials expired and could not be refreshed.",
+            "SlowDown": "Storage is throttling requests; try again later.",
+            "STORAGE_ERROR": "The storage operation failed.",
+        }
+        if code not in messages and not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.]{0,63}", code):
+            code = "STORAGE_ERROR"
+        super().__init__(code, messages.get(code, messages["STORAGE_ERROR"]), status)
+        self.phase = phase
+        self.key = key
+        self.objects = objects
+
+    def detail(self) -> dict:
+        detail = {"code": self.code, "message": str(self), "phase": self.phase, "key": self.key}
+        if self.objects is not None:
+            detail["objects"] = self.objects
+        return detail
+
+
+def safe_move_error(error: Exception, phase: str, key: str | None = None) -> MoveError:
+    """Classify without returning or logging a raw AWS message."""
+    if isinstance(error, MoveError):
+        return error
+    if isinstance(error, ValueError) and str(error) in {"INVALID_NAME", "INVALID_KEY", "KEY_TOO_LONG"}:
+        return MoveError(str(error), 400, phase)
+    classified = classify_boto_error(error)
+    return MoveError(classified.code, classified.http_status, phase, key)
 
 
 class S3AccessDeniedError(S3OperationError):

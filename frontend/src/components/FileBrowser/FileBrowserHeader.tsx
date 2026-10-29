@@ -1,5 +1,6 @@
 import {
   ActionIcon,
+  Button,
   Box,
   CloseButton,
   Group,
@@ -9,6 +10,7 @@ import {
 } from "@mantine/core";
 import {
   ChevronDown,
+  FolderPlus,
   ChevronUp,
   LayoutGrid,
   List as ListIcon,
@@ -21,8 +23,12 @@ import { LoadSplitButton } from "./LoadSplitButton";
 import type { DisplayMode } from "@/hooks/useDisplayMode";
 import { type SortColumn, type SortState } from "@/utils/sortEntries";
 
+import type { InternalFileDrag } from "@/features/files/hooks/useInternalFileDrag";
+
 interface FileBrowserHeaderProps {
   bucket: string;
+  onNewFolder?: () => void;
+  drag?: InternalFileDrag;
   roleId: string;
   path: string;
   searchQuery: string;
@@ -70,6 +76,8 @@ function isSortColumn(v: string | null): v is SortColumn {
 
 export function FileBrowserHeader({
   bucket,
+  onNewFolder,
+  drag,
   roleId,
   path,
   searchQuery,
@@ -142,8 +150,7 @@ export function FileBrowserHeader({
           if (!isSortColumn(value)) return;
           onSortChange({
             column: value,
-            direction:
-              sortState.column === value ? sortState.direction : "asc",
+            direction: sortState.column === value ? sortState.direction : "asc",
           });
         }}
       />
@@ -190,7 +197,12 @@ export function FileBrowserHeader({
   // row read as a dead "runway" under the page-identity line (smoke feedback).
   return (
     <Group justify="space-between" mb="md" wrap="wrap" gap="sm">
-      <FileBreadcrumbs bucket={bucket} roleId={roleId} path={path} />
+      <FileBreadcrumbs
+        bucket={bucket}
+        roleId={roleId}
+        path={path}
+        drag={drag}
+      />
       <Group gap="sm">
         <Box visibleFrom="sm">{searchInput(200)}</Box>
         <Box hiddenFrom="sm">
@@ -246,7 +258,13 @@ export function FileBrowserHeader({
             So table mode renders the same control too, restricted to below
             `sm` via Mantine's hiddenFrom — never both at once. Both views
             share one SortState, so switching table↔grid keeps the sort. */}
-        {mode === "grid" ? sortControls : <Group hiddenFrom="sm" gap={2}>{sortControls}</Group>}
+        {mode === "grid" ? (
+          sortControls
+        ) : (
+          <Group hiddenFrom="sm" gap={2}>
+            {sortControls}
+          </Group>
+        )}
         {(truncated || loadingAll) && (
           <LoadSplitButton
             onLoadMore={onLoadMore}
@@ -260,6 +278,18 @@ export function FileBrowserHeader({
             continuation + Upload) are grouped together at the end so a control
             never sits sandwiched between them. Bulk Copy URLs + Delete live in
             the contextual BulkActionBar (rendered by FileBrowser). */}
+        {onNewFolder && (
+          <Button
+            variant="default"
+            aria-label="New folder"
+            leftSection={<FolderPlus size={16} />}
+            onClick={onNewFolder}
+          >
+            <Box component="span" visibleFrom="sm">
+              New folder
+            </Box>
+          </Button>
+        )}
         <UploadSplitButton
           onUploadFiles={onUploadClick}
           onUploadFolder={onUploadFolderClick}

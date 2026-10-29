@@ -26,6 +26,7 @@ from another_s3_manager import api_tokens as token_svc
 from another_s3_manager import s3_client as _s3_client
 from another_s3_manager.errors import (
     CredentialsExpiredError,
+    MoveError,
     RoleNotFoundError,
     S3AccessDeniedError,
     S3ConfigError,
@@ -1124,6 +1125,9 @@ async def upload_file(
     except McpError as e:
         error_code = e.code
         raise
+    except MoveError as e:
+        error_code = e.code
+        raise McpError(e.code, str(e), {"http_status": e.http_status}) from None
     except S3AccessDeniedError as e:
         error_code = "S3_ACCESS_DENIED"
         logger.warning("mcp.upload_file.access_denied", extra={"boto_code": e.code})
@@ -1213,6 +1217,9 @@ async def delete_file(
     except McpError as e:
         error_code = e.code
         raise
+    except MoveError as e:
+        error_code = e.code
+        raise McpError(e.code, str(e), {"http_status": e.http_status}) from None
     except S3AccessDeniedError as e:
         error_code = "S3_ACCESS_DENIED"
         logger.warning("mcp.delete_file.access_denied", extra={"boto_code": e.code})
@@ -1562,6 +1569,9 @@ async def copy_object(
     except McpError as e:
         error_code = e.code
         raise
+    except MoveError as e:
+        error_code = e.code
+        raise McpError(e.code, str(e), {"http_status": e.http_status}) from None
     except S3AccessDeniedError as e:
         error_code = "S3_ACCESS_DENIED"
         logger.warning("mcp.copy_object.access_denied", extra={"boto_code": e.code})

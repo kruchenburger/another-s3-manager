@@ -59,6 +59,7 @@ export function UploadDropZone({
     };
 
     const handleDrop = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes("Files")) return;
       e.preventDefault();
       setIsDragging(false);
       setCounter(0);

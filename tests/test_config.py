@@ -15,6 +15,22 @@ def reload_config():
     return config
 
 
+def test_move_max_objects_precedence(monkeypatch):
+    config = reload_config()
+    monkeypatch.delenv("MOVE_MAX_OBJECTS", raising=False)
+    assert config.resolve_move_max_objects({}) == 50000
+    monkeypatch.setenv("MOVE_MAX_OBJECTS", "12")
+    assert config.resolve_move_max_objects({}) == 12
+    assert config.resolve_move_max_objects({"move_max_objects": 3}) == 3
+    assert config._get_default_config()["move_max_objects"] == 12
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "bad", 1.5])
+def test_move_max_objects_rejects_invalid(value):
+    with pytest.raises(ValueError):
+        reload_config().resolve_move_max_objects({"move_max_objects": value})
+
+
 def test_load_config_creates_default_when_missing(tmp_path):
     config = reload_config()
     config.CONFIG_FILE = Path(os.environ["S3_FILE_MANAGER_CONFIG"])

@@ -6,7 +6,7 @@ import { Anchor, Badge, CloseButton, Group, Text } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
 import { DelayedLoader } from "@/components/DelayedLoader/DelayedLoader";
 import { notifications } from "@mantine/notifications";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useFiles } from "@/features/files/hooks/useFiles";
 import {
   useFileSearch,
@@ -22,7 +22,7 @@ import {
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { useConfig } from "@/hooks/useConfig";
-import { joinPath, decodePath } from "@/utils/pathUtils";
+import { joinPath, decodePath, encodePath } from "@/utils/pathUtils";
 import { ApiError, getErrorMessage } from "@/utils/apiError";
 import { formatBytes } from "@/utils/formatBytes";
 import { formatTimeOfDay } from "@/utils/formatDate";
@@ -64,11 +64,24 @@ import { QueryErrorState } from "@/components/QueryErrorState/QueryErrorState";
 import { ScrollToTopButton } from "@/components/ScrollToTopButton/ScrollToTopButton";
 import classes from "./FileBrowser.module.css";
 
+import {
+  decodeIdentity,
+  entryIdentity,
+  itemName,
+} from "@/features/files/utils/folderOperations";
+import { useFolderOperations } from "@/features/files/hooks/useFolderOperations";
+import { useInternalFileDrag } from "@/features/files/hooks/useInternalFileDrag";
+import { NewFolderModal } from "./NewFolderModal";
+import { MoveDialog } from "./MoveDialog";
+import { ConfirmMoveModal } from "./ConfirmMoveModal";
+
 export function FileBrowser() {
-  const params = useParams<{ roleId: string; bucket: string; "*": string }>();
-  const roleId = decodeURIComponent(params.roleId ?? "");
-  const bucket = decodeURIComponent(params.bucket ?? "");
-  const pathFromUrl = decodePath(params["*"] ?? "");
+  // Router params have already been decoded and collapse literal %2F into /.
+  // Read the encoded pathname to preserve the exact S3 key with one decode.
+  const segments = useLocation().pathname.split("/");
+  const roleId = decodeURIComponent(segments[2] ?? "");
+  const bucket = decodeURIComponent(segments[4] ?? "");
+  const pathFromUrl = decodePath(segments.slice(6).join("/"));
   const navigate = useNavigate();
 
   const { data: config } = useConfig();
@@ -93,7 +106,12 @@ export function FileBrowser() {
   const [bulkDeletedCount, setBulkDeletedCount] = useState(0);
 
   const folder = useFiles(bucket, roleId, pathFromUrl);
-  const search = useFileSearch(bucket, roleId, pathFromUrl, serverSearchTerm ?? "");
+  const search = useFileSearch(
+    bucket,
+    roleId,
+    pathFromUrl,
+    serverSearchTerm ?? "",
+  );
   const active = serverSearchActive ? search : folder;
 
   const {
@@ -161,10 +179,7 @@ export function FileBrowser() {
   // arrival/S3 order. Source for every .find(name === ...) lookup below
   // (preview, bulk delete) and the object count. Also what `sortedItems`
   // below returns under the default sort — see the comment there.
-  const items = useMemo(
-    () => [...directories, ...files],
-    [directories, files],
-  );
+  const items = useMemo(() => [...directories, ...files], [directories, files]);
 
   // Honesty guard: a persisted custom sort must never order a partially-loaded
   // (truncated) level — fall back to the native S3 name-asc order until the
@@ -172,7 +187,9 @@ export function FileBrowser() {
   // what the headers show is always what the rows do.
   const effectiveSort = useMemo(
     () =>
-      truncated && !isDefaultSort(sortPreference) ? DEFAULT_SORT : sortPreference,
+      truncated && !isDefaultSort(sortPreference)
+        ? DEFAULT_SORT
+        : sortPreference,
     [truncated, sortPreference],
   );
 
@@ -206,6 +223,24 @@ export function FileBrowser() {
     toggleAll: handleToggleAll,
     clear: clearSelection,
   } = useShiftSelect();
+  const operations = useFolderOperations(
+    bucket,
+    roleId,
+    pathFromUrl,
+    disableDeletion,
+    clearSelection,
+  );
+  const drag = useInternalFileDrag({
+    bucket,
+    role: roleId,
+    selected,
+    disabled: disableDeletion,
+    onDrop: (request) => {
+      void operations.choose(request);
+    },
+  });
+  const openMove = (id: string) => operations.open([decodeIdentity(id)]);
+  useEffect(() => clearSelection(), [contextKey, clearSelection]);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [uploadHint, setUploadHint] = useState<{
     open: boolean;
@@ -233,7 +268,7 @@ export function FileBrowser() {
     setSearchQuery("");
     setServerSearchTerm(null);
     const next = joinPath(pathFromUrl, folderName);
-    const encoded = next.split("/").map(encodeURIComponent).join("/");
+    const encoded = encodePath(next);
     navigate(
       `/r/${encodeURIComponent(roleId)}/b/${encodeURIComponent(bucket)}/p/${encoded}`,
     );
@@ -257,8 +292,10 @@ export function FileBrowser() {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   };
 
-  const handleDownload = async (name: string): Promise<void> => {
-    const fullPath = joinPath(pathFromUrl, name);
+  const handleDownload = async (id: string): Promise<void> => {
+    const item = decodeIdentity(id);
+    const name = itemName(item);
+    const fullPath = item.path;
     const url = buildDownloadUrl(bucket, roleId, fullPath);
     try {
       const response = await fetch(url, { credentials: "include" });
@@ -304,15 +341,14 @@ export function FileBrowser() {
     }
   };
 
-  const handleCopyUrl = async (name: string, ttlSeconds?: number) => {
-    const fullPath = joinPath(pathFromUrl, name);
+  const handleCopyUrl = async (id: string, ttlSeconds?: number) => {
+    const item = decodeIdentity(id);
+    if (item.kind !== "file") return;
+    const name = itemName(item);
+    const fullPath = item.path;
     try {
-      const { url, expires_at, expires_in, warning } = await getPresignedDownloadUrl(
-        bucket,
-        roleId,
-        fullPath,
-        ttlSeconds,
-      );
+      const { url, expires_at, expires_in, warning } =
+        await getPresignedDownloadUrl(bucket, roleId, fullPath, ttlSeconds);
       await navigator.clipboard.writeText(url);
       const base = `${name} — anyone with this link can download it until ${formatTimeOfDay(expires_at)} (expires in ${formatDuration(expires_in)}). No sign-in needed.`;
       showToast({
@@ -342,11 +378,18 @@ export function FileBrowser() {
     if (bulkCopyingRef.current) return;
     bulkCopyingRef.current = true;
     setBulkCopying(true);
-    const names = Array.from(selected);
+    const names = Array.from(selected).filter(
+      (id) => decodeIdentity(id).kind === "file",
+    );
     try {
       const responses = await Promise.all(
         names.map((name) =>
-          getPresignedDownloadUrl(bucket, roleId, joinPath(pathFromUrl, name), ttlSeconds),
+          getPresignedDownloadUrl(
+            bucket,
+            roleId,
+            decodeIdentity(name).path,
+            ttlSeconds,
+          ),
         ),
       );
       const urls = responses.map((r) => r.url).join("\n");
@@ -382,11 +425,11 @@ export function FileBrowser() {
   } | null>(null);
 
   const handlePreview = (name: string) => {
-    const fileEntry = items.find((f) => f.name === name);
+    const fileEntry = items.find((f) => entryIdentity(pathFromUrl, f) === name);
     if (!fileEntry || fileEntry.is_directory) return;
-    const fullPath = joinPath(pathFromUrl, name);
+    const fullPath = decodeIdentity(name).path;
     setPreviewState({
-      filename: name,
+      filename: fileEntry.name,
       url: buildDownloadUrl(bucket, roleId, fullPath),
       size: fileEntry.size,
     });
@@ -438,7 +481,7 @@ export function FileBrowser() {
           <BulkDeleteProgress
             started={0}
             total={names.length}
-            currentName={names[0]}
+            currentName={itemName(decodeIdentity(names[0]))}
             onCancel={onCancel}
           />
         ),
@@ -461,11 +504,9 @@ export function FileBrowser() {
     for (let i = 0; i < names.length; i++) {
       if (cancelRef.cancelled) break;
       const name = names[i];
-      renderProgress(i, name);
-      const fileEntry = items.find((f) => f.name === name);
-      const fullPath = fileEntry?.is_directory
-        ? joinPath(pathFromUrl, name) + "/"
-        : joinPath(pathFromUrl, name);
+      renderProgress(i, itemName(decodeIdentity(name)));
+      const item = decodeIdentity(name);
+      const fullPath = item.path + (item.kind === "folder" ? "/" : "");
       try {
         // Call deleteFile directly instead of useDelete().mutateAsync so the
         // batch doesn't push N copies of useMutation's "pending → success"
@@ -557,8 +598,8 @@ export function FileBrowser() {
   // Visible-order names — shift-select range is computed against this list
   // (after sort + filter) so the highlighted range matches what the user sees.
   const orderedNames = useMemo(
-    () => filteredItems.map((f) => f.name),
-    [filteredItems],
+    () => filteredItems.map((f) => entryIdentity(pathFromUrl, f)),
+    [filteredItems, pathFromUrl],
   );
   const toggleSelect = (name: string, shiftKey: boolean) => {
     handleToggleSelect(name, shiftKey, orderedNames);
@@ -685,14 +726,22 @@ export function FileBrowser() {
       const renderToast = () => {
         notifications.update({
           id: notifId,
-          message: <UploadProgress items={updated} onCancel={cancel} onDismiss={dismiss} />,
+          message: (
+            <UploadProgress
+              items={updated}
+              onCancel={cancel}
+              onDismiss={dismiss}
+            />
+          ),
           autoClose: false,
           withCloseButton: false,
         });
       };
 
       const notifId = notifications.show({
-        message: <UploadProgress items={items} onCancel={cancel} onDismiss={dismiss} />,
+        message: (
+          <UploadProgress items={items} onCancel={cancel} onDismiss={dismiss} />
+        ),
         autoClose: false,
         withCloseButton: false,
       });
@@ -764,7 +813,11 @@ export function FileBrowser() {
               // replies. On a multi-GB file that's tens of seconds during which
               // the bar would sit frozen at 100% — switch to a "Finalizing…"
               // state so the user sees the server is still working, not hung.
-              updated[i] = { ...updated[i], status: "finalizing", progress: 100 };
+              updated[i] = {
+                ...updated[i],
+                status: "finalizing",
+                progress: 100,
+              };
               renderToast();
             },
           });
@@ -921,6 +974,8 @@ export function FileBrowser() {
             truncated={truncated}
           />
           <FileBrowserHeader
+            onNewFolder={() => operations.setNewFolder(true)}
+            drag={drag}
             bucket={bucket}
             roleId={roleId}
             path={pathFromUrl}
@@ -1036,6 +1091,9 @@ export function FileBrowser() {
           ) : mode === "table" ? (
             <>
               <FileTable
+                path={pathFromUrl}
+                drag={drag}
+                onMove={openMove}
                 files={filteredItems}
                 selected={selected}
                 onToggleSelect={toggleSelect}
@@ -1067,6 +1125,8 @@ export function FileBrowser() {
           ) : (
             <>
               <FileGrid
+                drag={drag}
+                onMove={openMove}
                 files={filteredItems}
                 selected={selected}
                 onToggleSelect={toggleSelect}
@@ -1109,7 +1169,10 @@ export function FileBrowser() {
         opened={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         onConfirm={confirmDelete}
-        items={pendingDelete.current}
+        items={pendingDelete.current.map((id) => {
+          const item = decodeIdentity(id);
+          return itemName(item) + (item.kind === "folder" ? "/" : "");
+        })}
         loading={deleteMutation.isPending}
       />
       <SortLoadAllModal
@@ -1131,7 +1194,55 @@ export function FileBrowser() {
       {/* Contextual bulk-action bar — sibling of the modals, OUTSIDE the
           virtualized scroll container. Portals to the body via Affix; appears
           only while something is selected (see BulkActionBar). */}
+      {operations.newFolder && (
+        <NewFolderModal
+          opened
+          bucket={bucket}
+          role={roleId}
+          path={pathFromUrl}
+          onClose={() => operations.setNewFolder(false)}
+        />
+      )}
+      {operations.picker && !operations.confirmation && (
+        <MoveDialog
+          bucket={bucket}
+          role={roleId}
+          path={pathFromUrl}
+          items={operations.picker}
+          onClose={operations.close}
+          onChoose={(request) => {
+            void operations.choose(request);
+          }}
+          busy={operations.busy}
+          disabled={disableDeletion}
+          error={operations.error}
+        />
+      )}
+      {operations.confirmation && (
+        <ConfirmMoveModal
+          preflight={operations.confirmation.preflight}
+          onConfirm={() => {
+            void operations.confirm();
+          }}
+          onClose={operations.close}
+          busy={operations.busy}
+          disabled={disableDeletion}
+          error={operations.error}
+        />
+      )}
+      {!operations.picker && !operations.confirmation && operations.error && (
+        <Text role="alert" c="red">
+          {operations.error}
+        </Text>
+      )}
       <BulkActionBar
+        onMove={() => operations.open(Array.from(selected, decodeIdentity))}
+        modalOpen={
+          !!operations.picker ||
+          !!operations.confirmation ||
+          operations.newFolder ||
+          confirmOpen
+        }
         count={selected.size}
         onClear={clearSelection}
         onCopyUrls={handleBulkCopyUrl}

@@ -1,5 +1,14 @@
-import { ActionIcon, Menu } from "@mantine/core";
-import { Download, Eye, MoreVertical, Share2, Trash2 } from "lucide-react";
+import { ActionIcon, Menu, Tooltip } from "@mantine/core";
+import {
+  Download,
+  Eye,
+  MoreVertical,
+  Share2,
+  Trash2,
+  FolderInput,
+} from "lucide-react";
+
+import { MOVE_DISABLED } from "@/features/files/utils/folderOperations";
 
 interface FileRowActionsMenuProps {
   isDirectory: boolean;
@@ -9,6 +18,7 @@ interface FileRowActionsMenuProps {
   onCopyUrl: () => void;
   onPreview: () => void;
   onDelete: () => void;
+  onMove?: () => void;
   /** When true, Delete is rendered disabled (deletion off in server config). */
   disabled?: boolean;
 }
@@ -26,6 +36,7 @@ export function FileRowActionsMenu({
   onCopyUrl,
   onPreview,
   onDelete,
+  onMove,
   disabled = false,
 }: FileRowActionsMenuProps) {
   return (
@@ -54,6 +65,17 @@ export function FileRowActionsMenu({
           <Menu.Item leftSection={<Eye size={14} />} onClick={onPreview}>
             Preview
           </Menu.Item>
+        )}
+        {onMove && (
+          <Tooltip label={MOVE_DISABLED} disabled={!disabled}>
+            <Menu.Item
+              leftSection={<FolderInput size={14} />}
+              onClick={onMove}
+              disabled={disabled}
+            >
+              Move to…
+            </Menu.Item>
+          </Tooltip>
         )}
         <Menu.Item
           color="red"

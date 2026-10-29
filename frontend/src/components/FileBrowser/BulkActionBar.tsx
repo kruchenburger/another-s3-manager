@@ -9,7 +9,7 @@ import {
   Tooltip,
   Transition,
 } from "@mantine/core";
-import { ChevronDown, Share2, Trash2 } from "lucide-react";
+import { ChevronDown, Share2, Trash2, FolderInput } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { TtlPopover } from "@/components/TtlPopover/TtlPopover";
 import classes from "./BulkActionBar.module.css";
@@ -23,6 +23,8 @@ interface BulkActionBarProps {
   onCopyUrls: (ttlSeconds?: number) => void;
   /** Delete the selection (opens ConfirmDeleteModal). */
   onDelete: () => void;
+  onMove?: () => void;
+  modalOpen?: boolean;
   /** When true, Delete renders disabled with a config-aware tooltip. */
   disableDeletion?: boolean;
   /** Server default presigned TTL (seconds). */
@@ -51,6 +53,8 @@ export function BulkActionBar({
   onClear,
   onCopyUrls,
   onDelete,
+  onMove,
+  modalOpen = false,
   disableDeletion = false,
   defaultTtl = 3600,
   maxTtl = 604800,
@@ -67,7 +71,7 @@ export function BulkActionBar({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || modalOpen) return;
       if (ttlOpen) {
         setTtlOpen(false);
         return;
@@ -76,7 +80,7 @@ export function BulkActionBar({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, ttlOpen, onClear]);
+  }, [open, ttlOpen, onClear, modalOpen]);
 
   // Move focus to the first action when the selection FIRST appears (0 → 1+),
   // so keyboard users land on the bar instead of hunting for it. Only on the
@@ -157,6 +161,24 @@ export function BulkActionBar({
                   }
                 />
               </Button.Group>
+              {onMove && (
+                <Tooltip
+                  label="Moving is disabled because deletion is disabled in the server config."
+                  disabled={!disableDeletion}
+                >
+                  <Button
+                    variant="light"
+                    aria-label="Move to…"
+                    disabled={disableDeletion}
+                    onClick={onMove}
+                    leftSection={<FolderInput size={14} />}
+                  >
+                    <Box component="span" visibleFrom="sm">
+                      Move to…
+                    </Box>
+                  </Button>
+                </Tooltip>
+              )}
               <Tooltip
                 label="Deletion is disabled in the server config."
                 withArrow

@@ -10,6 +10,8 @@ import { joinPath } from "@/utils/pathUtils";
 import { FileActions } from "./FileActions";
 import { STAGGER_ROW_LIMIT } from "./FileRow";
 import classes from "./FileBrowser.module.css";
+import type { InternalFileDrag } from "@/features/files/hooks/useInternalFileDrag";
+import { entryItem } from "@/features/files/utils/folderOperations";
 import type { FileEntry } from "@/types/api";
 
 // IMAGE_RE and VIDEO_RE drive the grid thumbnail (presigned <img>/<video>),
@@ -29,6 +31,9 @@ interface FileCardProps {
   file: FileEntry;
   index: number;
   selected: boolean;
+  identity?: string;
+  drag?: InternalFileDrag;
+  onMove?: (id: string) => void;
   /** `shiftKey` lets the parent implement range-select on Shift+click. */
   onToggleSelect: (name: string, shiftKey: boolean) => void;
   onNavigate: (folderName: string) => void;
@@ -51,6 +56,9 @@ export function FileCard({
   file,
   index,
   selected,
+  identity,
+  drag,
+  onMove,
   onToggleSelect,
   onNavigate,
   onDownload,
@@ -64,6 +72,8 @@ export function FileCard({
   defaultTtl,
   maxTtl,
 }: FileCardProps) {
+  const actionId = identity ?? file.name;
+  const dragProps = drag?.row(entryItem(path, file));
   const me = useMe();
   const disableDeletion = me.data?.disable_deletion ?? false;
   const { data: config } = useConfig();
@@ -85,16 +95,24 @@ export function FileCard({
 
   return (
     <Card
+      {...dragProps}
       // Grid density is deliberate: FileGrid's virtualizer assumes this
       // card's rendered height (ROW_HEIGHT). Pin the pre-airify padding so
       // the theme-level Card padding bump (md -> lg) can't reflow the grid.
       padding="md"
-      className={animateIn ? `${classes.row} ${classes.animateIn}` : classes.row}
+      className={
+        animateIn ? `${classes.row} ${classes.animateIn}` : classes.row
+      }
       style={
         {
           ...(animateIn ? { "--row-index": index } : {}),
           position: "relative",
-          cursor: file.is_directory ? "pointer" : "default",
+          cursor:
+            dragProps?.["data-move-target"] === "invalid"
+              ? "not-allowed"
+              : file.is_directory
+                ? "pointer"
+                : "default",
         } as React.CSSProperties
       }
       onClick={() => file.is_directory && onNavigate(file.name)}
@@ -106,7 +124,7 @@ export function FileCard({
             // See FileRow.tsx for the same cast — React.ChangeEvent's
             // nativeEvent type doesn't expose shiftKey.
             const native = e.nativeEvent as MouseEvent | KeyboardEvent;
-            onToggleSelect(file.name, native.shiftKey ?? false);
+            onToggleSelect(actionId, native.shiftKey ?? false);
           }}
           // Shift+click extends the browser's native text selection across the
           // cards being range-selected, which looks broken. Suppress only the
@@ -123,13 +141,16 @@ export function FileCard({
             isDirectory={file.is_directory}
             canPreview={canPreview}
             filename={file.name}
-            onDownload={() => onDownload(file.name)}
-            onCopyUrl={() => onCopyUrl(file.name)}
+            onDownload={() => onDownload(actionId)}
+            onCopyUrl={() => onCopyUrl(actionId)}
             onCopyUrlWithTtl={
-              onCopyUrlWithTtl ? (ttl) => onCopyUrlWithTtl(file.name, ttl) : undefined
+              onCopyUrlWithTtl
+                ? (ttl) => onCopyUrlWithTtl(actionId, ttl)
+                : undefined
             }
-            onPreview={() => onPreview(file.name)}
-            onDelete={() => onDelete(file.name)}
+            onPreview={() => onPreview(actionId)}
+            onMove={onMove ? () => onMove(actionId) : undefined}
+            onDelete={() => onDelete(actionId)}
             disabled={disableDeletion}
             defaultTtl={defaultTtl}
             maxTtl={maxTtl}

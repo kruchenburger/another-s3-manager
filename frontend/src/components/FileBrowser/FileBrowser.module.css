@@ -143,7 +143,18 @@
    starve the Name column under table layout="fixed". Width must track
    which variant FileRow renders (Box visibleFrom/hiddenFrom "sm"). */
 .actionsCol {
-  width: 180px;
+  width: 200px;
+}
+
+.row[data-move-target="valid"],
+.crumb[data-move-target="valid"] {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: -2px;
+  background: var(--mantine-primary-color-light);
+}
+.row[data-move-target="invalid"],
+.crumb[data-move-target="invalid"] {
+  cursor: not-allowed;
 }
 
 @media (max-width: 47.99em) {
@@ -170,7 +181,8 @@
   display: flex;
   flex-direction: column;
   height: calc(
-    100dvh - var(--app-shell-header-height, 60px) - 2 * var(--mantine-spacing-md)
+    100dvh - var(--app-shell-header-height, 60px) - 2 *
+      var(--mantine-spacing-md)
   );
 }
 

@@ -39,6 +39,7 @@ For a `docker compose` setup see [`docker-compose.example.yml`](docker-compose.e
 - **Multi-account** — switch between roles (default credentials, named profiles, assume role, direct keys)
 - **Fast file browser** — table + grid views with image thumbnails; virtualized lists stay smooth in 10k+ object folders
 - **Upload & download** — single files, multiple files, or entire folders; drag-and-drop supported
+- **Folders** — New folder, Move to… with an optional new name, multi-select and drag-and-drop moves
 - **Bulk operations** — multi-select with bulk delete and bulk link copying
 - **File preview** — images, video, PDF and text inline (text extensions are admin-configurable)
 - **Share links** — presigned URLs with a configurable lifetime, per-link override up to 7 days
@@ -48,6 +49,8 @@ For a `docker compose` setup see [`docker-compose.example.yml`](docker-compose.e
 - **Observability** — Prometheus `/metrics` with a ready-made Grafana dashboard, optional structured JSON logs (see [docs/observability.md](docs/observability.md))
 - **Security** — JWT in an httpOnly cookie, bcrypt passwords, CSRF protection, per-username ban after failed logins
 - **Dark / light theme**
+
+Object storage has no native rename or move, so ASM copies objects and then deletes the originals with progress tracking; very large folders beyond `MOVE_MAX_OBJECTS` are better moved with the AWS CLI.
 
 ## Configuration
 

@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 def _user_to_dict(user: User) -> Dict[str, Any]:
     """Render a User row to the dict shape that the rest of the app expects."""
     return {
+        "id": user.id,
         "username": user.username,
         "password_hash": user.password_hash,
         "is_admin": user.is_admin,
@@ -459,6 +460,15 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
             .unique()
             .scalar_one_or_none()
         )
+        return _user_to_dict(user) if user else None
+
+
+def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
+    """Look up a job owner by immutable database identity."""
+    with session_scope() as session:
+        user = session.execute(
+            select(User).options(selectinload(User.roles)).where(User.id == user_id)
+        ).scalar_one_or_none()
         return _user_to_dict(user) if user else None
 
 
