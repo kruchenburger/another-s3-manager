@@ -258,11 +258,11 @@ Folder moves use an in-memory registry in a single application process: at most 
 
 The React SPA consumes existing backend endpoints plus a small set added for SPA UX:
 
-- `POST /api/buckets/{b}/folders?role=...` � create an empty folder marker; rejects file/folder name collisions. Requires cookie auth and CSRF, independently of the deletion gate.
-- `POST /api/buckets/{b}/move/preflight?role=...` � validate and enumerate an immutable same-bucket plan, returning object/byte counts before writes.
-- `POST /api/buckets/{b}/move?role=...` � start a background copy-then-delete job; requires a UUID `operation_id`, items and destination; optional `new_name` for a single item. Returns 202 `{job_id}`. Roles are required on all three bucket routes.
-- `GET /api/jobs/{job_id}?failures_offset=0` � owner-only job progress and paginated failures; checks current role/bucket access.
-- `POST /api/jobs/{job_id}/cleanup` � owner-only, CSRF-protected removal of unchanged partial copies from that job. Move and cleanup obey `DISABLE_DELETION` OR config `disable_deletion`.
+- `POST /api/buckets/{b}/folders?role=...` — create an empty folder marker; rejects file/folder name collisions. Requires cookie auth and CSRF, independently of the deletion gate.
+- `POST /api/buckets/{b}/move/preflight?role=...` — validate and enumerate an immutable same-bucket plan, returning object/byte counts before writes.
+- `POST /api/buckets/{b}/move?role=...` — start a background copy-then-delete job; requires a UUID `operation_id`, items and destination; optional `new_name` for a single item. Returns 202 `{job_id}`. Roles are required on all three bucket routes.
+- `GET /api/jobs/{job_id}?failures_offset=0` — owner-only job progress and paginated failures; checks current role/bucket access.
+- `POST /api/jobs/{job_id}/cleanup` — owner-only, CSRF-protected removal of unchanged partial copies from that job. Move and cleanup obey `DISABLE_DELETION` OR config `disable_deletion`.
 - `GET /api/me` — extended to include `allowed_roles: string[]` and `disable_deletion: bool` (env `DISABLE_DELETION` OR `config.disable_deletion`, env wins; surfaces the flag so the React UI can disable Delete controls before the user clicks)
 - `GET /api/buckets?role=...` — list buckets (already existed)
 - `GET /api/buckets/{b}/files?path=...&role=...` — list files (already existed)
