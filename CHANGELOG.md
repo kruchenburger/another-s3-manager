@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Folder operations: New folder, Move to… with an optional new name, multi-select
+  and drag-and-drop moves, progress tracking, and cleanup of partial copies if
+  copying fails. Moves are limited by `MOVE_MAX_OBJECTS`; use the AWS CLI for
+  larger folders.
+
 ## [1.1.7] - 2026-10-29
 
 ### Security
@@ -208,7 +215,6 @@ in _s3_clients_cache` before indexing into it — two separate,
   prefix match rather than an exact-key lookup — deleted every key the
   listing returned, not just the one requested. Three call sites shared the
   helper, so all three were affected:
-
   - **Web UI:** deleting `report.pdf` in the file browser also destroyed
     `report.pdf.bak` and `report.pdf.old` — anything whose key merely
     started with the same string as the file you clicked delete on.
