@@ -19,7 +19,8 @@ from botocore.session import Session as BotocoreSession
 
 from another_s3_manager.config import load_config
 from another_s3_manager.constants import S3_USE_SSL, S3_VERIFY_SSL
-from another_s3_manager.errors import RoleNotFoundError
+from another_s3_manager.errors import RoleNotFoundError, SafeStorageLogFilter
+from another_s3_manager.move_reservations import guarded_write
 
 # Cache for S3 clients per role
 _s3_clients_cache: Dict[str, AnyType] = {}
@@ -33,6 +34,8 @@ T = TypeVar("T")
 
 # Set up logging
 logger = logging.getLogger(__name__)
+if not any(isinstance(item, SafeStorageLogFilter) for item in logger.filters):
+    logger.addFilter(SafeStorageLogFilter())
 
 
 def _iter_error_chain(error: BaseException):
@@ -2029,6 +2032,24 @@ def generate_presigned_url_for_role(
     return url
 
 
+@guarded_write()
+def create_folder_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> dict:
+    """Create a marker only when neither the file nor the folder exists."""
+    from another_s3_manager.errors import MoveError
+    from another_s3_manager.move_jobs import name_exists, require_access, s3_unit
+    from another_s3_manager.utils import validate_new_name, validate_source_key
+
+    require_access(user_dict, role, bucket)
+    validate_source_key(path)
+    validate_new_name(path.rsplit("/", 1)[-1])
+    validate_source_key(path + "/")
+    if s3_unit(role, "list", lambda client: name_exists(client, bucket, path)):
+        raise MoveError("ALREADY_EXISTS", 409)
+    s3_unit(role, "put", lambda client: client.put_object(Bucket=bucket, Key=path + "/", Body=b""))
+    return {"path": path + "/"}
+
+
+@guarded_write()
 def put_object_for_role(
     role: str,
     bucket: str,
@@ -2069,6 +2090,7 @@ def put_object_for_role(
     execute_with_s3_retry(validated_role, "put", do_put)
 
 
+@guarded_write()
 def upload_fileobj_for_role(
     role: str,
     bucket: str,
@@ -2119,6 +2141,7 @@ def upload_fileobj_for_role(
     execute_with_s3_retry(validated_role, "put", do_put)
 
 
+@guarded_write(copy=True)
 def copy_object_for_role(
     role: str,
     source_bucket: str,
@@ -2170,6 +2193,7 @@ def copy_object_for_role(
     execute_with_s3_retry(validated_role, "put", do_copy)
 
 
+@guarded_write()
 def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> dict:
     """
     Delete a file or recursively delete a directory from `bucket`.

@@ -119,6 +119,18 @@ def resolve_max_file_size(config: Optional[Dict[str, Any]] = None) -> int:
     return int(max_file_size)
 
 
+def resolve_move_max_objects(config: Optional[Dict[str, Any]] = None) -> int:
+    """Resolve the bounded move enumeration limit, config before environment."""
+    if config is None:
+        config = load_config(force_reload=False)
+    value = config.get("move_max_objects")
+    if value is None:
+        value = os.getenv("MOVE_MAX_OBJECTS", "50000")
+    if isinstance(value, bool) or not str(value).isdigit() or int(value) < 1:
+        raise ValueError("move_max_objects must be a positive integer")
+    return int(value)
+
+
 def _migrate_config(config: Dict[str, Any]) -> bool:
     """Migrate `config` in place by adding missing fields with default values.
 
@@ -129,6 +141,10 @@ def _migrate_config(config: Dict[str, Any]) -> bool:
     matters under concurrent readers.
     """
     config_modified = False
+
+    if "move_max_objects" not in config:
+        config["move_max_objects"] = resolve_move_max_objects({})
+        config_modified = True
 
     if "enable_lazy_loading" not in config:
         config["enable_lazy_loading"] = os.getenv("ENABLE_LAZY_LOADING", "true").lower() == "true"
@@ -254,6 +270,7 @@ def _get_default_config() -> Dict[str, Any]:
         "max_file_size": int(os.getenv("MAX_FILE_SIZE", str(DEFAULT_MAX_FILE_SIZE))),
         "max_client_load": int(os.getenv("MAX_CLIENT_LOAD", str(DEFAULT_MAX_CLIENT_LOAD))),
         "disable_deletion": False,
+        "move_max_objects": resolve_move_max_objects({}),
         # Two independent lists (see migration): text-preview vs upload-inline.
         "preview_text_extensions": list(DEFAULT_PREVIEW_TEXT_EXTENSIONS),
         "upload_inline_extensions": list(DEFAULT_UPLOAD_INLINE_EXTENSIONS),

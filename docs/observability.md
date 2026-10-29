@@ -56,6 +56,8 @@ file path.
 
 ### S3 operations
 
+`as3m_move_jobs_total{outcome}` counts each completed background move exactly once. Bounded outcomes are `done`, `done_with_warnings`, `failed_copy`, `failed_delete`, and `cancelled_access`. Successful copies and deletions (including cleanup) also increment `as3m_s3_objects_total{operation="copy"|"delete"}`; per-key delete failures do not count as removed objects. No user, job id, or object key is used as a move-job metric label.
+
 | Metric                               | Type      | Labels                            | Notes                                                                                                                                                                                                 |
 | ------------------------------------ | --------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `as3m_s3_operations_total`           | Counter   | `role`, `operation`, `error_code` | `operation`: `list\|get\|put\|delete\|head`. `error_code`: `none` (success) \| `access_denied` \| `not_found` \| `credentials_expired` \| `network_error` \| `config_error` \| `throttled` \| `other` |

@@ -14,6 +14,7 @@ import os
 import secrets as _secrets
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -41,10 +42,11 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import another_s3_manager.config as config_module
+from another_s3_manager import move_jobs
 from another_s3_manager.api_tokens import count_active_tokens
 from another_s3_manager.auth import (
     check_ban,
@@ -73,7 +75,7 @@ from another_s3_manager.constants import (
     PRESIGNED_URL_MIN_TTL,
     STATIC_DIR,
 )
-from another_s3_manager.errors import RoleNotFoundError, S3OperationError
+from another_s3_manager.errors import MoveError, RoleNotFoundError, S3OperationError, safe_move_error
 from another_s3_manager.metrics import (
     REGISTRY,
     _seed_zero_series,
@@ -499,7 +501,58 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
-# HTTP metrics middleware — registered late so it sees the final response status
+class _MoveBodyGuard:
+    """Bound actual ASGI body bytes before JSON decoding, including chunked bodies."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        import re
+
+        if scope["type"] != "http" or scope["method"] != "POST":
+            return await self.app(scope, receive, send)
+        path = scope["path"]
+        bucket_match = re.fullmatch(r"/api/buckets/[^/]+/(folders|move(?:/preflight)?)", path)
+        cleanup_match = re.fullmatch(r"/api/jobs/[^/]+/cleanup", path)
+        if not bucket_match and not cleanup_match:
+            return await self.app(scope, receive, send)
+        scope["guard_path_template"] = (
+            "/api/buckets/{bucket_name}/" + bucket_match[1] if bucket_match else "/api/jobs/{job_id}/cleanup"
+        )
+        if not has_valid_session(Request(scope)):
+            return await JSONResponse({"detail": "Not authenticated"}, status_code=401)(scope, receive, send)
+        chunks = []
+        length = 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            length += len(message.get("body", b""))
+            if length > 256 * 1024:
+                return await JSONResponse({"detail": MoveError("BODY_TOO_LARGE", 413).detail()}, status_code=413)(
+                    scope, receive, send
+                )
+            chunks.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+        body = b"".join(chunks)
+        delivered = False
+
+        async def bounded_receive():
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        await self.app(scope, bounded_receive, send)
+
+
+app.add_middleware(_MoveBodyGuard)
+
+
+# HTTP metrics middleware - registered late so it sees the final response status
 # (after exception handlers have run and converted exceptions to proper HTTP responses).
 @app.middleware("http")
 async def _http_metrics(request: Request, call_next):
@@ -1587,6 +1640,7 @@ async def get_config(
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
             "max_client_load": max_client_load,
+            "move_max_objects": config_module.resolve_move_max_objects(config),
             "presigned_url_default_ttl": presigned_url_default_ttl,
             "presigned_url_max_ttl": presigned_url_max_ttl,
             "preview_text_extensions": config.get("preview_text_extensions", []),
@@ -1626,6 +1680,7 @@ async def get_config(
             "enable_lazy_loading": enable_lazy_loading,
             "max_file_size": max_file_size,
             "max_client_load": max_client_load,
+            "move_max_objects": config_module.resolve_move_max_objects(config),
             "presigned_url_default_ttl": presigned_url_default_ttl,
             "presigned_url_max_ttl": presigned_url_max_ttl,
             "preview_text_extensions": config.get("preview_text_extensions", []),
@@ -1646,6 +1701,7 @@ async def get_config(
         "enable_lazy_loading": enable_lazy_loading,
         "max_file_size": max_file_size,
         "max_client_load": max_client_load,
+        "move_max_objects": config_module.resolve_move_max_objects(config),
         "presigned_url_default_ttl": presigned_url_default_ttl,
         "presigned_url_max_ttl": presigned_url_max_ttl,
         "preview_text_extensions": config.get("preview_text_extensions", []),
@@ -1733,6 +1789,14 @@ async def update_config(
             else:
                 # Use env var or default if not in config
                 config["max_file_size"] = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
+
+        try:
+            if "move_max_objects" in config:
+                config["move_max_objects"] = config_module.resolve_move_max_objects(config)
+            else:
+                config["move_max_objects"] = config_module.resolve_move_max_objects(load_config())
+        except ValueError:
+            raise HTTPException(400, detail="move_max_objects must be a positive integer") from None
 
         # Handle max_client_load - if provided, validate and use it; otherwise preserve existing or use env var/default
         if "max_client_load" in config:
@@ -2003,6 +2067,8 @@ def _s3_error_to_http(error: S3OperationError) -> HTTPException:
     Frontend reads ``message`` for display and ``code`` for per-code UI hints
     (e.g. "Open admin to fix" when code == "InvalidRegion").
     """
+    if isinstance(error, MoveError):
+        return HTTPException(status_code=error.http_status, detail=error.detail())
     return HTTPException(
         status_code=error.http_status,
         detail={"code": error.code, "message": str(error)},
@@ -2695,6 +2761,164 @@ async def delete_file(
             status_code=500,
             detail={"code": "INTERNAL", "message": "Delete failed — see server logs"},
         ) from e
+
+
+class FolderRequest(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+    path: str
+
+    @field_validator("path")
+    @classmethod
+    def validate_folder_path(cls, value):
+        from another_s3_manager.utils import validate_new_name, validate_source_key
+
+        validate_source_key(value)
+        validate_new_name(value.rsplit("/", 1)[-1])
+        validate_source_key(value + "/")
+        return value
+
+
+class MoveStartRequest(move_jobs.MoveRequest):
+    operation_id: str = Field(max_length=1024)
+
+    @field_validator("operation_id")
+    @classmethod
+    def validate_operation_id(cls, value):
+        return str(uuid.UUID(value))
+
+
+class FolderResponse(BaseModel):
+    path: str
+
+
+class MoveStartResponse(BaseModel):
+    job_id: str
+
+
+class MoveFailure(BaseModel):
+    code: str
+    message: str
+    phase: str
+    key: str | None
+
+
+class MovePreflightResponse(BaseModel):
+    objects: int
+    bytes: int
+    largest: int
+    conflicts: list[MoveFailure]
+    blocked_reason: str | None
+
+
+class MoveJobResponse(MoveStartResponse):
+    state: str
+    phase: str
+    done: int
+    total: int
+    bytes_done: int
+    bytes_total: int
+    removed: int
+    failures: list[MoveFailure]
+    failures_total: int
+    failures_stored: int
+    failures_offset: int
+    next_failures_offset: int | None
+    result: dict[str, int]
+
+
+class MoveCleanupResponse(BaseModel):
+    removed: int
+    failures: list[MoveFailure]
+
+
+async def _move_payload(request: Request, schema):
+    try:
+        return schema.model_validate(await request.json())
+    except ValidationError as error:
+        code = "INVALID_REQUEST"
+        for failure in error.errors():
+            reason = str(failure.get("ctx", {}).get("error", ""))
+            if reason in {"INVALID_NAME", "INVALID_KEY", "KEY_TOO_LONG"}:
+                code = reason
+                break
+        raise HTTPException(400, detail=MoveError(code).detail()) from None
+    except (ValueError, UnicodeError):
+        # Pydantic's default response echoes input; storage keys and tokens must not leak.
+        raise HTTPException(400, detail=MoveError("INVALID_REQUEST").detail()) from None
+
+
+async def _move_call(function, *args):
+    try:
+        return await run_in_threadpool(function, *args)
+    except Exception as error:
+        safe = safe_move_error(error, "request")
+        raise HTTPException(safe.http_status, detail=safe.detail()) from None
+
+
+def _move_bucket(bucket_name):
+    try:
+        return sanitize_bucket_name(bucket_name)
+    except ValueError:
+        raise HTTPException(400, detail=MoveError("INVALID_REQUEST").detail()) from None
+
+
+@app.post("/api/buckets/{bucket_name}/folders", status_code=201, response_model=FolderResponse)
+async def create_folder(
+    request: Request,
+    bucket_name: str,
+    role: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    bucket = _move_bucket(bucket_name)
+    await _move_call(move_jobs.require_access, current_user, role, bucket)
+    payload = await _move_payload(request, FolderRequest)
+    return await _move_call(move_jobs.s3_client.create_folder_for_role, role, bucket, payload.path, current_user)
+
+
+@app.post("/api/buckets/{bucket_name}/move/preflight", response_model=MovePreflightResponse)
+async def move_preflight(
+    request: Request,
+    bucket_name: str,
+    role: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    bucket = _move_bucket(bucket_name)
+    await _move_call(move_jobs.require_access, current_user, role, bucket)
+    payload = await _move_payload(request, move_jobs.MoveRequest)
+    return await _move_call(move_jobs.registry.preflight, current_user, role, bucket, payload)
+
+
+@app.post("/api/buckets/{bucket_name}/move", status_code=202, response_model=MoveStartResponse)
+async def start_move(
+    request: Request,
+    bucket_name: str,
+    role: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
+    csrf_verified: bool = Depends(verify_csrf_token),
+):
+    bucket = _move_bucket(bucket_name)
+    await _move_call(move_jobs.require_access, current_user, role, bucket)
+    payload = await _move_payload(request, MoveStartRequest)
+    move = move_jobs.MoveRequest.model_validate(payload.model_dump(exclude={"operation_id"}))
+    job = await _move_call(move_jobs.registry.start, current_user, role, bucket, move, payload.operation_id)
+    return MoveStartResponse(job_id=job.id)
+
+
+@app.get("/api/jobs/{job_id}", response_model=MoveJobResponse)
+async def get_move_job(
+    job_id: str, failures_offset: int = Query(0, ge=0), current_user: dict = Depends(get_current_user)
+):
+    job = await _move_call(move_jobs.registry.get, job_id, current_user)
+    return job.snapshot(failures_offset)
+
+
+@app.post("/api/jobs/{job_id}/cleanup", response_model=MoveCleanupResponse)
+async def cleanup_move_job(
+    job_id: str, current_user: dict = Depends(get_current_user), csrf_verified: bool = Depends(verify_csrf_token)
+):
+    return await _move_call(move_jobs.registry.cleanup, job_id, current_user)
 
 
 # Mount MCP sub-app at /mcp — must come AFTER all @app.get/@app.post route

@@ -24,6 +24,8 @@ from prometheus_client import (
 
 REGISTRY = CollectorRegistry(auto_describe=True)
 
+move_jobs_total = Counter("as3m_move_jobs_total", "Completed move jobs by outcome", ["outcome"], registry=REGISTRY)
+
 # Runtime metrics. Standard, UNPREFIXED names on purpose: `process_*` and
 # `python_info` are a Prometheus-wide contract that every off-the-shelf alert
 # and dashboard already knows. The `as3m_` rule governs metrics we author.

@@ -6,6 +6,48 @@ import re
 from typing import Optional, Union
 
 
+def validate_new_name(name: str) -> str:
+    """Validate a newly chosen name without changing existing S3 keys."""
+    if (
+        not name
+        or len(name) > 255
+        or name != name.strip()
+        or "/" in name
+        or name in {".", ".."}
+        or re.search(r"[\x00-\x1f\x7f]", name)
+    ):
+        raise ValueError("INVALID_NAME")
+    return name
+
+
+def validate_source_key(key: str, *, allow_root: bool = False) -> str:
+    """Keep keys byte-exact; only reject unsupported keys, never normalize."""
+    if not key and allow_root:
+        return key
+    if not key or key.startswith("/") or ".." in key.split("/") or re.search(r"[\x00-\x1f\x7f]", key):
+        raise ValueError("INVALID_KEY")
+    try:
+        length = len(key.encode("utf-8"))
+    except UnicodeError:
+        raise ValueError("INVALID_KEY") from None
+    if length > 1024:
+        raise ValueError("KEY_TOO_LONG")
+    return key
+
+
+def is_same_or_descendant(candidate: str, parent: str) -> bool:
+    """Compare folder boundaries, not arbitrary string prefixes."""
+    return candidate == parent or candidate.startswith(parent + "/")
+
+
+def build_destination_key(destination: str, path: str, kind: str, new_name: Optional[str] = None) -> str:
+    validate_source_key(destination, allow_root=True)
+    validate_source_key(path)
+    name = validate_new_name(new_name) if new_name is not None else path.rsplit("/", 1)[-1]
+    key = (destination + "/" if destination else "") + name + ("/" if kind == "folder" else "")
+    return validate_source_key(key)
+
+
 def sanitize_path(path: str) -> str:
     """
     Sanitize S3 path to prevent path traversal attacks.

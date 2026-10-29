@@ -223,6 +223,7 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 | `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | No       | `180`                                   | JWT expiration (minutes)                                                                                                                                                                                |
 | `DISABLE_DELETION`                | No       | `false`                                 | Disable file deletion                                                                                                                                                                                   |
 | `MAX_FILE_SIZE`                   | No       | `104857600`                             | Max upload file size (bytes, 100MB)                                                                                                                                                                     |
+| `MOVE_MAX_OBJECTS`                | No       | `50000`                                 | Maximum unique objects per move; config `move_max_objects` overrides the environment. Enumeration stops immediately above this limit.                                                                   |
 | `PRESIGNED_URL_DEFAULT_TTL`       | No       | `3600`                                  | Default presigned-URL lifetime (seconds). Overridable per link up to the max.                                                                                                                           |
 | `PRESIGNED_URL_MAX_TTL`           | No       | `604800`                                | Max presigned-URL lifetime (seconds; 7-day SigV4 ceiling). Requests above this are rejected (400).                                                                                                      |
 | `ENABLE_LAZY_LOADING`             | No       | `true`                                  | Enable lazy loading for file lists                                                                                                                                                                      |
@@ -253,8 +254,15 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 
 ### React API surface
 
+Folder moves use an in-memory registry in a single application process: at most 2 running jobs per user and 4 globally, with 8 copy workers per job. Preflights are limited to 10 per user per minute; requests contain at most 1,000 items and 256 KiB of JSON. Completed jobs expire after one hour; at most 200 are retained, with up to 1,000 failures each, served in pages of 100. Restarting loses the registry and no job auto-resumes. Until deletion starts the source remains complete; after deletion starts a complete copy exists at the destination. Internal reservations coordinate web/MCP writes, conservatively including source parents for marker writes and matching bucket names across roles/endpoints; external clients and separate processes/replicas are not coordinated. Job polling and cleanup use the stored role/bucket and re-check current access. Cleanup is available only before source deletion begins and skips destination objects with changed ETags. Multipart copies above 5 GiB preserve content metadata but do not copy tags; versioned-bucket deletions leave historical versions.
+
 The React SPA consumes existing backend endpoints plus a small set added for SPA UX:
 
+- `POST /api/buckets/{b}/folders?role=...` � create an empty folder marker; rejects file/folder name collisions. Requires cookie auth and CSRF, independently of the deletion gate.
+- `POST /api/buckets/{b}/move/preflight?role=...` � validate and enumerate an immutable same-bucket plan, returning object/byte counts before writes.
+- `POST /api/buckets/{b}/move?role=...` � start a background copy-then-delete job; requires a UUID `operation_id`, items and destination; optional `new_name` for a single item. Returns 202 `{job_id}`. Roles are required on all three bucket routes.
+- `GET /api/jobs/{job_id}?failures_offset=0` � owner-only job progress and paginated failures; checks current role/bucket access.
+- `POST /api/jobs/{job_id}/cleanup` � owner-only, CSRF-protected removal of unchanged partial copies from that job. Move and cleanup obey `DISABLE_DELETION` OR config `disable_deletion`.
 - `GET /api/me` — extended to include `allowed_roles: string[]` and `disable_deletion: bool` (env `DISABLE_DELETION` OR `config.disable_deletion`, env wins; surfaces the flag so the React UI can disable Delete controls before the user clicks)
 - `GET /api/buckets?role=...` — list buckets (already existed)
 - `GET /api/buckets/{b}/files?path=...&role=...` — list files (already existed)

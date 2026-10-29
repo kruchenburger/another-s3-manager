@@ -5,6 +5,15 @@ import time
 import pytest
 
 
+def test_job_owner_lookup_uses_database_identity(db_session):
+    from another_s3_manager import users
+
+    user = users.create_user("move-owner", "hash")
+    assert isinstance(user["id"], int)
+    assert users.get_user_by_id(user["id"])["username"] == "move-owner"
+    assert users.get_user_by_id(user["id"] + 1000) is None
+
+
 def test_load_users_creates_default_admin_when_db_empty(db_session, monkeypatch):
     monkeypatch.setenv("ADMIN_PASSWORD", "test_admin_pw_123")
     from another_s3_manager.users import load_users
