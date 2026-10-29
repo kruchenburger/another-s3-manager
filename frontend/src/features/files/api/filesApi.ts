@@ -2,6 +2,60 @@ import { apiRequest } from "@/hooks/useApiClient";
 import { ApiError } from "@/utils/apiError";
 import { getCsrfToken } from "@/utils/csrf";
 import type { BucketList, ClientLoadPage } from "@/types/api";
+import type {
+  MoveRequest,
+  MoveStartRequest,
+  MovePreflight,
+  MoveJob,
+  MoveCleanup,
+} from "@/types/api";
+
+function folderRoute(bucket: string, role: string, action: string) {
+  return `/api/buckets/${encodeURIComponent(bucket)}/${action}?${new URLSearchParams({ role })}`;
+}
+function postJson<T>(url: string, body: unknown) {
+  return apiRequest<T>(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function createFolder(bucket: string, role: string, path: string) {
+  return postJson<{ path: string }>(folderRoute(bucket, role, "folders"), {
+    path,
+  });
+}
+export function movePreflight(
+  bucket: string,
+  role: string,
+  request: MoveRequest,
+) {
+  return postJson<MovePreflight>(
+    folderRoute(bucket, role, "move/preflight"),
+    request,
+  );
+}
+export function startMove(
+  bucket: string,
+  role: string,
+  action: MoveStartRequest,
+) {
+  return postJson<{ job_id: string }>(
+    folderRoute(bucket, role, "move"),
+    action,
+  );
+}
+export function getJob(id: string, failuresOffset = 0) {
+  return apiRequest<MoveJob>(
+    `/api/jobs/${encodeURIComponent(id)}?failures_offset=${failuresOffset}`,
+  );
+}
+export function cleanupJob(id: string) {
+  return apiRequest<MoveCleanup>(
+    `/api/jobs/${encodeURIComponent(id)}/cleanup`,
+    { method: "POST" },
+  );
+}
 
 export async function listBuckets(role: string): Promise<BucketList> {
   const params = new URLSearchParams({ role });
@@ -143,7 +197,9 @@ export function uploadFile(
       } catch {
         // non-JSON error body — keep null
       }
-      reject(new ApiError(xhr.status, xhr.statusText || `HTTP ${xhr.status}`, body));
+      reject(
+        new ApiError(xhr.status, xhr.statusText || `HTTP ${xhr.status}`, body),
+      );
     };
 
     xhr.onerror = () => {
@@ -163,15 +219,26 @@ export function uploadFile(
   });
 }
 
-export async function deleteFile(bucket: string, role: string, path: string): Promise<void> {
+export async function deleteFile(
+  bucket: string,
+  role: string,
+  path: string,
+): Promise<void> {
   // path can be a folder (ends with /) — backend handles recursive delete
   const params = new URLSearchParams({ role, path });
-  await apiRequest<void>(`/api/buckets/${encodeURIComponent(bucket)}/files?${params}`, {
-    method: "DELETE",
-  });
+  await apiRequest<void>(
+    `/api/buckets/${encodeURIComponent(bucket)}/files?${params}`,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
-export function buildDownloadUrl(bucket: string, role: string, path: string): string {
+export function buildDownloadUrl(
+  bucket: string,
+  role: string,
+  path: string,
+): string {
   // Browser-triggered download via <a href> — relies on cookie auth (same-origin GET).
   const params = new URLSearchParams({ role, path });
   return `/api/buckets/${encodeURIComponent(bucket)}/download?${params}`;

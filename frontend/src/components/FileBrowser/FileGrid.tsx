@@ -2,6 +2,8 @@ import { type RefObject } from "react";
 import { Box } from "@mantine/core";
 import { useElementSize } from "@mantine/hooks";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { entryIdentity } from "@/features/files/utils/folderOperations";
+import type { InternalFileDrag } from "@/features/files/hooks/useInternalFileDrag";
 import type { FileEntry } from "@/types/api";
 import { FileCard } from "./FileCard";
 import { useNearEndAutoLoad } from "./useNearEndAutoLoad";
@@ -9,6 +11,8 @@ import { useNearEndAutoLoad } from "./useNearEndAutoLoad";
 interface FileGridProps {
   files: FileEntry[];
   selected: Set<string>;
+  drag?: InternalFileDrag;
+  onMove?: (id: string) => void;
   onToggleSelect: (name: string, shiftKey: boolean) => void;
   onNavigate: (name: string) => void;
   onDownload: (name: string) => void;
@@ -56,6 +60,8 @@ export function columnsForWidth(width: number): number {
 export function FileGrid({
   files,
   selected,
+  drag,
+  onMove,
   onToggleSelect,
   onNavigate,
   onDownload,
@@ -107,10 +113,13 @@ export function FileGrid({
             >
               {rowItems.map((file, k) => (
                 <FileCard
-                  key={file.name}
+                  key={entryIdentity(path, file)}
+                  identity={entryIdentity(path, file)}
+                  drag={drag}
+                  onMove={onMove}
                   file={file}
                   index={start + k}
-                  selected={selected.has(file.name)}
+                  selected={selected.has(entryIdentity(path, file))}
                   onToggleSelect={onToggleSelect}
                   onNavigate={onNavigate}
                   onDownload={onDownload}

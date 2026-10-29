@@ -2,6 +2,8 @@ import { type RefObject } from "react";
 import { Box, Checkbox, Table, UnstyledButton } from "@mantine/core";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { entryIdentity } from "@/features/files/utils/folderOperations";
+import type { InternalFileDrag } from "@/features/files/hooks/useInternalFileDrag";
 import type { FileEntry } from "@/types/api";
 import { type SortColumn, type SortState } from "@/utils/sortEntries";
 import { FileRow } from "./FileRow";
@@ -11,6 +13,9 @@ import classes from "./FileBrowser.module.css";
 interface FileTableProps {
   files: FileEntry[];
   selected: Set<string>;
+  drag?: InternalFileDrag;
+  onMove?: (id: string) => void;
+  path?: string;
   onToggleSelect: (name: string, shiftKey: boolean) => void;
   onToggleSelectAll: () => void;
   onNavigate: (name: string) => void;
@@ -91,6 +96,9 @@ function SortHeaderButton({
 export function FileTable({
   files,
   selected,
+  drag,
+  onMove,
+  path = "",
   onToggleSelect,
   onToggleSelectAll,
   onNavigate,
@@ -109,8 +117,10 @@ export function FileTable({
   sortDisabled = false,
 }: FileTableProps) {
   const allSelected =
-    files.length > 0 && files.every((f) => selected.has(f.name));
-  const someSelected = files.some((f) => selected.has(f.name)) && !allSelected;
+    files.length > 0 &&
+    files.every((f) => selected.has(entryIdentity(path, f)));
+  const someSelected =
+    files.some((f) => selected.has(entryIdentity(path, f))) && !allSelected;
 
   const virtualizer = useVirtualizer({
     count: files.length,
@@ -199,17 +209,24 @@ export function FileTable({
       <Table.Tbody>
         {paddingTop > 0 && (
           <Table.Tr data-spacer aria-hidden>
-            <Table.Td colSpan={1} style={{ height: paddingTop, padding: 0, border: 0 }} />
+            <Table.Td
+              colSpan={1}
+              style={{ height: paddingTop, padding: 0, border: 0 }}
+            />
           </Table.Tr>
         )}
         {virtualRows.map((vrow) => {
           const file = files[vrow.index];
           return (
             <FileRow
-              key={file.name}
+              key={entryIdentity(path, file)}
+              identity={entryIdentity(path, file)}
+              drag={drag}
+              onMove={onMove}
+              path={path}
               file={file}
               index={vrow.index}
-              selected={selected.has(file.name)}
+              selected={selected.has(entryIdentity(path, file))}
               onToggleSelect={onToggleSelect}
               onNavigate={onNavigate}
               onDownload={onDownload}
@@ -224,7 +241,10 @@ export function FileTable({
         })}
         {paddingBottom > 0 && (
           <Table.Tr data-spacer aria-hidden>
-            <Table.Td colSpan={1} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+            <Table.Td
+              colSpan={1}
+              style={{ height: paddingBottom, padding: 0, border: 0 }}
+            />
           </Table.Tr>
         )}
       </Table.Tbody>

@@ -1,5 +1,58 @@
 export type Theme = "light" | "dark" | "auto";
 
+export interface MoveItem {
+  path: string;
+  kind: "file" | "folder";
+  new_name?: string;
+}
+export interface MoveRequest {
+  items: MoveItem[];
+  destination: string;
+}
+export interface MoveStartRequest extends MoveRequest {
+  operation_id: string;
+}
+export interface MoveFailure {
+  code: string;
+  message: string;
+  phase: string;
+  key: string | null;
+}
+export interface MovePreflight {
+  objects: number;
+  bytes: number;
+  largest: number;
+  conflicts: MoveFailure[];
+  blocked_reason: string | null;
+}
+export type MoveState =
+  | "running"
+  | "done"
+  | "done_with_warnings"
+  | "failed_copy"
+  | "failed_delete"
+  | "cancelled_access";
+export interface MoveJob {
+  job_id: string;
+  state: MoveState;
+  phase: string;
+  done: number;
+  total: number;
+  bytes_done: number;
+  bytes_total: number;
+  removed: number;
+  failures: MoveFailure[];
+  failures_total: number;
+  failures_stored: number;
+  failures_offset: number;
+  next_failures_offset: number | null;
+  result: Record<string, number>;
+}
+export interface MoveCleanup {
+  removed: number;
+  failures: MoveFailure[];
+}
+
 export interface User {
   username: string;
   is_admin: boolean;

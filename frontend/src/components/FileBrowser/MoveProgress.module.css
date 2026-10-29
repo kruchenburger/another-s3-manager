@@ -1,0 +1,9 @@
+.stack {
+  width: min(360px, calc(100vw - 32px));
+  max-height: 55dvh;
+  overflow-y: auto;
+}
+.panel {
+  background: var(--as3m-surface);
+  box-shadow: var(--as3m-shadow-float);
+}

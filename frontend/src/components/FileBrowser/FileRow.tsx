@@ -8,6 +8,8 @@ import { useConfig } from "@/hooks/useConfig";
 import { getPreviewType } from "@/utils/filePreview";
 import { FileActions } from "./FileActions";
 import classes from "./FileBrowser.module.css";
+import type { InternalFileDrag } from "@/features/files/hooks/useInternalFileDrag";
+import { entryItem } from "@/features/files/utils/folderOperations";
 import type { FileEntry } from "@/types/api";
 
 // Only the first screenful of rows plays the staggered fade-in entry (cold-load
@@ -20,6 +22,10 @@ interface FileRowProps {
   file: FileEntry;
   index: number;
   selected: boolean;
+  identity?: string;
+  drag?: InternalFileDrag;
+  onMove?: (id: string) => void;
+  path?: string;
   /** `shiftKey` lets the parent implement range-select on Shift+click. */
   onToggleSelect: (name: string, shiftKey: boolean) => void;
   onNavigate: (folderName: string) => void;
@@ -38,6 +44,10 @@ export function FileRow({
   file,
   index,
   selected,
+  identity,
+  drag,
+  onMove,
+  path = "",
   onToggleSelect,
   onNavigate,
   onDownload,
@@ -48,6 +58,8 @@ export function FileRow({
   defaultTtl,
   maxTtl,
 }: FileRowProps) {
+  const actionId = identity ?? file.name;
+  const dragProps = drag?.row(entryItem(path, file));
   const me = useMe();
   const disableDeletion = me.data?.disable_deletion ?? false;
   const { data: config } = useConfig();
@@ -71,9 +83,12 @@ export function FileRow({
 
   return (
     <Table.Tr
+      {...dragProps}
       className={rowClassName}
       style={
-        animateIn ? ({ "--row-index": index } as React.CSSProperties) : undefined
+        animateIn
+          ? ({ "--row-index": index } as React.CSSProperties)
+          : undefined
       }
       onDoubleClick={() => file.is_directory && onNavigate(file.name)}
     >
@@ -88,7 +103,7 @@ export function FileRow({
             // tsc -b is happy and degrade safely to `false` if nativeEvent
             // is somehow neither (programmatic toggle, etc.).
             const native = e.nativeEvent as MouseEvent | KeyboardEvent;
-            onToggleSelect(file.name, native.shiftKey ?? false);
+            onToggleSelect(actionId, native.shiftKey ?? false);
           }}
           aria-label={`Select ${file.name}`}
           // Shift+click extends the browser's native text selection across the
@@ -102,7 +117,14 @@ export function FileRow({
         />
       </Table.Td>
       <Table.Td
-        style={{ cursor: file.is_directory ? "pointer" : "default" }}
+        style={{
+          cursor:
+            dragProps?.["data-move-target"] === "invalid"
+              ? "not-allowed"
+              : file.is_directory
+                ? "pointer"
+                : "default",
+        }}
         onClick={() => file.is_directory && onNavigate(file.name)}
       >
         {/* Flex + truncate: the row height is a virtualization constant
@@ -148,13 +170,16 @@ export function FileRow({
             isDirectory={file.is_directory}
             canPreview={canPreview}
             filename={file.name}
-            onDownload={() => onDownload(file.name)}
-            onCopyUrl={() => onCopyUrl(file.name)}
+            onDownload={() => onDownload(actionId)}
+            onCopyUrl={() => onCopyUrl(actionId)}
             onCopyUrlWithTtl={
-              onCopyUrlWithTtl ? (ttl) => onCopyUrlWithTtl(file.name, ttl) : undefined
+              onCopyUrlWithTtl
+                ? (ttl) => onCopyUrlWithTtl(actionId, ttl)
+                : undefined
             }
-            onPreview={() => onPreview(file.name)}
-            onDelete={() => onDelete(file.name)}
+            onPreview={() => onPreview(actionId)}
+            onMove={onMove ? () => onMove(actionId) : undefined}
+            onDelete={() => onDelete(actionId)}
             disabled={disableDeletion}
             defaultTtl={defaultTtl}
             maxTtl={maxTtl}
@@ -165,10 +190,11 @@ export function FileRow({
             isDirectory={file.is_directory}
             canPreview={canPreview}
             filename={file.name}
-            onDownload={() => onDownload(file.name)}
-            onCopyUrl={() => onCopyUrl(file.name)}
-            onPreview={() => onPreview(file.name)}
-            onDelete={() => onDelete(file.name)}
+            onDownload={() => onDownload(actionId)}
+            onCopyUrl={() => onCopyUrl(actionId)}
+            onPreview={() => onPreview(actionId)}
+            onMove={onMove ? () => onMove(actionId) : undefined}
+            onDelete={() => onDelete(actionId)}
             disabled={disableDeletion}
           />
         </Box>

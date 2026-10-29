@@ -1,5 +1,6 @@
 import { ActionIcon, Group, Tooltip } from "@mantine/core";
-import { Download, Eye, Share2, Trash2 } from "lucide-react";
+import { Download, Eye, Share2, Trash2, FolderInput } from "lucide-react";
+import { MOVE_DISABLED } from "@/features/files/utils/folderOperations";
 import { useState } from "react";
 import { TtlPopover } from "@/components/TtlPopover/TtlPopover";
 
@@ -15,6 +16,7 @@ export interface FileActionsProps {
   onCopyUrlWithTtl?: (ttlSeconds: number) => void;
   onPreview?: () => void;
   onDelete: () => void;
+  onMove?: () => void;
   /** When true, Delete is rendered disabled with a config-aware tooltip. */
   disabled?: boolean;
   /** Server default presigned TTL (seconds) — preselected in the popover. */
@@ -34,6 +36,7 @@ export function FileActions({
   onCopyUrlWithTtl,
   onPreview,
   onDelete,
+  onMove,
   disabled = false,
   defaultTtl = 3600,
   maxTtl = 604800,
@@ -68,6 +71,7 @@ export function FileActions({
   const shareIcon = (
     <Tooltip label={shareLabel} withArrow>
       <ActionIcon
+        size="sm"
         variant="subtle"
         onClick={handleShareClick}
         onContextMenu={handleShareContextMenu}
@@ -82,13 +86,19 @@ export function FileActions({
     <Group gap={4} wrap="nowrap">
       {!isDirectory && onDownload && (
         <Tooltip label="Download" withArrow>
-          <ActionIcon variant="subtle" onClick={onDownload} aria-label={downloadLabel}>
+          <ActionIcon
+            size="sm"
+            variant="subtle"
+            onClick={onDownload}
+            aria-label={downloadLabel}
+          >
             <Download size={16} />
           </ActionIcon>
         </Tooltip>
       )}
-      {!isDirectory && onCopyUrl && (
-        canOverrideTtl ? (
+      {!isDirectory &&
+        onCopyUrl &&
+        (canOverrideTtl ? (
           <TtlPopover
             opened={ttlOpen}
             onClose={() => setTtlOpen(false)}
@@ -99,17 +109,35 @@ export function FileActions({
           />
         ) : (
           shareIcon
-        )
-      )}
+        ))}
       {!isDirectory && canPreview && onPreview && (
         <Tooltip label="Preview" withArrow>
-          <ActionIcon variant="subtle" onClick={onPreview} aria-label="Preview">
+          <ActionIcon
+            size="sm"
+            variant="subtle"
+            onClick={onPreview}
+            aria-label="Preview"
+          >
             <Eye size={16} />
+          </ActionIcon>
+        </Tooltip>
+      )}
+      {onMove && (
+        <Tooltip label={disabled ? MOVE_DISABLED : "Move to…"} withArrow>
+          <ActionIcon
+            size="sm"
+            variant="subtle"
+            aria-label="Move to…"
+            disabled={disabled}
+            onClick={onMove}
+          >
+            <FolderInput size={16} />
           </ActionIcon>
         </Tooltip>
       )}
       <Tooltip label={disabled ? DISABLED_DELETE_LABEL : "Delete"} withArrow>
         <ActionIcon
+          size="sm"
           variant="subtle"
           color="red"
           onClick={onDelete}

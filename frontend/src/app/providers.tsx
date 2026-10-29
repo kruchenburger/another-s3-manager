@@ -6,6 +6,7 @@ import "@mantine/notifications/styles.css";
 import "@/app/global.css";
 import { ThemePreviewProvider } from "@/app/ThemePreviewProvider";
 import { queryClient } from "@/app/queryClient";
+import { MoveJobsProvider } from "@/features/files/jobs/MoveJobsProvider";
 
 interface AppProvidersProps {
   children: ReactNode;
@@ -29,7 +30,7 @@ export function AppProviders({ children }: AppProvidersProps) {
             still aggregate their errors (a huge queue would drip-feed
             replacements for minutes even with a limit). */}
         <Notifications position="bottom-right" limit={5} />
-        {children}
+        <MoveJobsProvider>{children}</MoveJobsProvider>
       </ThemePreviewProvider>
     </QueryClientProvider>
   );
