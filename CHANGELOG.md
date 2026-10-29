@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- `role` is now required on bucket endpoints; requests without a valid role are rejected.
+
 ## [1.1.6] - 2026-07-31
 
 ### Changed

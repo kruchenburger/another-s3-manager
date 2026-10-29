@@ -650,7 +650,7 @@ def test_list_buckets_with_allowed_list(app_client, monkeypatch):
     config_module.save_config(config_data)
 
     _, headers = login(app_client)
-    response = app_client.get("/api/buckets", headers=headers)
+    response = app_client.get("/api/buckets?role=Default", headers=headers)
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == ["bucket-a", "bucket-b"]
 
@@ -660,7 +660,7 @@ def test_list_buckets_uses_s3(app_client, moto_s3):
     _, headers = login(app_client)
     moto_s3.create_bucket(Bucket="bucket")
 
-    response = app_client.get("/api/buckets", headers=headers)
+    response = app_client.get("/api/buckets?role=Default", headers=headers)
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == ["bucket"]
 
@@ -675,7 +675,7 @@ def test_list_files(app_client, moto_s3):
     moto_s3.put_object(Bucket="files-bucket", Key="root.txt", Body=b"hi")
     moto_s3.put_object(Bucket="files-bucket", Key="sub/inner.txt", Body=b"deep")
 
-    response = app_client.get("/api/buckets/files-bucket/files?path=", headers=headers)
+    response = app_client.get("/api/buckets/files-bucket/files?path=&role=Default", headers=headers)
 
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
@@ -697,7 +697,7 @@ def test_upload_file(app_client, moto_s3):
 
     response = app_client.post(
         "/api/buckets/up-bucket/upload",
-        data={"key": "hello.txt"},
+        data={"role": "Default", "key": "hello.txt"},
         files={"file": ("hello.txt", b"world", "text/plain")},
         headers=headers,
     )
@@ -723,7 +723,7 @@ def test_upload_sets_inline_disposition_for_configured_extension(app_client, mot
     # .pdf → inline
     app_client.post(
         "/api/buckets/inline-bucket/upload",
-        data={"key": "doc.pdf"},
+        data={"role": "Default", "key": "doc.pdf"},
         files={"file": ("doc.pdf", b"%PDF-1.4", "application/pdf")},
         headers=headers,
     )
@@ -733,7 +733,7 @@ def test_upload_sets_inline_disposition_for_configured_extension(app_client, mot
     # .txt → NOT inline (not in the list)
     app_client.post(
         "/api/buckets/inline-bucket/upload",
-        data={"key": "note.txt"},
+        data={"role": "Default", "key": "note.txt"},
         files={"file": ("note.txt", b"hi", "text/plain")},
         headers=headers,
     )
@@ -832,7 +832,7 @@ async def test_upload_handler_rejects_oversize_spooled_body():
             bucket_name="bucket",
             file=upload,
             key="big.bin",
-            role=None,
+            role="Default",
             current_user={"username": "admin", "is_admin": True, "allowed_roles": []},
             csrf_verified=True,
         )
@@ -852,7 +852,7 @@ def test_upload_file_too_large(app_client, mocker):
     _, headers = login(app_client)
     response = app_client.post(
         "/api/buckets/test-bucket/upload",
-        data={"key": "file.txt"},
+        data={"role": "Default", "key": "file.txt"},
         files={"file": ("file.txt", io.BytesIO(b"toolarge"), "text/plain")},
         headers=headers,
     )
@@ -865,7 +865,9 @@ def test_download_file(app_client, moto_s3):
     moto_s3.create_bucket(Bucket="dl-bucket")
     moto_s3.put_object(Bucket="dl-bucket", Key="file.txt", Body=b"data", ContentType="text/plain")
 
-    response = app_client.get("/api/buckets/dl-bucket/download", params={"path": "file.txt"}, headers=headers)
+    response = app_client.get(
+        "/api/buckets/dl-bucket/download", params={"role": "Default", "path": "file.txt"}, headers=headers
+    )
     assert response.status_code == status.HTTP_200_OK
     assert response.content == b"data"
     # Streaming must preserve the upstream Content-Type
@@ -878,7 +880,9 @@ def test_delete_file(app_client, moto_s3):
     moto_s3.create_bucket(Bucket="test-bucket")
     moto_s3.put_object(Bucket="test-bucket", Key="path/file.txt", Body=b"data")
 
-    response = app_client.delete("/api/buckets/test-bucket/files", params={"path": "path/file.txt"}, headers=headers)
+    response = app_client.delete(
+        "/api/buckets/test-bucket/files", params={"role": "Default", "path": "path/file.txt"}, headers=headers
+    )
     assert response.status_code == status.HTTP_200_OK
     body = response.json()
     assert body["count"] == 1
@@ -897,7 +901,9 @@ def test_delete_file_does_not_delete_prefix_siblings(app_client, moto_s3):
     moto_s3.put_object(Bucket="siblings-route-b", Key="notes.txt.bak", Body=b"b")
     moto_s3.put_object(Bucket="siblings-route-b", Key="notes.txt.old", Body=b"c")
 
-    response = app_client.delete("/api/buckets/siblings-route-b/files", params={"path": "notes.txt"}, headers=headers)
+    response = app_client.delete(
+        "/api/buckets/siblings-route-b/files", params={"role": "Default", "path": "notes.txt"}, headers=headers
+    )
     assert response.status_code == status.HTTP_200_OK
     assert response.json()["count"] == 1
 
@@ -915,7 +921,9 @@ def test_delete_file_folder_delete_via_route_is_recursive(app_client, moto_s3):
     moto_s3.put_object(Bucket="folder-route-b", Key="reports/2026/feb.csv", Body=b"g")
     moto_s3.put_object(Bucket="folder-route-b", Key="reports/2026-q1.csv", Body=b"e")
 
-    response = app_client.delete("/api/buckets/folder-route-b/files", params={"path": "reports/2026/"}, headers=headers)
+    response = app_client.delete(
+        "/api/buckets/folder-route-b/files", params={"role": "Default", "path": "reports/2026/"}, headers=headers
+    )
     assert response.status_code == status.HTTP_200_OK
     assert response.json()["count"] == 2
 
@@ -930,7 +938,9 @@ def test_delete_file_not_found_returns_404_via_moto(app_client, moto_s3):
     moto_s3.create_bucket(Bucket="missing-route-b")
     moto_s3.put_object(Bucket="missing-route-b", Key="unrelated.txt", Body=b"z")
 
-    response = app_client.delete("/api/buckets/missing-route-b/files", params={"path": "gone.txt"}, headers=headers)
+    response = app_client.delete(
+        "/api/buckets/missing-route-b/files", params={"role": "Default", "path": "gone.txt"}, headers=headers
+    )
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
     remaining = {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="missing-route-b").get("Contents", [])}
@@ -1173,7 +1183,7 @@ def test_list_buckets_access_denied_returns_friendly_403(app_client, mocker):
         side_effect=ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListBuckets"),
     )
     _, headers = login(app_client)
-    response = app_client.get("/api/buckets", headers=headers)
+    response = app_client.get("/api/buckets?role=Default", headers=headers)
     assert response.status_code == status.HTTP_403_FORBIDDEN
     detail = response.json()["detail"]
     assert "permission to list all buckets" in detail
@@ -1188,7 +1198,7 @@ def test_list_buckets_other_client_error_still_returns_500(app_client, mocker):
         side_effect=ClientError({"Error": {"Code": "InternalError", "Message": "boom"}}, "ListBuckets"),
     )
     _, headers = login(app_client)
-    response = app_client.get("/api/buckets", headers=headers)
+    response = app_client.get("/api/buckets?role=Default", headers=headers)
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
@@ -1200,7 +1210,7 @@ def test_list_files_handles_error(app_client, mocker):
         "another_s3_manager.main.list_objects_for_role",
         side_effect=ClientError({"Error": {"Code": "NoSuchBucket", "Message": "Missing"}}, "ListObjectsV2"),
     )
-    response = app_client.get("/api/buckets/test-bucket/files", headers=headers)
+    response = app_client.get("/api/buckets/test-bucket/files?role=Default", headers=headers)
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
@@ -1213,7 +1223,7 @@ def test_upload_file_handles_exception(app_client, mocker):
     )
     response = app_client.post(
         "/api/buckets/test-bucket/upload",
-        data={"key": "file.txt"},
+        data={"role": "Default", "key": "file.txt"},
         files={"file": ("file.txt", io.BytesIO(b"data"), "text/plain")},
         headers=headers,
     )
@@ -1228,7 +1238,9 @@ def test_download_file_not_found(app_client, mocker):
         "another_s3_manager.main.iter_object_for_role",
         side_effect=FileNotFoundError("Object 'ghost.txt' not found in bucket 'test-bucket'"),
     )
-    response = app_client.get("/api/buckets/test-bucket/download", params={"path": "ghost.txt"}, headers=headers)
+    response = app_client.get(
+        "/api/buckets/test-bucket/download", params={"role": "Default", "path": "ghost.txt"}, headers=headers
+    )
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
@@ -1239,7 +1251,9 @@ def test_delete_file_handles_error(app_client, mocker):
         "another_s3_manager.main.delete_object_for_role",
         side_effect=ClientError({"Error": {"Code": "AccessDenied", "Message": "Nope"}}, "ListObjectsV2"),
     )
-    response = app_client.delete("/api/buckets/test-bucket/files", params={"path": "path"}, headers=headers)
+    response = app_client.delete(
+        "/api/buckets/test-bucket/files", params={"role": "Default", "path": "path"}, headers=headers
+    )
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
@@ -1526,7 +1540,7 @@ async def test_list_buckets_invalid_allowed_buckets(mocker):
     mocker.patch("another_s3_manager.config.load_config", return_value=config_data)
 
     with pytest.raises(HTTPException) as exc:
-        await module.list_buckets(None, {"username": "admin", "is_admin": True})
+        await module.list_buckets("Default", {"username": "admin", "is_admin": True})
     assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
 
 
@@ -1537,8 +1551,8 @@ async def test_list_files_invalid_path():
         await module.list_files(
             "test-bucket",
             "../etc",
-            None,
-            {"username": "admin", "is_admin": True},
+            "Default",
+            current_user={"username": "admin", "is_admin": True},
         )
     assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
 
@@ -1574,7 +1588,7 @@ def test_delete_file_root_path_forbidden(app_client, moto_s3, raw_path):
 
     response = app_client.delete(
         "/api/buckets/root-guard-bucket/files",
-        params={"path": raw_path},
+        params={"role": "Default", "path": raw_path},
         headers=headers,
     )
     assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -1592,7 +1606,7 @@ def test_delete_file_disabled(app_client, mocker):
     config_module.save_config(config_data)
     response = app_client.delete(
         "/api/buckets/test-bucket/files",
-        params={"path": "path/file.txt"},
+        params={"role": "Default", "path": "path/file.txt"},
         headers=headers,
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN
@@ -1747,7 +1761,7 @@ def test_download_file_with_colon_in_key(app_client, moto_s3):
     # The key point of this test is that sanitize_path no longer rejects the `:` character.
     response = app_client.get(
         "/api/buckets/test-bucket/download",
-        params={"path": key_with_colon},
+        params={"role": "Default", "path": key_with_colon},
         headers=headers,
     )
     assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text[:200]}"
@@ -2186,13 +2200,14 @@ def test_presigned_endpoint_requires_auth(app_client):
 
 
 def test_presigned_endpoint_requires_role_param(app_client):
-    """Omitting `role` query param → 422 (FastAPI validation)."""
+    """Omitting `role` query param → 400 ROLE_REQUIRED, same as every bucket endpoint."""
     _, _ = login(app_client)
     response = app_client.get(
         "/api/buckets/some-bucket/presigned",
         params={"path": "x.txt"},
     )
-    assert response.status_code == 422
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "ROLE_REQUIRED"
 
 
 def test_presigned_endpoint_boto_error_returns_500(app_client, mocker):
@@ -2430,7 +2445,7 @@ def test_list_buckets_typed_access_denied_returns_403_with_dict_detail(app_clien
         side_effect=S3AccessDeniedError("AccessDenied", "scoped token cannot list"),
     )
     _, headers = login(app_client)
-    resp = app_client.get("/api/buckets", headers=headers)
+    resp = app_client.get("/api/buckets?role=Default", headers=headers)
     assert resp.status_code == 403
     body = resp.json()
     assert body["detail"]["code"] == "AccessDenied"
@@ -2446,7 +2461,7 @@ def test_list_files_typed_no_such_bucket_returns_404_with_dict_detail(app_client
         side_effect=S3NotFoundError("NoSuchBucket", "bucket missing"),
     )
     _, headers = login(app_client)
-    resp = app_client.get("/api/buckets/missing-bucket/files", headers=headers)
+    resp = app_client.get("/api/buckets/missing-bucket/files?role=Default", headers=headers)
     assert resp.status_code == 404
     body = resp.json()
     assert body["detail"]["code"] == "NoSuchBucket"
@@ -2465,7 +2480,7 @@ def test_list_files_generic_exception_logs_and_returns_500(app_client, mocker, c
     _, headers = login(app_client)
 
     with caplog.at_level(logging.ERROR, logger="another_s3_manager.main"):
-        resp = app_client.get("/api/buckets/some/files", headers=headers)
+        resp = app_client.get("/api/buckets/some/files?role=Default", headers=headers)
 
     assert resp.status_code == 500
     # Must contain the stack trace (logger.exception writes ERROR level + exc_info).

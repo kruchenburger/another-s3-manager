@@ -79,7 +79,7 @@ def test_unauth_upload_rejected_before_body_parse(app_client, mocker):
 
     response = app_client.post(
         "/api/buckets/guard-bucket/upload",
-        data={"key": "big.bin"},
+        data={"role": "Default", "key": "big.bin"},
         files={"file": ("big.bin", b"x" * (256 * 1024), "application/octet-stream")},
     )
 
@@ -158,7 +158,7 @@ def test_upload_content_length_over_limit_gets_413_and_metric(app_client):
 
     response = app_client.post(
         "/api/buckets/guard-bucket/upload",
-        data={"key": "big.bin"},
+        data={"role": "Default", "key": "big.bin"},
         files={"file": ("big.bin", b"x" * 1024, "application/octet-stream")},
         headers=headers,
     )
@@ -175,7 +175,7 @@ def test_valid_small_upload_passes_guard(app_client, moto_s3):
 
     response = app_client.post(
         "/api/buckets/guard-bucket/upload",
-        data={"key": "ok.txt"},
+        data={"role": "Default", "key": "ok.txt"},
         files={"file": ("ok.txt", b"hello", "text/plain")},
         headers=headers,
     )

@@ -167,10 +167,14 @@ def test_validate_role_access_admin_allows_any(monkeypatch, reload_main):
     assert main.validate_role_access("AnyRole", {"username": "admin", "is_admin": True}) == "AnyRole"
 
 
-def test_validate_role_access_none(monkeypatch, reload_main):
+@pytest.mark.parametrize("role", [None, "", " \t "])
+def test_validate_role_access_none(monkeypatch, reload_main, role):
     main = reload_main
 
-    assert main.validate_role_access(None, {"username": "user", "is_admin": False}) is None
+    with pytest.raises(HTTPException) as exc:
+        main.validate_role_access(role, {"username": "user", "is_admin": False})
+    assert exc.value.status_code == 400
+    assert exc.value.detail == {"code": "ROLE_REQUIRED", "message": "A role is required for this request."}
 
 
 def test_validate_role_access_allowed(monkeypatch, reload_main):
@@ -510,7 +514,7 @@ async def test_list_buckets_with_explicit_role(monkeypatch, reload_main):
 
 
 @pytest.mark.asyncio
-async def test_list_buckets_defaults_to_first_role(monkeypatch, reload_main):
+async def test_list_buckets_returns_helper_buckets(monkeypatch, reload_main):
     main = reload_main
 
     monkeypatch.setattr(
@@ -519,7 +523,7 @@ async def test_list_buckets_defaults_to_first_role(monkeypatch, reload_main):
         lambda role, user: ["bucket-a"],
     )
 
-    buckets = await main.list_buckets(None, {"is_admin": True})
+    buckets = await main.list_buckets("Default", {"is_admin": True})
     assert buckets == ["bucket-a"]
 
 
@@ -533,7 +537,7 @@ async def test_list_buckets_value_error(monkeypatch, reload_main):
     monkeypatch.setattr(main, "list_buckets_for_role", _raise_value_error)
 
     with pytest.raises(HTTPException) as exc:
-        await main.list_buckets(None, {"is_admin": True})
+        await main.list_buckets("Default", {"is_admin": True})
     assert exc.value.status_code == 400
 
 
@@ -547,7 +551,7 @@ async def test_list_buckets_generic_exception(monkeypatch, reload_main):
     monkeypatch.setattr(main, "list_buckets_for_role", _raise_runtime)
 
     with pytest.raises(HTTPException) as exc:
-        await main.list_buckets(None, {"is_admin": True})
+        await main.list_buckets("Default", {"is_admin": True})
     assert exc.value.status_code == 500
 
 
@@ -574,7 +578,7 @@ async def test_list_files_success(monkeypatch, reload_main):
     result = await main.list_files(
         "bucket",
         path="folder1",
-        role=None,
+        role="Default",
         max_keys=None,
         continuation_token=None,
         client_load=False,
@@ -594,7 +598,7 @@ async def test_list_files_invalid_path(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_path", lambda path: (_ for _ in ()).throw(ValueError("bad path")))
 
     with pytest.raises(HTTPException) as exc:
-        await main.list_files("bucket", path="../etc", role=None, current_user={"is_admin": True})
+        await main.list_files("bucket", path="../etc", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 400
     assert exc.value.detail == "bad path"
 
@@ -625,7 +629,9 @@ async def test_upload_file_streaming_limit(monkeypatch, reload_main):
     upload = SimpleUploadFile(b"0123456789")
 
     with pytest.raises(HTTPException) as exc:
-        await main.upload_file(request, "bucket", upload, key="test.txt", role=None, current_user={"is_admin": True})
+        await main.upload_file(
+            request, "bucket", upload, key="test.txt", role="Default", current_user={"is_admin": True}
+        )
     assert exc.value.status_code == 413
     assert "maximum allowed size" in exc.value.detail
     # Helper must NOT be reached when the spooled body exceeds the limit
@@ -662,7 +668,7 @@ async def test_upload_file_success(monkeypatch, reload_main):
     upload = SimpleUploadFile(b"12345", filename="ok.txt")
 
     response = await main.upload_file(
-        request, "bucket", upload, key="folder/ok.txt", role=None, current_user={"is_admin": True}
+        request, "bucket", upload, key="folder/ok.txt", role="Default", current_user={"is_admin": True}
     )
     assert response["message"] == "File uploaded successfully"
     assert calls[0]["path"] == "folder/ok.txt"
@@ -687,7 +693,7 @@ async def test_list_files_s3_error(monkeypatch, reload_main):
         await main.list_files(
             "bucket",
             path="",
-            role=None,
+            role="Default",
             max_keys=None,
             continuation_token=None,
             client_load=False,
@@ -709,7 +715,7 @@ async def test_list_buckets_boto_error(monkeypatch, reload_main):
     monkeypatch.setattr(main, "list_buckets_for_role", _raise_access_denied)
 
     with pytest.raises(HTTPException) as exc:
-        await main.list_buckets(None, {"is_admin": True})
+        await main.list_buckets("Default", {"is_admin": True})
     assert exc.value.status_code == 403
     assert "permission to list all buckets" in exc.value.detail
 
@@ -728,7 +734,7 @@ async def test_list_files_generic_exception(monkeypatch, reload_main):
     monkeypatch.setattr(main, "list_objects_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
-        await main.list_files("bucket", path="", role=None, current_user={"is_admin": True})
+        await main.list_files("bucket", path="", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 500
 
 
@@ -747,7 +753,7 @@ async def test_list_files_client_error_other(monkeypatch, reload_main):
     monkeypatch.setattr(main, "list_objects_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
-        await main.list_files("bucket", path="", role=None, current_user={"is_admin": True})
+        await main.list_files("bucket", path="", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 500
 
 
@@ -763,7 +769,7 @@ async def test_upload_file_invalid_key(monkeypatch, reload_main):
     upload = SimpleUploadFile(b"data")
 
     with pytest.raises(HTTPException) as exc:
-        await main.upload_file(request, "bucket", upload, key="../bad", role=None, current_user={"is_admin": True})
+        await main.upload_file(request, "bucket", upload, key="../bad", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 400
 
 
@@ -789,7 +795,7 @@ async def test_upload_file_env_max_file_size(monkeypatch, reload_main):
     upload = SimpleUploadFile(b"abcd")
 
     response = await main.upload_file(
-        request, "bucket", upload, key="file.txt", role=None, current_user={"is_admin": True}
+        request, "bucket", upload, key="file.txt", role="Default", current_user={"is_admin": True}
     )
     assert response["message"] == "File uploaded successfully"
     assert called == [True]
@@ -818,7 +824,7 @@ async def test_upload_file_invalid_content_length(monkeypatch, reload_main):
     upload = SimpleUploadFile(b"abcd")
 
     response = await main.upload_file(
-        request, "bucket", upload, key="file.txt", role=None, current_user={"is_admin": True}
+        request, "bucket", upload, key="file.txt", role="Default", current_user={"is_admin": True}
     )
     assert response["message"] == "File uploaded successfully"
     assert called == [b"abcd"]
@@ -842,7 +848,9 @@ async def test_upload_file_client_error(monkeypatch, reload_main):
     upload = SimpleUploadFile(b"abcd")
 
     with pytest.raises(HTTPException) as exc:
-        await main.upload_file(request, "bucket", upload, key="file.txt", role=None, current_user={"is_admin": True})
+        await main.upload_file(
+            request, "bucket", upload, key="file.txt", role="Default", current_user={"is_admin": True}
+        )
     # AccessDenied errors now return 403 (Forbidden) instead of 500 (Internal Server Error)
     assert exc.value.status_code == 403
     assert "Failed to upload file" in exc.value.detail
@@ -856,7 +864,7 @@ async def test_download_file_invalid_path(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_path", lambda path: (_ for _ in ()).throw(ValueError("bad path")))
 
     with pytest.raises(HTTPException) as exc:
-        await main.download_file("bucket", path="../secret", role=None, current_user={"is_admin": True})
+        await main.download_file("bucket", path="../secret", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 400
 
 
@@ -874,7 +882,7 @@ async def test_download_file_s3_not_found(monkeypatch, reload_main):
     monkeypatch.setattr(main, "iter_object_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
-        await main.download_file("bucket", path="missing.txt", role=None, current_user={"is_admin": True})
+        await main.download_file("bucket", path="missing.txt", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 404
 
 
@@ -892,7 +900,7 @@ async def test_download_file_generic_exception(monkeypatch, reload_main):
     monkeypatch.setattr(main, "iter_object_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
-        await main.download_file("bucket", path="file.txt", role=None, current_user={"is_admin": True})
+        await main.download_file("bucket", path="file.txt", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 500
     # Structured INTERNAL fallback per error-handling rules
     assert isinstance(exc.value.detail, dict)
@@ -913,7 +921,7 @@ async def test_download_file_client_error_other(monkeypatch, reload_main):
     monkeypatch.setattr(main, "iter_object_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
-        await main.download_file("bucket", path="file.txt", role=None, current_user={"is_admin": True})
+        await main.download_file("bucket", path="file.txt", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 500
 
 
@@ -925,7 +933,7 @@ async def test_download_file_outer_value_error(monkeypatch, reload_main):
     monkeypatch.setattr(main, "sanitize_bucket_name", lambda name: (_ for _ in ()).throw(ValueError("bad bucket")))
 
     with pytest.raises(HTTPException) as exc:
-        await main.download_file("bucket", path="file.txt", role=None, current_user={"is_admin": True})
+        await main.download_file("bucket", path="file.txt", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 400
 
 
@@ -943,7 +951,7 @@ async def test_download_file_validate_role_value_error(monkeypatch, reload_main)
     monkeypatch.setattr(main, "iter_object_for_role", _raise)
 
     with pytest.raises(HTTPException) as exc:
-        await main.download_file("bucket", path="file.txt", role=None, current_user={"is_admin": True})
+        await main.download_file("bucket", path="file.txt", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 400
 
 
@@ -959,7 +967,7 @@ async def test_delete_file_invalid_path(monkeypatch, reload_main):
     request = SimpleNamespace()
 
     with pytest.raises(HTTPException) as exc:
-        await main.delete_file(request, "bucket", path="../secret", role=None, current_user={"is_admin": True})
+        await main.delete_file(request, "bucket", path="../secret", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 400
 
 
@@ -975,7 +983,7 @@ async def test_delete_file_cannot_delete_root(monkeypatch, reload_main):
     request = SimpleNamespace()
 
     with pytest.raises(HTTPException) as exc:
-        await main.delete_file(request, "bucket", path="", role=None, current_user={"is_admin": True})
+        await main.delete_file(request, "bucket", path="", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 400
     assert "Cannot delete root" in exc.value.detail
 
@@ -999,7 +1007,7 @@ async def test_delete_file_single_object_not_found(monkeypatch, reload_main):
     request = SimpleNamespace()
 
     with pytest.raises(HTTPException) as exc:
-        await main.delete_file(request, "bucket", path="file.txt", role=None, current_user={"is_admin": True})
+        await main.delete_file(request, "bucket", path="file.txt", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 404
 
 
@@ -1025,7 +1033,7 @@ async def test_delete_file_directory(monkeypatch, reload_main):
     monkeypatch.setattr(main, "delete_object_for_role", fake_helper)
 
     request = SimpleNamespace()
-    response = await main.delete_file(request, "bucket", path="dir/", role=None, current_user={"is_admin": True})
+    response = await main.delete_file(request, "bucket", path="dir/", role="Default", current_user={"is_admin": True})
     assert response["count"] == 2
     # The directory marker must propagate to the helper so it can do a recursive delete
     assert captured["path"] == "dir/"
@@ -1049,7 +1057,7 @@ async def test_delete_file_no_objects_deleted(monkeypatch, reload_main):
 
     request = SimpleNamespace()
     with pytest.raises(HTTPException) as exc:
-        await main.delete_file(request, "bucket", path="empty_dir/", role=None, current_user={"is_admin": True})
+        await main.delete_file(request, "bucket", path="empty_dir/", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 404
 
 
@@ -1072,7 +1080,7 @@ async def test_delete_file_client_error(monkeypatch, reload_main):
     request = SimpleNamespace()
 
     with pytest.raises(HTTPException) as exc:
-        await main.delete_file(request, "bucket", path="file.txt", role=None, current_user={"is_admin": True})
+        await main.delete_file(request, "bucket", path="file.txt", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 500
 
 
@@ -1095,7 +1103,7 @@ async def test_delete_file_generic_exception(monkeypatch, reload_main):
     request = SimpleNamespace()
 
     with pytest.raises(HTTPException) as exc:
-        await main.delete_file(request, "bucket", path="file.txt", role=None, current_user={"is_admin": True})
+        await main.delete_file(request, "bucket", path="file.txt", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 500
     # Detail is structured: {"code": "INTERNAL", "message": "Delete failed — see server logs"}
     assert isinstance(exc.value.detail, dict)
@@ -1120,7 +1128,9 @@ async def test_delete_file_single_success(monkeypatch, reload_main):
     monkeypatch.setattr(main, "delete_object_for_role", fake_helper)
 
     request = SimpleNamespace()
-    response = await main.delete_file(request, "bucket", path="file.txt", role=None, current_user={"is_admin": True})
+    response = await main.delete_file(
+        request, "bucket", path="file.txt", role="Default", current_user={"is_admin": True}
+    )
     assert response["count"] == 1
 
 
@@ -1142,7 +1152,7 @@ async def test_delete_file_get_client_exception(monkeypatch, reload_main):
 
     request = SimpleNamespace()
     with pytest.raises(HTTPException) as exc:
-        await main.delete_file(request, "bucket", path="file.txt", role=None, current_user={"is_admin": True})
+        await main.delete_file(request, "bucket", path="file.txt", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 500
 
 
@@ -1164,5 +1174,5 @@ async def test_delete_file_value_error(monkeypatch, reload_main):
 
     request = SimpleNamespace()
     with pytest.raises(HTTPException) as exc:
-        await main.delete_file(request, "bucket", path="file.txt", role=None, current_user={"is_admin": True})
+        await main.delete_file(request, "bucket", path="file.txt", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 400

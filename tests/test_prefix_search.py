@@ -27,7 +27,7 @@ def test_name_prefix_filters_current_level_dirs_and_files(moto_s3):
     )
 
     result = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="ps-level",
         path="",
         user_dict=ADMIN,
@@ -51,14 +51,14 @@ def test_empty_name_prefix_is_unchanged_listing(moto_s3):
     )
 
     plain = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="ps-empty",
         path="",
         user_dict=ADMIN,
         max_client_load=100,
     )
     explicit_empty = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="ps-empty",
         path="",
         user_dict=ADMIN,
@@ -81,7 +81,7 @@ def test_name_prefix_within_subfolder_strips_to_child_name(moto_s3):
     )
 
     result = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="ps-sub",
         path="logs",
         user_dict=ADMIN,
@@ -101,7 +101,7 @@ def test_name_prefix_truncation_and_continuation(moto_s3):
     )
 
     page1 = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="ps-trunc",
         path="",
         user_dict=ADMIN,
@@ -113,7 +113,7 @@ def test_name_prefix_truncation_and_continuation(moto_s3):
     assert [f["name"] for f in page1["files"]] == [f"p-{i:03d}.txt" for i in range(5)]
 
     page2 = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="ps-trunc",
         path="",
         user_dict=ADMIN,
@@ -129,7 +129,7 @@ def test_name_prefix_exact_file_match(moto_s3):
     """A name_prefix equal to an exact filename still returns that file."""
     _seed(moto_s3, "ps-exact", files=["match.csv", "other.txt"], directories=[])
     result = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="ps-exact",
         path="",
         user_dict=ADMIN,
@@ -143,7 +143,7 @@ def test_name_prefix_no_match_returns_empty(moto_s3):
     """A name_prefix that matches nothing returns empty dirs+files, not truncated."""
     _seed(moto_s3, "ps-none", files=["a.txt"], directories=["dir1"])
     result = list_objects_client_load_for_role(
-        role=None,
+        role="Default",
         bucket="ps-none",
         path="",
         user_dict=ADMIN,
@@ -187,7 +187,7 @@ def test_route_search_filters_current_level(app_client, moto_s3):
     moto_s3.put_object(Bucket="ps-route", Key="other.txt", Body=b"")
 
     response = app_client.get(
-        "/api/buckets/ps-route/files?client_load=1&search=4f2a",
+        "/api/buckets/ps-route/files?client_load=1&search=4f2a&role=Default",
         headers=headers,
     )
     assert response.status_code == 200
@@ -203,7 +203,7 @@ def test_route_search_without_client_load_is_400(app_client, moto_s3):
     moto_s3.create_bucket(Bucket="ps-guard")
 
     response = app_client.get(
-        "/api/buckets/ps-guard/files?search=abc",
+        "/api/buckets/ps-guard/files?search=abc&role=Default",
         headers=headers,
     )
     assert response.status_code == 400
@@ -220,7 +220,7 @@ def test_route_blank_search_is_noop(app_client, moto_s3):
     moto_s3.put_object(Bucket="ps-blank", Key="b.txt", Body=b"")
 
     response = app_client.get(
-        "/api/buckets/ps-blank/files?client_load=1&search=%20%20",
+        "/api/buckets/ps-blank/files?client_load=1&search=%20%20&role=Default",
         headers=headers,
     )
     assert response.status_code == 200
@@ -234,7 +234,7 @@ def test_route_overlong_search_is_422(app_client, moto_s3):
     moto_s3.create_bucket(Bucket="ps-long")
 
     response = app_client.get(
-        f"/api/buckets/ps-long/files?client_load=1&search={'x' * 1025}",
+        f"/api/buckets/ps-long/files?client_load=1&role=Default&search={'x' * 1025}",
         headers=headers,
     )
     assert response.status_code == 422  # FastAPI Query max_length
@@ -248,7 +248,7 @@ def test_route_control_char_search_is_400(app_client, moto_s3):
     moto_s3.create_bucket(Bucket="ps-ctrl")
 
     response = app_client.get(
-        "/api/buckets/ps-ctrl/files?client_load=1&search=a%00b",
+        "/api/buckets/ps-ctrl/files?client_load=1&search=a%00b&role=Default",
         headers=headers,
     )
     assert response.status_code == 400

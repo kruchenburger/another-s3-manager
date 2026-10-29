@@ -126,7 +126,7 @@ async def test_list_buckets_offload_keeps_health_responsive(app_client, monkeypa
         # The slow request, awaited INLINE (not create_task'd) — see the
         # docstring above for why this ordering is what makes the test
         # trustworthy.
-        slow_resp = await client.get("/api/buckets")
+        slow_resp = await client.get("/api/buckets?role=Default")
 
         stop.set()
         await poller_task

@@ -19,6 +19,7 @@ from botocore.session import Session as BotocoreSession
 
 from another_s3_manager.config import load_config
 from another_s3_manager.constants import S3_USE_SSL, S3_VERIFY_SSL
+from another_s3_manager.errors import RoleNotFoundError
 
 # Cache for S3 clients per role
 _s3_clients_cache: Dict[str, AnyType] = {}
@@ -585,6 +586,7 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
         raise ValueError(f"Unknown role type: {role_type}")
 
 
+# Internal callers may use the default; request paths must validate an explicit role first.
 def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     """
     Get S3 client for the specified role (cached).
@@ -922,17 +924,17 @@ def clear_s3_clients_cache() -> None:
 # ---------------------------------------------------------------------------
 
 
-def validate_role_access(role_name: Optional[str], user_dict: Dict[str, Any]) -> Optional[str]:
+def validate_role_access(role_name: Optional[str], user_dict: Dict[str, Any]) -> str:
     """
     Validate that user_dict permits using role_name.
 
     Raises PermissionError (not HTTPException) — callers translate to the
     appropriate boundary error (HTTP 403 or McpError).
 
-    Returns the validated role name, or None if role_name is None.
+    Returns the explicit, non-empty role name.
     """
-    if role_name is None:
-        return None
+    if role_name is None or not role_name.strip():
+        raise PermissionError("A role is required for this request.")
 
     # Admins have access to all roles.
     if user_dict.get("is_admin", False):
@@ -962,8 +964,7 @@ def _validate_bucket_access(role: str, bucket: str, user_dict: Dict[str, Any]) -
     roles = config.get("roles", [])
     role_config = next((r for r in roles if r.get("name") == role), None)
     if role_config is None:
-        # Role not found in config — s3_client.get_s3_client will raise ValueError later.
-        return
+        raise RoleNotFoundError(f"Role '{role}' not found in configuration")
     allowed_buckets = role_config.get("allowed_buckets")
     if allowed_buckets and bucket not in allowed_buckets:
         raise PermissionError(f"bucket '{bucket}' not in allowed_buckets for role '{role}'")
@@ -1002,11 +1003,9 @@ def list_buckets_for_role(role: str, user_dict: Dict[str, Any]) -> list:
 
     config = load_config(force_reload=False)
     roles = config.get("roles", [])
-    role_config = (
-        next((r for r in roles if r.get("name") == validated_role), None)
-        if validated_role
-        else (roles[0] if roles else None)
-    )
+    role_config = next((r for r in roles if r.get("name") == validated_role), None)
+    if role_config is None:
+        raise RoleNotFoundError(f"Role '{validated_role}' not found in configuration")
 
     if role_config and "allowed_buckets" in role_config and role_config["allowed_buckets"]:
         allowed_buckets = role_config["allowed_buckets"]
