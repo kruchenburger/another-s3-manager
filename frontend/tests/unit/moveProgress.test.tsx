@@ -9,7 +9,10 @@ import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MoveJobDetails } from "@/components/FileBrowser/MoveJobDetails";
-import { MoveProgress } from "@/components/FileBrowser/MoveProgress";
+import {
+  MoveProgress,
+  SUCCESS_AUTO_DISMISS_MS,
+} from "@/components/FileBrowser/MoveProgress";
 import type { MoveJob } from "@/types/api";
 import * as api from "@/features/files/api/filesApi";
 const record = {
@@ -155,4 +158,45 @@ describe("move results", () => {
     expect(screen.getByText(/Copying 6.7 GB/)).toBeInTheDocument();
     expect(screen.getByText("Originals removed: 0 / 1")).toBeInTheDocument();
   });
+});
+
+describe("MoveProgress auto-dismiss", () => {
+  function panel(state: MoveJob["state"], onDismiss: () => void) {
+    render(
+      <MantineProvider>
+        <MoveProgress
+          record={{ ...record, snapshot: { ...job, state } }}
+          onDetails={vi.fn()}
+          onDismiss={onDismiss}
+        />
+      </MantineProvider>,
+    );
+  }
+  it("closes a clean success on its own after a short delay", () => {
+    vi.useFakeTimers();
+    try {
+      const onDismiss = vi.fn();
+      panel("done", onDismiss);
+      vi.advanceTimersByTime(SUCCESS_AUTO_DISMISS_MS - 1);
+      expect(onDismiss).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it.each(["done_with_warnings", "failed_copy", "running"] as const)(
+    "keeps %s on screen until the user dismisses it",
+    (state) => {
+      vi.useFakeTimers();
+      try {
+        const onDismiss = vi.fn();
+        panel(state, onDismiss);
+        vi.advanceTimersByTime(SUCCESS_AUTO_DISMISS_MS * 4);
+        expect(onDismiss).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

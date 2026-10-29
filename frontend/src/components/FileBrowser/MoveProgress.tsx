@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Affix,
   Button,
@@ -18,6 +18,9 @@ import {
 import { formatBytes } from "@/utils/formatBytes";
 import { MoveJobDetails } from "./MoveJobDetails";
 import classes from "./MoveProgress.module.css";
+// A clean success is already announced by the result toast; keep the panel only
+// long enough to read it. Warnings and failures stay until dismissed.
+export const SUCCESS_AUTO_DISMISS_MS = 5000;
 export function MoveProgress({
   record,
   onDetails,
@@ -31,6 +34,18 @@ export function MoveProgress({
   const running = !record.unavailable && (!job || job.state === "running");
   const indeterminate =
     job?.phase === "copy" && job.total === 1 && job.done === 0;
+  // The parent passes a fresh callback on every render; keep the timer stable.
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
+  const succeeded = !record.unavailable && job?.state === "done";
+  useEffect(() => {
+    if (!succeeded) return;
+    const timer = setTimeout(
+      () => dismissRef.current(),
+      SUCCESS_AUTO_DISMISS_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [succeeded]);
   return (
     <Paper withBorder radius="lg" p="md" className={classes.panel}>
       <Stack gap={6} role="status" aria-live="polite" aria-atomic="true">

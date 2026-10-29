@@ -90,8 +90,8 @@ test("folder creation, dialog moves, new names and row drag-and-drop via MinIO",
     await expect(progress).toContainText(
       `Originals removed: ${expectedCount} / ${expectedCount}`,
     );
-    await progress.getByRole("button", { name: "Dismiss move result" }).click();
-    await expect(progress).toHaveCount(0);
+    // A clean success closes on its own a few seconds after the result is shown.
+    await expect(progress).toHaveCount(0, { timeout: 15_000 });
   }
 
   try {
