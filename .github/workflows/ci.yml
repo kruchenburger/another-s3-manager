@@ -91,7 +91,7 @@ jobs:
           docker run -d --name minio --network host \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+            cgr.dev/chainguard/minio@sha256:0dab2f9fee1c1139ae8753b5e35bb4461af2a276cfe0923a2504c75a6170bc64 server /data
           for i in $(seq 1 30); do
             if curl -fs http://localhost:9000/minio/health/live; then
               echo "MinIO ready"
@@ -105,7 +105,7 @@ jobs:
             || { echo "::error::MinIO did not become healthy in 30s"; docker logs minio; exit 1; }
 
       - name: Seed MinIO bucket
-        # `minio/mc` image entrypoint is `mc` itself — without --entrypoint sh
+        # The minio-client image entrypoint is `mc` itself — without --entrypoint sh
         # the trailing `sh /seed.sh` would be passed to mc as args ("mc sh /seed.sh")
         # and the shell script would never run. The compose sidecar avoids this
         # via `entrypoint: ["/bin/sh", "/seed.sh"]` in docker/docker-compose.minio.yml.
@@ -115,7 +115,7 @@ jobs:
             -v "${PWD}/frontend/tests/e2e/fixtures:/fixtures:ro" \
             -v "${PWD}/scripts/ci/seed-minio.sh:/seed.sh:ro" \
             -e MC_HOST=http://localhost:9000 \
-            minio/mc:RELEASE.2025-08-13T08-35-41Z \
+            cgr.dev/chainguard/minio-client@sha256:3c8a8e5c1d88e308f689bd2706984c0095477cd44dcfc5772a5c617074721eaf \
             /seed.sh
 
       - uses: astral-sh/setup-uv@v4
