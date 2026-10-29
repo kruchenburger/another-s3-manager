@@ -275,12 +275,6 @@ function JobPoller({
     if (terminal && !terminalHandled.current) {
       terminalHandled.current = true;
       void invalidateMoveFiles(qc, record.bucket, record.role);
-      if (!record.notified)
-        showToast({
-          title: "Move result",
-          message: resultMeaning(query.data),
-          color: query.data.state === "done" ? "green" : "yellow",
-        });
     }
   }, [
     query.data,

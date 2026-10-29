@@ -1,9 +1,57 @@
-.stack {
-  width: min(360px, calc(100vw - 32px));
-  max-height: 55dvh;
-  overflow-y: auto;
-}
 .panel {
+  width: min(360px, calc(100vw - 32px));
   background: var(--as3m-surface);
   box-shadow: var(--as3m-shadow-float);
+}
+.list {
+  max-height: min(55dvh, max(0px, calc(100dvh - 160px)));
+  overflow-y: auto;
+  list-style: none;
+}
+.row {
+  padding: var(--mantine-spacing-xs);
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+.row svg {
+  flex-shrink: 0;
+}
+.label {
+  flex: 1;
+  min-width: 0;
+}
+.success {
+  color: var(--mantine-color-green-text);
+}
+.warning {
+  color: var(--mantine-color-yellow-text);
+}
+.error {
+  color: var(--mantine-color-red-text);
+}
+.indeterminate {
+  height: 3px;
+  border-radius: var(--mantine-radius-xl);
+  background: var(--mantine-color-default);
+  overflow: hidden;
+}
+.indeterminate::after {
+  content: "";
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: var(--mantine-primary-color-filled);
+  animation: move-progress 1.5s ease-in-out infinite alternate;
+}
+@keyframes move-progress {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(150%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .indeterminate::after {
+    animation: none;
+  }
 }

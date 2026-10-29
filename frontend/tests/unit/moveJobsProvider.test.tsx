@@ -20,6 +20,7 @@ import * as api from "@/features/files/api/filesApi";
 import { ApiError } from "@/utils/apiError";
 import type { MoveJob } from "@/types/api";
 import { showToast } from "@/utils/toast";
+import { notifications } from "@mantine/notifications";
 const auth = vi.hoisted(() => ({ username: "alice" as string | undefined }));
 vi.mock("@/features/auth/hooks/useMe", () => ({
   useMe: () => ({
@@ -29,7 +30,10 @@ vi.mock("@/features/auth/hooks/useMe", () => ({
   }),
   meQueryKey: ["auth", "me"],
 }));
-vi.mock("@/utils/toast", () => ({ showToast: vi.fn() }));
+vi.mock("@/utils/toast", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/toast")>();
+  return { ...actual, showToast: vi.fn(actual.showToast) };
+});
 const saved = {
   job_id: "j",
   bucket: "b",
@@ -93,9 +97,8 @@ describe("app-level move jobs", () => {
       "j",
       "k",
     ]);
-    const key = Array.from(
-      { length: localStorage.length },
-      (_, i) => localStorage.key(i)!,
+    const key = Array.from({ length: localStorage.length }, (_, i) =>
+      localStorage.key(i)!,
     ).find((k) => k.includes("v2") && k.endsWith(":j"))!;
     expect(key).toBeTruthy();
     const otherKey = key.slice(0, -1) + "remote";
@@ -172,13 +175,11 @@ describe("app-level move jobs", () => {
   );
   it("keeps retrying other HTTP 400 errors", async () => {
     vi.useFakeTimers();
-    const get = vi
-      .spyOn(api, "getJob")
-      .mockRejectedValue(
-        new ApiError(400, "Bad Request", {
-          detail: { code: "OTHER", message: "Try later" },
-        }),
-      );
+    const get = vi.spyOn(api, "getJob").mockRejectedValue(
+      new ApiError(400, "Bad Request", {
+        detail: { code: "OTHER", message: "Try later" },
+      }),
+    );
     const hook = setup();
     await act(async () => hook.result.current.add(saved));
     await act(async () => {
@@ -282,8 +283,12 @@ describe("app-level move jobs", () => {
     const key = "as3m:move-dismissed:v1:alice:j";
     expect(localStorage.getItem(key)).not.toBeNull();
     act(() => window.dispatchEvent(new StorageEvent("storage", { key })));
-    expect(first.result.current.jobs.map((job) => job.job_id)).toEqual(["other"]);
-    expect(second.result.current.jobs.map((job) => job.job_id)).toEqual(["other"]);
+    expect(first.result.current.jobs.map((job) => job.job_id)).toEqual([
+      "other",
+    ]);
+    expect(second.result.current.jobs.map((job) => job.job_id)).toEqual([
+      "other",
+    ]);
   });
   it("does not restore dismissed v1 or v2 jobs or suppress the same id for another user", () => {
     vi.spyOn(api, "getJob").mockImplementation(() => new Promise(() => {}));
@@ -296,12 +301,19 @@ describe("app-level move jobs", () => {
     localStorage.setItem(jobsStorageKey("alice", "j"), JSON.stringify(saved));
     localStorage.setItem(
       jobsStorageKey("alice"),
-      JSON.stringify({ version: 1, jobs: [saved, { ...saved, job_id: "other" }] }),
+      JSON.stringify({
+        version: 1,
+        jobs: [saved, { ...saved, job_id: "other" }],
+      }),
     );
     const restored = setup();
-    expect(restored.result.current.jobs.map((job) => job.job_id)).toEqual(["other"]);
+    expect(restored.result.current.jobs.map((job) => job.job_id)).toEqual([
+      "other",
+    ]);
     act(() => restored.result.current.add(saved));
-    expect(restored.result.current.jobs.map((job) => job.job_id)).toEqual(["other"]);
+    expect(restored.result.current.jobs.map((job) => job.job_id)).toEqual([
+      "other",
+    ]);
     restored.unmount();
     auth.username = "bob";
     const bob = setup();
@@ -328,7 +340,9 @@ describe("app-level move jobs", () => {
     clock.mockReturnValue(now + 3_599_999);
     const beforeExpiry = setup();
     expect(beforeExpiry.result.current.jobs).toEqual([]);
-    expect(localStorage.getItem("as3m:move-dismissed:v1:alice:j")).not.toBeNull();
+    expect(
+      localStorage.getItem("as3m:move-dismissed:v1:alice:j"),
+    ).not.toBeNull();
     beforeExpiry.unmount();
     clock.mockReturnValue(now + 3_600_000);
     const afterExpiry = setup();
@@ -336,7 +350,9 @@ describe("app-level move jobs", () => {
     expect(localStorage.getItem(key)).toBeNull();
     expect(localStorage.getItem("as3m:move-dismissed:v1:alice:j")).toBeNull();
     act(() => afterExpiry.result.current.add(saved));
-    expect(afterExpiry.result.current.jobs.map((job) => job.job_id)).toEqual(["j"]);
+    expect(afterExpiry.result.current.jobs.map((job) => job.job_id)).toEqual([
+      "j",
+    ]);
   });
   it("bounds tombstones without evicting active dismissals and admits more after expiry", () => {
     const now = 1_800_000_000_000;
@@ -361,7 +377,9 @@ describe("app-level move jobs", () => {
       JSON.stringify({ ...saved, job_id: "closed-0" }),
     );
     const restored = setup();
-    expect(restored.result.current.jobs.map((job) => job.job_id)).toEqual(["j"]);
+    expect(restored.result.current.jobs.map((job) => job.job_id)).toEqual([
+      "j",
+    ]);
     restored.unmount();
     clock.mockReturnValue(now + 3_600_000);
     act(() => hook.result.current.dismiss("j"));
@@ -397,8 +415,12 @@ describe("app-level move jobs", () => {
     const key = jobsStorageKey("alice", "j");
     localStorage.setItem(key, JSON.stringify(saved));
     act(() => window.dispatchEvent(new StorageEvent("storage", { key })));
-    expect(first.result.current.jobs.map((job) => job.job_id)).not.toContain("j");
-    expect(second.result.current.jobs.map((job) => job.job_id)).not.toContain("j");
+    expect(first.result.current.jobs.map((job) => job.job_id)).not.toContain(
+      "j",
+    );
+    expect(second.result.current.jobs.map((job) => job.job_id)).not.toContain(
+      "j",
+    );
   });
   it.each(["getItem", "setItem", "key", "removeItem"] as const)(
     "keeps dismissal usable in memory when tombstone storage %s throws",
@@ -483,7 +505,7 @@ describe("app-level move jobs", () => {
     ).toBe(true);
     expect(showToast).not.toHaveBeenCalled();
   });
-  it("announces a cached terminal result only once under StrictMode", async () => {
+  it("keeps a cached terminal result in the tray without a toast under StrictMode", async () => {
     localStorage.setItem(
       jobsStorageKey("alice"),
       JSON.stringify({ version: 1, jobs: [saved] }),
@@ -491,7 +513,7 @@ describe("app-level move jobs", () => {
     vi.spyOn(api, "getJob").mockResolvedValue(snapshot);
     const qc = new QueryClient();
     qc.setQueryData(["move-job", "alice", "j"], snapshot);
-    renderHook(() => useMoveJobs(), {
+    const hook = renderHook(() => useMoveJobs(), {
       wrapper: ({ children }: { children: ReactNode }) => (
         <StrictMode>
           <QueryClientProvider client={qc}>
@@ -502,8 +524,26 @@ describe("app-level move jobs", () => {
         </StrictMode>
       ),
     });
-    await waitFor(() => expect(showToast).toHaveBeenCalled());
-    expect(showToast).toHaveBeenCalledOnce();
+    await waitFor(() =>
+      expect(hook.result.current.jobs[0].snapshot?.state).toBe("done"),
+    );
+    expect(showToast).not.toHaveBeenCalled();
+  });
+  it.each([
+    "done",
+    "done_with_warnings",
+    "failed_copy",
+    "failed_delete",
+    "cancelled_access",
+  ] as const)("does not emit a notification for %s", async (state) => {
+    const notify = vi.spyOn(notifications, "show");
+    vi.spyOn(api, "getJob").mockResolvedValue({ ...snapshot, state });
+    const hook = setup();
+    act(() => hook.result.current.add(saved));
+    await waitFor(() =>
+      expect(hook.result.current.jobs[0].snapshot?.state).toBe(state),
+    );
+    expect(notify).not.toHaveBeenCalled();
   });
   it("persists, resumes with GET and invalidates all matching list/search paths", async () => {
     vi.spyOn(api, "getJob").mockResolvedValue(snapshot);
@@ -590,7 +630,7 @@ describe("app-level move jobs", () => {
       await vi.advanceTimersByTimeAsync(10_000);
     });
     expect(get).toHaveBeenCalledTimes(3);
-    expect(showToast).toHaveBeenCalledOnce();
+    expect(showToast).not.toHaveBeenCalled();
   });
   it.each([401, 403, 404])(
     "does not keep polling after HTTP %s",

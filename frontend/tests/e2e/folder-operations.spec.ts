@@ -84,14 +84,15 @@ test("folder creation, dialog moves, new names and row drag-and-drop via MinIO",
     const { job_id } = (await response.json()) as { job_id: string };
     jobs.push(job_id);
     await expect(dialog).not.toBeVisible();
-    // A persistent progress panel, unlike the toast, cannot disappear before this assertion.
-    const progress = page.getByLabel("Move jobs").getByRole("status");
-    await expect(progress).toContainText(SUCCESS, { timeout: 20_000 });
-    await expect(progress).toContainText(
-      `Originals removed: ${expectedCount} / ${expectedCount}`,
+    const tray = page.getByLabel("Move jobs", { exact: true });
+    const progress = tray.getByRole("status");
+    await expect(tray.locator(`[data-move-job-id="${job_id}"]`)).toContainText(
+      SUCCESS,
+      { timeout: 20_000 },
     );
-    // A clean success closes on its own a few seconds after the result is shown.
-    await expect(progress).toHaveCount(0, { timeout: 15_000 });
+    await expect(progress).toContainText("1 move done");
+    // Clean success remains readable briefly, then the entire tray closes.
+    await expect(tray).toHaveCount(0, { timeout: 15_000 });
   }
 
   try {
