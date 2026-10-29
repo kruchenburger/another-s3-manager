@@ -7,12 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-29
+
 ### Added
 
-- Folder operations: New folder, Move to… with an optional new name, multi-select
-  and drag-and-drop moves, progress tracking, and cleanup of partial copies if
-  copying fails. Moves are limited by `MOVE_MAX_OBJECTS`; use the AWS CLI for
-  larger folders.
+- Folder operations in the file browser: **New folder**, **Move to…** for files
+  and folders (with an optional new name for a single item), moving several
+  selected items at once, and drag-and-drop onto a folder or a breadcrumb.
+- Object storage has no native rename or move, so a move — including a name
+  change — copies every object to the new location and then deletes the
+  originals. Before each move ASM shows how many objects and bytes it will
+  copy; progress and results appear in one panel, and partial copies left by a
+  failed copy can be removed from the details view.
+- `MOVE_MAX_OBJECTS` (default `50000`) limits how many objects one move may
+  touch; use the AWS CLI for larger folders.
+
+### Changed
+
+- While a move is running, uploads, deletes and MCP writes into the affected
+  paths are refused with a clear "a move is in progress" error instead of
+  racing the move.
 
 ## [1.1.7] - 2026-10-29
 
@@ -693,7 +707,8 @@ in _s3_clients_cache` before indexing into it — two separate,
 - CSRF protection
 - Login attempt rate limiting
 
-[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.7...HEAD
+[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.7...v1.2.0
 [1.1.7]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.4...v1.1.5
