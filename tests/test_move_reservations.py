@@ -33,15 +33,44 @@ def test_different_role_cannot_bypass_reservation():
         assert error.value.code == "BUSY"
 
 
-@pytest.mark.parametrize("role", [None, "Default"])
-def test_web_write_busy(app_client, role):
+def test_web_write_without_role_is_rejected_before_reservation(app_client):
+    """A missing role is refused with ROLE_REQUIRED, never BUSY, even on a reserved path."""
     from tests.test_main import login
 
     _, headers = login(app_client)
     with reservations.reserve("move", [("Default", "bucket", "source/")]):
-        data = {"key": "source/a"}
-        if role:
-            data["role"] = role
+        response = app_client.post(
+            "/api/buckets/bucket/upload", data={"key": "source/a"}, files={"file": ("a", b"body")}, headers=headers
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "ROLE_REQUIRED"
+        response = app_client.delete("/api/buckets/bucket/files", params={"path": "source/a"}, headers=headers)
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "ROLE_REQUIRED"
+
+
+def test_removed_role_gets_same_refusal_on_reserved_and_free_paths(app_client):
+    """A role deleted from config but still in allowed_roles must not reveal reservations."""
+    from tests.test_main import create_user, login
+
+    create_user("ghost", password="password123", allowed_roles=["Removed"])
+    _, headers = login(app_client, username="ghost", password="password123")
+    params = {"role": "Removed", "path": "source/a"}
+    with reservations.reserve("move", [("Removed", "bucket", "source/")]):
+        reserved = app_client.delete("/api/buckets/bucket/files", params=params, headers=headers)
+    free = app_client.delete("/api/buckets/bucket/files", params=params, headers=headers)
+    assert reserved.status_code == free.status_code
+    assert reserved.status_code != 409
+    assert reserved.json() == free.json()
+
+
+def test_web_write_busy(app_client):
+    from tests.test_main import login
+
+    _, headers = login(app_client)
+    role = "Default"
+    with reservations.reserve("move", [("Default", "bucket", "source/")]):
+        data = {"key": "source/a", "role": role}
         response = app_client.post(
             "/api/buckets/bucket/upload", data=data, files={"file": ("a", b"body")}, headers=headers
         )
@@ -49,7 +78,7 @@ def test_web_write_busy(app_client, role):
         assert response.json()["detail"]["code"] == "BUSY"
         response = app_client.delete(
             "/api/buckets/bucket/files",
-            params={"path": "source/a", **({"role": role} if role else {})},
+            params={"path": "source/a", "role": role},
             headers=headers,
         )
         assert response.status_code == 409
