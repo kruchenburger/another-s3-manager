@@ -233,6 +233,228 @@ describe("app-level move jobs", () => {
     expect(hook.result.current.jobs).toEqual([]);
     expect(localStorage.getItem(key)).toBeNull();
   });
+  it("keeps dismissal after another tab has already read the job it will persist", async () => {
+    const pending: ((job: MoveJob) => void)[] = [];
+    vi.spyOn(api, "getJob").mockImplementation(
+      () => new Promise((resolve) => pending.push(resolve)),
+    );
+    const first = setup();
+    const second = setup();
+    act(() => first.result.current.add(saved));
+    const key = jobsStorageKey("alice", "j");
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key })));
+    await waitFor(() => expect(pending).toHaveLength(2));
+    const read = localStorage.getItem.bind(localStorage);
+    let dismissed = false;
+    vi.spyOn(localStorage, "getItem").mockImplementation((storageKey) => {
+      const value = read(storageKey);
+      if (storageKey === key && value !== null && !dismissed) {
+        dismissed = true;
+        second.result.current.dismiss("j");
+      }
+      return value;
+    });
+    await act(async () => pending[0](snapshot));
+    expect(dismissed).toBe(true);
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key })));
+    expect(first.result.current.jobs).toEqual([]);
+    expect(second.result.current.jobs).toEqual([]);
+    expect(localStorage.getItem(key)).toBeNull();
+
+    // A stale writer may recreate the key even after a tombstone check.
+    localStorage.setItem(key, JSON.stringify({ ...saved, notified: true }));
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key })));
+    expect(first.result.current.jobs).toEqual([]);
+    expect(second.result.current.jobs).toEqual([]);
+    first.unmount();
+    second.unmount();
+    expect(setup().result.current.jobs).toEqual([]);
+  });
+  it("syncs a tombstone before the job removal event without affecting other jobs", () => {
+    vi.spyOn(api, "getJob").mockImplementation(() => new Promise(() => {}));
+    const first = setup();
+    act(() => {
+      first.result.current.add(saved);
+      first.result.current.add({ ...saved, job_id: "other" });
+    });
+    const second = setup();
+    act(() => second.result.current.dismiss("j"));
+    const key = "as3m:move-dismissed:v1:alice:j";
+    expect(localStorage.getItem(key)).not.toBeNull();
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key })));
+    expect(first.result.current.jobs.map((job) => job.job_id)).toEqual(["other"]);
+    expect(second.result.current.jobs.map((job) => job.job_id)).toEqual(["other"]);
+  });
+  it("does not restore dismissed v1 or v2 jobs or suppress the same id for another user", () => {
+    vi.spyOn(api, "getJob").mockImplementation(() => new Promise(() => {}));
+    const hook = setup();
+    act(() => {
+      hook.result.current.add(saved);
+      hook.result.current.dismiss("j");
+    });
+    hook.unmount();
+    localStorage.setItem(jobsStorageKey("alice", "j"), JSON.stringify(saved));
+    localStorage.setItem(
+      jobsStorageKey("alice"),
+      JSON.stringify({ version: 1, jobs: [saved, { ...saved, job_id: "other" }] }),
+    );
+    const restored = setup();
+    expect(restored.result.current.jobs.map((job) => job.job_id)).toEqual(["other"]);
+    act(() => restored.result.current.add(saved));
+    expect(restored.result.current.jobs.map((job) => job.job_id)).toEqual(["other"]);
+    restored.unmount();
+    auth.username = "bob";
+    const bob = setup();
+    act(() => bob.result.current.add(saved));
+    act(() =>
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "as3m:move-dismissed:v1:alice:j" }),
+      ),
+    );
+    expect(bob.result.current.jobs.map((job) => job.job_id)).toEqual(["j"]);
+  });
+  it("retains tombstones for an hour and removes stale job keys before pruning them", () => {
+    const now = 1_800_000_000_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.spyOn(api, "getJob").mockImplementation(() => new Promise(() => {}));
+    const hook = setup();
+    act(() => {
+      hook.result.current.add(saved);
+      hook.result.current.dismiss("j");
+    });
+    hook.unmount();
+    const key = jobsStorageKey("alice", "j");
+    localStorage.setItem(key, JSON.stringify(saved));
+    clock.mockReturnValue(now + 3_599_999);
+    const beforeExpiry = setup();
+    expect(beforeExpiry.result.current.jobs).toEqual([]);
+    expect(localStorage.getItem("as3m:move-dismissed:v1:alice:j")).not.toBeNull();
+    beforeExpiry.unmount();
+    clock.mockReturnValue(now + 3_600_000);
+    const afterExpiry = setup();
+    expect(afterExpiry.result.current.jobs).toEqual([]);
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(localStorage.getItem("as3m:move-dismissed:v1:alice:j")).toBeNull();
+    act(() => afterExpiry.result.current.add(saved));
+    expect(afterExpiry.result.current.jobs.map((job) => job.job_id)).toEqual(["j"]);
+  });
+  it("bounds tombstones without evicting active dismissals and admits more after expiry", () => {
+    const now = 1_800_000_000_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.spyOn(api, "getJob").mockImplementation(() => new Promise(() => {}));
+    const hook = setup();
+    act(() => {
+      for (let i = 0; i < 200; i++) {
+        hook.result.current.add({ ...saved, job_id: `closed-${i}` });
+        hook.result.current.dismiss(`closed-${i}`);
+      }
+      hook.result.current.add(saved);
+      hook.result.current.dismiss("j");
+    });
+    expect(hook.result.current.jobs.map((job) => job.job_id)).toEqual(["j"]);
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Dismiss limit reached" }),
+    );
+    expect(localStorage.length).toBe(201);
+    localStorage.setItem(
+      jobsStorageKey("alice", "closed-0"),
+      JSON.stringify({ ...saved, job_id: "closed-0" }),
+    );
+    const restored = setup();
+    expect(restored.result.current.jobs.map((job) => job.job_id)).toEqual(["j"]);
+    restored.unmount();
+    clock.mockReturnValue(now + 3_600_000);
+    act(() => hook.result.current.dismiss("j"));
+    expect(hook.result.current.jobs).toEqual([]);
+    expect(localStorage.length).toBe(1);
+  });
+  it("does not roll back a dismissal another tab accepted while the last slot fills", () => {
+    vi.spyOn(api, "getJob").mockImplementation(() => new Promise(() => {}));
+    const first = setup();
+    act(() => {
+      for (let i = 0; i < 199; i++) {
+        first.result.current.add({ ...saved, job_id: `closed-${i}` });
+        first.result.current.dismiss(`closed-${i}`);
+      }
+      first.result.current.add(saved);
+    });
+    const second = setup();
+    act(() => second.result.current.add({ ...saved, job_id: "other" }));
+    const write = localStorage.setItem.bind(localStorage);
+    let interleaved = false;
+    vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+      if (key === "as3m:move-dismissed:v1:alice:j" && !interleaved) {
+        interleaved = true;
+        second.result.current.dismiss("other");
+        write(key, value);
+        second.result.current.dismiss("j");
+      } else {
+        write(key, value);
+      }
+    });
+    act(() => first.result.current.dismiss("j"));
+    expect(interleaved).toBe(true);
+    const key = jobsStorageKey("alice", "j");
+    localStorage.setItem(key, JSON.stringify(saved));
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key })));
+    expect(first.result.current.jobs.map((job) => job.job_id)).not.toContain("j");
+    expect(second.result.current.jobs.map((job) => job.job_id)).not.toContain("j");
+  });
+  it.each(["getItem", "setItem", "key", "removeItem"] as const)(
+    "keeps dismissal usable in memory when tombstone storage %s throws",
+    (method) => {
+      vi.spyOn(api, "getJob").mockImplementation(() => new Promise(() => {}));
+      const hook = setup();
+      act(() => hook.result.current.add(saved));
+      vi.spyOn(localStorage, method).mockImplementation(() => {
+        throw new Error("Storage denied");
+      });
+      act(() => hook.result.current.dismiss("j"));
+      expect(hook.result.current.jobs).toEqual([]);
+    },
+  );
+  it("handles a denied localStorage getter during dismissal", () => {
+    vi.spyOn(api, "getJob").mockImplementation(() => new Promise(() => {}));
+    const hook = setup();
+    act(() => hook.result.current.add(saved));
+    const access = vi
+      .spyOn(window, "localStorage", "get")
+      .mockImplementation(() => {
+        throw new Error("Storage denied");
+      });
+    try {
+      act(() => hook.result.current.dismiss("j"));
+      expect(hook.result.current.jobs).toEqual([]);
+    } finally {
+      access.mockRestore();
+    }
+  });
+  it("does not show a stale record when storage removal fails", () => {
+    vi.spyOn(api, "getJob").mockImplementation(() => new Promise(() => {}));
+    const first = setup();
+    act(() => first.result.current.add(saved));
+    const second = setup();
+    act(() => second.result.current.dismiss("j"));
+    const key = jobsStorageKey("alice", "j");
+    localStorage.setItem(key, JSON.stringify(saved));
+    vi.spyOn(localStorage, "removeItem").mockImplementation(() => {
+      throw new Error("Storage denied");
+    });
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key })));
+    expect(first.result.current.jobs).toEqual([]);
+    expect(second.result.current.jobs).toEqual([]);
+  });
+  it("prunes interrupted admission reservations on reload", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const key = "as3m:move-dismiss-admission:v1:alice:interrupted";
+    localStorage.setItem(key, "1800000000000");
+    const beforeExpiry = setup();
+    expect(localStorage.getItem(key)).not.toBeNull();
+    beforeExpiry.unmount();
+    clock.mockReturnValue(1_800_003_600_000);
+    setup();
+    expect(localStorage.getItem(key)).toBeNull();
+  });
   it("ignores storage entries belonging to another user", () => {
     const hook = setup();
     const key = jobsStorageKey("bob", "j");

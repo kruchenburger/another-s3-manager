@@ -42,6 +42,86 @@ export const jobsStorageKey = (username: string, id?: string) =>
   id === undefined
     ? `as3m:move-jobs:v1:${encodeURIComponent(username)}`
     : `${jobsPrefix(username)}${encodeURIComponent(id)}`;
+const dismissedPrefix = (username: string) =>
+  `as3m:move-dismissed:v1:${encodeURIComponent(username)}:`;
+const dismissedKey = (username: string, id: string) =>
+  `${dismissedPrefix(username)}${encodeURIComponent(id)}`;
+const admissionPrefix = (username: string) =>
+  `as3m:move-dismiss-admission:v1:${encodeURIComponent(username)}:`;
+const DISMISSAL_TTL = 60 * 60 * 1000;
+const MAX_DISMISSALS = 200;
+function validTimestamp(timestamp: number, now: number): boolean {
+  return Number.isFinite(timestamp) && timestamp > 0 && timestamp <= now;
+}
+function isDismissed(username: string, id: string): boolean {
+  try {
+    const timestamp = Number(localStorage.getItem(dismissedKey(username, id)));
+    const now = Date.now();
+    return validTimestamp(timestamp, now) && now - timestamp < DISMISSAL_TTL;
+  } catch {
+    return false;
+  }
+}
+function pruneMarkers(prefix: string, jobPrefix?: string): Set<string> {
+  const active = new Set<string>();
+  try {
+    // Snapshot the keys before removing entries so enumeration cannot skip them.
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(prefix)) keys.push(key);
+    }
+    for (const key of keys) {
+      const timestamp = Number(localStorage.getItem(key));
+      const now = Date.now();
+      if (validTimestamp(timestamp, now) && now - timestamp < DISMISSAL_TTL) {
+        active.add(key);
+      } else {
+        // Remove any late writer's job before dropping its expired tombstone.
+        if (jobPrefix && validTimestamp(timestamp, now))
+          localStorage.removeItem(`${jobPrefix}${key.slice(prefix.length)}`);
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    /* Storage can be unavailable; keep tracking in memory. */
+  }
+  return active;
+}
+function pruneDismissals(username: string): Set<string> {
+  return pruneMarkers(dismissedPrefix(username), jobsPrefix(username));
+}
+function recordDismissal(username: string, id: string): boolean {
+  let admissionKey: string | undefined;
+  try {
+    const key = dismissedKey(username, id);
+    const active = pruneDismissals(username);
+    if (active.has(key)) return true;
+    // Never evict a live tombstone to admit another dismissal.
+    if (active.size >= MAX_DISMISSALS) return false;
+    // Reserve capacity under a unique key before publishing the tombstone.
+    // Read reservations BEFORE committed markers: a concurrent commit can be
+    // counted twice, but cannot disappear between those two counts.
+    admissionKey = `${admissionPrefix(username)}${crypto.randomUUID()}`;
+    localStorage.setItem(admissionKey, String(Date.now()));
+    const admissions = pruneMarkers(admissionPrefix(username));
+    const committed = pruneDismissals(username);
+    if (committed.has(key)) return true;
+    if (admissions.size + committed.size > MAX_DISMISSALS) return false;
+    localStorage.setItem(key, String(Date.now()));
+  } catch {
+    /* Dismiss still works in memory when storage is unavailable. */
+  } finally {
+    if (admissionKey) {
+      try {
+        localStorage.removeItem(admissionKey);
+      } catch {
+        /* An interrupted reservation expires with the tombstone TTL. */
+      }
+    }
+  }
+  return true;
+}
 export function invalidateMoveFiles(
   qc: QueryClient,
   bucket: string,
@@ -94,6 +174,8 @@ function readStored(key: string): MoveRecord | null {
 }
 function restore(username?: string): MoveRecord[] {
   if (!username) return [];
+  pruneMarkers(admissionPrefix(username));
+  pruneDismissals(username);
   const records = new Map<string, MoveRecord>();
   try {
     const legacy: unknown = JSON.parse(
@@ -109,7 +191,8 @@ function restore(username?: string): MoveRecord[] {
     ) {
       for (const raw of legacy.jobs.slice(-200)) {
         const record = storedRecord(raw);
-        if (record) records.set(record.job_id, record);
+        if (record && !isDismissed(username, record.job_id))
+          records.set(record.job_id, record);
       }
     }
   } catch {
@@ -120,7 +203,11 @@ function restore(username?: string): MoveRecord[] {
       const key = localStorage.key(i);
       if (!key?.startsWith(jobsPrefix(username))) continue;
       const record = readStored(key);
-      if (record && key === jobsStorageKey(username, record.job_id))
+      if (
+        record &&
+        key === jobsStorageKey(username, record.job_id) &&
+        !isDismissed(username, record.job_id)
+      )
         records.set(record.job_id, record);
     }
   } catch {
@@ -130,6 +217,7 @@ function restore(username?: string): MoveRecord[] {
 }
 function persist(username: string, job: MoveRecord) {
   try {
+    if (isDismissed(username, job.job_id)) return;
     localStorage.setItem(
       jobsStorageKey(username, job.job_id),
       JSON.stringify(storedRecord(job)),
@@ -259,7 +347,7 @@ function JobsSession({
       const existing = jobsRef.current.find((job) => job.job_id === id);
       if (!existing) return;
       const next = { ...existing, ...patch };
-      // Polling may finish after another tab dismissed this job. Never recreate its key.
+      // Polling may finish after another tab dismissed this job.
       if (username && patch.notified && !existing.notified) {
         try {
           if (localStorage.getItem(jobsStorageKey(username, id)) !== null)
@@ -268,12 +356,17 @@ function JobsSession({
           /* Keep progress in memory when storage is unavailable. */
         }
       }
+      if (username && isDismissed(username, id)) {
+        replace(jobsRef.current.filter((job) => job.job_id !== id));
+        return;
+      }
       replace(jobsRef.current.map((job) => (job.job_id === id ? next : job)));
     },
     [username, replace],
   );
   const add = useCallback(
     (job: MoveRecord) => {
+      if (username && isDismissed(username, job.job_id)) return;
       if (jobsRef.current.some((existing) => existing.job_id === job.job_id))
         return;
       if (username) persist(username, job);
@@ -284,6 +377,15 @@ function JobsSession({
   const dismiss = useCallback(
     (id: string) => {
       if (username) {
+        if (!recordDismissal(username, id)) {
+          showToast({
+            title: "Dismiss limit reached",
+            message:
+              "Too many move results were dismissed in the last hour. Try again when an earlier dismissal expires.",
+            color: "yellow",
+          });
+          return;
+        }
         try {
           localStorage.removeItem(jobsStorageKey(username, id));
         } catch {
@@ -311,10 +413,10 @@ function JobsSession({
       ) {
         for (const raw of legacy.jobs.slice(-200)) {
           const job = storedRecord(raw);
-          if (!job) continue;
+          if (!job || isDismissed(username, job.job_id)) continue;
           const key = jobsStorageKey(username, job.job_id);
           if (localStorage.getItem(key) === null) {
-            localStorage.setItem(key, JSON.stringify(job));
+            persist(username, job);
           }
         }
         localStorage.removeItem(jobsStorageKey(username));
@@ -329,10 +431,27 @@ function JobsSession({
           replace(restore(username));
           return;
         }
+        if (event.key.startsWith(dismissedPrefix(username))) {
+          replace(
+            jobsRef.current.filter((job) => !isDismissed(username, job.job_id)),
+          );
+          return;
+        }
         if (!event.key.startsWith(jobsPrefix(username))) return;
         // Read current storage: a queued add event may arrive after its removal.
         const record = readStored(event.key);
-        if (!record || jobsStorageKey(username, record.job_id) !== event.key) {
+        if (
+          !record ||
+          jobsStorageKey(username, record.job_id) !== event.key ||
+          isDismissed(username, record.job_id)
+        ) {
+          if (record && isDismissed(username, record.job_id)) {
+            try {
+              localStorage.removeItem(event.key);
+            } catch {
+              /* The tombstone still prevents restoring this stale record. */
+            }
+          }
           replace(
             jobsRef.current.filter(
               (job) => jobsStorageKey(username, job.job_id) !== event.key,
