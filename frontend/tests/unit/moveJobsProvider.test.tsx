@@ -21,6 +21,7 @@ import { ApiError } from "@/utils/apiError";
 import type { MoveJob } from "@/types/api";
 import { showToast } from "@/utils/toast";
 import { notifications } from "@mantine/notifications";
+import { createStorageStandIn } from "./storageStandIn";
 const auth = vi.hoisted(() => ({ username: "alice" as string | undefined }));
 vi.mock("@/features/auth/hooks/useMe", () => ({
   useMe: () => ({
@@ -70,14 +71,19 @@ function setup(
     ),
   });
 }
+let standIn: ReturnType<typeof createStorageStandIn>;
 beforeEach(() => {
-  localStorage.clear();
   vi.restoreAllMocks();
+  standIn = createStorageStandIn();
+  vi.stubGlobal("localStorage", standIn.storage);
   vi.mocked(showToast).mockClear();
   auth.username = "alice";
 });
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  localStorage.clear();
   vi.useRealTimers();
 });
 describe("app-level move jobs", () => {
@@ -196,9 +202,9 @@ describe("app-level move jobs", () => {
         ...snapshot,
         state: "running",
       });
-      vi.spyOn(localStorage, method).mockImplementation(() => {
+      standIn.hooks[method] = () => {
         throw new Error("Storage denied");
-      });
+      };
       const hook = setup();
       act(() => hook.result.current.add(saved));
       await waitFor(() =>
@@ -245,16 +251,15 @@ describe("app-level move jobs", () => {
     const key = jobsStorageKey("alice", "j");
     act(() => window.dispatchEvent(new StorageEvent("storage", { key })));
     await waitFor(() => expect(pending).toHaveLength(2));
-    const read = localStorage.getItem.bind(localStorage);
     let dismissed = false;
-    vi.spyOn(localStorage, "getItem").mockImplementation((storageKey) => {
-      const value = read(storageKey);
+    standIn.hooks.getItem = (storageKey, read) => {
+      const value = read();
       if (storageKey === key && value !== null && !dismissed) {
         dismissed = true;
         second.result.current.dismiss("j");
       }
       return value;
-    });
+    };
     await act(async () => pending[0](snapshot));
     expect(dismissed).toBe(true);
     act(() => window.dispatchEvent(new StorageEvent("storage", { key })));
@@ -398,18 +403,17 @@ describe("app-level move jobs", () => {
     });
     const second = setup();
     act(() => second.result.current.add({ ...saved, job_id: "other" }));
-    const write = localStorage.setItem.bind(localStorage);
     let interleaved = false;
-    vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+    standIn.hooks.setItem = (key, _value, write) => {
       if (key === "as3m:move-dismissed:v1:alice:j" && !interleaved) {
         interleaved = true;
         second.result.current.dismiss("other");
-        write(key, value);
+        write();
         second.result.current.dismiss("j");
       } else {
-        write(key, value);
+        write();
       }
-    });
+    };
     act(() => first.result.current.dismiss("j"));
     expect(interleaved).toBe(true);
     const key = jobsStorageKey("alice", "j");
@@ -428,9 +432,9 @@ describe("app-level move jobs", () => {
       vi.spyOn(api, "getJob").mockImplementation(() => new Promise(() => {}));
       const hook = setup();
       act(() => hook.result.current.add(saved));
-      vi.spyOn(localStorage, method).mockImplementation(() => {
+      standIn.hooks[method] = () => {
         throw new Error("Storage denied");
-      });
+      };
       act(() => hook.result.current.dismiss("j"));
       expect(hook.result.current.jobs).toEqual([]);
     },
@@ -439,16 +443,19 @@ describe("app-level move jobs", () => {
     vi.spyOn(api, "getJob").mockImplementation(() => new Promise(() => {}));
     const hook = setup();
     act(() => hook.result.current.add(saved));
-    const access = vi
-      .spyOn(window, "localStorage", "get")
-      .mockImplementation(() => {
-        throw new Error("Storage denied");
+    for (const target of new Set([globalThis, window])) {
+      Object.defineProperty(target, "localStorage", {
+        configurable: true,
+        get() {
+          throw new Error("Storage denied");
+        },
       });
+    }
     try {
       act(() => hook.result.current.dismiss("j"));
       expect(hook.result.current.jobs).toEqual([]);
     } finally {
-      access.mockRestore();
+      vi.stubGlobal("localStorage", standIn.storage);
     }
   });
   it("does not show a stale record when storage removal fails", () => {
@@ -459,9 +466,9 @@ describe("app-level move jobs", () => {
     act(() => second.result.current.dismiss("j"));
     const key = jobsStorageKey("alice", "j");
     localStorage.setItem(key, JSON.stringify(saved));
-    vi.spyOn(localStorage, "removeItem").mockImplementation(() => {
+    standIn.hooks.removeItem = () => {
       throw new Error("Storage denied");
-    });
+    };
     act(() => window.dispatchEvent(new StorageEvent("storage", { key })));
     expect(first.result.current.jobs).toEqual([]);
     expect(second.result.current.jobs).toEqual([]);
@@ -595,9 +602,9 @@ describe("app-level move jobs", () => {
     vi.spyOn(api, "getJob").mockResolvedValue(snapshot);
     const hook = setup();
     expect(hook.result.current.jobs).toEqual([]);
-    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+    standIn.hooks.setItem = () => {
       throw new Error("denied");
-    });
+    };
     act(() => hook.result.current.add(saved));
     await waitFor(() =>
       expect(hook.result.current.jobs[0].snapshot?.state).toBe("done"),
