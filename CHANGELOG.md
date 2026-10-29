@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.7] - 2026-10-29
+
 ### Security
 
 - `role` is now required on bucket endpoints; requests without a valid role are rejected.
+
+### Changed
+
+- Development and CI pin Python 3.13 via `.python-version` (the Docker image already used 3.13).
+- The MinIO end-to-end fixture now uses the Chainguard `minio` and `minio-client` images, pinned by
+  digest; the upstream `minio/minio` and `minio/mc` images are no longer published on Docker Hub.
 
 ## [1.1.6] - 2026-07-31
 
@@ -679,7 +687,8 @@ in _s3_clients_cache` before indexing into it — two separate,
 - CSRF protection
 - Login attempt rate limiting
 
-[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.6...HEAD
+[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.7...HEAD
+[1.1.7]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.3...v1.1.4
