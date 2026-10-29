@@ -3,7 +3,9 @@ import pytest
 from another_s3_manager import move_reservations as reservations
 from another_s3_manager.errors import MoveError
 
-pytest_plugins = ["tests.test_mcp_tools"]
+# Reuse the MCP fixtures by import: `pytest_plugins` in a non-root test module is
+# ignored when the whole suite runs, which left these fixtures undefined in CI.
+from tests.test_mcp_tools import alice_user, tool_registry  # noqa: F401
 
 
 def test_overlap_and_release():
@@ -100,7 +102,7 @@ def test_web_write_busy(app_client):
         ),
     ],
 )
-async def test_mcp_busy(alice_user, tool_registry, tool, kwargs):
+async def test_mcp_busy(alice_user, tool_registry, tool, kwargs):  # noqa: F811
     from another_s3_manager.mcp_server import McpError
     from tests.test_mcp_tools import _call, _fake_request
 
