@@ -76,15 +76,40 @@ def get_data_dir() -> Path:
     # to it. The image sets S3_FILE_MANAGER_CONFIG=/app/data/config.json, so a
     # plain `docker run -v ...:/app/data` persists everything (ASM-67). DATA_DIR
     # and config `data_dir` above still win.
-    # With the legacy fallback active this is the package dir, i.e. exactly the
-    # pre-ASM-67 behaviour for that deployment.
-    if os.getenv("S3_FILE_MANAGER_CONFIG"):
-        data_dir = CONFIG_FILE.parent
-        data_dir.mkdir(parents=True, exist_ok=True)
-        return data_dir
+    # The *configured* path is used, not the resolved one: with the legacy
+    # fallback active CONFIG_FILE sits in the package dir, which the image keeps
+    # root-owned. A read-only config dir (ConfigMap) is skipped the same way.
+    configured = os.getenv("S3_FILE_MANAGER_CONFIG")
+    if configured:
+        candidates = [Path(configured).parent, IMAGE_DATA_DIR, BASE_DIR]
+        for candidate in candidates:
+            if _usable_dir(candidate):
+                if candidate != candidates[0]:
+                    logger.warning(
+                        "Data directory %s (next to S3_FILE_MANAGER_CONFIG) is not writable; using %s. "
+                        "Set DATA_DIR to a writable, persistent directory.",
+                        candidates[0],
+                        candidate,
+                    )
+                return candidate
+        logger.error("No writable data directory found; set DATA_DIR to a writable, persistent directory.")
+        return candidates[0]
 
     # Default to BASE_DIR
     return BASE_DIR
+
+
+# The image's writable data dir (Dockerfile: chown app /app/data).
+IMAGE_DATA_DIR = Path("/app/data")
+
+
+def _usable_dir(path: Path) -> bool:
+    """Create the directory if needed and report whether this process can write to it."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return path.is_dir() and os.access(path, os.W_OK)
 
 
 def get_users_file() -> Path:

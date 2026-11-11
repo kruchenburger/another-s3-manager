@@ -262,3 +262,27 @@ def test_no_legacy_warning_on_new_path(monkeypatch, tmp_path):
     constants, chosen, _, _ = _resolve(monkeypatch, tmp_path, new=True, legacy=True)
     monkeypatch.setattr(constants, "CONFIG_FILE", chosen)
     assert constants.legacy_config_in_use() is False
+
+
+def test_legacy_fallback_keeps_data_next_to_configured_path(monkeypatch, tmp_path):
+    # Review: with the legacy config in use the DB must not go to the root-owned package dir.
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    constants, chosen, new_path, legacy_path = _resolve(monkeypatch, tmp_path, new=False, legacy=True)
+    monkeypatch.setattr(constants, "CONFIG_FILE", chosen)
+    monkeypatch.setattr("another_s3_manager.config.load_config", lambda force_reload=False: {})
+    assert chosen == legacy_path
+    assert constants.get_data_dir() == new_path.parent
+
+
+def test_read_only_config_dir_falls_back_to_image_data_dir(monkeypatch, tmp_path, caplog):
+    # Review: a ConfigMap dir is read-only; without DATA_DIR the DB goes to the image's /app/data.
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    ro_dir = tmp_path / "etc"
+    monkeypatch.setenv("S3_FILE_MANAGER_CONFIG", str(ro_dir / "config.json"))
+    constants = reload_constants()
+    image_dir = tmp_path / "image-data"
+    monkeypatch.setattr(constants, "IMAGE_DATA_DIR", image_dir)
+    real_usable = constants._usable_dir
+    monkeypatch.setattr(constants, "_usable_dir", lambda p: p != ro_dir and real_usable(p))
+    monkeypatch.setattr("another_s3_manager.config.load_config", lambda force_reload=False: {})
+    assert constants.get_data_dir() == image_dir

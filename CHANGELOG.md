@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The volume at `/app/data` must be writable by uid 1001. Named volumes created
   by earlier images already are (Docker copies the image's ownership into a new
   named volume). Host bind mounts need `chown 1001:1001` as before.
+- If `S3_FILE_MANAGER_CONFIG` points into a read-only directory (a ConfigMap)
+  and neither `DATA_DIR` nor `data_dir` is set, the database goes to
+  `/app/data` with a warning. Set `DATA_DIR` to a persistent volume.
 - AWS service definitions are limited to S3, STS, SSO and SSO OIDC. Static
   keys, profiles, SSO profiles, `assume_role`, web identity, instance and
   container credentials all keep working.
