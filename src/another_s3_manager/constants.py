@@ -11,7 +11,35 @@ logger = logging.getLogger(__name__)
 # File paths
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
-CONFIG_FILE = Path(os.getenv("S3_FILE_MANAGER_CONFIG", str(BASE_DIR / "config.json")))
+LEGACY_CONFIG_FILE = BASE_DIR / "config.json"
+
+
+def _resolve_config_file() -> Path:
+    """Pick config.json: S3_FILE_MANAGER_CONFIG, else the legacy package-dir file.
+
+    The image sets S3_FILE_MANAGER_CONFIG=/app/data/config.json (ASM-67). A
+    deployment that mounted its config at the old default (the package dir)
+    without setting the variable must not silently start with no roles: when
+    the configured file is missing but the legacy one exists, use the legacy
+    file. run_startup_tasks() logs a warning about it (see legacy_config_in_use).
+    """
+    configured = os.getenv("S3_FILE_MANAGER_CONFIG")
+    if not configured:
+        return LEGACY_CONFIG_FILE
+    path = Path(configured)
+    if not path.exists() and LEGACY_CONFIG_FILE.exists():
+        return LEGACY_CONFIG_FILE
+    return path
+
+
+CONFIG_FILE = _resolve_config_file()
+
+
+def legacy_config_in_use() -> bool:
+    """True when S3_FILE_MANAGER_CONFIG is set but the legacy file was chosen."""
+    configured = os.getenv("S3_FILE_MANAGER_CONFIG")
+    return bool(configured) and CONFIG_FILE == LEGACY_CONFIG_FILE and Path(configured) != LEGACY_CONFIG_FILE
+
 
 # Application metadata
 APP_NAME = "Another S3 Manager"
@@ -44,8 +72,44 @@ def get_data_dir() -> Path:
     except (ImportError, Exception):
         pass
 
+    # An explicitly placed config file marks the data location: keep the DB next
+    # to it. The image sets S3_FILE_MANAGER_CONFIG=/app/data/config.json, so a
+    # plain `docker run -v ...:/app/data` persists everything (ASM-67). DATA_DIR
+    # and config `data_dir` above still win.
+    # The *configured* path is used, not the resolved one: with the legacy
+    # fallback active CONFIG_FILE sits in the package dir, which the image keeps
+    # root-owned. A read-only config dir (ConfigMap) is skipped the same way.
+    configured = os.getenv("S3_FILE_MANAGER_CONFIG")
+    if configured:
+        candidates = [Path(configured).parent, IMAGE_DATA_DIR, BASE_DIR]
+        for candidate in candidates:
+            if _usable_dir(candidate):
+                if candidate != candidates[0]:
+                    logger.warning(
+                        "Data directory %s (next to S3_FILE_MANAGER_CONFIG) is not writable; using %s. "
+                        "Set DATA_DIR to a writable, persistent directory.",
+                        candidates[0],
+                        candidate,
+                    )
+                return candidate
+        logger.error("No writable data directory found; set DATA_DIR to a writable, persistent directory.")
+        return candidates[0]
+
     # Default to BASE_DIR
     return BASE_DIR
+
+
+# The image's writable data dir (Dockerfile: chown app /app/data).
+IMAGE_DATA_DIR = Path("/app/data")
+
+
+def _usable_dir(path: Path) -> bool:
+    """Create the directory if needed and report whether this process can write to it."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return path.is_dir() and os.access(path, os.W_OK)
 
 
 def get_users_file() -> Path:

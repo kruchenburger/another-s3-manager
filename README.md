@@ -23,6 +23,8 @@ docker run -d -p 8080:8080 \
   ghcr.io/kruchenburger/another-s3-manager:latest
 ```
 
+The image is about 59 MB compressed (amd64 and arm64).
+
 Open `http://localhost:8080` and log in with `admin` / `change_me_pls`. Persistent state
 (SQLite DB, `config.json`, etc.) lives in the `s3m-data` named Docker volume — works out
 of the box on Linux/macOS/Windows because Docker initializes named volumes with the

@@ -89,6 +89,12 @@ def extract_changelog(version: str, changelog_path: str = "CHANGELOG.md", output
         pattern = rf"^## \[{re.escape(version)}\].*?(?=^## \[|\Z)"
         match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
 
+        # A prerelease tag (v1.2.2-rc1) ships the notes of its final version.
+        base_version = version.split("-", 1)[0]
+        if not match and base_version != version:
+            pattern = rf"^## \[{re.escape(base_version)}\].*?(?=^## \[|\Z)"
+            match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
+
         if match:
             notes = match.group(0).strip()
         else:

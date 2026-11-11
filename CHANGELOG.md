@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The container image is about half the size: roughly 59 MB compressed
+  instead of 112 MB. It no longer duplicates the Python environment in a second
+  layer and ships AWS service definitions only for S3, STS and SSO. It also
+  leaves out unused server extras, the `cryptography` package (sign-in tokens
+  use HMAC only) and the frontend source maps.
+- Application code in the image is owned by root and read-only for the app
+  user; only `/app/data` is writable.
+
+### Fixed
+
+- A plain `docker run -v …:/app/data`, as shown in the Quick Start, now keeps
+  the database and configuration on the volume. Before, without `DATA_DIR` the
+  app wrote them inside the container, and they were lost when the container
+  was recreated. The image sets `S3_FILE_MANAGER_CONFIG=/app/data/config.json`
+  and, when neither `DATA_DIR` nor config `data_dir` is set, the data directory
+  now follows the config file's location. Compose files and setups that set
+  `DATA_DIR` or `data_dir` are unaffected.
+- A `config.json` placed at the old default location inside the application
+  package is still read if nothing exists at `S3_FILE_MANAGER_CONFIG`, with a
+  startup warning naming both paths. Move it to `/app/data/config.json`.
+
+### Upgrade notes
+
+- If you ran the image as in the old Quick Start (`-v …:/app/data` without
+  `DATA_DIR`), your users, tokens and settings were never on the volume and
+  were already lost on every container recreate. After this upgrade ASM starts
+  with a fresh database on the volume: log in as `admin` with
+  `ADMIN_PASSWORD` and set things up again; from now on they persist.
+- The volume at `/app/data` must be writable by uid 1001. Named volumes created
+  by earlier images already are (Docker copies the image's ownership into a new
+  named volume). Host bind mounts need `chown 1001:1001` as before.
+- If `S3_FILE_MANAGER_CONFIG` points into a read-only directory (a ConfigMap)
+  and neither `DATA_DIR` nor `data_dir` is set, the database goes to
+  `/app/data` with a warning. Set `DATA_DIR` to a persistent volume.
+- AWS service definitions are limited to S3, STS, SSO and SSO OIDC. Static
+  keys, profiles, SSO profiles, `assume_role`, web identity, instance and
+  container credentials all keep working.
+
 ## [1.2.1] - 2026-11-11
 
 ### Fixed
