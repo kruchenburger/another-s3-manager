@@ -52,6 +52,24 @@ For a `docker compose` setup see [`docker-compose.example.yml`](docker-compose.e
 
 Object storage has no native rename or move, so ASM copies objects and then deletes the originals with progress tracking; very large folders beyond `MOVE_MAX_OBJECTS` are better moved with the AWS CLI.
 
+## Alternatives
+
+Other S3 web UIs, and when each one is the better pick:
+
+- **[cloudlena/s3manager](https://github.com/cloudlena/s3manager).** A small Go app, configured entirely through env vars,
+  that handles several S3 accounts at once and also does bucket administration (policies, versions). It has no login:
+  everyone who can reach it sees every account. If you are the only user, it is simpler and lighter than ASM.
+- **[Filestash](https://github.com/mickael-kerjean/filestash).** A file manager for many backends (S3, SFTP, WebDAV, FTP
+  and more) with SSO and plugins. Pick it if S3 is one of several things you need to browse.
+- **MinIO Console.** The community edition no longer has its admin screens, the `minio/minio` repository was archived
+  in 2026, and the console only works with MinIO. Forks of the older full console exist.
+- **Desktop clients** (Cyberduck, S3 Browser, rclone). Great for one person with their own keys. They can't give
+  another person access to one bucket without handing over keys.
+
+ASM is for the case where several people need access to different buckets: users and roles live in the app,
+credentials stay on the server, and AI agents get the same permissions through MCP. Its limits: a single instance on
+SQLite, no bucket administration, and a ~110 MB image.
+
 ## Configuration
 
 Configure roles through the web UI (**Admin console → Roles**; global settings live under
