@@ -92,6 +92,11 @@ def test_update_user_accepts_explicit_default_role(app_client):
 
 def test_api_me_returns_explicit_default_role_when_in_allowed(app_client):
     """If user.default_role is set AND is in allowed_roles → return it."""
+    from another_s3_manager.config import load_config, save_config
+
+    cfg = load_config(force_reload=True)
+    cfg["roles"].extend({"name": name, "type": "default"} for name in ["RoleA", "RoleB"])
+    save_config(cfg)
     from another_s3_manager import users
 
     users.create_user(
@@ -111,6 +116,11 @@ def test_api_me_returns_explicit_default_role_when_in_allowed(app_client):
 
 def test_api_me_falls_back_to_first_allowed_when_default_role_missing(app_client):
     """If user.default_role is NULL → return first of allowed_roles."""
+    from another_s3_manager.config import load_config, save_config
+
+    cfg = load_config(force_reload=True)
+    cfg["roles"].extend({"name": name, "type": "default"} for name in ["RoleA", "RoleB"])
+    save_config(cfg)
     from another_s3_manager import users
 
     users.create_user(
@@ -145,6 +155,11 @@ def test_api_me_returns_null_default_role_when_no_allowed_roles(app_client):
 
 def test_put_my_default_role_sets_explicit_value(app_client):
     """PUT /api/me/default-role with a valid role updates the user's record."""
+    from another_s3_manager.config import load_config, save_config
+
+    cfg = load_config(force_reload=True)
+    cfg["roles"].extend({"name": name, "type": "default"} for name in ["RoleA", "RoleB"])
+    save_config(cfg)
     from another_s3_manager import users
 
     users.create_user(
@@ -180,6 +195,11 @@ def test_put_my_default_role_rejects_role_not_in_allowed(app_client):
 
 def test_put_my_default_role_null_clears_explicit_choice(app_client):
     """PUT with role=null clears the explicit choice (fallback to first allowed)."""
+    from another_s3_manager.config import load_config, save_config
+
+    cfg = load_config(force_reload=True)
+    cfg["roles"].extend({"name": name, "type": "default"} for name in ["RoleA", "RoleB"])
+    save_config(cfg)
     from another_s3_manager import users
 
     users.create_user(

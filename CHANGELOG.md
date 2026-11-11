@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-11
+
+### Fixed
+
+- Roles removed from the configuration no longer show up for users who were
+  granted them, and can no longer be used from the web UI or MCP — including
+  when `config.json` is edited by hand or replaced by a read-only ConfigMap.
+- Deleting a role in **Admin → Roles** also removes it from every user, so
+  creating a new role with the same name later does not silently give it to
+  the people who had the old one. Already issued presigned links stay valid
+  until they expire.
+- MCP tokens can no longer delete files (`delete_file`, `copy_object` with
+  `delete_source`) when deletion is disabled only through the
+  `DISABLE_DELETION` environment variable. The web UI, moves and MCP now share
+  one check: deletion is off if either the variable or the `disable_deletion`
+  setting is on.
+- Releases no longer fail when the version tag is pushed before the `main`
+  image has finished building; the release job waits for it.
+
+### Changed
+
+- Creating or editing a user with a role that does not exist is rejected with
+  a message naming the role.
+- New role names may not contain commas or leading/trailing spaces, and must be
+  unique.
+- **Admin → Users** marks grants to roles that no longer exist; saving the user
+  drops them. At startup ASM logs a warning listing such grants.
+
+### Added
+
+- The container image carries the `io.modelcontextprotocol.server.name` label
+  needed to list ASM in the official MCP Registry.
+
 ## [1.2.0] - 2026-10-29
 
 ### Added
@@ -707,7 +740,8 @@ in _s3_clients_cache` before indexing into it — two separate,
 - CSRF protection
 - Login attempt rate limiting
 
-[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.7...v1.2.0
 [1.1.7]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.5...v1.1.6

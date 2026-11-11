@@ -8,6 +8,7 @@ import {
   Stack,
   Switch,
   TagsInput,
+  Text,
   TextInput,
   Tooltip,
 } from "@mantine/core";
@@ -222,6 +223,11 @@ export function UserDrawer({
             }}
             {...form.getInputProps("allowed_roles")}
           />
+          {mode === "edit" && (initialUser?.missing_roles?.length ?? 0) > 0 && (
+            <Text size="xs" c="dimmed">
+              Removed from configuration, will be dropped on save: {initialUser?.missing_roles.join(", ")}
+            </Text>
+          )}
           {mode === "edit" && initialUser && (
             <>
               <Divider my="xs" />

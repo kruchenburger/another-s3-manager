@@ -43,6 +43,7 @@ from another_s3_manager.metrics import (
     mcp_writes_denied_total,
     upload_rejected_total,
 )
+from another_s3_manager.users import effective_allowed_roles
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,7 @@ def assert_write_allowed(token: Any, tool_name: str, config: dict) -> None:
             "This token is read-only",
             {"tool": tool_name},
         )
-    if tool_name == "delete_file" and config.get("disable_deletion", False):
+    if tool_name == "delete_file" and _config_module.is_deletion_disabled(config):
         mcp_writes_denied_total.labels(tool=tool_name, reason="deletion_disabled").inc()
         raise McpError(
             "DELETION_DISABLED",
@@ -224,11 +225,13 @@ async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
         # token returns 0 roles via list_roles because the admin user's
         # allowed_roles column is empty (admins manage roles, they don't get
         # explicit assignments).
+        cfg = _config_module.load_config()
         if u.is_admin:
-            cfg = _config_module.load_config(force_reload=False)
             allowed_roles = [r["name"] for r in cfg.get("roles", []) if r.get("name")]
         else:
-            allowed_roles = [r.role_name for r in u.roles]
+            allowed_roles = effective_allowed_roles(
+                [r.role_name for r in u.roles], {r["name"] for r in cfg.get("roles", []) if r.get("name")}
+            )
         user_dict = {
             "username": u.username,
             "is_admin": u.is_admin,
@@ -554,7 +557,7 @@ async def list_roles() -> dict:
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         config = _config_module.load_config(force_reload=False)
-        all_role_names = {r["name"] for r in config.get("roles", [])}
+        all_role_names = {r["name"] for r in config.get("roles", []) if r.get("name")}
         visible = [r for r in user["allowed_roles"] if r in all_role_names]
         logger.info("mcp.list_roles", extra={"user": user["username"], "count": len(visible)})
         return _observe_response_size("list_roles", token, {"roles": visible})
@@ -1516,7 +1519,7 @@ async def copy_object(
         token, user = await authenticate_mcp_request(_get_current_request())
         config = _config_module.load_config(force_reload=False)
         assert_write_allowed(token, "copy_object", config)
-        if delete_source and config.get("disable_deletion", False):
+        if delete_source and _config_module.is_deletion_disabled(config):
             # This guard lives outside assert_write_allowed (it's conditional on
             # delete_source, not just the tool name), but it's still a write
             # denial for the same reason and must be counted identically.

@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import os
 import secrets
 import threading
 import time
@@ -81,7 +80,7 @@ def require_access(user: dict, role: str | None, bucket: str, *, deleting=False)
         s3_client._validate_bucket_access(role, bucket, user)
     except PermissionError:
         raise MoveError("ACCESS_DENIED", 403) from None
-    if deleting and (os.getenv("DISABLE_DELETION", "false").lower() == "true" or cfg.get("disable_deletion", False)):
+    if deleting and config.is_deletion_disabled(cfg):
         raise MoveError("DELETION_DISABLED", 403)
 
 
