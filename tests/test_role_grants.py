@@ -35,6 +35,21 @@ def external_roles(*names):
     os.utime(path, (path.stat().st_atime, path.stat().st_mtime + 2))
 
 
+@pytest.fixture
+def main_log(caplog, monkeypatch):
+    """caplog that still sees main.py's logger after other tests ran alembic's fileConfig.
+
+    fileConfig() defaults to disable_existing_loggers=True, so in a full-suite run
+    the module logger can be disabled before these tests execute.
+    """
+    logger = logging.getLogger("another_s3_manager.main")
+    monkeypatch.setattr(logger, "disabled", False)
+    monkeypatch.setattr(logger, "propagate", False)
+    logger.addHandler(caplog.handler)
+    yield caplog
+    logger.removeHandler(caplog.handler)
+
+
 @pytest.mark.parametrize(
     "stored,names,expected", [(["B", "gone", "A"], {"A", "B"}, ["B", "A"]), (["A"], set(), []), ([], {"A"}, [])]
 )
@@ -187,13 +202,13 @@ def test_admin_list_exposes_missing_roles(app_client):
     assert body["available_roles"] == ["Default", "B"]
 
 
-def test_startup_report_does_not_delete(app_client, caplog):
+def test_startup_report_does_not_delete(app_client, main_log):
     from another_s3_manager import main
 
     member(("gone",))
-    with caplog.at_level(logging.WARNING):
+    with main_log.at_level(logging.WARNING):
         main._report_dangling_role_grants()
-    assert "Dangling role grants (role no longer in config): gone (1 user)" in caplog.text
+    assert "Dangling role grants (role no longer in config): gone (1 user)" in main_log.text
     assert users.count_grants_by_role() == {"gone": 1}
 
 
@@ -233,7 +248,7 @@ def test_pre_prune_failure_prevents_publication(app_client, monkeypatch, failure
     assert config.load_config(force_reload=True)["roles"] == old["roles"]
 
 
-def test_post_prune_failure_is_success_and_hidden(app_client, monkeypatch, caplog):
+def test_post_prune_failure_is_success_and_hidden(app_client, monkeypatch, main_log):
     set_roles("Default", "A")
     member(("A",))
     _, headers = login(app_client)
@@ -244,9 +259,9 @@ def test_post_prune_failure_is_success_and_hidden(app_client, monkeypatch, caplo
     monkeypatch.setattr(users, "prune_role_grants", fail)
     cfg = config.load_config(force_reload=True)
     cfg["roles"] = [cfg["roles"][0]]
-    with caplog.at_level(logging.ERROR):
+    with main_log.at_level(logging.ERROR):
         assert app_client.post("/api/config", json=cfg, headers=headers).status_code == 200
-    assert "Failed to prune grants after role removal" in caplog.text
+    assert "Failed to prune grants after role removal" in main_log.text
     assert users.count_grants_by_role() == {"A": 1}
     _login_as(app_client, "member")
     assert app_client.get("/api/me").json()["allowed_roles"] == []
@@ -304,24 +319,24 @@ def test_prune_rolls_back_deleted_grants_if_default_update_fails(app_client, mon
     assert users.get_user_by_username("member")["default_role"] == "A"
 
 
-def test_report_silent_without_dangling_roles(app_client, caplog):
+def test_report_silent_without_dangling_roles(app_client, main_log):
     from another_s3_manager import main
 
-    with caplog.at_level(logging.WARNING):
+    with main_log.at_level(logging.WARNING):
         main._report_dangling_role_grants()
-    assert not caplog.records
+    assert not main_log.records
 
 
-def test_report_failure_is_nonfatal(app_client, monkeypatch, caplog):
+def test_report_failure_is_nonfatal(app_client, monkeypatch, main_log):
     from another_s3_manager import main
 
     def fail():
         raise RuntimeError("read failed")
 
     monkeypatch.setattr(users, "count_grants_by_role", fail)
-    with caplog.at_level(logging.WARNING):
+    with main_log.at_level(logging.WARNING):
         main._report_dangling_role_grants()
-    assert "continuing startup" in caplog.text
+    assert "continuing startup" in main_log.text
 
 
 @pytest.mark.parametrize("method", ["post", "put"])

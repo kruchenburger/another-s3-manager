@@ -944,8 +944,12 @@ def validate_role_access(role_name: Optional[str], user_dict: Dict[str, Any]) ->
     if user_dict.get("is_admin", False):
         return role_name
 
+    # Late import, like the other helpers here, so the module-level config
+    # loader is the one tests patch (another_s3_manager.config.load_config).
+    from another_s3_manager.config import load_config as _load_config
+
     allowed_roles = effective_allowed_roles(
-        user_dict.get("allowed_roles", []), {r["name"] for r in load_config().get("roles", []) if r.get("name")}
+        user_dict.get("allowed_roles", []), {r["name"] for r in _load_config().get("roles", []) if r.get("name")}
     )
     if role_name not in allowed_roles:
         raise PermissionError(f"Access denied: You don't have permission to use role '{role_name}'")

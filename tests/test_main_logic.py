@@ -186,6 +186,8 @@ def test_validate_role_access_allowed(monkeypatch, reload_main):
     }
 
     monkeypatch.setattr(main, "get_user_by_username", lambda username: copy.deepcopy(user_dict))
+    # The role must exist in config too (ASM-42): grants to removed roles are ignored.
+    monkeypatch.setattr(main, "load_config", lambda *a, **k: {"roles": [{"name": "RoleA", "type": "default"}]})
 
     assert main.validate_role_access("RoleA", {"username": "demo", "is_admin": False}) == "RoleA"
 
@@ -203,6 +205,8 @@ def test_validate_role_access_never_calls_load_users(monkeypatch, reload_main):
         raise AssertionError("validate_role_access must not call load_users()")
 
     monkeypatch.setattr(main, "load_users", _boom)
+    # The role must exist in config too (ASM-42): grants to removed roles are ignored.
+    monkeypatch.setattr(main, "load_config", lambda *a, **k: {"roles": [{"name": "RoleA", "type": "default"}]})
 
     assert main.validate_role_access("RoleA", {"username": "demo", "is_admin": False}) == "RoleA"
 

@@ -913,9 +913,14 @@ def test_validate_role_access_admin_allows_any():
     assert mod.validate_role_access("AnyRole", _make_user(is_admin=True)) == "AnyRole"
 
 
-def test_validate_role_access_allowed_role():
+def test_validate_role_access_allowed_role(mocker):
     import another_s3_manager.s3_client as mod
 
+    # The role must exist in config too (ASM-42): grants to removed roles are ignored.
+    mocker.patch(
+        "another_s3_manager.config.load_config",
+        return_value={"roles": [{"name": "RoleA", "type": "default"}, {"name": "RoleB", "type": "default"}]},
+    )
     assert mod.validate_role_access("RoleA", _make_user(allowed_roles=["RoleA", "RoleB"])) == "RoleA"
 
 
