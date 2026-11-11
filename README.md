@@ -44,8 +44,8 @@ For a `docker compose` setup see [`docker-compose.example.yml`](docker-compose.e
 - **File preview** — images, video, PDF and text inline (text extensions are admin-configurable)
 - **Share links** — presigned URLs with a configurable lifetime, per-link override up to 7 days
 - **Server-side search** — prefix search inside folders too large to load client-side
-- **User management** — per-role and per-bucket access, configurable password policy, forced first-login password change
-- **MCP server** — AI agents (Claude Desktop, Cursor) browse the same storage with the same permissions
+- **User management** — users are granted roles, and each role can be limited to a list of buckets; configurable password policy, forced first-login password change
+- **MCP server** — AI agents (Claude Desktop, Cursor) browse the same storage with the token owner's roles and buckets
 - **Observability** — Prometheus `/metrics` with a ready-made Grafana dashboard, optional structured JSON logs (see [docs/observability.md](docs/observability.md))
 - **Security** — JWT in an httpOnly cookie, bcrypt passwords, CSRF protection, per-username ban after failed logins
 - **Dark / light theme**
@@ -57,21 +57,24 @@ Object storage has no native rename or move, so ASM copies objects and then dele
 Other S3 web UIs, and when each one is the better pick:
 
 - **[cloudlena/s3manager](https://github.com/cloudlena/s3manager).** A small Go app, configured entirely through env vars,
-  that handles several S3 accounts at once and also does bucket administration (policies, versions). It has no login:
+  that handles several S3 accounts at once, and also creates and deletes buckets, edits bucket policies and shows
+  object versions. It has no login:
   everyone who can reach it sees every account. If you are the only user, it is simpler and lighter than ASM.
 - **[Filestash](https://github.com/mickael-kerjean/filestash).** A file manager for many backends (S3, SFTP, WebDAV, FTP
-  and more) with SSO and plugins. Pick it if S3 is one of several things you need to browse.
-- **MinIO Console, `mc admin`, the AWS CLI.** For administering the storage itself: buckets, policies, versioning,
+  and more) with pluggable authentication (LDAP, proxy passthrough and more) and plugins. Pick it if S3 is one of several things you need to browse.
+- **`mc admin`, the AWS CLI, or a fork of the old MinIO console** (the community console no longer has admin
+  screens). For administering the storage itself: buckets, policies, versioning,
   lifecycle, storage users. ASM does none of that.
 - **Desktop clients** (Cyberduck, S3 Browser, rclone). Great for one person with their own keys. They can't give
   another person access to one bucket without handing over keys.
 
 ASM is for the case where several people need access to different buckets: users and roles live in the app,
-credentials stay on the server, and AI agents get the same permissions through MCP.
+credentials stay on the server, and AI agents connect through MCP with the token owner's roles and buckets.
 
 **What ASM is not:** an admin console. It works with the data inside buckets (browse, upload, move, share) and does
 no bucket administration: no creating or deleting buckets, no policies, versioning, lifecycle or encryption settings.
-Other limits: a single instance on SQLite and a ~110 MB image.
+Other limits: a single instance on SQLite and a ~112 MB image. Access control is per bucket: a role cannot be limited
+to a prefix, and deletion is switched on or off for the whole instance, not per user.
 
 ## Configuration
 
@@ -240,8 +243,7 @@ copy [`docker-compose.override.example.yml`](docker-compose.override.example.yml
 
 The container is Kubernetes-ready: read-only `config.json` mount via ConfigMap is supported,
 SQLite DB lives under `DATA_DIR` (mount a PVC there), and secrets like `JWT_SECRET_KEY` come
-from env. Helm charts for kruchenburger services live in a separate repo —
-[github.com/kruchenburger/helm](https://github.com/kruchenburger/helm) (in progress).
+from env. No Helm chart is published yet.
 
 ## Development
 
@@ -302,7 +304,7 @@ Add `s3:ListAllMyBuckets` on `*` if you don't want to manually specify allowed b
 
 another-s3-manager exposes an MCP (Model Context Protocol) server at `/mcp`,
 allowing AI agents (Claude Desktop, Cursor, Codex) to interact with your S3
-storage using the same roles and permissions as the web UI.
+storage using the same roles and bucket access as the token's owner in the web UI.
 
 Quick start: log in → User menu → MCP tokens → create. Copy the plaintext
 token once, paste into your AI agent's MCP config.
