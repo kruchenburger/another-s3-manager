@@ -11,7 +11,35 @@ logger = logging.getLogger(__name__)
 # File paths
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
-CONFIG_FILE = Path(os.getenv("S3_FILE_MANAGER_CONFIG", str(BASE_DIR / "config.json")))
+LEGACY_CONFIG_FILE = BASE_DIR / "config.json"
+
+
+def _resolve_config_file() -> Path:
+    """Pick config.json: S3_FILE_MANAGER_CONFIG, else the legacy package-dir file.
+
+    The image sets S3_FILE_MANAGER_CONFIG=/app/data/config.json (ASM-67). A
+    deployment that mounted its config at the old default (the package dir)
+    without setting the variable must not silently start with no roles: when
+    the configured file is missing but the legacy one exists, use the legacy
+    file. run_startup_tasks() logs a warning about it (see legacy_config_in_use).
+    """
+    configured = os.getenv("S3_FILE_MANAGER_CONFIG")
+    if not configured:
+        return LEGACY_CONFIG_FILE
+    path = Path(configured)
+    if not path.exists() and LEGACY_CONFIG_FILE.exists():
+        return LEGACY_CONFIG_FILE
+    return path
+
+
+CONFIG_FILE = _resolve_config_file()
+
+
+def legacy_config_in_use() -> bool:
+    """True when S3_FILE_MANAGER_CONFIG is set but the legacy file was chosen."""
+    configured = os.getenv("S3_FILE_MANAGER_CONFIG")
+    return bool(configured) and CONFIG_FILE == LEGACY_CONFIG_FILE and Path(configured) != LEGACY_CONFIG_FILE
+
 
 # Application metadata
 APP_NAME = "Another S3 Manager"
@@ -48,6 +76,8 @@ def get_data_dir() -> Path:
     # to it. The image sets S3_FILE_MANAGER_CONFIG=/app/data/config.json, so a
     # plain `docker run -v ...:/app/data` persists everything (ASM-67). DATA_DIR
     # and config `data_dir` above still win.
+    # With the legacy fallback active this is the package dir, i.e. exactly the
+    # pre-ASM-67 behaviour for that deployment.
     if os.getenv("S3_FILE_MANAGER_CONFIG"):
         data_dir = CONFIG_FILE.parent
         data_dir.mkdir(parents=True, exist_ok=True)

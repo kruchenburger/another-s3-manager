@@ -26,6 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and, when neither `DATA_DIR` nor config `data_dir` is set, the data directory
   now follows the config file's location. Compose files and setups that set
   `DATA_DIR` or `data_dir` are unaffected.
+- A `config.json` placed at the old default location inside the application
+  package is still read if nothing exists at `S3_FILE_MANAGER_CONFIG`, with a
+  startup warning naming both paths. Move it to `/app/data/config.json`.
+
+### Upgrade notes
+
+- If you ran the image as in the old Quick Start (`-v …:/app/data` without
+  `DATA_DIR`), your users, tokens and settings were never on the volume and
+  were already lost on every container recreate. After this upgrade ASM starts
+  with a fresh database on the volume: log in as `admin` with
+  `ADMIN_PASSWORD` and set things up again; from now on they persist.
+- The volume at `/app/data` must be writable by uid 1001. Named volumes created
+  by earlier images already are (Docker copies the image's ownership into a new
+  named volume). Host bind mounts need `chown 1001:1001` as before.
+- AWS service definitions are limited to S3, STS, SSO and SSO OIDC. Static
+  keys, profiles, SSO profiles, `assume_role`, web identity, instance and
+  container credentials all keep working.
 
 ## [1.2.1] - 2026-11-11
 

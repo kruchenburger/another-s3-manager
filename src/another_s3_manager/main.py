@@ -205,6 +205,21 @@ def _report_dangling_role_grants() -> None:
         logger.warning("Dangling role grants report failed; continuing startup", exc_info=True)
 
 
+def _warn_legacy_config_location() -> None:
+    """Loudly flag a config still read from the pre-ASM-67 package-dir location."""
+    from another_s3_manager import constants
+
+    if constants.legacy_config_in_use():
+        logger.warning(
+            "config.json was not found at S3_FILE_MANAGER_CONFIG=%s; using the legacy file %s instead. "
+            "Move it to %s (or set S3_FILE_MANAGER_CONFIG to where you mount it); the legacy location "
+            "is inside the application package and will stop being read in a future release.",
+            os.getenv("S3_FILE_MANAGER_CONFIG"),
+            constants.LEGACY_CONFIG_FILE,
+            os.getenv("S3_FILE_MANAGER_CONFIG"),
+        )
+
+
 def run_startup_tasks() -> None:
     """Everything the app does on startup EXCEPT entering the MCP session manager.
 
@@ -219,6 +234,8 @@ def run_startup_tasks() -> None:
     #    Installed here, inside startup, so uvicorn has already configured its
     #    `uvicorn.access` logger by the time we attach the filter.
     install_access_log_filter()
+
+    _warn_legacy_config_location()
 
     # 1. DB migrations — must complete before any request hits a model
     try:

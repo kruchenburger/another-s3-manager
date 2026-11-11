@@ -202,3 +202,63 @@ def test_cookie_secure_case_insensitive(monkeypatch):
 
     importlib.reload(constants)
     assert constants.COOKIE_SECURE is False
+
+
+# --- ASM-67: legacy config.json fallback -------------------------------------
+
+
+def _resolve(monkeypatch, tmp_path, *, new: bool, legacy: bool):
+    constants = reload_constants()
+    new_path = tmp_path / "data" / "config.json"
+    legacy_path = tmp_path / "pkg" / "config.json"
+    for path, present in ((new_path, new), (legacy_path, legacy)):
+        if present:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("S3_FILE_MANAGER_CONFIG", str(new_path))
+    monkeypatch.setattr(constants, "LEGACY_CONFIG_FILE", legacy_path)
+    return constants, constants._resolve_config_file(), new_path, legacy_path
+
+
+def test_config_new_path_only(monkeypatch, tmp_path):
+    _, chosen, new_path, _ = _resolve(monkeypatch, tmp_path, new=True, legacy=False)
+    assert chosen == new_path
+
+
+def test_config_legacy_only_falls_back(monkeypatch, tmp_path):
+    _, chosen, _, legacy_path = _resolve(monkeypatch, tmp_path, new=False, legacy=True)
+    assert chosen == legacy_path
+
+
+def test_config_both_new_wins(monkeypatch, tmp_path):
+    _, chosen, new_path, _ = _resolve(monkeypatch, tmp_path, new=True, legacy=True)
+    assert chosen == new_path
+
+
+def test_config_neither_uses_new_path(monkeypatch, tmp_path):
+    _, chosen, new_path, _ = _resolve(monkeypatch, tmp_path, new=False, legacy=False)
+    assert chosen == new_path
+
+
+def test_legacy_config_warning_names_both_paths(monkeypatch, tmp_path, caplog):
+    import logging
+
+    constants, chosen, new_path, legacy_path = _resolve(monkeypatch, tmp_path, new=False, legacy=True)
+    monkeypatch.setattr(constants, "CONFIG_FILE", chosen)
+    from another_s3_manager import main
+
+    logger = logging.getLogger("another_s3_manager.main")
+    monkeypatch.setattr(logger, "disabled", False)
+    with caplog.at_level(logging.WARNING, logger="another_s3_manager.main"):
+        logger.addHandler(caplog.handler)
+        try:
+            main._warn_legacy_config_location()
+        finally:
+            logger.removeHandler(caplog.handler)
+    assert str(new_path) in caplog.text and str(legacy_path) in caplog.text
+
+
+def test_no_legacy_warning_on_new_path(monkeypatch, tmp_path):
+    constants, chosen, _, _ = _resolve(monkeypatch, tmp_path, new=True, legacy=True)
+    monkeypatch.setattr(constants, "CONFIG_FILE", chosen)
+    assert constants.legacy_config_in_use() is False

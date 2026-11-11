@@ -80,5 +80,19 @@ def test_extract_reflows_the_written_file(tmp_path):
     assert "0.9.0" not in body
 
 
+def test_prerelease_tag_uses_its_final_version_section(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        "# Changelog\n\n## [Unreleased]\n\n## [1.2.2] - 2026-11-12\n\n### Changed\n\n- smaller image\n\n"
+        "## [1.2.1] - 2026-11-11\n\n### Fixed\n\n- old\n",
+        encoding="utf-8",
+    )
+    out_file = tmp_path / "release_notes.md"
+    ec.extract_changelog("v1.2.2-rc1", str(changelog), str(out_file))
+    body = out_file.read_text(encoding="utf-8")
+    assert "smaller image" in body
+    assert "1.2.1" not in body
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
