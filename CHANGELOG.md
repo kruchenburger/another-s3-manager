@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-11
+
 ### Fixed
 
 - Roles removed from the configuration no longer show up for users who were
@@ -738,7 +740,8 @@ in _s3_clients_cache` before indexing into it — two separate,
 - CSRF protection
 - Login attempt rate limiting
 
-[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.7...v1.2.0
 [1.1.7]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.5...v1.1.6
