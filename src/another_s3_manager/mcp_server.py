@@ -43,6 +43,7 @@ from another_s3_manager.metrics import (
     mcp_writes_denied_total,
     upload_rejected_total,
 )
+from another_s3_manager.users import effective_allowed_roles
 
 logger = logging.getLogger(__name__)
 
@@ -224,11 +225,13 @@ async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
         # token returns 0 roles via list_roles because the admin user's
         # allowed_roles column is empty (admins manage roles, they don't get
         # explicit assignments).
+        cfg = _config_module.load_config()
         if u.is_admin:
-            cfg = _config_module.load_config(force_reload=False)
             allowed_roles = [r["name"] for r in cfg.get("roles", []) if r.get("name")]
         else:
-            allowed_roles = [r.role_name for r in u.roles]
+            allowed_roles = effective_allowed_roles(
+                [r.role_name for r in u.roles], {r["name"] for r in cfg.get("roles", [])}
+            )
         user_dict = {
             "username": u.username,
             "is_admin": u.is_admin,

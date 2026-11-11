@@ -95,12 +95,14 @@ const TWO_USERS = {
       username: "admin",
       is_admin: true,
       allowed_roles: [],
+      missing_roles: [],
     },
     {
       id: 2,
       username: "alice",
       is_admin: false,
       allowed_roles: ["dev", "ops"],
+      missing_roles: [],
     },
   ],
   available_roles: ["dev", "ops", "qa"],
@@ -148,6 +150,33 @@ describe("UsersPage", () => {
     // Alice has both role badges
     expect(within(aliceRow).getByText("dev")).toBeInTheDocument();
     expect(within(aliceRow).getByText("ops")).toBeInTheDocument();
+  });
+
+  it("shows missing role badges with an explanation", async () => {
+    vi.mocked(listUsers).mockResolvedValue({
+      ...TWO_USERS,
+      users: TWO_USERS.users.map((u) => ({ ...u, missing_roles: u.username === "alice" ? ["retired"] : [] })),
+    });
+    renderPage();
+    const row = await findUserRow("alice");
+    const badge = within(row).getByText("retired").closest(".mantine-Badge-root")!;
+    expect(badge).toHaveAttribute("data-variant", "outline");
+    expect(badge).toHaveStyle({ textDecoration: "line-through" });
+    fireEvent.mouseEnter(badge);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Role no longer exists");
+  });
+
+  it("explains missing roles in edit mode and excludes them from submission", async () => {
+    vi.mocked(listUsers).mockResolvedValue({
+      ...TWO_USERS,
+      users: TWO_USERS.users.map((u) => ({ ...u, missing_roles: u.username === "alice" ? ["retired"] : [] })),
+    });
+    vi.mocked(updateUser).mockResolvedValue(undefined);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit alice" }));
+    expect(await screen.findByText("Removed from configuration, will be dropped on save: retired")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(updateUser).toHaveBeenCalledWith("alice", { is_admin: false, allowed_roles: ["dev", "ops"] }));
   });
 
   it("disables Delete and Reset buttons for the current user's row (self-protect)", async () => {
@@ -206,6 +235,8 @@ describe("UsersPage", () => {
     // Drawer title = "Create user"
     await screen.findByRole("dialog", { name: /create user/i });
 
+    expect(screen.queryByText(/Removed from configuration/)).not.toBeInTheDocument();
+
     // Both Username and Password fields rendered + enabled (create mode).
     // Mantine appends " *" to required label text, so match flexibly.
     const username = screen.getByLabelText(/username/i) as HTMLInputElement;
@@ -227,6 +258,7 @@ describe("UsersPage", () => {
     const username = screen.getByLabelText(/username/i) as HTMLInputElement;
     expect(username).toBeDisabled();
     expect(username.value).toBe("alice");
+    expect(screen.queryByText(/Removed from configuration/)).not.toBeInTheDocument();
 
     // No password field in edit mode (matches "Password" or "Password *")
     expect(

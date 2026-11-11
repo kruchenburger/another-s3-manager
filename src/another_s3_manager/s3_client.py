@@ -21,6 +21,7 @@ from another_s3_manager.config import load_config
 from another_s3_manager.constants import S3_USE_SSL, S3_VERIFY_SSL
 from another_s3_manager.errors import RoleNotFoundError, SafeStorageLogFilter
 from another_s3_manager.move_reservations import guarded_write
+from another_s3_manager.users import effective_allowed_roles
 
 # Cache for S3 clients per role
 _s3_clients_cache: Dict[str, AnyType] = {}
@@ -943,7 +944,9 @@ def validate_role_access(role_name: Optional[str], user_dict: Dict[str, Any]) ->
     if user_dict.get("is_admin", False):
         return role_name
 
-    allowed_roles = user_dict.get("allowed_roles", [])
+    allowed_roles = effective_allowed_roles(
+        user_dict.get("allowed_roles", []), {r["name"] for r in load_config().get("roles", [])}
+    )
     if role_name not in allowed_roles:
         raise PermissionError(f"Access denied: You don't have permission to use role '{role_name}'")
 

@@ -7,10 +7,12 @@ is preserved unchanged so callers in auth.py and main.py need no edits.
 
 import logging
 import os
+import threading
 import time
+from collections.abc import Collection
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import joinedload, selectinload
 
 from another_s3_manager.constants import (
@@ -24,6 +26,9 @@ from another_s3_manager.database import session_scope
 from another_s3_manager.models import Ban, User, UserRole
 
 logger = logging.getLogger(__name__)
+
+# Serialize config publication and grant writes in the single application process.
+role_grants_lock = threading.RLock()
 
 
 def _user_to_dict(user: User) -> Dict[str, Any]:
@@ -336,6 +341,43 @@ def _reconcile_default_role(current: Optional[str], new_roles: List[str]) -> Opt
     if current is None or current in new_roles:
         return current
     return new_roles[0] if new_roles else None
+
+
+def effective_allowed_roles(stored: list[str], config_role_names: Collection[str]) -> list[str]:
+    """Return stored grants that still exist in configuration, preserving order."""
+    # This protects new application-authorized operations, not already issued
+    # presigned URLs (valid until expiry). An in-flight request authenticated
+    # before a same-name delete/recreate is not guaranteed to be rechecked.
+    # External restoration of a name can revive grants: identities have no generations.
+    names = set(config_role_names)
+    return [name for name in stored if name in names]
+
+
+def count_grants_by_role() -> dict[str, int]:
+    """Count users holding each stored role, including missing configuration names."""
+    with session_scope() as session:
+        return dict(session.execute(select(UserRole.role_name, func.count()).group_by(UserRole.role_name)).all())
+
+
+def prune_role_grants(role_names: Collection[str]) -> dict[str, int]:
+    """Atomically remove named grants and explicit defaults; leave all other roles alone."""
+    names = set(role_names)
+    if not names:
+        return {}
+    with session_scope() as session:
+        counts = dict(
+            session.execute(
+                select(UserRole.role_name, func.count())
+                .where(UserRole.role_name.in_(names))
+                .group_by(UserRole.role_name)
+            ).all()
+        )
+        session.execute(delete(UserRole).where(UserRole.role_name.in_(names)))
+        session.execute(update(User).where(User.default_role.in_(names)).values(default_role=None))
+    result = {name: counts.get(name, 0) for name in sorted(names)}
+    for name, count in result.items():
+        logger.info("role_grants_pruned role=%s users=%s", name, count)
+    return result
 
 
 def compute_default_role(
