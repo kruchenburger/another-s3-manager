@@ -20,6 +20,7 @@ permissions:
 jobs:
   promote:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,10 +40,24 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Verify the tested source image exists
+        # The :<short-sha> image is pushed by ci.yml's build job a few minutes
+        # after the main push, so a tag pushed right after merging the
+        # release-prep PR can arrive first. Wait for it (bounded) instead of
+        # failing; a commit that never went through a main build still fails.
+        env:
+          SOURCE_IMAGE: ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.sha_tag }}
+          SHA_TAG: ${{ steps.vars.outputs.sha_tag }}
         run: |
-          docker buildx imagetools inspect \
-            "ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.sha_tag }}" \
-            || { echo "::error::No ghcr :${{ steps.vars.outputs.sha_tag }} image — tag a commit that was built on main (ci.yml build job) first."; exit 1; }
+          for attempt in $(seq 1 40); do
+            if docker buildx imagetools inspect "$SOURCE_IMAGE" > /dev/null 2>&1; then
+              echo "Found $SOURCE_IMAGE (attempt $attempt)"
+              exit 0
+            fi
+            echo "Attempt $attempt/40: $SOURCE_IMAGE not published yet, waiting 30s"
+            sleep 30
+          done
+          echo "::error::No ghcr :$SHA_TAG image after 20 minutes — tag a commit that was built on main (ci.yml build job) first."
+          exit 1
 
       - name: Promote tested image to release tags
         # docker/Dockerfile.release is FROM the tested :<short-sha> image and only
