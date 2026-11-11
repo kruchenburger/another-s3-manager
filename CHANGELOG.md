@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   creating a new role with the same name later does not silently give it to
   the people who had the old one. Already issued presigned links stay valid
   until they expire.
+- MCP tokens can no longer delete files (`delete_file`, `copy_object` with
+  `delete_source`) when deletion is disabled only through the
+  `DISABLE_DELETION` environment variable. The web UI, moves and MCP now share
+  one check: deletion is off if either the variable or the `disable_deletion`
+  setting is on.
 - Releases no longer fail when the version tag is pushed before the `main`
   image has finished building; the release job waits for it.
 

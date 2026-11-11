@@ -857,9 +857,7 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
         )
     # disable_deletion: env var OR config (env wins). Mirrors the same combined
     # check used in /api/config so the two endpoints don't disagree.
-    disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
-    disable_deletion_config = config.get("disable_deletion", False)
-    disable_deletion = disable_deletion_env or disable_deletion_config
+    disable_deletion = config_module.is_deletion_disabled(config)
     # Computed default_role: explicit choice if still valid, else first of
     # allowed_roles, else null. Helper lives in users.py so the rule lives
     # next to the data layer that stores explicit_default.
@@ -1609,9 +1607,7 @@ async def get_config(
     config = load_config(force_reload=force_reload)
 
     # Check if deletion is disabled (from environment variable or config)
-    disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
-    disable_deletion_config = config.get("disable_deletion", False)
-    disable_deletion = disable_deletion_env or disable_deletion_config
+    disable_deletion = config_module.is_deletion_disabled(config)
 
     # Get enable_lazy_loading from config file, fallback to environment variable, then default
     enable_lazy_loading = config.get("enable_lazy_loading")
@@ -2760,11 +2756,7 @@ async def delete_file(
     """Delete a file or recursively delete a directory from S3"""
     role = _require_role(role)
     # Check if deletion is disabled (from environment variable or config)
-    config = load_config(force_reload=False)
-    disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
-    disable_deletion_config = config.get("disable_deletion", False)
-
-    if disable_deletion_env or disable_deletion_config:
+    if config_module.is_deletion_disabled(load_config(force_reload=False)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File deletion is disabled by administrator")
     try:
         # A trailing "/" is the directory-delete signal delete_object_for_role

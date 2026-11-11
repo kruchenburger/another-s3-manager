@@ -170,7 +170,7 @@ def assert_write_allowed(token: Any, tool_name: str, config: dict) -> None:
             "This token is read-only",
             {"tool": tool_name},
         )
-    if tool_name == "delete_file" and config.get("disable_deletion", False):
+    if tool_name == "delete_file" and _config_module.is_deletion_disabled(config):
         mcp_writes_denied_total.labels(tool=tool_name, reason="deletion_disabled").inc()
         raise McpError(
             "DELETION_DISABLED",
@@ -1519,7 +1519,7 @@ async def copy_object(
         token, user = await authenticate_mcp_request(_get_current_request())
         config = _config_module.load_config(force_reload=False)
         assert_write_allowed(token, "copy_object", config)
-        if delete_source and config.get("disable_deletion", False):
+        if delete_source and _config_module.is_deletion_disabled(config):
             # This guard lives outside assert_write_allowed (it's conditional on
             # delete_source, not just the tool name), but it's still a write
             # denial for the same reason and must be counted identically.
