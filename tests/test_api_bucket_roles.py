@@ -35,7 +35,7 @@ def bucket_request(client, endpoint, role, headers):
         ("", "member", 400),
         (" \t ", "member", 400),
         ("Unknown", "admin", 400),
-        ("Unknown", "member", 400),
+        ("Unknown", "member", 403),
         ("Default", "denied", 403),
     ],
 )

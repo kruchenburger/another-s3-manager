@@ -475,7 +475,7 @@ def test_single_user_admin_routes_do_not_rewrite_the_whole_table(app_client, moc
     create_user("targetuser", is_admin=False, allowed_roles=["Default"])
     _, headers = login(app_client)
 
-    save_users_spy = mocker.patch("another_s3_manager.main.save_users", side_effect=AssertionError("must not run"))
+    save_users_spy = mocker.patch("another_s3_manager.users.save_users", side_effect=AssertionError("must not run"))
 
     resp = app_client.put(
         "/api/admin/users/targetuser/password",
@@ -1049,7 +1049,12 @@ def test_me_returns_allowed_roles(app_client, monkeypatch):
     """/api/me must include allowed_roles for the React sidebar."""
     monkeypatch.setenv("ADMIN_PASSWORD", "test-pw")
     from another_s3_manager.auth import hash_password
+    from another_s3_manager.config import load_config, save_config
     from another_s3_manager.users import save_users
+
+    cfg = load_config(force_reload=True)
+    cfg["roles"].extend({"name": name, "type": "default"} for name in ["aws-prod", "r2-cdn"])
+    save_config(cfg)
 
     save_users(
         {
@@ -1912,6 +1917,11 @@ def test_admin_can_clear_user_allowed_roles(app_client):
 
 def test_admin_can_partially_update_user_omitting_roles(app_client):
     """If allowed_roles key is absent, existing roles must be preserved."""
+    from another_s3_manager.config import load_config, save_config
+
+    cfg = load_config(force_reload=True)
+    cfg["roles"].append({"name": "RoleA", "type": "default"})
+    save_config(cfg)
     create_user("alice", password="OldPass123", is_admin=False, allowed_roles=["RoleA"])
     _, headers = login(app_client)
     # Send only is_admin, no allowed_roles field at all

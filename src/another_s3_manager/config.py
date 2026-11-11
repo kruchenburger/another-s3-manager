@@ -119,6 +119,20 @@ def resolve_max_file_size(config: Optional[Dict[str, Any]] = None) -> int:
     return int(max_file_size)
 
 
+def is_deletion_disabled(config: Optional[Dict[str, Any]] = None) -> bool:
+    """Single deletion gate for the web UI, move jobs and MCP.
+
+    Deletion is off when EITHER env `DISABLE_DELETION=true` OR config
+    `disable_deletion` is set. Every delete path must call this instead of
+    reading one of the two sources itself (ASM-64: MCP used to check only config).
+    """
+    if os.getenv("DISABLE_DELETION", "").lower() == "true":
+        return True
+    if config is None:
+        config = load_config()
+    return bool(config.get("disable_deletion", False))
+
+
 def resolve_move_max_objects(config: Optional[Dict[str, Any]] = None) -> int:
     """Resolve the bounded move enumeration limit, config before environment."""
     if config is None:

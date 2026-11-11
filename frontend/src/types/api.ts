@@ -147,6 +147,7 @@ export interface AdminUser {
   username: string;
   is_admin: boolean;
   allowed_roles: string[];
+  missing_roles: string[];
   // created_at: not currently rendered — backend returns it but frontend
   // doesn't display it. Add back with a "Created" column when wanted.
 }

@@ -27,6 +27,11 @@ RUN uv sync --frozen --no-dev --no-editable
 # Stage 3: Runtime
 FROM python:3.13-slim
 
+# Official MCP Registry ownership check for the OCI package
+# (registry.modelcontextprotocol.io): must match "name" in server.json.
+# Inherited by the release image built from docker/Dockerfile.release.
+LABEL io.modelcontextprotocol.server.name="io.github.kruchenburger/another-s3-manager"
+
 RUN groupadd --gid 1001 app && \
     useradd --uid 1001 --gid 1001 --create-home --home-dir /home/app app
 

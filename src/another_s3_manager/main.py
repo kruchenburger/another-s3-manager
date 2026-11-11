@@ -47,6 +47,7 @@ from starlette.concurrency import run_in_threadpool
 
 import another_s3_manager.config as config_module
 from another_s3_manager import move_jobs
+from another_s3_manager import users as users_module
 from another_s3_manager.api_tokens import count_active_tokens
 from another_s3_manager.auth import (
     check_ban,
@@ -110,7 +111,6 @@ from another_s3_manager.users import (
     load_bans,
     load_users,
     save_bans,
-    save_users,
     sync_admin_password_from_env,
 )
 from another_s3_manager.utils import (
@@ -191,6 +191,20 @@ from contextlib import asynccontextmanager
 from another_s3_manager.mcp_server import mcp as _mcp_instance
 
 
+def _report_dangling_role_grants() -> None:
+    """Report configuration drift without destroying grants on a bad ConfigMap push."""
+    try:
+        names = {r["name"] for r in load_config().get("roles", []) if r.get("name")}
+        missing = {name: count for name, count in users_module.count_grants_by_role().items() if name not in names}
+        if missing:
+            report = ", ".join(
+                f"{name} ({count} {'user' if count == 1 else 'users'})" for name, count in sorted(missing.items())
+            )
+            logger.warning("Dangling role grants (role no longer in config): %s", report)
+    except Exception:
+        logger.warning("Dangling role grants report failed; continuing startup", exc_info=True)
+
+
 def run_startup_tasks() -> None:
     """Everything the app does on startup EXCEPT entering the MCP session manager.
 
@@ -226,6 +240,8 @@ def run_startup_tasks() -> None:
         sys.exit(1)
     except Exception:
         logger.warning("JSON migration failed; DB is still usable", exc_info=True)
+
+    _report_dangling_role_grants()
 
     # 3. One-time migration: legacy global config.default_role → per-user records
     try:
@@ -836,12 +852,12 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
     if is_admin:
         allowed_roles = [r["name"] for r in config.get("roles", []) if r.get("name")]
     else:
-        allowed_roles = current_user.get("allowed_roles", [])
+        allowed_roles = users_module.effective_allowed_roles(
+            current_user.get("allowed_roles", []), {r["name"] for r in config.get("roles", []) if r.get("name")}
+        )
     # disable_deletion: env var OR config (env wins). Mirrors the same combined
     # check used in /api/config so the two endpoints don't disagree.
-    disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
-    disable_deletion_config = config.get("disable_deletion", False)
-    disable_deletion = disable_deletion_env or disable_deletion_config
+    disable_deletion = config_module.is_deletion_disabled(config)
     # Computed default_role: explicit choice if still valid, else first of
     # allowed_roles, else null. Helper lives in users.py so the rule lives
     # next to the data layer that stores explicit_default.
@@ -890,7 +906,23 @@ async def list_users(current_user: Dict[str, Any] = Depends(get_current_admin_us
     available_roles = [role.get("name") for role in config.get("roles", [])]
     # Returns user list including id field (used by admin token creation)
     user_list = get_users_for_admin()
+    names = set(available_roles)
+    for user in user_list:
+        stored = user["allowed_roles"]
+        user["allowed_roles"] = users_module.effective_allowed_roles(stored, names)
+        user["missing_roles"] = [name for name in stored if name not in names]
     return {"users": user_list, "available_roles": available_roles}
+
+
+def _validate_role_grants(roles: list[str]) -> None:
+    """Validate requested grants while the caller holds role_grants_lock."""
+    names = {r["name"] for r in load_config(force_reload=True).get("roles", []) if r.get("name")}
+    unknown = list(dict.fromkeys(name for name in roles if name not in names))
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown role(s): {', '.join(unknown)}. Create the role first or remove it from the list.",
+        )
 
 
 @app.post("/api/admin/users")
@@ -905,19 +937,8 @@ async def create_user(
     csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Create a new user (admin only)"""
-    # Note: this still loads the full user list rather than a targeted lookup.
-    # save_users() below has full-replace semantics (any user present in the
-    # DB but absent from the list it's given gets deleted), so the full list
-    # has to be loaded anyway to append the new user and save it back without
-    # losing everyone else. The existence check just below is a free in-memory
-    # scan over that already-loaded list, not a second DB query. Admin-only,
-    # low-frequency — not the per-request hot path this fix targets.
-    users = load_users()
-
-    # Check if user already exists
-    if any(u.get("username") == username for u in users.get("users", [])):
+    if get_user_by_username(username):
         raise HTTPException(status_code=400, detail="User already exists")
-
     _enforce_password_policy(password)
 
     # Hash password
@@ -931,22 +952,19 @@ async def create_user(
     # Parse allowed roles
     roles_list = [r.strip() for r in allowed_roles.split(",") if r.strip()] if allowed_roles else []
 
-    # Import datetime for timestamp
-    from datetime import datetime
-
-    new_user = {
-        "username": username,
-        "password_hash": hashed_password,
-        "is_admin": is_admin,
-        "allowed_roles": roles_list,
-        "theme": "auto",  # Default to auto (system preference)
-        "must_change_password": must_change_password,
-        "password_set_via": PASSWORD_SET_VIA_UI,
-        "created_at": datetime.now().isoformat(),
-    }
-
-    users.setdefault("users", []).append(new_user)
-    save_users(users)
+    with users_module.role_grants_lock:
+        _validate_role_grants(roles_list)
+        try:
+            users_module.create_user(
+                username,
+                hashed_password,
+                is_admin=is_admin,
+                allowed_roles=roles_list,
+                must_change_password=must_change_password,
+                password_set_via=PASSWORD_SET_VIA_UI,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="User already exists") from exc
 
     return {"message": "User created successfully", "username": username}
 
@@ -1111,7 +1129,9 @@ def _effective_allowed_roles(current_user: Dict[str, Any]) -> list[str]:
     if current_user.get("is_admin", False):
         config = load_config()
         return [r["name"] for r in config.get("roles", []) if r.get("name")]
-    return current_user.get("allowed_roles", [])
+    return users_module.effective_allowed_roles(
+        current_user.get("allowed_roles", []), {r["name"] for r in load_config().get("roles", []) if r.get("name")}
+    )
 
 
 @app.put("/api/me/default-role", response_model=UpdateDefaultRoleResponse)
@@ -1475,10 +1495,13 @@ async def update_user(
         # and rewrite every user just to change one).
         from another_s3_manager.users import update_user as users_update_user
 
-        try:
-            users_update_user(username, **update_kwargs)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail="User not found") from exc
+        with users_module.role_grants_lock:
+            if "allowed_roles" in update_kwargs:
+                _validate_role_grants(update_kwargs["allowed_roles"])
+            try:
+                users_update_user(username, **update_kwargs)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail="User not found") from exc
 
     return {"message": f"User {username} updated successfully"}
 
@@ -1584,9 +1607,7 @@ async def get_config(
     config = load_config(force_reload=force_reload)
 
     # Check if deletion is disabled (from environment variable or config)
-    disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
-    disable_deletion_config = config.get("disable_deletion", False)
-    disable_deletion = disable_deletion_env or disable_deletion_config
+    disable_deletion = config_module.is_deletion_disabled(config)
 
     # Get enable_lazy_loading from config file, fallback to environment variable, then default
     enable_lazy_loading = config.get("enable_lazy_loading")
@@ -1670,7 +1691,9 @@ async def get_config(
         raise HTTPException(status_code=404, detail="User not found")
 
     # Get allowed roles for this user
-    allowed_roles = user.get("allowed_roles", [])
+    allowed_roles = users_module.effective_allowed_roles(
+        user.get("allowed_roles", []), {r["name"] for r in config.get("roles", []) if r.get("name")}
+    )
     if not allowed_roles:
         # No roles allowed, return empty config with all required fields
         return {
@@ -1753,311 +1776,345 @@ async def update_config(
             detail="The application does not have write access to the configuration file (e.g., mounted as read-only from Kubernetes ConfigMap). Configuration management must be handled externally.",
         )
 
-    try:
-        # Validate config structure
-        if "roles" not in config:
-            raise HTTPException(status_code=400, detail="Invalid config structure: 'roles' is required")
-
-        # Handle enable_lazy_loading - if provided, validate and use it; otherwise preserve existing or use env var/default
-        if "enable_lazy_loading" in config:
-            # Validate enable_lazy_loading (must be boolean)
-            if not isinstance(config["enable_lazy_loading"], bool):
-                raise HTTPException(status_code=400, detail="enable_lazy_loading must be a boolean")
-        else:
-            # Preserve enable_lazy_loading from current config if exists, otherwise use env var or default
-            current_config = load_config(force_reload=False)
-            if "enable_lazy_loading" in current_config:
-                config["enable_lazy_loading"] = current_config["enable_lazy_loading"]
-            else:
-                # Use env var or default if not in config
-                config["enable_lazy_loading"] = os.getenv("ENABLE_LAZY_LOADING", "true").lower() == "true"
-
-        # Handle max_file_size - if provided, validate and use it; otherwise preserve existing or use env var/default
-        if "max_file_size" in config:
-            # Validate max_file_size
-            try:
-                max_file_size_val = int(config["max_file_size"])
-                if max_file_size_val < 1024:  # At least 1KB
-                    raise HTTPException(status_code=400, detail="max_file_size must be at least 1024 bytes (1KB)")
-            except (ValueError, TypeError):
-                raise HTTPException(status_code=400, detail="max_file_size must be a valid integer")
-        else:
-            # Preserve max_file_size from current config if exists, otherwise use env var or default
-            current_config = load_config(force_reload=False)
-            if "max_file_size" in current_config:
-                config["max_file_size"] = current_config["max_file_size"]
-            else:
-                # Use env var or default if not in config
-                config["max_file_size"] = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
-
+    with users_module.role_grants_lock:
         try:
-            if "move_max_objects" in config:
-                config["move_max_objects"] = config_module.resolve_move_max_objects(config)
-            else:
-                config["move_max_objects"] = config_module.resolve_move_max_objects(load_config())
-        except ValueError:
-            raise HTTPException(400, detail="move_max_objects must be a positive integer") from None
+            # Validate config structure
+            if "roles" not in config:
+                raise HTTPException(status_code=400, detail="Invalid config structure: 'roles' is required")
 
-        # Handle max_client_load - if provided, validate and use it; otherwise preserve existing or use env var/default
-        if "max_client_load" in config:
-            # Validate max_client_load (1..200000, matching the s3_client clamp)
+            old_config = load_config(force_reload=True)
+            old_names = {r["name"] for r in old_config.get("roles", []) if r.get("name")}
+            new_names = []
+            for role in config["roles"]:
+                name = role.get("name")
+                if not isinstance(name, str):
+                    raise HTTPException(status_code=400, detail=f"Invalid role name: {name!r}")
+                if name not in old_names and (not name or name != name.strip() or "," in name):
+                    raise HTTPException(status_code=400, detail=f"Invalid role name: {name!r}")
+                if name not in old_names and name in new_names:
+                    raise HTTPException(status_code=400, detail=f"Duplicate role name: {name!r}")
+                new_names.append(name)
+            added = set(new_names) - old_names
+            removed = old_names - set(new_names)
+
+            # Handle enable_lazy_loading - if provided, validate and use it; otherwise preserve existing or use env var/default
+            if "enable_lazy_loading" in config:
+                # Validate enable_lazy_loading (must be boolean)
+                if not isinstance(config["enable_lazy_loading"], bool):
+                    raise HTTPException(status_code=400, detail="enable_lazy_loading must be a boolean")
+            else:
+                # Preserve enable_lazy_loading from current config if exists, otherwise use env var or default
+                current_config = old_config
+                if "enable_lazy_loading" in current_config:
+                    config["enable_lazy_loading"] = current_config["enable_lazy_loading"]
+                else:
+                    # Use env var or default if not in config
+                    config["enable_lazy_loading"] = os.getenv("ENABLE_LAZY_LOADING", "true").lower() == "true"
+
+            # Handle max_file_size - if provided, validate and use it; otherwise preserve existing or use env var/default
+            if "max_file_size" in config:
+                # Validate max_file_size
+                try:
+                    max_file_size_val = int(config["max_file_size"])
+                    if max_file_size_val < 1024:  # At least 1KB
+                        raise HTTPException(status_code=400, detail="max_file_size must be at least 1024 bytes (1KB)")
+                except (ValueError, TypeError):
+                    raise HTTPException(status_code=400, detail="max_file_size must be a valid integer")
+            else:
+                # Preserve max_file_size from current config if exists, otherwise use env var or default
+                current_config = old_config
+                if "max_file_size" in current_config:
+                    config["max_file_size"] = current_config["max_file_size"]
+                else:
+                    # Use env var or default if not in config
+                    config["max_file_size"] = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
+
             try:
-                max_client_load_val = int(config["max_client_load"])
-                if max_client_load_val < 1 or max_client_load_val > 200000:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="max_client_load must be between 1 and 200000",
-                    )
-                config["max_client_load"] = max_client_load_val
-            except (ValueError, TypeError):
-                raise HTTPException(status_code=400, detail="max_client_load must be a valid integer")
-        else:
-            # Preserve max_client_load from current config if exists, otherwise use env var or default
-            current_config = load_config(force_reload=False)
-            if "max_client_load" in current_config:
-                config["max_client_load"] = current_config["max_client_load"]
-            else:
-                # Use env var or default if not in config
-                config["max_client_load"] = int(os.getenv("MAX_CLIENT_LOAD", "10000"))
+                if "move_max_objects" in config:
+                    config["move_max_objects"] = config_module.resolve_move_max_objects(config)
+                else:
+                    config["move_max_objects"] = config_module.resolve_move_max_objects(old_config)
+            except ValueError:
+                raise HTTPException(400, detail="move_max_objects must be a positive integer") from None
 
-        # Handle presigned URL TTLs — validate when provided, preserve when omitted.
-        _current_for_ttl = load_config(force_reload=False)
-
-        def _validate_ttl_field(field_name: str) -> None:
-            if field_name in config:
+            # Handle max_client_load - if provided, validate and use it; otherwise preserve existing or use env var/default
+            if "max_client_load" in config:
+                # Validate max_client_load (1..200000, matching the s3_client clamp)
                 try:
-                    val = int(config[field_name])
+                    max_client_load_val = int(config["max_client_load"])
+                    if max_client_load_val < 1 or max_client_load_val > 200000:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="max_client_load must be between 1 and 200000",
+                        )
+                    config["max_client_load"] = max_client_load_val
                 except (ValueError, TypeError):
-                    raise HTTPException(status_code=400, detail=f"{field_name} must be a valid integer")
-                if val < PRESIGNED_URL_MIN_TTL or val > PRESIGNED_URL_HARD_CEILING:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"{field_name} must be between {PRESIGNED_URL_MIN_TTL} "
-                            f"and {PRESIGNED_URL_HARD_CEILING} seconds"
-                        ),
-                    )
-                config[field_name] = val
+                    raise HTTPException(status_code=400, detail="max_client_load must be a valid integer")
             else:
-                preserved = _current_for_ttl.get(field_name)
-                if preserved is not None:
-                    config[field_name] = preserved
+                # Preserve max_client_load from current config if exists, otherwise use env var or default
+                current_config = old_config
+                if "max_client_load" in current_config:
+                    config["max_client_load"] = current_config["max_client_load"]
+                else:
+                    # Use env var or default if not in config
+                    config["max_client_load"] = int(os.getenv("MAX_CLIENT_LOAD", "10000"))
 
-        _validate_ttl_field("presigned_url_default_ttl")
-        _validate_ttl_field("presigned_url_max_ttl")
+            # Handle presigned URL TTLs — validate when provided, preserve when omitted.
+            _current_for_ttl = old_config
 
-        # Cross-field invariant: default cannot exceed max (when both are known).
-        _eff_default = config.get("presigned_url_default_ttl")
-        _eff_max = config.get("presigned_url_max_ttl")
-        if _eff_default is not None and _eff_max is not None and int(_eff_default) > int(_eff_max):
-            raise HTTPException(
-                status_code=400,
-                detail="presigned_url_default_ttl cannot exceed presigned_url_max_ttl",
-            )
+            def _validate_ttl_field(field_name: str) -> None:
+                if field_name in config:
+                    try:
+                        val = int(config[field_name])
+                    except (ValueError, TypeError):
+                        raise HTTPException(status_code=400, detail=f"{field_name} must be a valid integer")
+                    if val < PRESIGNED_URL_MIN_TTL or val > PRESIGNED_URL_HARD_CEILING:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f"{field_name} must be between {PRESIGNED_URL_MIN_TTL} "
+                                f"and {PRESIGNED_URL_HARD_CEILING} seconds"
+                            ),
+                        )
+                    config[field_name] = val
+                else:
+                    preserved = _current_for_ttl.get(field_name)
+                    if preserved is not None:
+                        config[field_name] = preserved
 
-        # Extension lists — validate (list of strings) when provided, preserve
-        # when omitted. Two independent keys since the 1.0.3 split:
-        #   preview_text_extensions → text-preview in the UI
-        #   upload_inline_extensions → Content-Disposition: inline on upload
-        current_config = load_config(force_reload=False)
-        for ext_field in ("preview_text_extensions", "upload_inline_extensions"):
-            if ext_field in config:
-                if not isinstance(config[ext_field], list):
-                    raise HTTPException(status_code=400, detail=f"{ext_field} must be a list")
-                for ext in config[ext_field]:
-                    if not isinstance(ext, str):
-                        raise HTTPException(status_code=400, detail=f"{ext_field} must contain only strings")
-                # Normalize: strip leading dots, lowercase, drop blanks.
-                config[ext_field] = [ext.lstrip(".").lower() for ext in config[ext_field] if ext.strip()]
-            elif ext_field in current_config:
-                config[ext_field] = current_config[ext_field]
-            else:
-                config[ext_field] = []
+            _validate_ttl_field("presigned_url_default_ttl")
+            _validate_ttl_field("presigned_url_max_ttl")
 
-        # Password policy fields: validate range when provided, preserve when omitted.
-        for field in (
-            "password_min_length",
-            "password_min_uppercase",
-            "password_min_lowercase",
-            "password_min_digits",
-            "password_min_special",
-        ):
-            if field in config:
-                try:
-                    val = int(config[field])
-                except (ValueError, TypeError):
-                    raise HTTPException(status_code=400, detail=f"{field} must be an integer")
-                if val < 0 or val > 50:
-                    raise HTTPException(status_code=400, detail=f"{field} must be between 0 and 50")
-                config[field] = val
-            else:
-                preserved = load_config(force_reload=False).get(field)
-                if preserved is not None:
-                    config[field] = preserved
+            # Cross-field invariant: default cannot exceed max (when both are known).
+            _eff_default = config.get("presigned_url_default_ttl")
+            _eff_max = config.get("presigned_url_max_ttl")
+            if _eff_default is not None and _eff_max is not None and int(_eff_default) > int(_eff_max):
+                raise HTTPException(
+                    status_code=400,
+                    detail="presigned_url_default_ttl cannot exceed presigned_url_max_ttl",
+                )
 
-        # MCP server fields (Phase 5): validate types/ranges when provided, preserve when omitted.
-        if "mcp_enabled" in config and not isinstance(config["mcp_enabled"], bool):
-            raise HTTPException(status_code=422, detail="mcp_enabled must be boolean")
-        if "mcp_disable_writes" in config and not isinstance(config["mcp_disable_writes"], bool):
-            raise HTTPException(status_code=422, detail="mcp_disable_writes must be boolean")
-        if "mcp_text_extensions" in config:
-            ext = config["mcp_text_extensions"]
-            if not isinstance(ext, list) or not all(isinstance(e, str) for e in ext):
-                raise HTTPException(status_code=422, detail="mcp_text_extensions must be list of strings")
-        if "mcp_global_max_read_bytes" in config:
-            v = config["mcp_global_max_read_bytes"]
-            # Explicitly reject booleans (bool is a subclass of int in Python)
-            if isinstance(v, bool) or not isinstance(v, int) or v < 1 or v > 10_485_760:
-                raise HTTPException(status_code=422, detail="mcp_global_max_read_bytes must be 1..10485760")
-        # MCP big-bucket ergonomics keys (2026-07-12): positive ints within UI
-        # bounds. POST rejects garbage; the READ path additionally clamps
-        # (floor 1 for the list keys, floor 1000 for the summary walk) so a
-        # hand-edited config file cannot brick the tools.
-        for int_field, lo, hi in (
-            # Lower bound 1_000 matches the runtime floor
-            # (s3_client._MIN_SUMMARY_MAX_KEYS) and the Settings NumberInput
-            # min — a value accepted here that the walk silently re-floors
-            # at call time would be a lie by the time it's echoed back.
-            ("mcp_summary_max_keys", 1_000, 1_000_000),
-            ("mcp_summary_prefix_scan_pages", 1, 200),
-            ("mcp_list_page_size", 1, 10_000),
-            ("mcp_list_max_page_size", 1, 10_000),
-        ):
-            if int_field in config:
-                v = config[int_field]
+            # Extension lists — validate (list of strings) when provided, preserve
+            # when omitted. Two independent keys since the 1.0.3 split:
+            #   preview_text_extensions → text-preview in the UI
+            #   upload_inline_extensions → Content-Disposition: inline on upload
+            current_config = old_config
+            for ext_field in ("preview_text_extensions", "upload_inline_extensions"):
+                if ext_field in config:
+                    if not isinstance(config[ext_field], list):
+                        raise HTTPException(status_code=400, detail=f"{ext_field} must be a list")
+                    for ext in config[ext_field]:
+                        if not isinstance(ext, str):
+                            raise HTTPException(status_code=400, detail=f"{ext_field} must contain only strings")
+                    # Normalize: strip leading dots, lowercase, drop blanks.
+                    config[ext_field] = [ext.lstrip(".").lower() for ext in config[ext_field] if ext.strip()]
+                elif ext_field in current_config:
+                    config[ext_field] = current_config[ext_field]
+                else:
+                    config[ext_field] = []
+
+            # Password policy fields: validate range when provided, preserve when omitted.
+            for field in (
+                "password_min_length",
+                "password_min_uppercase",
+                "password_min_lowercase",
+                "password_min_digits",
+                "password_min_special",
+            ):
+                if field in config:
+                    try:
+                        val = int(config[field])
+                    except (ValueError, TypeError):
+                        raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+                    if val < 0 or val > 50:
+                        raise HTTPException(status_code=400, detail=f"{field} must be between 0 and 50")
+                    config[field] = val
+                else:
+                    preserved = old_config.get(field)
+                    if preserved is not None:
+                        config[field] = preserved
+
+            # MCP server fields (Phase 5): validate types/ranges when provided, preserve when omitted.
+            if "mcp_enabled" in config and not isinstance(config["mcp_enabled"], bool):
+                raise HTTPException(status_code=422, detail="mcp_enabled must be boolean")
+            if "mcp_disable_writes" in config and not isinstance(config["mcp_disable_writes"], bool):
+                raise HTTPException(status_code=422, detail="mcp_disable_writes must be boolean")
+            if "mcp_text_extensions" in config:
+                ext = config["mcp_text_extensions"]
+                if not isinstance(ext, list) or not all(isinstance(e, str) for e in ext):
+                    raise HTTPException(status_code=422, detail="mcp_text_extensions must be list of strings")
+            if "mcp_global_max_read_bytes" in config:
+                v = config["mcp_global_max_read_bytes"]
                 # Explicitly reject booleans (bool is a subclass of int in Python)
-                if isinstance(v, bool) or not isinstance(v, int) or v < lo or v > hi:
-                    raise HTTPException(status_code=422, detail=f"{int_field} must be {lo}..{hi}")
-        # Preserve MCP fields from current config when omitted in request
-        _current_cfg = load_config(force_reload=False)
-        for k in (
-            "mcp_enabled",
-            "mcp_disable_writes",
-            "mcp_text_extensions",
-            "mcp_global_max_read_bytes",
-            "mcp_summary_max_keys",
-            "mcp_summary_prefix_scan_pages",
-            "mcp_list_page_size",
-            "mcp_list_max_page_size",
-        ):
-            if k not in config:
-                config[k] = _current_cfg.get(k)
+                if isinstance(v, bool) or not isinstance(v, int) or v < 1 or v > 10_485_760:
+                    raise HTTPException(status_code=422, detail="mcp_global_max_read_bytes must be 1..10485760")
+            # MCP big-bucket ergonomics keys (2026-07-12): positive ints within UI
+            # bounds. POST rejects garbage; the READ path additionally clamps
+            # (floor 1 for the list keys, floor 1000 for the summary walk) so a
+            # hand-edited config file cannot brick the tools.
+            for int_field, lo, hi in (
+                # Lower bound 1_000 matches the runtime floor
+                # (s3_client._MIN_SUMMARY_MAX_KEYS) and the Settings NumberInput
+                # min — a value accepted here that the walk silently re-floors
+                # at call time would be a lie by the time it's echoed back.
+                ("mcp_summary_max_keys", 1_000, 1_000_000),
+                ("mcp_summary_prefix_scan_pages", 1, 200),
+                ("mcp_list_page_size", 1, 10_000),
+                ("mcp_list_max_page_size", 1, 10_000),
+            ):
+                if int_field in config:
+                    v = config[int_field]
+                    # Explicitly reject booleans (bool is a subclass of int in Python)
+                    if isinstance(v, bool) or not isinstance(v, int) or v < lo or v > hi:
+                        raise HTTPException(status_code=422, detail=f"{int_field} must be {lo}..{hi}")
+            # Preserve MCP fields from current config when omitted in request
+            _current_cfg = old_config
+            for k in (
+                "mcp_enabled",
+                "mcp_disable_writes",
+                "mcp_text_extensions",
+                "mcp_global_max_read_bytes",
+                "mcp_summary_max_keys",
+                "mcp_summary_prefix_scan_pages",
+                "mcp_list_page_size",
+                "mcp_list_max_page_size",
+            ):
+                if k not in config:
+                    config[k] = _current_cfg.get(k)
 
-        # Validate roles and preserve existing secret_access_key if not provided
-        current_config = load_config(force_reload=False)
-        current_roles = {r.get("name"): r for r in current_config.get("roles", [])}
+            # Validate roles and preserve existing secret_access_key if not provided
+            current_config = old_config
+            current_roles = {r.get("name"): r for r in current_config.get("roles", [])}
 
-        for role in config.get("roles", []):
-            if "name" not in role or "type" not in role:
-                raise HTTPException(status_code=400, detail="Role must have 'name' and 'type'")
+            for role in config.get("roles", []):
+                if "name" not in role or "type" not in role:
+                    raise HTTPException(status_code=400, detail="Role must have 'name' and 'type'")
 
-            role_type = role.get("type")
-            if role_type == "assume_role" and "role_arn" not in role:
-                raise HTTPException(status_code=400, detail="assume_role type requires 'role_arn'")
-            elif role_type == "credentials":
-                if "access_key_id" not in role:
-                    raise HTTPException(status_code=400, detail="credentials type requires 'access_key_id'")
+                role_type = role.get("type")
+                if role_type == "assume_role" and "role_arn" not in role:
+                    raise HTTPException(status_code=400, detail="assume_role type requires 'role_arn'")
+                elif role_type == "credentials":
+                    if "access_key_id" not in role:
+                        raise HTTPException(status_code=400, detail="credentials type requires 'access_key_id'")
 
-                # Validate and clean access_key_id
-                access_key_id = role.get("access_key_id", "").strip()
-                if not access_key_id:
-                    raise HTTPException(status_code=400, detail="access_key_id cannot be empty")
+                    # Validate and clean access_key_id
+                    access_key_id = role.get("access_key_id", "").strip()
+                    if not access_key_id:
+                        raise HTTPException(status_code=400, detail="access_key_id cannot be empty")
 
-                # Validate AWS format (should start with AKIA and be 20 characters)
-                import re
+                    # Validate AWS format (should start with AKIA and be 20 characters)
+                    import re
 
-                if not re.match(r"^AKIA[0-9A-Z]{16}$", access_key_id):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Invalid access_key_id format. AWS access keys should start with AKIA and be 20 characters long",
+                    if not re.match(r"^AKIA[0-9A-Z]{16}$", access_key_id):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Invalid access_key_id format. AWS access keys should start with AKIA and be 20 characters long",
+                        )
+
+                    role["access_key_id"] = access_key_id  # Save trimmed value
+
+                    # Handle secret_access_key: if not provided or is REDACTED, preserve existing from config
+                    secret_access_key = (
+                        role.get("secret_access_key", "").strip() if role.get("secret_access_key") else ""
                     )
+                    role_name = role.get("name")
 
-                role["access_key_id"] = access_key_id  # Save trimmed value
-
-                # Handle secret_access_key: if not provided or is REDACTED, preserve existing from config
-                secret_access_key = role.get("secret_access_key", "").strip() if role.get("secret_access_key") else ""
-                role_name = role.get("name")
-
-                if not secret_access_key or secret_access_key == "***REDACTED***":
-                    # Preserve existing secret_access_key from current config (for editing existing role)
-                    if role_name in current_roles:
-                        existing_secret = current_roles[role_name].get("secret_access_key", "")
-                        if existing_secret and existing_secret != "***REDACTED***":
-                            role["secret_access_key"] = existing_secret
+                    if not secret_access_key or secret_access_key == "***REDACTED***":
+                        # Preserve existing secret_access_key from current config (for editing existing role)
+                        if role_name in current_roles:
+                            existing_secret = current_roles[role_name].get("secret_access_key", "")
+                            if existing_secret and existing_secret != "***REDACTED***":
+                                role["secret_access_key"] = existing_secret
+                            else:
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail=f"secret_access_key is required for role '{role_name}'. Please provide it.",
+                                )
                         else:
+                            # New role - secret_access_key is required
                             raise HTTPException(
-                                status_code=400,
-                                detail=f"secret_access_key is required for role '{role_name}'. Please provide it.",
+                                status_code=400, detail="secret_access_key is required for new credentials role"
                             )
                     else:
-                        # New role - secret_access_key is required
-                        raise HTTPException(
-                            status_code=400, detail="secret_access_key is required for new credentials role"
-                        )
-                else:
-                    # New secret_access_key provided, use it
-                    role["secret_access_key"] = secret_access_key
+                        # New secret_access_key provided, use it
+                        role["secret_access_key"] = secret_access_key
 
-            elif role_type == "s3_compatible":
-                if "access_key_id" not in role:
-                    raise HTTPException(status_code=400, detail="s3_compatible type requires 'access_key_id'")
-                if "endpoint_url" not in role:
-                    raise HTTPException(status_code=400, detail="s3_compatible type requires 'endpoint_url'")
+                elif role_type == "s3_compatible":
+                    if "access_key_id" not in role:
+                        raise HTTPException(status_code=400, detail="s3_compatible type requires 'access_key_id'")
+                    if "endpoint_url" not in role:
+                        raise HTTPException(status_code=400, detail="s3_compatible type requires 'endpoint_url'")
 
-                # Validate and clean access_key_id (no format validation for S3-compatible services)
-                access_key_id = role.get("access_key_id", "").strip()
-                if not access_key_id:
-                    raise HTTPException(status_code=400, detail="access_key_id cannot be empty")
+                    # Validate and clean access_key_id (no format validation for S3-compatible services)
+                    access_key_id = role.get("access_key_id", "").strip()
+                    if not access_key_id:
+                        raise HTTPException(status_code=400, detail="access_key_id cannot be empty")
 
-                endpoint_url = role.get("endpoint_url", "").strip()
-                if not endpoint_url:
-                    raise HTTPException(status_code=400, detail="endpoint_url cannot be empty")
+                    endpoint_url = role.get("endpoint_url", "").strip()
+                    if not endpoint_url:
+                        raise HTTPException(status_code=400, detail="endpoint_url cannot be empty")
 
-                role["access_key_id"] = access_key_id  # Save trimmed value
-                role["endpoint_url"] = endpoint_url  # Save trimmed value
+                    role["access_key_id"] = access_key_id  # Save trimmed value
+                    role["endpoint_url"] = endpoint_url  # Save trimmed value
 
-                # Handle secret_access_key: if not provided or is REDACTED, preserve existing from config
-                secret_access_key = role.get("secret_access_key", "").strip() if role.get("secret_access_key") else ""
-                role_name = role.get("name")
+                    # Handle secret_access_key: if not provided or is REDACTED, preserve existing from config
+                    secret_access_key = (
+                        role.get("secret_access_key", "").strip() if role.get("secret_access_key") else ""
+                    )
+                    role_name = role.get("name")
 
-                if not secret_access_key or secret_access_key == "***REDACTED***":
-                    # Preserve existing secret_access_key from current config (for editing existing role)
-                    if role_name in current_roles:
-                        existing_secret = current_roles[role_name].get("secret_access_key", "")
-                        if existing_secret and existing_secret != "***REDACTED***":
-                            role["secret_access_key"] = existing_secret
+                    if not secret_access_key or secret_access_key == "***REDACTED***":
+                        # Preserve existing secret_access_key from current config (for editing existing role)
+                        if role_name in current_roles:
+                            existing_secret = current_roles[role_name].get("secret_access_key", "")
+                            if existing_secret and existing_secret != "***REDACTED***":
+                                role["secret_access_key"] = existing_secret
+                            else:
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail=f"secret_access_key is required for role '{role_name}'. Please provide it.",
+                                )
                         else:
+                            # New role - secret_access_key is required
                             raise HTTPException(
-                                status_code=400,
-                                detail=f"secret_access_key is required for role '{role_name}'. Please provide it.",
+                                status_code=400, detail="secret_access_key is required for new s3_compatible role"
                             )
                     else:
-                        # New role - secret_access_key is required
-                        raise HTTPException(
-                            status_code=400, detail="secret_access_key is required for new s3_compatible role"
-                        )
-                else:
-                    # New secret_access_key provided, use it
-                    role["secret_access_key"] = secret_access_key
+                        # New secret_access_key provided, use it
+                        role["secret_access_key"] = secret_access_key
 
-            elif role_type == "profile":
-                if "profile_name" not in role:
-                    raise HTTPException(status_code=400, detail="profile type requires 'profile_name'")
+                elif role_type == "profile":
+                    if "profile_name" not in role:
+                        raise HTTPException(status_code=400, detail="profile type requires 'profile_name'")
 
-        save_config(config)
-        clear_s3_clients_cache()
-        logger.info("S3 client cache cleared after config save")
-        return {"message": "Configuration updated successfully"}
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Unexpected error in update_config")
-        raise HTTPException(
-            status_code=500,
-            detail={"code": "INTERNAL", "message": "Failed to update config — see server logs"},
-        ) from e
+            if added:
+                try:
+                    users_module.prune_role_grants(added)
+                except Exception as exc:
+                    logger.exception("Failed to prune grants before role creation")
+                    raise HTTPException(
+                        status_code=500,
+                        detail={"code": "INTERNAL", "message": "Failed to update config - see server logs"},
+                    ) from exc
+            save_config(config)
+            if removed:
+                try:
+                    users_module.prune_role_grants(removed)
+                except Exception:
+                    logger.exception("Failed to prune grants after role removal")
+            clear_s3_clients_cache()
+            logger.info("S3 client cache cleared after config save")
+            return {"message": "Configuration updated successfully"}
+        except PermissionError as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Unexpected error in update_config")
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "INTERNAL", "message": "Failed to update config — see server logs"},
+            ) from e
 
 
 def _s3_error_to_http(error: S3OperationError) -> HTTPException:
@@ -2099,7 +2156,9 @@ def validate_role_access(role_name: Optional[str], current_user: Dict[str, Any])
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    allowed_roles = user.get("allowed_roles", [])
+    allowed_roles = users_module.effective_allowed_roles(
+        user.get("allowed_roles", []), {r["name"] for r in load_config().get("roles", []) if r.get("name")}
+    )
     if role_name not in allowed_roles:
         raise HTTPException(
             status_code=403, detail=f"Access denied: You don't have permission to use role '{role_name}'"
@@ -2697,11 +2756,7 @@ async def delete_file(
     """Delete a file or recursively delete a directory from S3"""
     role = _require_role(role)
     # Check if deletion is disabled (from environment variable or config)
-    config = load_config(force_reload=False)
-    disable_deletion_env = os.getenv("DISABLE_DELETION", "").lower() == "true"
-    disable_deletion_config = config.get("disable_deletion", False)
-
-    if disable_deletion_env or disable_deletion_config:
+    if config_module.is_deletion_disabled(load_config(force_reload=False)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File deletion is disabled by administrator")
     try:
         # A trailing "/" is the directory-delete signal delete_object_for_role

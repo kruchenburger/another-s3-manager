@@ -164,6 +164,13 @@ export function UsersPage() {
                         {r}
                       </Badge>
                     ))}
+                    {u.missing_roles.map((r) => (
+                      <Tooltip key={r} label="Role no longer exists">
+                        <Badge color="red" variant="outline" size="sm" td="line-through">
+                          {r}
+                        </Badge>
+                      </Tooltip>
+                    ))}
                   </Group>
                 </Table.Td>
                 <Table.Td>

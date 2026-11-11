@@ -271,16 +271,16 @@ The React SPA consumes existing backend endpoints plus a small set added for SPA
 - `DELETE /api/buckets/{b}/files?path=...&role=...` — file or folder delete (already existed)
 - `GET /api/buckets/{b}/download?path=...&role=...` — streamed download (already existed; cookie-auth proxy used by Download button)
 - `GET /api/buckets/{b}/presigned?path=...&role=...&op=get[&expires_in=<seconds>]` — boto3 presigned GET URL. Lifetime defaults to `presigned_url_default_ttl` (config/env, default 1h); `expires_in` overrides it within `[60, presigned_url_max_ttl]` (else 400 `INVALID_EXPIRES_IN`). Returns `{url, expires_at, expires_in, warning?}` — `expires_in` echoes the granted TTL; `warning` is present for STS-backed roles (assume_role/profile) when the link outlives ~1h (it may expire when the role's session ends). Auto-applies a `; charset=utf-8` Content-Type override for known text extensions. Used by Copy URL (single + bulk, with a per-link "Valid for" override) and grid thumbnails.
-- `GET /api/admin/users` — list users with available roles (returns `{users, available_roles}`)
-- `POST /api/admin/users` — create user (multipart Form)
-- `PUT /api/admin/users/{u}` — update user (multipart Form, blocks self-demote)
+- `GET /api/admin/users` — list users with available roles (returns `{users, available_roles}`); each user's `allowed_roles` holds only roles present in config, grants to removed roles are listed in `missing_roles`
+- `POST /api/admin/users` — create user (multipart Form); 400 `Unknown role(s): …` for role names not in config
+- `PUT /api/admin/users/{u}` — update user (multipart Form, blocks self-demote); same unknown-role 400 when `allowed_roles` is sent
 - `DELETE /api/admin/users/{u}` — delete user (blocks self-delete)
 - `PUT /api/admin/users/{u}/password` — admin-reset another user's password (JSON `{password}`)
 - `PUT /api/me/password` — self-service password change (JSON `{current_password, new_password}`); requires current password, rejects identical new password
 - `GET /api/admin/bans` — list active bans (returns `{bans}`)
 - `DELETE /api/admin/bans/{u}` — unban user
 - `GET /api/config` — read whole config including derived `data_dir` / `current_role` / `is_read_only` (response-only)
-- `POST /api/config` — write config; React strips derived fields via `toWritableConfig()` to avoid persisting runtime values
+- `POST /api/config` — write config; React strips derived fields via `toWritableConfig()` to avoid persisting runtime values. New role names must be unique, without commas or surrounding whitespace. Grants (`user_roles`, `default_role`) for added names are pruned before saving and for removed names after saving, so a re-created name never inherits old grants. Everywhere else a non-admin's grants are filtered by the current config (`users.effective_allowed_roles`); startup only logs dangling grants
 - `GET /api/me/tokens` — list authenticated user's active MCP tokens (table `api_tokens` kept for backwards compatibility)
 - `POST /api/me/tokens` — create MCP token (returns plaintext token once; stored as SHA-256 hash)
 - `PUT /api/me/tokens/{id}` — update editable metadata (`name`, `is_read_only`, `max_read_bytes`); 400 on empty body / out-of-range, 404 on missing/revoked, 409 on name collision
