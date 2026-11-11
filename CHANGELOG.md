@@ -19,12 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The image now sets `DATA_DIR=/app/data` and
-  `S3_FILE_MANAGER_CONFIG=/app/data/config.json`. Before, a plain
-  `docker run -v …:/app/data` as shown in the Quick Start kept the database and
-  configuration inside the container instead of the volume, so they were lost
-  when the container was recreated. Compose files already set both and are
-  unaffected.
+- A plain `docker run -v …:/app/data`, as shown in the Quick Start, now keeps
+  the database and configuration on the volume. Before, without `DATA_DIR` the
+  app wrote them inside the container, and they were lost when the container
+  was recreated. The image sets `S3_FILE_MANAGER_CONFIG=/app/data/config.json`
+  and, when neither `DATA_DIR` nor config `data_dir` is set, the data directory
+  now follows the config file's location. Compose files and setups that set
+  `DATA_DIR` or `data_dir` are unaffected.
 
 ## [1.2.1] - 2026-11-11
 

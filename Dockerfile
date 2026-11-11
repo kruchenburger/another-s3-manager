@@ -65,10 +65,10 @@ COPY --from=frontend-builder /build/dist/ ${APP_PKG}/static/app/
 # whole venv into a second layer (+34 MB compressed, ASM-67); the code stays
 # root-owned and read-only for the app user.
 RUN mkdir -p /app/data && chown app:app /app/data
-# Without these the app falls back to the package directory inside the venv,
-# which is root-owned now. They match the documented Docker default and the
-# compose files; an explicit -e DATA_DIR / S3_FILE_MANAGER_CONFIG still wins.
-ENV DATA_DIR=/app/data
+# Without it the app keeps config and DB in the package directory inside the
+# venv, which is root-owned now. With only the config path set, the data dir
+# follows it (constants.get_data_dir); DATA_DIR and config "data_dir" still win,
+# so ConfigMap setups that point "data_dir" at a PVC are unaffected.
 ENV S3_FILE_MANAGER_CONFIG=/app/data/config.json
 
 ARG BUILD_VERSION=dev

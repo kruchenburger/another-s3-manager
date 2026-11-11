@@ -42,11 +42,33 @@ def test_get_data_dir_defaults_to_base_dir(monkeypatch, tmp_path):
     config_data = config_module.load_config(force_reload=True)
     config_data.pop("data_dir", None)
     config_module.save_config(config_data)
+    monkeypatch.delenv("S3_FILE_MANAGER_CONFIG", raising=False)
 
     constants = reload_constants()
     result = constants.get_data_dir()
     assert result == constants.BASE_DIR
     assert result.exists()
+
+
+def test_get_data_dir_follows_explicit_config_location(monkeypatch, tmp_path):
+    # ASM-67: the image sets only S3_FILE_MANAGER_CONFIG; the DB must live beside it.
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    cfg_dir = tmp_path / "mounted"
+    monkeypatch.setenv("S3_FILE_MANAGER_CONFIG", str(cfg_dir / "config.json"))
+    constants = reload_constants()
+    monkeypatch.setattr("another_s3_manager.config.load_config", lambda force_reload=False: {})
+    assert constants.get_data_dir() == cfg_dir
+    assert cfg_dir.is_dir()
+
+
+def test_config_data_dir_still_wins_over_config_location(monkeypatch, tmp_path):
+    # A ConfigMap-mounted config with "data_dir" pointing at a PVC keeps working.
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    monkeypatch.setenv("S3_FILE_MANAGER_CONFIG", str(tmp_path / "etc" / "config.json"))
+    constants = reload_constants()
+    pvc = tmp_path / "pvc"
+    monkeypatch.setattr("another_s3_manager.config.load_config", lambda force_reload=False: {"data_dir": str(pvc)})
+    assert constants.get_data_dir() == pvc
 
 
 def test_get_users_file(monkeypatch, tmp_path):
@@ -78,6 +100,8 @@ def test_get_data_dir_handles_load_config_error(monkeypatch):
 
     monkeypatch.setattr(config_module, "load_config", boom)
     monkeypatch.delenv("DATA_DIR", raising=False)
+    # Without an explicit config location the fallback is the package dir.
+    monkeypatch.delenv("S3_FILE_MANAGER_CONFIG", raising=False)
     result = constants.get_data_dir()
     assert result == constants.BASE_DIR
 

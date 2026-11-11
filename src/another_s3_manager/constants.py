@@ -44,6 +44,15 @@ def get_data_dir() -> Path:
     except (ImportError, Exception):
         pass
 
+    # An explicitly placed config file marks the data location: keep the DB next
+    # to it. The image sets S3_FILE_MANAGER_CONFIG=/app/data/config.json, so a
+    # plain `docker run -v ...:/app/data` persists everything (ASM-67). DATA_DIR
+    # and config `data_dir` above still win.
+    if os.getenv("S3_FILE_MANAGER_CONFIG"):
+        data_dir = CONFIG_FILE.parent
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir
+
     # Default to BASE_DIR
     return BASE_DIR
 
