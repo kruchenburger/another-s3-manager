@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The container image is about half the size: roughly 59 MB compressed
+  instead of 112 MB. It no longer duplicates the Python environment in a second
+  layer and ships AWS service definitions only for S3, STS and SSO. It also
+  leaves out unused server extras, the `cryptography` package (sign-in tokens
+  use HMAC only) and the frontend source maps.
+- Application code in the image is owned by root and read-only for the app
+  user; only `/app/data` is writable.
+
+### Fixed
+
+- The image now sets `DATA_DIR=/app/data` and
+  `S3_FILE_MANAGER_CONFIG=/app/data/config.json`. Before, a plain
+  `docker run -v …:/app/data` as shown in the Quick Start kept the database and
+  configuration inside the container instead of the volume, so they were lost
+  when the container was recreated. Compose files already set both and are
+  unaffected.
+
 ## [1.2.1] - 2026-11-11
 
 ### Fixed

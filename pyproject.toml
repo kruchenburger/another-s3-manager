@@ -6,10 +6,15 @@ requires-python = ">=3.13"
 dynamic = ["version"]
 dependencies = [
     "fastapi>=0.115,<1.0",
-    "uvicorn[standard]>=0.30,<1.0",
+    # uvicorn without [standard]: keep only the fast loop/parser. The extra also pulls
+    # websockets, watchfiles (dev reload) and PyYAML, none of which ASM uses (ASM-67).
+    "uvicorn>=0.30,<1.0",
+    "uvloop>=0.19; sys_platform != 'win32'",
+    "httptools>=0.6",
     "boto3==1.29.7",
     "python-multipart>=0.0.9",
-    "python-jose[cryptography]==3.3.0",
+    # HS256 only: python-jose's native HMAC backend is enough, no cryptography wheel (ASM-67).
+    "python-jose==3.3.0",
     "passlib[bcrypt]==1.7.4",
     "bcrypt==4.0.1",
     "python-dotenv==1.0.0",

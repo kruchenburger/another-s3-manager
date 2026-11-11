@@ -13,7 +13,11 @@ ARG VITE_SHOW_THEME_SWITCHER=
 ENV VITE_SHOW_THEME_SWITCHER=${VITE_SHOW_THEME_SWITCHER}
 # Vite build outputs to /build/dist; we redirect via vite.config.ts to ../src/...
 # but inside the container we don't have ../src, so override outDir at build time.
-RUN npx vite build --outDir /build/dist --emptyOutDir
+# Source maps are for local debugging only: the image would serve them publicly
+# and they cost ~1.2 MB compressed (ASM-67).
+RUN npx vite build --outDir /build/dist --emptyOutDir \
+    && find /build/dist -name '*.map' -delete \
+    && find /build/dist -name '*.js' -exec sed -i '/^\/\/# sourceMappingURL=/d' {} +
 
 # Stage 2: Build Python deps
 FROM python:3.13-slim AS builder
@@ -23,6 +27,19 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY src/ src/
 RUN uv sync --frozen --no-dev --no-editable
+# Trim the venv (ASM-67). botocore ships models for every AWS service (~21 MB);
+# ASM only builds s3 and sts clients, plus sso / sso-oidc for SSO profiles.
+# Guarded by tests/test_botocore_pruning.py (keep the list in sync).
+ARG BOTOCORE_KEEP="s3 sts sso sso-oidc"
+RUN set -eu; \
+    SP=/app/.venv/lib/python3.13/site-packages; \
+    for d in "$SP"/botocore/data/*/; do \
+        n="$(basename "$d")"; \
+        case " $BOTOCORE_KEEP " in *" $n "*) ;; *) rm -rf "$d";; esac; \
+    done; \
+    for d in "$SP"/boto3/data/*/; do [ "$(basename "$d")" = s3 ] || rm -rf "$d"; done; \
+    find "$SP" -depth -type d \( -name tests -o -name test -o -name __pycache__ \) \
+        -not -path "*/another_s3_manager/*" -exec rm -rf {} +
 
 # Stage 3: Runtime
 FROM python:3.13-slim
@@ -44,7 +61,15 @@ COPY migrations/ migrations/
 # app imports from the wheel under .venv, not from /app/src/).
 COPY --from=frontend-builder /build/dist/ ${APP_PKG}/static/app/
 
-RUN mkdir -p /app/data && chown -R app:app /app/data /app
+# Only the data dir must be writable. A recursive chown of /app would copy the
+# whole venv into a second layer (+34 MB compressed, ASM-67); the code stays
+# root-owned and read-only for the app user.
+RUN mkdir -p /app/data && chown app:app /app/data
+# Without these the app falls back to the package directory inside the venv,
+# which is root-owned now. They match the documented Docker default and the
+# compose files; an explicit -e DATA_DIR / S3_FILE_MANAGER_CONFIG still wins.
+ENV DATA_DIR=/app/data
+ENV S3_FILE_MANAGER_CONFIG=/app/data/config.json
 
 ARG BUILD_VERSION=dev
 ENV APP_VERSION=${BUILD_VERSION}
