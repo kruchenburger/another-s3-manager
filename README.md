@@ -11,7 +11,7 @@ Works with **AWS S3**, **MinIO**, **Cloudflare R2**, **Wasabi**, and any S3-comp
 </p>
 
 <p align="center">
-  <img src="docs/assets/hero.png" alt="Another S3 Manager — file browser with bulk actions and a grid view with live image previews" width="830">
+  <img src="docs/assets/hero.png" alt="Another S3 Manager — file browser with folders, bulk actions (copy URLs, move to a folder, delete) and a grid view with folder tiles and live image previews" width="830">
 </p>
 
 ## Quick Start
