@@ -194,7 +194,7 @@ from another_s3_manager.mcp_server import mcp as _mcp_instance
 def _report_dangling_role_grants() -> None:
     """Report configuration drift without destroying grants on a bad ConfigMap push."""
     try:
-        names = {r["name"] for r in load_config().get("roles", [])}
+        names = {r["name"] for r in load_config().get("roles", []) if r.get("name")}
         missing = {name: count for name, count in users_module.count_grants_by_role().items() if name not in names}
         if missing:
             report = ", ".join(
@@ -853,7 +853,7 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
         allowed_roles = [r["name"] for r in config.get("roles", []) if r.get("name")]
     else:
         allowed_roles = users_module.effective_allowed_roles(
-            current_user.get("allowed_roles", []), {r["name"] for r in config.get("roles", [])}
+            current_user.get("allowed_roles", []), {r["name"] for r in config.get("roles", []) if r.get("name")}
         )
     # disable_deletion: env var OR config (env wins). Mirrors the same combined
     # check used in /api/config so the two endpoints don't disagree.
@@ -918,7 +918,7 @@ async def list_users(current_user: Dict[str, Any] = Depends(get_current_admin_us
 
 def _validate_role_grants(roles: list[str]) -> None:
     """Validate requested grants while the caller holds role_grants_lock."""
-    names = {r["name"] for r in load_config(force_reload=True).get("roles", [])}
+    names = {r["name"] for r in load_config(force_reload=True).get("roles", []) if r.get("name")}
     unknown = list(dict.fromkeys(name for name in roles if name not in names))
     if unknown:
         raise HTTPException(
@@ -1132,7 +1132,7 @@ def _effective_allowed_roles(current_user: Dict[str, Any]) -> list[str]:
         config = load_config()
         return [r["name"] for r in config.get("roles", []) if r.get("name")]
     return users_module.effective_allowed_roles(
-        current_user.get("allowed_roles", []), {r["name"] for r in load_config().get("roles", [])}
+        current_user.get("allowed_roles", []), {r["name"] for r in load_config().get("roles", []) if r.get("name")}
     )
 
 
@@ -1696,7 +1696,7 @@ async def get_config(
 
     # Get allowed roles for this user
     allowed_roles = users_module.effective_allowed_roles(
-        user.get("allowed_roles", []), {r["name"] for r in config.get("roles", [])}
+        user.get("allowed_roles", []), {r["name"] for r in config.get("roles", []) if r.get("name")}
     )
     if not allowed_roles:
         # No roles allowed, return empty config with all required fields
@@ -1787,7 +1787,7 @@ async def update_config(
                 raise HTTPException(status_code=400, detail="Invalid config structure: 'roles' is required")
 
             old_config = load_config(force_reload=True)
-            old_names = {r["name"] for r in old_config.get("roles", [])}
+            old_names = {r["name"] for r in old_config.get("roles", []) if r.get("name")}
             new_names = []
             for role in config["roles"]:
                 name = role.get("name")
@@ -2161,7 +2161,7 @@ def validate_role_access(role_name: Optional[str], current_user: Dict[str, Any])
         raise HTTPException(status_code=404, detail="User not found")
 
     allowed_roles = users_module.effective_allowed_roles(
-        user.get("allowed_roles", []), {r["name"] for r in load_config().get("roles", [])}
+        user.get("allowed_roles", []), {r["name"] for r in load_config().get("roles", []) if r.get("name")}
     )
     if role_name not in allowed_roles:
         raise HTTPException(

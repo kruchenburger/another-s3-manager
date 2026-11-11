@@ -945,7 +945,7 @@ def validate_role_access(role_name: Optional[str], user_dict: Dict[str, Any]) ->
         return role_name
 
     allowed_roles = effective_allowed_roles(
-        user_dict.get("allowed_roles", []), {r["name"] for r in load_config().get("roles", [])}
+        user_dict.get("allowed_roles", []), {r["name"] for r in load_config().get("roles", []) if r.get("name")}
     )
     if role_name not in allowed_roles:
         raise PermissionError(f"Access denied: You don't have permission to use role '{role_name}'")

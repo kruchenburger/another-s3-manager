@@ -422,3 +422,20 @@ def test_rest_guard_and_default_choice_reject_dangling_role(app_client):
     assert error.value.detail == "Access denied: You don't have permission to use role 'A'"
     assert app_client.put("/api/me/default-role", json={"role": "A"}).status_code == 400
     assert app_client.put("/api/me/default-role", json={"role": "B"}).status_code == 200
+
+
+def test_nameless_config_role_does_not_break_non_admin_paths(app_client):
+    # A hand-edited config may hold a role without "name"; it must be skipped, not 500.
+    set_roles("A")
+    member(("A",))
+    _login_as(app_client, "member")
+    import os
+    from pathlib import Path
+
+    path = Path(os.environ["S3_FILE_MANAGER_CONFIG"])
+    cfg = json.loads(path.read_text())
+    cfg["roles"].append({"type": "default"})
+    path.write_text(json.dumps(cfg))
+    os.utime(path, (path.stat().st_atime, path.stat().st_mtime + 2))
+    assert app_client.get("/api/me").json()["allowed_roles"] == ["A"]
+    assert app_client.get("/api/config").status_code == 200

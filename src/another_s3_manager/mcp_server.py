@@ -230,7 +230,7 @@ async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
             allowed_roles = [r["name"] for r in cfg.get("roles", []) if r.get("name")]
         else:
             allowed_roles = effective_allowed_roles(
-                [r.role_name for r in u.roles], {r["name"] for r in cfg.get("roles", [])}
+                [r.role_name for r in u.roles], {r["name"] for r in cfg.get("roles", []) if r.get("name")}
             )
         user_dict = {
             "username": u.username,
@@ -557,7 +557,7 @@ async def list_roles() -> dict:
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         config = _config_module.load_config(force_reload=False)
-        all_role_names = {r["name"] for r in config.get("roles", [])}
+        all_role_names = {r["name"] for r in config.get("roles", []) if r.get("name")}
         visible = [r for r in user["allowed_roles"] if r in all_role_names]
         logger.info("mcp.list_roles", extra={"user": user["username"], "count": len(visible)})
         return _observe_response_size("list_roles", token, {"roles": visible})

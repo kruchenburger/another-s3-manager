@@ -78,7 +78,10 @@ jobs:
 
   e2e:
     name: Frontend E2E (Playwright + MinIO)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04 and `playwright install --with-deps chromium`
+    # fails there ("Playwright does not support chromium on ubuntu26.04-x64").
+    # Back to ubuntu-latest once the pinned @playwright/test supports it.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -242,7 +245,10 @@ jobs:
     # Separate job from `e2e` so the default pipeline stays fast and the MinIO
     # and AWS-emulator (S3+IAM+STS) paths run in parallel. Gated identically to
     # `e2e` (no `needs:`, no `if:`) — runs on every push to main / tag / PR-to-main.
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04 and `playwright install --with-deps chromium`
+    # fails there ("Playwright does not support chromium on ubuntu26.04-x64").
+    # Back to ubuntu-latest once the pinned @playwright/test supports it.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
