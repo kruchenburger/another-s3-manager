@@ -112,7 +112,8 @@ async def test_mcp_copy_without_delete_source_ignores_gate(alice_user, tool_regi
 def test_web_delete_blocked(app_client, monkeypatch, env, cfg_flag, expected):
     _apply(monkeypatch, env, cfg_flag)
     _, headers = login(app_client)
-    with patch("another_s3_manager.s3_client.delete_object_for_role") as del_mock:
+    # main.py imports delete_object_for_role by name, so patch it there.
+    with patch("another_s3_manager.main.delete_object_for_role") as del_mock:
         response = app_client.delete("/api/buckets/b/files?path=a.txt&role=Default", headers=headers)
     assert response.status_code == 403
     del_mock.assert_not_called()
