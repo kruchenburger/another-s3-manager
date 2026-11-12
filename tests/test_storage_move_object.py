@@ -636,3 +636,46 @@ def test_typed_s3_denial_after_copy_preserves_both_objects(source, monkeypatch):
     delete.assert_called_once()
     assert body(source, "move-source", "file") == b"old"
     assert body(source, "move-dest", "copy") == b"old"
+
+
+@pytest.mark.parametrize("method", ["head_object", "delete_object"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ClientError({"Error": {"Code": "InternalError"}, "ResponseMetadata": {"HTTPStatusCode": 500}}, "Op"),
+        ConnectionError("network down"),
+    ],
+)
+def test_other_failure_after_copy_keeps_copy_result(source, monkeypatch, method, failure):
+    original_head = source.head_object
+    heads = 0
+
+    def head(**kwargs):
+        nonlocal heads
+        heads += 1
+        if method == "head_object" and heads == 2:
+            raise failure
+        return original_head(**kwargs)
+
+    delete = Mock(side_effect=failure)
+    monkeypatch.setattr(source, "head_object", head)
+    monkeypatch.setattr(source, "delete_object", delete)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "SOURCE_DELETE_FAILED"
+    assert "may still exist" in result["message"]
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"
+
+
+def test_failure_before_copy_still_raises(source, monkeypatch):
+    def head(**kwargs):
+        raise ConnectionError("network down")
+
+    monkeypatch.setattr(source, "head_object", head)
+    with pytest.raises(ConnectionError):
+        move()
+    monkeypatch.undo()
+    with pytest.raises(ClientError):
+        source.head_object(Bucket="move-dest", Key="copy")

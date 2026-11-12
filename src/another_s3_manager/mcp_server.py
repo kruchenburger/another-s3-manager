@@ -1583,7 +1583,7 @@ async def copy_object(
         moved = result["moved"]
         if source_kept_reason:
             error_code = source_kept_reason
-            if source_kept_reason not in {"SOURCE_CHANGED", "S3_ACCESS_DENIED"}:
+            if source_kept_reason not in {"SOURCE_CHANGED", "S3_ACCESS_DENIED", "SOURCE_DELETE_FAILED"}:
                 mapped = _access_error(
                     AccessDenied(source_kept_reason, result["message"]), "copy_object", context="copied"
                 )

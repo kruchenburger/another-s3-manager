@@ -2393,11 +2393,18 @@ def move_object_for_role(
         reason = error.code
         denial_message = error.message
     except ClientError as error:
-        typed = classify_boto_error(error)
-        if not copied or not (isinstance(typed, S3AccessDeniedError) or typed.http_status == 403):
+        if not copied:
             raise
-        reason = "S3_ACCESS_DENIED"
-        denial_message = f"Copied, source kept. Access denied by S3 during {error.operation_name}."
+        typed = classify_boto_error(error)
+        if isinstance(typed, S3AccessDeniedError) or typed.http_status == 403:
+            reason = "S3_ACCESS_DENIED"
+            denial_message = f"Copied, source kept. Access denied by S3 during {error.operation_name}."
+        else:
+            reason = "SOURCE_DELETE_FAILED"
+            denial_message = (
+                f"Copied, but {error.operation_name} failed before the source was confirmed deleted"
+                " — check the source; it may still exist."
+            )
     except S3AccessDeniedError:
         # Typed 403 after the copy (e.g. a client rebuilt after ExpiredToken is refused
         # by S3): the copy exists, so report the partial result instead of raising.
@@ -2405,6 +2412,17 @@ def move_object_for_role(
             raise
         reason = "S3_ACCESS_DENIED"
         denial_message = "Copied, source kept. Access denied by S3 before the source could be deleted."
+    except Exception:
+        # Any other failure after a confirmed copy (5xx, network, credential refresh):
+        # never hide that the destination now exists.
+        if not copied:
+            raise
+        logger.warning("move_object_for_role: failure after copy", exc_info=True)
+        reason = "SOURCE_DELETE_FAILED"
+        denial_message = (
+            "Copied, but removing the source failed before it was confirmed deleted"
+            " — check the source; it may still exist."
+        )
     return {
         "ok": copied,
         "copied": copied,

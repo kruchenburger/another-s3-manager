@@ -102,6 +102,11 @@ reason.
 
 MCP moves on versioned buckets also require `s3:GetObjectVersion` to copy the pinned source version.
 
+Once the copy has succeeded, a later failure never hides it: an S3 403 returns
+`copied: true`, `moved: false`, `S3_ACCESS_DENIED`; any other failure before the
+source is confirmed deleted (5xx, network, credentials) returns
+`SOURCE_DELETE_FAILED` — check the source, it may still exist.
+
 For versioned sources the copy is pinned to the source's `VersionId`, but
 deletion never names a version: with versioning **enabled** it creates a delete
 marker, so the key disappears without exposing a previous version and all
