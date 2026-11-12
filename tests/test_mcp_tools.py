@@ -951,8 +951,10 @@ async def test_copy_object_move_deletes_source(alice_user, tool_registry):
     """delete_source=True -> copy then delete source; moved=True."""
     _, plaintext = alice_user
     with (
-        patch("another_s3_manager.s3_client.copy_object_for_role", return_value=None) as copy_mock,
-        patch("another_s3_manager.s3_client.delete_exact_key_for_role", return_value={"count": 1}) as del_mock,
+        patch("another_s3_manager.s3_client.get_s3_client", return_value=None),
+        patch("another_s3_manager.s3_client._head_move_source", return_value={"ETag": '"old"'}),
+        patch("another_s3_manager.s3_client._copy_object", return_value=None) as copy_mock,
+        patch("another_s3_manager.s3_client._delete_exact_key", return_value={"count": 1}) as del_mock,
     ):
         result = await _call(
             tool_registry,
@@ -1278,7 +1280,7 @@ async def test_mcp_copy_delete_source_rechecks_before_delete(alice_user, tool_re
 
     _, plaintext = alice_user
 
-    def revoke(*args):
+    def revoke(*args, **kwargs):
         cfg = config.load_config()
         if global_flag:
             cfg["disable_deletion"] = True
@@ -1287,8 +1289,10 @@ async def test_mcp_copy_delete_source_rechecks_before_delete(alice_user, tool_re
         config.save_config(cfg)
 
     with (
-        patch("another_s3_manager.s3_client.copy_object_for_role", side_effect=revoke) as copy_mock,
-        patch("another_s3_manager.s3_client.delete_exact_key_for_role") as delete_mock,
+        patch("another_s3_manager.s3_client.get_s3_client", return_value=None),
+        patch("another_s3_manager.s3_client._head_move_source", return_value={"ETag": '"old"'}),
+        patch("another_s3_manager.s3_client._copy_object", side_effect=revoke) as copy_mock,
+        patch("another_s3_manager.s3_client._delete_exact_key") as delete_mock,
     ):
         result = await _call(
             tool_registry,
@@ -1365,10 +1369,12 @@ async def test_delete_tools_map_storage_revocation(alice_user, tool_registry, to
 
     _, plaintext = alice_user
     with (
-        patch("another_s3_manager.s3_client.copy_object_for_role"),
+        patch("another_s3_manager.s3_client.get_s3_client", return_value=None),
+        patch("another_s3_manager.s3_client._head_move_source", return_value={"ETag": '"old"'}),
+        patch("another_s3_manager.s3_client._copy_object"),
         patch(
             "another_s3_manager.s3_client."
-            + ("delete_object_for_role" if tool == "delete_file" else "delete_exact_key_for_role"),
+            + ("delete_object_for_role" if tool == "delete_file" else "_delete_exact_key"),
             side_effect=AccessDenied("DELETION_DISABLED_FOR_ROLE", "revoked"),
         ),
     ):
@@ -1436,3 +1442,39 @@ async def test_copy_marker_deletes_only_copied_key(alice_user, tool_registry, mo
         "folder/a",
         "folder/deep/b",
     }
+
+
+@pytest.mark.asyncio
+async def test_copy_object_move_delegates_to_storage(alice_user, tool_registry):
+    _, plaintext = alice_user
+    storage_result = {
+        "ok": True,
+        "copied": True,
+        "moved": False,
+        "source_kept_reason": "SOURCE_CHANGED",
+        "message": "Copied, source changed after the copy — source kept",
+    }
+    with (
+        patch("another_s3_manager.s3_client.move_object_for_role", return_value=storage_result) as move_mock,
+        patch("another_s3_manager.s3_client.copy_object_for_role") as copy_mock,
+        patch("another_s3_manager.s3_client.delete_exact_key_for_role") as delete_mock,
+    ):
+        result = await _call(
+            tool_registry,
+            "copy_object",
+            _fake_request(plaintext),
+            role="Default",
+            source_bucket="source",
+            source_path="a",
+            dest_bucket="dest",
+            dest_path="b",
+            delete_source=True,
+        )
+    move_mock.assert_called_once()
+    assert move_mock.call_args.args[:5] == ("Default", "source", "a", "dest", "b")
+    assert move_mock.call_args.args[5]["username"] == "alice_tools"
+    copy_mock.assert_not_called()
+    delete_mock.assert_not_called()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "SOURCE_CHANGED"

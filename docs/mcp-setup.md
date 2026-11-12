@@ -90,6 +90,22 @@ after copying: if permission was revoked, the copy stays and the response says
 only (both buckets must be in the role's allowed_buckets) — cross-role /
 cross-provider copy is not supported.
 
+A single-object move reserves both paths throughout copying and deletion, reads
+its source ETag and VersionId, and copies that exact state with
+`CopySourceIfMatch`. It rechecks the current source before deletion. If the
+source changed or disappeared, the result is `copied: true`, `moved: false`,
+`source_kept_reason: "SOURCE_CHANGED"`, with the message
+`Copied, source changed after the copy — source kept`. A copy precondition
+failure instead returns `ok: false`, `copied: false`, `moved: false` and
+`SOURCE_CHANGED`; nothing is deleted. Always inspect `copied` as well as the
+reason.
+
+For versioned sources, deletion targets only the copied `VersionId`. Otherwise
+ASM sends a conditional `If-Match` DELETE; a failed precondition keeps the
+source. On backends that ignore `If-Match` on DELETE, the final check-to-delete
+window remains against writers outside this ASM process (including other
+replicas). Writes handled by this process share the reservation.
+
 ### Tool annotations (auto-approval hints)
 
 All ten tools advertise MCP `readOnlyHint`/`destructiveHint`/`idempotentHint`
