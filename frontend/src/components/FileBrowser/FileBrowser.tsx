@@ -1093,6 +1093,8 @@ export function FileBrowser() {
           ) : mode === "table" ? (
             <>
               <FileTable
+                disableDeletion={disableDeletion}
+                deletionReason={deletionReason ?? undefined}
                 path={pathFromUrl}
                 drag={drag}
                 onMove={openMove}
@@ -1127,6 +1129,8 @@ export function FileBrowser() {
           ) : (
             <>
               <FileGrid
+                disableDeletion={disableDeletion}
+                deletionReason={deletionReason ?? undefined}
                 drag={drag}
                 onMove={openMove}
                 files={filteredItems}

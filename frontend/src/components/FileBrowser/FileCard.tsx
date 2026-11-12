@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Card, Checkbox, Group, Text } from "@mantine/core";
 import { formatBytes } from "@/utils/formatBytes";
 import { getFileIcon } from "@/utils/fileIcon";
-import { useRolePermissions } from "@/features/auth/hooks/useRolePermissions";
 import { useConfig } from "@/hooks/useConfig";
 import { getPreviewType } from "@/utils/filePreview";
 import { usePresignedUrl } from "@/features/files/hooks/usePresignedUrl";
@@ -42,6 +41,8 @@ interface FileCardProps {
   onCopyUrlWithTtl?: (name: string, ttlSeconds: number) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
+  disableDeletion?: boolean;
+  deletionReason?: string;
   bucket: string;
   roleId: string;
   /** Current folder prefix (without trailing slash). */
@@ -66,6 +67,8 @@ export function FileCard({
   onCopyUrlWithTtl,
   onPreview,
   onDelete,
+  disableDeletion = true,
+  deletionReason,
   bucket,
   roleId,
   path,
@@ -74,8 +77,6 @@ export function FileCard({
 }: FileCardProps) {
   const actionId = identity ?? file.name;
   const dragProps = drag?.row(entryItem(path, file));
-  const { canDelete, reason: deletionReason } = useRolePermissions(roleId);
-  const disableDeletion = !canDelete;
   const { data: config } = useConfig();
   const canPreview =
     !file.is_directory &&

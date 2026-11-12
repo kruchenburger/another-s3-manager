@@ -20,6 +20,8 @@ interface FileGridProps {
   onCopyUrlWithTtl?: (name: string, ttlSeconds: number) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
+  disableDeletion?: boolean;
+  deletionReason?: string;
   bucket: string;
   roleId: string;
   path: string;
@@ -69,6 +71,8 @@ export function FileGrid({
   onCopyUrlWithTtl,
   onPreview,
   onDelete,
+  disableDeletion = true,
+  deletionReason,
   bucket,
   roleId,
   path,
@@ -127,6 +131,8 @@ export function FileGrid({
                   onCopyUrlWithTtl={onCopyUrlWithTtl}
                   onPreview={onPreview}
                   onDelete={onDelete}
+                  disableDeletion={disableDeletion}
+                  deletionReason={deletionReason}
                   bucket={bucket}
                   roleId={roleId}
                   path={path}
