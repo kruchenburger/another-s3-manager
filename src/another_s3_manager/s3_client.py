@@ -2177,8 +2177,12 @@ def _copy_object(
     *,
     etag: str | None = None,
     version_id: str | None = None,
-) -> None:
-    """Copy under the caller's reservation, optionally pinning the source state."""
+) -> str | None:
+    """Copy under the caller's reservation, optionally pinning the source state.
+
+    Returns the source VersionId that was actually copied (``None`` for an unversioned
+    source, or when an unpinned fallback copy got no ``CopySourceVersionId`` back).
+    """
     from another_s3_manager.metrics import s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, source_bucket, user_dict)
@@ -2192,20 +2196,25 @@ def _copy_object(
         conditions = {"CopySourceIfMatch": etag} if etag is not None else {}
         try:
             try:
-                client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=copy_source, **conditions)
+                response = client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=copy_source, **conditions)
+                copied_version = response.get("CopySourceVersionId") or version_id
             except ClientError as error:
                 # Pinning a version needs s3:GetObjectVersion, which 1.2.x never required.
                 # Without it, fall back to the unpinned copy: CopySourceIfMatch still
                 # guarantees the copied bytes are the ones HEAD saw, and the second HEAD
-                # still compares VersionId before anything is deleted.
+                # still compares VersionId before anything is deleted. The caller checks
+                # the returned CopySourceVersionId, since an unpinned copy may have
+                # taken a newer version with the same ETag.
                 if "VersionId" not in copy_source or not _is_access_denied(error):
                     raise
                 logger.info("move: version-pinned copy denied, retrying without VersionId")
                 unpinned = {"Bucket": source_bucket, "Key": source_path}
-                client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=unpinned, **conditions)
+                response = client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=unpinned, **conditions)
+                copied_version = response.get("CopySourceVersionId")
             s3_objects_total.labels(
                 role=safe_role_label(validated_role or "unknown"), bucket=dest_bucket, operation="copy"
             ).inc()
+            return copied_version
         except ClientError as error:
             if etag is not None and _is_precondition_failed(error):
                 raise _SourceChanged from error
@@ -2215,7 +2224,7 @@ def _copy_object(
                 ) from error
             raise
 
-    execute_with_s3_retry(validated_role, "put", do_copy)
+    return execute_with_s3_retry(validated_role, "put", do_copy)
 
 
 class _SourceChanged(Exception):
@@ -2390,7 +2399,7 @@ def move_object_for_role(
     denial_message = None
     try:
         try:
-            _copy_object(
+            copied_version = _copy_object(
                 role, source_bucket, source_path, dest_bucket, dest_path, user_dict, etag=etag, version_id=version_id
             )
         except ClientError as error:
@@ -2399,6 +2408,10 @@ def move_object_for_role(
                 raise S3AccessDeniedError(typed.code, "Access denied by S3 during CopyObject.") from error
             raise
         copied = True
+        if version_id is not None and copied_version != version_id:
+            # The copy took another source version than HEAD saw (or could not confirm
+            # which): the destination holds that state, so keep the source.
+            raise _SourceChanged
         access_service.require_delete(role, load_config(force_reload=True))
         _delete_exact_key(
             role, source_bucket, source_path, user_dict, etag=etag, version_id=version_id, source_head=source

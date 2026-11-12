@@ -101,9 +101,11 @@ failure instead returns `ok: false`, `copied: false`, `moved: false` and
 reason.
 
 On versioned buckets the copy is pinned to the source `VersionId`, which needs
-`s3:GetObjectVersion`. Without that permission the move retries once without
-the version: `CopySourceIfMatch` still ensures the copied bytes are the ones
-read, and the final HEAD still compares the VersionId before deleting.
+`s3:GetObjectVersion`. Without that permission each copy attempt falls back to
+one copy without the version: `CopySourceIfMatch` still ensures the copied
+bytes are the ones read, the source is deleted only if the copy reports the same
+`CopySourceVersionId` that was read (otherwise `SOURCE_CHANGED`, source kept),
+and the final HEAD still compares the VersionId before deleting.
 
 Once the copy has succeeded, a later failure never hides it: an S3 403 returns
 `copied: true`, `moved: false`, `S3_ACCESS_DENIED`; any other failure before the

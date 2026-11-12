@@ -737,3 +737,63 @@ def test_unpinned_fallback_still_refuses_a_changed_source(source, monkeypatch):
     assert result["moved"] is False
     assert result["source_kept_reason"] == "SOURCE_CHANGED"
     assert body(source, "move-source", "file") == b"v3"
+
+
+def test_unpinned_fallback_that_copied_another_version_keeps_source(source, monkeypatch):
+    # A -> pinned copy denied -> B written with the same bytes -> unpinned copy takes B ->
+    # B deleted (A current again): the second HEAD matches A, so only CopySourceVersionId
+    # shows that the destination holds B.
+    source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+    source.put_object(Bucket="move-source", Key="file", Body=b"same")
+    original_copy = source.copy_object
+
+    def copy_object(**kwargs):
+        if "VersionId" in kwargs["CopySource"]:
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403}}, "CopyObject"
+            )
+        newer = source.put_object(Bucket="move-source", Key="file", Body=b"same", ContentType="text/b")
+        response = original_copy(**kwargs)
+        source.delete_object(Bucket="move-source", Key="file", VersionId=newer["VersionId"])
+        return response
+
+    monkeypatch.setattr(source, "copy_object", copy_object)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "SOURCE_CHANGED"
+    assert body(source, "move-source", "file") == b"same"
+
+
+def test_unpinned_fallback_without_copied_version_keeps_source(source, monkeypatch):
+    source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+    source.put_object(Bucket="move-source", Key="file", Body=b"v2")
+    original_copy = source.copy_object
+
+    def copy_object(**kwargs):
+        if "VersionId" in kwargs["CopySource"]:
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403}}, "CopyObject"
+            )
+        response = original_copy(**kwargs)
+        response.pop("CopySourceVersionId", None)  # backend that does not report it
+        return response
+
+    monkeypatch.setattr(source, "copy_object", copy_object)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "SOURCE_CHANGED"
+    assert body(source, "move-source", "file") == b"v2"
+
+
+def test_unversioned_copy_reporting_a_version_still_moves(source, monkeypatch):
+    original_copy = source.copy_object
+
+    def copy_object(**kwargs):
+        response = original_copy(**kwargs)
+        response["CopySourceVersionId"] = "null"  # some S3-compatible backends report one
+        return response
+
+    monkeypatch.setattr(source, "copy_object", copy_object)
+    assert move()["moved"] is True
