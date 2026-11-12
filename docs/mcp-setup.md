@@ -100,22 +100,28 @@ failure instead returns `ok: false`, `copied: false`, `moved: false` and
 `SOURCE_CHANGED`; nothing is deleted. Always inspect `copied` as well as the
 reason.
 
-For versioned sources with a real `VersionId` (not `"null"`), the copy is pinned
-to that version, but deletion omits `VersionId`: it creates a delete marker so
-the key disappears without exposing a previous version. All object versions are
-retained. An external write after the final HEAD can be hidden by this marker,
-but its version remains available explicitly by `VersionId`.
+For versioned sources the copy is pinned to the source's `VersionId`, but
+deletion never names a version: with versioning **enabled** it creates a delete
+marker, so the key disappears without exposing a previous version and all
+versions are retained (an external write after the final HEAD is hidden by the
+marker but stays available by its `VersionId`).
 
-For `"null"` or absent VersionId, ASM sends a conditional `If-Match` DELETE;
-a failed precondition or a missing source during that DELETE returns
-`copied: true`, `moved: false`, `SOURCE_CHANGED`. The final HEAD also compares
-LastModified, ContentLength, ContentType and user Metadata, in addition to ETag
-and VersionId. Delete permission is checked again after that comparison.
-On backends that ignore `If-Match` on DELETE, the final check-to-delete window
-remains against writers outside this ASM process (including other replicas).
-Writes handled by this process share the reservation. MinIO
-(tested with RELEASE.2026-10-23) ignores `If-Match` on DELETE; bucket versioning
-preserves versions rather than permanently deleting their data in that window.
+Every guarded delete carries `If-Match` with the copied ETag; a failed
+precondition or a missing source during that DELETE returns `copied: true`,
+`moved: false`, `SOURCE_CHANGED`. The final HEAD compares ETag, VersionId,
+LastModified, ContentLength, ContentType and user Metadata, and the delete
+permission is checked again right after that comparison.
+
+Remaining window (accepted, best-effort): writes handled by this ASM process
+share the reservation, but external clients and other replicas are not
+coordinated. Between the final HEAD and the DELETE:
+
+- on a backend that ignores `If-Match` on DELETE — MinIO RELEASE.2026-10-23 does —
+  an external overwrite of an unversioned source is lost;
+- on any backend, an external overwrite that keeps the same bytes but changes
+  only metadata (same ETag) passes `If-Match` and is lost.
+
+Enable bucket versioning to keep that data: deletes then only add a marker.
 
 ### Tool annotations (auto-approval hints)
 

@@ -1510,8 +1510,8 @@ async def copy_object(
                 "a MOVE/RENAME rather than a copy. DESTRUCTIVE and irreversible, and additionally "
                 "requires deletion to be enabled server-wide and for the role. Changed sources or revoked permissions are kept; inspect source_kept_reason. "
                 "Writes through this ASM server are coordinated; external clients and other replicas are not: on an unversioned "
-                "bucket whose backend ignores If-Match on DELETE (e.g. MinIO), an external write in the final moment before the "
-                "delete can be lost. Enable bucket versioning to close that gap."
+                "bucket whose backend ignores If-Match on DELETE (e.g. MinIO), or with a metadata-only overwrite on any backend, an "
+                "external write in the final moment before the delete can be lost. Enable bucket versioning to keep it."
             )
         ),
     ] = False,
@@ -1528,8 +1528,8 @@ async def copy_object(
     SOURCE_CHANGED reports copied=false if the conditional copy failed, otherwise
     copied=true and moved=false. With a real VersionId, deletion adds a delete
     marker and keeps all versions, including concurrent writes the marker may hide.
-    Otherwise it uses If-Match; backends ignoring that header retain a final race
-    with writers outside this ASM process. Blocked for
+    Every guarded delete uses If-Match; backends ignoring it, and metadata-only
+    overwrites, retain a final race with writers outside this ASM process. Blocked for
     read-only tokens and when the server disables MCP writes.
     """
     error_code = "none"

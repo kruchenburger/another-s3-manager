@@ -2305,11 +2305,13 @@ def _delete_exact_key(
                 for field in ("LastModified", "ContentLength", "ContentType", "Metadata")
             ):
                 raise _SourceChanged
-        conditional = etag is not None and version_id in (None, "null")
+        # If-Match on every guarded delete: with versioning suspended, a real
+        # VersionId seen by both HEADs can still be replaced by a new "null" one.
+        conditional = etag is not None
         access_service.require_delete(role, load_config(force_reload=True))
         try:
-            # Real versions are retained: a plain DELETE adds a delete marker.
-            # "null" versions can be overwritten, so they still need If-Match.
+            # Never delete by VersionId: with versioning enabled a plain DELETE adds
+            # a delete marker and keeps every version.
             if conditional:
                 with _conditional_delete(client, etag):
                     client.delete_object(Bucket=bucket, Key=path)
@@ -2380,7 +2382,9 @@ def move_object_for_role(
         "moved": copied and reason is None,
         "source_kept_reason": reason,
         "message": (
-            "Copied, source changed after the copy — source kept"
+            "Not copied: the source changed before the copy — nothing deleted"
+            if not copied
+            else "Copied, source changed after the copy — source kept"
             if reason == "SOURCE_CHANGED"
             else "Copied, source kept"
             if reason

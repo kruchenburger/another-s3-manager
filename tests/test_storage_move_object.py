@@ -436,7 +436,7 @@ def test_missing_delete_is_source_changed_only_for_conditional_move(source, monk
         source.put_object(Bucket="move-source", Key="file", Body=b"old")
     error = ClientError({"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": 404}}, "DeleteObject")
     monkeypatch.setattr(source, "delete_object", Mock(side_effect=error))
-    if kind == "conditional":
+    if kind in ("conditional", "versioned"):
         result = move()
         assert result["copied"] is True
         assert result["moved"] is False
@@ -504,3 +504,27 @@ def test_other_source_head_changes_prevent_delete(source, monkeypatch, field):
     delete.assert_not_called()
     assert body(source, "move-source", "file") == b"old"
     assert body(source, "move-dest", "copy") == b"old"
+
+
+def test_suspended_versioning_real_version_still_sends_if_match(source):
+    # Versioning suspended after a real version was written: a later PUT creates a
+    # new "null" version, so the delete must stay conditional even for a real id.
+    source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+    source.put_object(Bucket="move-source", Key="file", Body=b"old")
+    source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Suspended"})
+    etag = source.head_object(Bucket="move-source", Key="file")["ETag"]
+    headers = []
+    source.meta.events.register(
+        "before-send.s3.DeleteObject", lambda request, **kw: headers.append(request.headers.get("If-Match"))
+    )
+    assert move()["moved"] is True
+    assert headers == [etag.encode()]
+
+
+def test_copy_precondition_failure_message_says_not_copied(source, monkeypatch):
+    monkeypatch.setattr(source, "copy_object", Mock(side_effect=precondition("CopyObject")))
+    result = move()
+    assert result["copied"] is False
+    assert result["moved"] is False
+    assert result["message"].startswith("Not copied")
+    assert body(source, "move-source", "file") == b"old"
