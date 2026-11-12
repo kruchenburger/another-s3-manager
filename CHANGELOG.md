@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Deleting, moving and cleaning up partial moves now check the current
+  permissions right before every request to S3, including requests the S3
+  library retries on its own. The check reads the current user from the
+  database and the current configuration: role grant, bucket list and delete
+  permission. A user who was removed, demoted or re-created under the same name
+  can no longer finish a delete that was already running.
+- A background move stops with `ROLE_CHANGED` when an admin changes the role's
+  storage target (endpoint, region, account, access key) while it runs. Before,
+  its remaining copies and deletes could go to another storage with a bucket of
+  the same name.
+- A folder delete in which S3 refuses some objects no longer reports full
+  success. Only the objects actually deleted are counted. The web UI gets a 502
+  and MCP `delete_file` gets `PARTIAL_DELETE`, each with the number deleted and
+  the number left.
+
 ## [1.3.0] - 2026-11-12
 
 ### Added

@@ -17,9 +17,15 @@ USER = {"is_admin": True, "allowed_roles": ["Default"]}
 
 @pytest.fixture
 def source(moto_s3, monkeypatch):
+    from another_s3_manager import users
+
+    USER.clear()
+    USER.update(users.load_users()["users"][0])
     moto_s3.create_bucket(Bucket="move-source")
     moto_s3.create_bucket(Bucket="move-dest")
     moto_s3.put_object(Bucket="move-source", Key="file", Body=b"old")
+    # get_s3_client installs the delete handlers before publishing a client; the stub must too.
+    s3_client._register_delete_handlers(moto_s3)
     monkeypatch.setattr(s3_client, "get_s3_client", lambda role: moto_s3)
     return moto_s3
 
@@ -288,15 +294,18 @@ def test_delete_credential_retry_rechecks_without_recopying(source, monkeypatch,
         assert body(source, "move-source", "file") == (b"new" if change == "source" else b"old")
 
 
-def test_conditional_handler_is_registered_once_per_client(source, monkeypatch):
+def test_delete_handlers_are_never_registered_per_call(source, monkeypatch):
+    # Handlers are installed once when the client is built (the fixture mirrors
+    # get_s3_client); registering per call races botocore's handler cache.
     register = Mock(wraps=source.meta.events.register)
+    unregister = Mock(wraps=source.meta.events.unregister)
     monkeypatch.setattr(source.meta.events, "register", register)
+    monkeypatch.setattr(source.meta.events, "unregister", unregister)
     assert move()["moved"] is True
     source.put_object(Bucket="move-source", Key="file", Body=b"second")
     assert move()["moved"] is True
-    events = [call.args[0] for call in register.call_args_list]
-    assert events.count("before-sign.s3.DeleteObject") == 1
-    assert events.count("before-parameter-build.s3.DeleteObject") == 1
+    register.assert_not_called()
+    unregister.assert_not_called()
 
 
 def test_external_change_after_head_is_protected_by_conditional_delete(source):
@@ -797,3 +806,65 @@ def test_unversioned_copy_reporting_a_version_still_moves(source, monkeypatch):
 
     monkeypatch.setattr(source, "copy_object", copy_object)
     assert move()["moved"] is True
+
+
+@pytest.mark.parametrize("phase", ["head", "copy", "delete_retry", "fallback"])
+def test_move_keeps_original_storage_target(source, monkeypatch, phase):
+    from copy import deepcopy
+
+    original_head = source.head_object
+    original_copy = source.copy_object
+    original_delete = source.delete_object
+    copies = []
+    deletes = []
+
+    def change():
+        cfg = deepcopy(config.load_config())
+        cfg["roles"][0]["endpoint_url"] = "http://changed.test"
+        config.save_config(cfg)
+
+    def head(**kwargs):
+        result = original_head(**kwargs)
+        if phase == "head":
+            change()
+        return result
+
+    def copy(**kwargs):
+        copies.append(kwargs)
+        if phase == "fallback":
+            change()
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "CopyObject")
+        result = original_copy(**kwargs)
+        if phase == "copy":
+            change()
+        return result
+
+    def delete(**kwargs):
+        deletes.append(kwargs)
+        if phase == "delete_retry":
+            change()
+            raise ClientError({"Error": {"Code": "ExpiredToken"}}, "DeleteObject")
+        return original_delete(**kwargs)
+
+    if phase == "fallback":
+        source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+        source.put_object(Bucket="move-source", Key="file", Body=b"old")
+    monkeypatch.setattr(source, "head_object", head)
+    monkeypatch.setattr(source, "copy_object", copy)
+    monkeypatch.setattr(source, "delete_object", delete)
+    monkeypatch.setattr(s3_client, "_clear_boto3_cached_credentials", lambda: None)
+    if phase in {"head", "fallback"}:
+        with pytest.raises(MoveError) as caught:
+            move()
+        assert caught.value.code == "ROLE_CHANGED"
+        assert len(copies) == (1 if phase == "fallback" else 0)
+        assert not deletes
+    else:
+        result = move()
+        assert result["copied"] is True
+        assert result["moved"] is False
+        assert result["source_kept_reason"] == "ROLE_CHANGED"
+        assert len(copies) == 1
+        assert len(deletes) == (1 if phase == "delete_retry" else 0)
+        assert body(source, "move-dest", "copy") == b"old"
+    assert body(source, "move-source", "file") == b"old"

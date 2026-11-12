@@ -146,20 +146,18 @@ def test_destination_appeared(storage, monkeypatch):
 def test_per_key_delete_errors(storage, monkeypatch):
     s3, user = storage
     s3.put_object(Bucket="move-bucket", Key="source/file", Body=b"abc")
-    original = moves.s3_unit
 
-    class Denied:
-        def delete_objects(self, **kwargs):
-            return {"Errors": [{"Key": "source/file", "Code": "AccessDenied", "Message": "private"}]}
+    def denied(**kwargs):
+        return {"Errors": [{"Key": "source/file", "Code": "AccessDenied", "Message": "private"}]}
 
-    def unit(role, operation, callback):
-        return callback(Denied()) if operation == "delete" else original(role, operation, callback)
-
-    monkeypatch.setattr(moves, "s3_unit", unit)
+    # Keep real botocore events while injecting the storage's per-key response.
+    monkeypatch.setattr(s3, "delete_objects", denied)
+    monkeypatch.setattr(moves.s3_client, "get_s3_client", lambda role: s3)
     job = start(user, request())
     job.future.result(timeout=10)
     assert job.state == "failed_delete"
     assert job.removed == 0
+    assert job.failures[0]["code"] == "AccessDenied"
     assert s3.get_object(Bucket="move-bucket", Key="source/file")["Body"].read() == b"abc"
     with pytest.raises(MoveError) as error:
         moves.registry.cleanup(job.id, user)
@@ -420,6 +418,8 @@ def test_failure_storage_and_pagination():
 
 
 def test_access_rechecked_after_100_copies(storage, monkeypatch):
+    from another_s3_manager import users
+
     _, user = storage
     entries = tuple(moves.Entry("source/" + str(i), "dest/" + str(i), "etag", 1, None) for i in range(101))
     job = moves.Job(
@@ -431,15 +431,21 @@ def test_access_rechecked_after_100_copies(storage, monkeypatch):
         "hash",
         plan=moves.Plan(entries, (("source/", "dest/", "folder"),), ()),
     )
-    original = moves.users.get_user_by_id
+    original = users.get_user_by_id
     checks = []
 
     def owner(user_id):
         checks.append(user_id)
-        return original(user_id) if len(checks) == 1 else None
+        return original(user_id) if len(copied) < 100 else None
 
-    monkeypatch.setattr(moves.users, "get_user_by_id", owner)
-    monkeypatch.setattr(moves, "copy_entry", lambda *args: "copied-etag")
+    monkeypatch.setattr(users, "get_user_by_id", owner)
+    copied = []
+
+    def copy(*args):
+        copied.append(args)
+        return "copied-etag"
+
+    monkeypatch.setattr(moves, "copy_entry", copy)
     moves.run_job(job)
     assert job.state == "cancelled_access"
     assert job.done == 100
@@ -563,12 +569,12 @@ def test_snapshot_available_during_cleanup(storage, monkeypatch):
     recheck = moves.recheck
     checks = 0
 
-    def revoke_during_cleanup(job):
+    def revoke_during_cleanup(job, client=None):
         nonlocal checks
         checks += 1
         if checks == 2:
             raise MoveError("ACCESS_DENIED", 403)
-        recheck(job)
+        recheck(job, client)
 
     with monkeypatch.context() as patch:
         patch.setattr(moves, "recheck", revoke_during_cleanup)
@@ -659,13 +665,14 @@ def test_move_recheck_calls_access_policy(storage, monkeypatch):
 
     _, user = storage
     guard = Mock(side_effect=AccessDenied("DELETION_DISABLED_FOR_ROLE", "blocked"))
-    monkeypatch.setattr(service, "require_delete", guard)
+    monkeypatch.setattr(service, "require_destructive", guard)
     job = moves.Job("j", moves.owner_identity(user), "Default", "move-bucket", "op", "hash")
     with pytest.raises(MoveError) as caught:
         moves.recheck(job)
     assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
     assert caught.value.http_status == 403
-    assert guard.call_args.args[0] == "Default"
+    assert guard.call_args.args[0]["id"] == user["id"]
+    assert guard.call_args.args[1:3] == ("Default", "move-bucket")
 
 
 def test_move_cleanup_refused_for_role(storage, monkeypatch):
@@ -824,7 +831,7 @@ def test_cleanup_reports_all_remaining_copies_after_revocation(storage, monkeypa
     moves.registry.jobs[job.id] = job
     from unittest.mock import Mock
 
-    client = Mock()
+    client = Mock(_asm_storage_fingerprint=s3._asm_storage_fingerprint)
     client.head_object.return_value = {"ETag": '"etag"'}
 
     def delete(**kwargs):
@@ -842,3 +849,64 @@ def test_cleanup_reports_all_remaining_copies_after_revocation(storage, monkeypa
     assert len(job.copied) == 1000
     assert result["failures"][0]["code"] == "DELETION_DISABLED_FOR_ROLE"
     client.delete_objects.assert_called_once()
+
+
+@pytest.mark.parametrize("changed_role", ["Default", "unrelated"])
+def test_storage_target_change_before_delete(storage, monkeypatch, changed_role):
+    from another_s3_manager import config
+
+    client, user = storage
+    client.put_object(Bucket="move-bucket", Key="source/file", Body=b"keep")
+    original = moves.copy_entry
+
+    def copy_and_change(*args, **kwargs):
+        result = original(*args, **kwargs)
+        cfg = config.load_config()
+        if changed_role == "Default":
+            cfg["roles"][0]["endpoint_url"] = "http://different.test"
+        else:
+            cfg["roles"].append({"name": "unrelated", "type": "default", "endpoint_url": "http://different.test"})
+        config.save_config(cfg)
+        return result
+
+    monkeypatch.setattr(moves, "copy_entry", copy_and_change)
+    job = start(user, request())
+    job.future.result(timeout=10)
+    if changed_role == "Default":
+        assert job.removed == 0
+        assert job.delete_started is False
+        assert job.snapshot()["failures"][0]["code"] == "ROLE_CHANGED"
+        assert client.get_object(Bucket="move-bucket", Key="source/file")["Body"].read() == b"keep"
+        assert client.get_object(Bucket="move-bucket", Key="dest/file")["Body"].read() == b"keep"
+        with pytest.raises(MoveError) as caught:
+            moves.registry.cleanup(job.id, user)
+        assert caught.value.code == "ROLE_CHANGED"
+        assert caught.value.http_status == 409
+    else:
+        assert job.state == "done"
+
+
+def test_destructive_role_denial_precedes_role_existence(storage):
+    from another_s3_manager import users
+
+    user = users.create_user("no-grant", "password123", allowed_roles=[])
+    with pytest.raises(MoveError) as caught:
+        moves.require_access(user, "missing", "move-bucket", deleting=True)
+    assert caught.value.code == "ACCESS_DENIED"
+    assert caught.value.http_status == 403
+
+
+def test_recheck_loads_one_snapshot(storage, monkeypatch):
+    from unittest.mock import Mock
+
+    from another_s3_manager import config, users
+
+    _, user = storage
+    job = moves.Job("snapshot", moves.owner_identity(user), "Default", "move-bucket", "op", "hash")
+    get_user = Mock(wraps=users.get_user_by_id)
+    get_config = Mock(wraps=config.load_config)
+    monkeypatch.setattr(users, "get_user_by_id", get_user)
+    monkeypatch.setattr(config, "load_config", get_config)
+    moves.recheck(job)
+    get_user.assert_called_once_with(user["id"])
+    get_config.assert_called_once_with(force_reload=True)

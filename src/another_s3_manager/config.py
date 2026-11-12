@@ -18,13 +18,13 @@ _config_cache: Dict[str, Any] = {}
 _config_mtime: float = 0
 _migrating: bool = False  # Flag to prevent recursive migration
 
-# Serializes the reload path (read file + migrate + persist) across threads.
+# Serializes save and reload (file I/O + cache/mtime publication) across threads.
 # R001 moved every request onto a worker-thread pool, so concurrent reloads
 # are now real: without this, two threads could both read the file, both
 # migrate their own copy, and both write config.json back-to-back. The lock
 # does not protect plain reads of `_config_cache` below (those stay lock-free
 # and rely on the atomic-rebind argument documented in load_config).
-_config_lock = threading.Lock()
+_config_lock = threading.RLock()
 
 
 def load_config(force_reload: bool = False) -> Dict[str, Any]:
@@ -413,15 +413,16 @@ def _save_config_internal(config: Dict[str, Any], skip_migration: bool = False) 
     """
     global _config_cache, _config_mtime
 
-    # Check if config is writable before attempting to save
-    if not is_config_writable():
-        raise PermissionError("Configuration file is read-only. Cannot save changes.")
+    with _config_lock:
+        # Check if config is writable before attempting to save
+        if not is_config_writable():
+            raise PermissionError("Configuration file is read-only. Cannot save changes.")
 
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
-    _config_cache = config
-    if CONFIG_FILE.exists():
-        _config_mtime = CONFIG_FILE.stat().st_mtime
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        _config_cache = config
+        if CONFIG_FILE.exists():
+            _config_mtime = CONFIG_FILE.stat().st_mtime
 
 
 def save_config(config: Dict[str, Any], skip_migration: bool = False) -> None:

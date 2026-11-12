@@ -7,8 +7,9 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Literal
 
 from boto3.s3.transfer import TransferConfig
@@ -16,7 +17,7 @@ from botocore.exceptions import ClientError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from another_s3_manager import access as access_service
-from another_s3_manager import config, s3_client, users
+from another_s3_manager import config, s3_client
 from another_s3_manager.access import AccessDenied
 from another_s3_manager.errors import MoveError, safe_move_error, safe_storage_logging
 from another_s3_manager.metrics import move_jobs_total, s3_objects_total, safe_role_label
@@ -29,6 +30,7 @@ from another_s3_manager.utils import (
 )
 
 MULTIPART_THRESHOLD = 5 * 1024**3
+_active_job = ContextVar("active_move_job", default=None)
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="move-job")
 
 
@@ -72,6 +74,7 @@ class MoveRequest(BaseModel):
 _ACCESS_ERROR_CODES = {
     "role_required": "ACCESS_DENIED",
     "role_not_allowed": "ACCESS_DENIED",
+    "role_not_found": "ROLE_NOT_FOUND",
     "bucket_not_allowed": "ACCESS_DENIED",
     "deletion_disabled": "DELETION_DISABLED",
     "DELETION_DISABLED": "DELETION_DISABLED",
@@ -79,21 +82,21 @@ _ACCESS_ERROR_CODES = {
 }
 
 
-def require_access(user: dict, role: str | None, bucket: str, *, deleting=False) -> None:
+def require_access(user: dict, role: str | None, bucket: str, *, deleting=False, snapshot=None) -> dict | None:
     try:
         role = access_service.require_role_name(role)
     except AccessDenied:
         raise MoveError("ROLE_REQUIRED") from None
     if len(role.encode("utf-8")) > 1024:
         raise MoveError("INVALID_REQUEST")
-    cfg = config.load_config(force_reload=True)
-    if not any(r.get("name") == role for r in cfg.get("roles", [])):
-        raise MoveError("ROLE_NOT_FOUND")
     try:
-        s3_client.validate_role_access(role, user)
-        s3_client._validate_bucket_access(role, bucket, user)
         if deleting:
-            access_service.require_delete(role, cfg)
+            return s3_client.require_current_destructive(user, role, bucket, snapshot=snapshot)
+        cfg = config.load_config(force_reload=True)
+        if not any(r.get("name") == role for r in cfg.get("roles", [])):
+            raise MoveError("ROLE_NOT_FOUND")
+        access_service.require_role(role, user, cfg)
+        access_service.require_bucket(role, bucket, user, cfg)
     except AccessDenied as error:
         mapped = MoveError(_ACCESS_ERROR_CODES[error.code], 403)
         if error.code == "DELETION_DISABLED_FOR_ROLE":
@@ -106,7 +109,14 @@ def require_access(user: dict, role: str | None, bucket: str, *, deleting=False)
 def s3_unit(role, operation, callback):
     token = safe_storage_logging.set(True)
     try:
-        return s3_client.execute_with_s3_retry(role, operation, callback)
+        job = _active_job.get()
+
+        def checked(client):
+            if job is not None:
+                recheck(job, client)
+            return callback(client)
+
+        return s3_client.execute_with_s3_retry(role, operation, checked)
     finally:
         safe_storage_logging.reset(token)
 
@@ -176,12 +186,16 @@ class Plan:
     entries: tuple[Entry, ...]
     roots: tuple[tuple[str, str, str], ...]
     parents: tuple[str, ...]
+    # The role's storage target the plan was listed on: a confirmation given for one
+    # storage must never start a move on another one with an identical listing.
+    storage_fingerprint: str = ""
 
     def fingerprint(self, role, bucket, request):
         payload = [
             role,
             bucket,
             request.model_dump(),
+            self.storage_fingerprint,
             sorted((entry.source, entry.destination, entry.size, entry.etag) for entry in self.entries),
         ]
         return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -244,7 +258,8 @@ def enumerate_sources(role, bucket, roots, *, allow_missing=False):
 
 
 def build_plan(user, role, bucket, request):
-    require_access(user, role, bucket, deleting=True)
+    cfg = require_access(user, role, bucket, deleting=True)
+    storage_fingerprint = s3_client.role_storage_fingerprint(role, cfg)
     roots = roots_for(request)
     entries = enumerate_sources(role, bucket, roots)
     sources = {e.source for e in entries}
@@ -264,7 +279,9 @@ def build_plan(user, role, bucket, request):
     parents = tuple(sorted({item.path.rpartition("/")[0] for item in request.items if "/" in item.path}))
     for parent in parents:
         validate_source_key(parent + "/")
-    return Plan(entries, roots, parents)
+    # The listing must come from one target: a change while enumerating invalidates the plan.
+    s3_client.require_storage_target(role, storage_fingerprint, config.load_config(force_reload=True))
+    return Plan(entries, roots, parents, storage_fingerprint)
 
 
 def copy_entry(role, bucket, entry):
@@ -290,16 +307,26 @@ def copy_entry(role, bucket, entry):
             }
             if metadata.get("StorageClass", "STANDARD") != "STANDARD":
                 extra["StorageClass"] = metadata["StorageClass"]
-        client.copy(
-            {"Bucket": bucket, "Key": entry.source},
-            bucket,
-            entry.destination,
-            ExtraArgs=extra,
-            # s3transfer uses >=; the exact 5 GiB boundary still fits CopyObject.
-            Config=TransferConfig(
-                multipart_threshold=MULTIPART_THRESHOLD + (entry.size == MULTIPART_THRESHOLD), use_threads=False
-            ),
+        job = _active_job.get()
+        # Inside a job every signed copy attempt (CopyObject and the multipart stages,
+        # SDK retries included) re-checks access and the storage target. The
+        # verification HEAD below stays unguarded so an existing copy is always recorded.
+        guard = (
+            s3_client.destructive_delete_guard(client, lambda: recheck(job, client))
+            if job is not None
+            else nullcontext()
         )
+        with guard:
+            client.copy(
+                {"Bucket": bucket, "Key": entry.source},
+                bucket,
+                entry.destination,
+                ExtraArgs=extra,
+                # s3transfer uses >=; the exact 5 GiB boundary still fits CopyObject.
+                Config=TransferConfig(
+                    multipart_threshold=MULTIPART_THRESHOLD + (entry.size == MULTIPART_THRESHOLD), use_threads=False
+                ),
+            )
         result = client.head_object(Bucket=bucket, Key=entry.destination)
         return result["ETag"]
 
@@ -309,12 +336,7 @@ def copy_entry(role, bucket, entry):
 
 
 def owner_identity(user):
-    created_at = user["created_at"]
-    if created_at is not None:
-        # SQLite reloads UTC timestamps without the timezone attached at creation.
-        timestamp = datetime.fromisoformat(created_at)
-        created_at = timestamp.replace(tzinfo=timestamp.tzinfo or UTC).astimezone(UTC).isoformat()
-    return (user["id"], user["username"], created_at)
+    return s3_client.account_identity(user)
 
 
 @dataclass
@@ -325,6 +347,7 @@ class Job:
     bucket: str
     operation_id: str
     request_hash: str
+    storage_fingerprint: str = ""
     plan: Plan | None = None
     state: str = "running"
     phase: str = "planning"
@@ -341,6 +364,12 @@ class Job:
     planning_error: MoveError | None = None
     lock: object = field(default_factory=threading.RLock, repr=False)
     cleanup_lock: object = field(default_factory=threading.Lock, repr=False)
+
+    def __post_init__(self):
+        if not self.storage_fingerprint:
+            self.storage_fingerprint = s3_client.role_storage_fingerprint(
+                self.role, config.load_config(force_reload=True)
+            )
 
     def fail(self, error, phase, key=None):
         failure = safe_move_error(error, phase, key).detail()
@@ -371,11 +400,12 @@ class Job:
             }
 
 
-def recheck(job):
-    user = users.get_user_by_id(job.owner[0])
+def recheck(job, client=None):
+    user, cfg = s3_client.load_destructive_state(job.owner[0])
     if user is None or owner_identity(user) != job.owner:
         raise MoveError("ACCESS_DENIED", 403)
-    require_access(user, job.role, job.bucket, deleting=True)
+    require_access(user, job.role, job.bucket, deleting=True, snapshot=(user, cfg))
+    s3_client.require_storage_target(job.role, job.storage_fingerprint, cfg, client)
 
 
 def delete_batch(job, keys):
@@ -383,22 +413,27 @@ def delete_batch(job, keys):
 
     def delete(client):
         recheck(job)
-        return client.delete_objects(
-            Bucket=job.bucket, Delete={"Objects": [{"Key": key} for key in keys], "Quiet": False}
-        )
+        with s3_client.destructive_delete_guard(client, lambda: recheck(job, client)):
+            return s3_client.delete_keys_batch(client, job.bucket, keys)
 
-    result = s3_unit(job.role, "delete", delete)
-    errors = {error["Key"]: error.get("Code", "STORAGE_ERROR") for error in result.get("Errors", [])}
-    deleted = {item["Key"] for item in result.get("Deleted", [])}
-    for key in keys:
-        if key in errors or key not in deleted:
-            job.fail(MoveError(errors.get(key, "STORAGE_ERROR"), 502, job.phase, key), job.phase, key)
-    succeeded = deleted.intersection(keys).difference(errors)
+    succeeded, errors = s3_unit(job.role, "delete", delete)
+    for key, code in errors.items():
+        job.fail(MoveError(code, 502, job.phase, key), job.phase, key)
     s3_objects_total.labels(role=safe_role_label(job.role), bucket=job.bucket, operation="delete").inc(len(succeeded))
     return succeeded
 
 
+def copy_job_entry(job, entry):
+    token = _active_job.set(job)
+    try:
+        recheck(job)
+        return copy_entry(job.role, job.bucket, entry)
+    finally:
+        _active_job.reset(token)
+
+
 def run_job(job):
+    token = _active_job.set(job)
     try:
         job.phase = "copy"
         with ThreadPoolExecutor(max_workers=8, thread_name_prefix="move-copy") as pool:
@@ -410,7 +445,7 @@ def run_job(job):
                     job.state = "cancelled_access"
                     return
                 batch = job.plan.entries[index : index + 100]
-                futures = {pool.submit(copy_entry, job.role, job.bucket, entry): entry for entry in batch}
+                futures = {pool.submit(copy_job_entry, job, entry): entry for entry in batch}
                 failed = False
                 for future in as_completed(futures):
                     entry = futures[future]
@@ -477,6 +512,7 @@ def run_job(job):
         job.fail(error, job.phase)
         job.state = "failed_delete" if job.delete_started else "failed_copy"
     finally:
+        _active_job.reset(token)
         with job.lock:
             job.finished_at = time.monotonic()
         move_jobs_total.labels(outcome=job.state).inc()
@@ -556,6 +592,10 @@ class MoveRegistry:
                 raise
             if job.plan.fingerprint(role, bucket, request) != plan_fingerprint:
                 raise MoveError("PLAN_CHANGED", 409)
+            # The job may only act on the target the confirmed plan was listed on; every
+            # later recheck compares against job.storage_fingerprint.
+            if job.plan.storage_fingerprint != job.storage_fingerprint:
+                raise MoveError("ROLE_CHANGED", 409)
             job.future = _executor.submit(self._run, job)
             return job
         except Exception as error:
@@ -581,6 +621,7 @@ class MoveRegistry:
         recheck(job)
         if not job.cleanup_lock.acquire(blocking=False):
             raise MoveError("BUSY", 409)
+        job_context = _active_job.set(job)
         try:
             with job.lock:
                 if job.state == "running":
@@ -606,13 +647,12 @@ class MoveRegistry:
 
                         def delete(client):
                             recheck(job)
-                            return client.delete_objects(
-                                Bucket=job.bucket, Delete={"Objects": [{"Key": key}], "Quiet": False}
-                            )
+                            with s3_client.destructive_delete_guard(client, lambda: recheck(job, client)):
+                                return s3_client.delete_keys_batch(client, job.bucket, [key])
 
-                        result = s3_unit(job.role, "delete", delete)
-                        if result.get("Errors") or key not in {x["Key"] for x in result.get("Deleted", [])}:
-                            raise MoveError("STORAGE_ERROR", 502, "cleanup", key)
+                        deleted, failed = s3_unit(job.role, "delete", delete)
+                        if key not in deleted:
+                            raise MoveError(failed[key], 502, "cleanup", key)
                         with job.lock:
                             del job.copied[key]
                         removed += 1
@@ -623,6 +663,7 @@ class MoveRegistry:
                         access_denied = isinstance(error, MoveError) and error.code in {
                             "ACCESS_DENIED",
                             "ROLE_NOT_FOUND",
+                            "ROLE_CHANGED",
                             "DELETION_DISABLED",
                             "DELETION_DISABLED_FOR_ROLE",
                         }
@@ -642,6 +683,7 @@ class MoveRegistry:
                     "stopped_reason": stopped_reason,
                 }
         finally:
+            _active_job.reset(job_context)
             job.cleanup_lock.release()
 
 

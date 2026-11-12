@@ -2,13 +2,15 @@
 S3 client management module
 """
 
+import hashlib
 import heapq
+import json
 import logging
 import os
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, BinaryIO, Callable, Dict, Iterator, Optional, Tuple, TypeVar
 from typing import Any as AnyType
 
@@ -23,6 +25,8 @@ from another_s3_manager.access import AccessDenied
 from another_s3_manager.config import load_config
 from another_s3_manager.constants import S3_USE_SSL, S3_VERIFY_SSL
 from another_s3_manager.errors import (
+    MoveError,
+    PartialDeleteError,
     RoleNotFoundError,
     S3AccessDeniedError,
     SafeStorageLogFilter,
@@ -30,8 +34,136 @@ from another_s3_manager.errors import (
 )
 from another_s3_manager.move_reservations import guarded_write
 
+
+def account_identity(user: dict) -> tuple:
+    """Normalize account generation consistently with SQLite's naive UTC reads."""
+    created_at = user.get("created_at")
+    if created_at is not None:
+        timestamp = datetime.fromisoformat(created_at)
+        created_at = timestamp.replace(tzinfo=timestamp.tzinfo or UTC).astimezone(UTC).isoformat()
+    return (user.get("id"), user.get("username"), created_at)
+
+
+def load_destructive_state(user_id: int | None) -> tuple[dict | None, dict]:
+    """Load one fresh caller/config snapshot for a destructive recheck."""
+    from another_s3_manager import users
+    from another_s3_manager.config import load_config
+
+    cfg = load_config(force_reload=True)
+    current = users.get_user_by_id(user_id) if user_id is not None else None
+    return current, cfg
+
+
+def require_current_destructive(
+    user: dict, role: str, bucket: str, *, snapshot: tuple[dict | None, dict] | None = None
+) -> dict:
+    """Check the caller's generation and destructive access against fresh state."""
+    current, cfg = snapshot if snapshot is not None else load_destructive_state(user.get("id"))
+    if current is None or account_identity(current) != account_identity(user):
+        raise AccessDenied("role_not_allowed", f"Access denied: You don't have permission to use role '{role}'")
+    access_service.require_destructive(current, role, bucket, cfg)
+    return cfg
+
+
+def storage_target_fingerprint(role: dict) -> str:
+    """Identify a role's storage target without retaining secret key material."""
+    fields = (
+        "type",
+        "endpoint_url",
+        "region",
+        "role_arn",
+        "profile_name",
+        "account_id",
+        "access_key_id",
+        "addressing_style",
+        "path_style",
+        "use_path_style",
+        "use_ssl",
+        "verify_ssl",
+    )
+    target = {key: role.get(key) for key in fields}
+    return hashlib.sha256(json.dumps(target, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def role_storage_fingerprint(role: str, cfg: dict) -> str:
+    role_config = next((r for r in cfg.get("roles", []) if r.get("name") == role), None)
+    if role_config is None:
+        raise RoleNotFoundError(f"Role '{role}' not found in configuration")
+    return storage_target_fingerprint(role_config)
+
+
+def require_storage_target(role: str, fingerprint: str | None, cfg: dict, client=None) -> str:
+    """Pin one operation to its first client and reject config/client target drift."""
+    actual = client.__dict__.get("_asm_storage_fingerprint") if client is not None else None
+    expected = fingerprint if fingerprint is not None else actual
+    if (
+        not isinstance(expected, str)
+        or role_storage_fingerprint(role, cfg) != expected
+        or (client is not None and actual != expected)
+    ):
+        raise MoveError("ROLE_CHANGED", 409)
+    return expected
+
+
+_delete_guard_state = threading.local()
+
+
+def _register_delete_handlers(client):
+    """Install immutable handlers before publishing a client to worker threads."""
+
+    def before_sign(**kwargs):
+        state = getattr(_delete_guard_state, "value", None)
+        if state is not None and state[0] is client:
+            state[1]()
+
+    # Writes of a move (single copy and the multipart copy stages) and its deletes.
+    # Reads such as HeadObject are deliberately not guarded: a refused verification
+    # HEAD would lose track of a copy that already exists.
+    for operation in (
+        "DeleteObject",
+        "DeleteObjects",
+        "CopyObject",
+        "CreateMultipartUpload",
+        "UploadPartCopy",
+        "CompleteMultipartUpload",
+    ):
+        client.meta.events.register(
+            f"before-sign.s3.{operation}", before_sign, unique_id=f"asm-destructive-{operation}"
+        )
+    client.meta.events.register(
+        "before-parameter-build.s3.DeleteObject",
+        _mark_conditional_delete_context,
+        unique_id="asm-delete-if-match-context",
+    )
+    client.meta.events.register(
+        "before-sign.s3.DeleteObject",
+        _add_delete_if_match,
+        unique_id="asm-delete-if-match",
+    )
+
+
+@contextmanager
+def destructive_delete_guard(client, check: Callable[[], Any]):
+    """Run this thread's callback on every signed attempt, including SDK retries."""
+    previous = getattr(_delete_guard_state, "value", None)
+    _delete_guard_state.value = (client, check)
+    try:
+        check()
+        yield
+    finally:
+        _delete_guard_state.value = previous
+
+
+def delete_keys_batch(client, bucket: str, keys: list[str]) -> tuple[set[str], dict[str, str]]:
+    """Report only explicitly confirmed deletions; errors always take precedence."""
+    result = client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in keys], "Quiet": False})
+    failed = {item["Key"]: item.get("Code", "STORAGE_ERROR") for item in result.get("Errors", [])}
+    deleted = {item["Key"] for item in result.get("Deleted", [])}.intersection(keys).difference(failed)
+    return deleted, {key: failed.get(key, "STORAGE_ERROR") for key in keys if key not in deleted}
+
+
 # Cache for S3 clients per role
-_s3_clients_cache: Dict[str, AnyType] = {}
+_s3_clients_cache: Dict[tuple[str, str], AnyType] = {}
 # Guards the check-build-store sequence in get_s3_client (double-checked
 # locking, same shape as database.py's get_engine). R001 moved every boto3
 # call onto a worker-thread pool, so concurrent cache misses for the same
@@ -123,7 +255,9 @@ def invalidate_s3_client(role_name: Optional[str] = None) -> None:
     """
     cache_key = role_name or "default"
     with _s3_clients_lock:
-        _s3_clients_cache.pop(cache_key, None)
+        for key in list(_s3_clients_cache):
+            if key[0] == cache_key:
+                _s3_clients_cache.pop(key, None)
 
 
 def _is_expired_credentials_error(error: BaseException) -> bool:
@@ -142,17 +276,13 @@ def _is_expired_credentials_error(error: BaseException) -> bool:
         "service account token failed",
     }
 
-    eks_identity_hints = {
-        "eks-pod-identity",
-        "pod identity agent",
-        "iam-tokens.amazonaws.com",
-        "aws-iam-token",
-        "iam-credentials-service",
-        "container metadata",
-        "container-role",
-    }
+    # Domain failures can contain arbitrary key names, codes, and SDK causes.
+    if isinstance(error, (PartialDeleteError, MoveError)):
+        return False
 
     for chained_error in _iter_error_chain(error):
+        if isinstance(chained_error, (PartialDeleteError, MoveError)):
+            return False
         # Check for MetadataRetrievalError (used by container-role provider)
         if isinstance(chained_error, MetadataRetrievalError):
             message = str(chained_error).lower()
@@ -174,14 +304,9 @@ def _is_expired_credentials_error(error: BaseException) -> bool:
             )
             return True
 
-        message = str(chained_error).lower()
-        if any(phrase in message for phrase in expired_phrases):
-            if any(hint in message for hint in eks_identity_hints):
-                logger.warning("Detected expired pod identity token, requesting fresh credentials")
-            return True
-
-        error_response = getattr(chained_error, "response", None) or {}
-        error_code = (error_response.get("Error") or {}).get("Code", "")
+        if not isinstance(chained_error, ClientError):
+            continue
+        error_code = (chained_error.response.get("Error") or {}).get("Code", "")
         if error_code and error_code.lower() in {
             "expiredtoken",
             "expiredtokenexception",
@@ -642,45 +767,32 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
         S3OperationError,
     )
 
-    # Use cache key based on role name
-    cache_key = role_name or "default"
-
-    # Return cached client if available (lock-free fast path). A single
-    # dict.get() is atomic under the GIL; an `in` check followed by a
-    # separate `[]` subscript is not, and can KeyError if invalidate_s3_client
-    # / clear_s3_clients_cache pops or clears the entry in between.
+    # Select and fingerprint the same snapshot used to construct this client.
+    config = load_config(force_reload=False)
+    roles = config.get("roles", [])
+    if role_name:
+        role = next((r for r in roles if r.get("name") == role_name), None)
+        if role is None:
+            raise RoleNotFoundError(f"Role '{role_name}' not found in configuration")
+    else:
+        role = roles[0] if roles else {"name": "Default", "type": "default"}
+    fingerprint = storage_target_fingerprint(role)
+    cache_key = (role_name or "default", fingerprint)
     cached_client = _s3_clients_cache.get(cache_key)
     if cached_client is not None:
         return cached_client
 
     with _s3_clients_lock:
-        # Double-checked locking: another thread may have built and cached
-        # this exact role's client while we were waiting for the lock.
         cached_client = _s3_clients_cache.get(cache_key)
         if cached_client is not None:
             return cached_client
-
-        # Load config and find role
-        config = load_config(force_reload=False)
-        roles = config.get("roles", [])
-
-        if role_name:
-            role = next((r for r in roles if r.get("name") == role_name), None)
-            if not role:
-                raise RoleNotFoundError(f"Role '{role_name}' not found in configuration")
-        else:
-            # Use first role
-            role = roles[0] if roles else None
-
-            if not role:
-                # Fallback to default AWS credentials
-                role = {"name": "Default", "type": "default", "description": "Use default AWS credentials"}
 
         # Create client
         try:
             role_type = role.get("type", "unknown")
             logger.debug(f"Creating S3 client for role '{role_name or 'default'}' (type: {role_type})")
             client = _create_s3_client_from_role(role)
+            _register_delete_handlers(client)
         except Exception:
             logger.error(
                 f"Failed to create S3 client for role '{role_name or 'default'}'",
@@ -759,6 +871,12 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
                 )
                 raise typed from probe_error
 
+        client._asm_storage_fingerprint = fingerprint
+        # Retain at most the current target for each role, without closing clients
+        # still in use by another thread.
+        for key in list(_s3_clients_cache):
+            if key[0] == cache_key[0]:
+                _s3_clients_cache.pop(key, None)
         _s3_clients_cache[cache_key] = client
         logger.debug(f"Successfully created, probed and cached S3 client for role '{role_name or 'default'}'")
         return client
@@ -2177,6 +2295,7 @@ def _copy_object(
     *,
     etag: str | None = None,
     version_id: str | None = None,
+    storage_fingerprint: str | None = None,
 ) -> str | None:
     """Copy under the caller's reservation, optionally pinning the source state.
 
@@ -2190,13 +2309,24 @@ def _copy_object(
     validated_role = validate_role_access(role, user_dict)
 
     def do_copy(client):
+        def check_target():
+            if storage_fingerprint is not None:
+                # A move: both ends are re-checked against one fresh snapshot on every attempt.
+                current, cfg = snapshot = load_destructive_state(user_dict.get("id"))
+                cfg = require_current_destructive(user_dict, role, source_bucket, snapshot=snapshot)
+                access_service.require_bucket(role, dest_bucket, current, cfg)
+                require_storage_target(role, storage_fingerprint, cfg, client)
+
         copy_source = {"Bucket": source_bucket, "Key": source_path}
         if version_id is not None:
             copy_source["VersionId"] = version_id
         conditions = {"CopySourceIfMatch": etag} if etag is not None else {}
         try:
             try:
-                response = client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=copy_source, **conditions)
+                with destructive_delete_guard(client, check_target):
+                    response = client.copy_object(
+                        Bucket=dest_bucket, Key=dest_path, CopySource=copy_source, **conditions
+                    )
                 copied_version = response.get("CopySourceVersionId") or version_id
             except ClientError as error:
                 # Pinning a version needs s3:GetObjectVersion, which 1.2.x never required.
@@ -2209,7 +2339,8 @@ def _copy_object(
                     raise
                 logger.info("move: version-pinned copy denied, retrying without VersionId")
                 unpinned = {"Bucket": source_bucket, "Key": source_path}
-                response = client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=unpinned, **conditions)
+                with destructive_delete_guard(client, check_target):
+                    response = client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=unpinned, **conditions)
                 copied_version = response.get("CopySourceVersionId")
             s3_objects_total.labels(
                 role=safe_role_label(validated_role or "unknown"), bucket=dest_bucket, operation="copy"
@@ -2246,7 +2377,6 @@ def _is_precondition_failed(error: ClientError) -> bool:
 
 
 _delete_condition = threading.local()
-_delete_handler_lock = threading.Lock()
 
 
 def _add_delete_if_match(request, **kwargs):
@@ -2264,21 +2394,7 @@ def _mark_conditional_delete_context(params, context, **kwargs):
 
 @contextmanager
 def _conditional_delete(client, etag: str):
-    # Clients are shared across worker threads. Only registration is shared;
-    # the condition belongs to one call and is bound to its request context.
-    with _delete_handler_lock:
-        if not getattr(client, "_asm_conditional_delete_registered", False):
-            client.meta.events.register(
-                "before-parameter-build.s3.DeleteObject",
-                _mark_conditional_delete_context,
-                unique_id="asm-delete-if-match-context",
-            )
-            client.meta.events.register(
-                "before-sign.s3.DeleteObject",
-                _add_delete_if_match,
-                unique_id="asm-delete-if-match",
-            )
-            client._asm_conditional_delete_registered = True
+    # Handlers are installed before publication; only call-local state changes here.
     previous = getattr(_delete_condition, "value", None)
     _delete_condition.value = (None, etag)
     try:
@@ -2311,16 +2427,23 @@ def _delete_exact_key(
     etag: str | None = None,
     version_id: str | None = None,
     source_head: dict | None = None,
+    storage_fingerprint: str | None = None,
 ) -> dict:
     """Delete one exact key under the caller's reservation, rechecking each retry."""
-    from another_s3_manager.config import load_config
     from another_s3_manager.metrics import s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
 
     def do_delete(client):
-        access_service.require_delete(role, load_config(force_reload=True))
+        nonlocal storage_fingerprint
+
+        def check_target():
+            nonlocal storage_fingerprint
+            cfg = require_current_destructive(user_dict, role, bucket)
+            storage_fingerprint = require_storage_target(role, storage_fingerprint, cfg, client)
+
+        check_target()
         if etag is not None:
             try:
                 current = _head_move_source(client, bucket, path)
@@ -2336,15 +2459,16 @@ def _delete_exact_key(
         # If-Match on every guarded delete: with versioning suspended, a real
         # VersionId seen by both HEADs can still be replaced by a new "null" one.
         conditional = etag is not None
-        access_service.require_delete(role, load_config(force_reload=True))
+        check_target()
         try:
             # Never delete by VersionId: with versioning enabled a plain DELETE adds
             # a delete marker and keeps every version.
-            if conditional:
-                with _conditional_delete(client, etag):
+            with destructive_delete_guard(client, check_target):
+                if conditional:
+                    with _conditional_delete(client, etag):
+                        client.delete_object(Bucket=bucket, Key=path)
+                else:
                     client.delete_object(Bucket=bucket, Key=path)
-            else:
-                client.delete_object(Bucket=bucket, Key=path)
         except ClientError as error:
             if conditional and (
                 error.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}
@@ -2375,17 +2499,22 @@ def move_object_for_role(
     If-Match. Versioned deletes add a marker and retain all versions, including
     concurrent writes that the marker may hide. Internal writers are reserved.
     """
-    from another_s3_manager.config import load_config
 
     _validate_bucket_access(role, source_bucket, user_dict)
     _validate_bucket_access(role, dest_bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
-    access_service.require_delete(role, load_config(force_reload=True))
+    require_current_destructive(user_dict, role, source_bucket)
+
+    storage_fingerprint = None
+
+    def head_source(client):
+        nonlocal storage_fingerprint
+        cfg = require_current_destructive(user_dict, role, source_bucket)
+        storage_fingerprint = require_storage_target(role, storage_fingerprint, cfg, client)
+        return _head_move_source(client, source_bucket, source_path)
 
     try:
-        source = execute_with_s3_retry(
-            validated_role, "head", lambda client: _head_move_source(client, source_bucket, source_path)
-        )
+        source = execute_with_s3_retry(validated_role, "head", head_source)
     except ClientError as error:
         typed = classify_boto_error(error)
         if isinstance(typed, S3AccessDeniedError) or typed.http_status == 403:
@@ -2400,7 +2529,15 @@ def move_object_for_role(
     try:
         try:
             copied_version = _copy_object(
-                role, source_bucket, source_path, dest_bucket, dest_path, user_dict, etag=etag, version_id=version_id
+                role,
+                source_bucket,
+                source_path,
+                dest_bucket,
+                dest_path,
+                user_dict,
+                etag=etag,
+                version_id=version_id,
+                storage_fingerprint=storage_fingerprint,
             )
         except ClientError as error:
             typed = classify_boto_error(error)
@@ -2412,10 +2549,22 @@ def move_object_for_role(
             # The copy took another source version than HEAD saw (or could not confirm
             # which): the destination holds that state, so keep the source.
             raise _SourceChanged
-        access_service.require_delete(role, load_config(force_reload=True))
+        require_current_destructive(user_dict, role, source_bucket)
         _delete_exact_key(
-            role, source_bucket, source_path, user_dict, etag=etag, version_id=version_id, source_head=source
+            role,
+            source_bucket,
+            source_path,
+            user_dict,
+            etag=etag,
+            version_id=version_id,
+            source_head=source,
+            storage_fingerprint=storage_fingerprint,
         )
+    except MoveError as error:
+        if not copied or error.code != "ROLE_CHANGED":
+            raise
+        reason = error.code
+        denial_message = str(error)
     except _SourceChanged:
         reason = "SOURCE_CHANGED"
     except AccessDenied as error:
@@ -2490,35 +2639,43 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
     Raises FileNotFoundError if the object/directory does not exist.
     Returns {"message": ..., "count": N}.
     """
-    from another_s3_manager.config import load_config
     from another_s3_manager.metrics import s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
-    access_service.require_delete(role, load_config(force_reload=True))
+    require_current_destructive(user_dict, role, bucket)
 
     is_directory = path.endswith("/")
     prefix = path.rstrip("/")
 
-    deleted_count = 0
+    deleted_keys: set[str] = set()
+    failed: dict[str, str] = {}
+    objects_to_delete: list[dict] | None = None
 
-    def require_current_delete():
+    storage_fingerprint = None
+
+    def require_current_delete(client):
+        nonlocal storage_fingerprint
         try:
-            access_service.require_delete(role, load_config(force_reload=True))
+            cfg = require_current_destructive(user_dict, role, bucket)
+            storage_fingerprint = require_storage_target(role, storage_fingerprint, cfg, client)
         except AccessDenied as error:
-            error.details["count"] = deleted_count
+            error.details["count"] = len(deleted_keys)
             raise
 
     def do_delete(s3_client):
-        nonlocal deleted_count
+        nonlocal objects_to_delete
+        require_current_delete(s3_client)
 
         if is_directory:
             # Directory delete lists the "prefix/" subtree and takes every key
             # under it (recursive) — this genuinely needs every page.
-            paginator = s3_client.get_paginator("list_objects_v2")
-            pages = paginator.paginate(Bucket=bucket, Prefix=prefix + "/")
-
-            objects_to_delete = [{"Key": obj["Key"]} for page in pages for obj in page.get("Contents", []) or []]
+            # Preserve original batch membership across credential refreshes.
+            if objects_to_delete is None:
+                paginator = s3_client.get_paginator("list_objects_v2")
+                pages = paginator.paginate(Bucket=bucket, Prefix=prefix + "/")
+                keys = dict.fromkeys(obj["Key"] for page in pages for obj in page.get("Contents", []) or [])
+                objects_to_delete = [{"Key": key} for key in keys]
 
             if not objects_to_delete:
                 # Note: we deliberately do NOT fall back to a blind
@@ -2530,12 +2687,16 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
 
             for i in range(0, len(objects_to_delete), 1000):
                 batch = objects_to_delete[i : i + 1000]
-                require_current_delete()
-                s3_client.delete_objects(Bucket=bucket, Delete={"Objects": batch, "Quiet": True})
-                deleted_count += len(batch)
+                with destructive_delete_guard(s3_client, lambda: require_current_delete(s3_client)):
+                    deleted, failures = delete_keys_batch(s3_client, bucket, [item["Key"] for item in batch])
+                newly_deleted = deleted.difference(deleted_keys)
+                deleted_keys.update(deleted)
+                failed.update({key: code for key, code in failures.items() if key not in deleted_keys})
+                for key in deleted:
+                    failed.pop(key, None)
                 s3_objects_total.labels(
                     role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="delete"
-                ).inc(len(batch))
+                ).inc(len(newly_deleted))
         else:
             # Single-key existence + exact-match check in ONE list call
             # instead of paginating the entire prefix subtree. S3 returns
@@ -2557,13 +2718,16 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
 
             # Exact match confirmed — delete_object is equivalent to, and
             # cheaper than, the batch API for a single key.
-            require_current_delete()
-            s3_client.delete_object(Bucket=bucket, Key=prefix)
-            deleted_count += 1
+            with destructive_delete_guard(s3_client, lambda: require_current_delete(s3_client)):
+                s3_client.delete_object(Bucket=bucket, Key=prefix)
+            newly_deleted = prefix not in deleted_keys
+            deleted_keys.add(prefix)
             s3_objects_total.labels(
                 role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="delete"
-            ).inc()
+            ).inc(int(newly_deleted))
 
-        return {"message": f"Successfully deleted {deleted_count} object(s)", "count": deleted_count}
+        if failed:
+            raise PartialDeleteError(len(deleted_keys), failed)
+        return {"message": f"Successfully deleted {len(deleted_keys)} object(s)", "count": len(deleted_keys)}
 
     return execute_with_s3_retry(validated_role, "delete", do_delete)

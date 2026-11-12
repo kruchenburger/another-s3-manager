@@ -30,7 +30,14 @@ from another_s3_manager.errors import MoveError
     ],
 )
 def test_move_maps_access_denials_without_exposing_policy_messages(monkeypatch, source, code, expected, message):
+    # The destructive branch delegates to Storage's fresh-state helper, which calls Access;
+    # each Access denial is raised from there and must map through the job table.
     monkeypatch.setattr(service, source, Mock(side_effect=AccessDenied(code, "private policy details")))
+    monkeypatch.setattr(
+        move_jobs.s3_client,
+        "require_current_destructive",
+        lambda user, role, bucket, **kwargs: getattr(service, source)(),
+    )
     with pytest.raises(MoveError) as caught:
         move_jobs.require_access({"is_admin": True}, "Default", "b", deleting=True)
     assert caught.value.code == expected
@@ -50,8 +57,10 @@ def test_move_maps_access_denials_without_exposing_policy_messages(monkeypatch, 
 def test_move_request_guards_precede_access_policy(monkeypatch, role, code, message):
     policy = Mock(side_effect=AssertionError("Access must not run before request guards"))
     monkeypatch.setattr(service, "require_role", policy)
+    # Role existence is a request guard only on the non-destructive branch; for deletes
+    # the check order lives in Access (see test_destructive_role_denial_precedes_role_existence).
     with pytest.raises(MoveError) as caught:
-        move_jobs.require_access({"is_admin": True}, role, "b", deleting=True)
+        move_jobs.require_access({"is_admin": True}, role, "b", deleting=code != "ROLE_NOT_FOUND")
     assert caught.value.code == code
     assert caught.value.http_status == 400
     assert str(caught.value) == message

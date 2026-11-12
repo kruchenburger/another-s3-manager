@@ -247,10 +247,14 @@ def test_folder_delete_counts_every_object_not_every_api_call(monkeypatch):
 
             return _P()
 
-        def delete_objects(self, **_kw):
-            return {}
+        def delete_objects(self, **kw):
+            # Only keys S3 confirms in Deleted are counted (ASM-76).
+            return {"Deleted": kw["Delete"]["Objects"]}
 
     monkeypatch.setattr(sc, "_validate_bucket_access", lambda *a, **k: None)
+    # Fresh-state access and storage-target checks are covered in test_storage_delete*.py.
+    monkeypatch.setattr(sc, "require_current_destructive", lambda *a, **k: {})
+    monkeypatch.setattr(sc, "require_storage_target", lambda *a, **k: "target")
     monkeypatch.setattr(sc, "validate_role_access", lambda role, _u: role)
     monkeypatch.setattr(sc, "execute_with_s3_retry", lambda _r, _op, cb: cb(_FakeClient()))
     # The role-level delete policy (ASM-69) fails closed for a role missing from config.

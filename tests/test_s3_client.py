@@ -877,11 +877,12 @@ def test_execute_with_s3_retry_increments_error_counter_on_failure(monkeypatch):
 
 def _make_user(is_admin=False, allowed_roles=None):
     """Create a minimal user_dict for testing."""
-    return {
-        "username": "testuser",
-        "is_admin": is_admin,
-        "allowed_roles": allowed_roles or [],
-    }
+    from another_s3_manager import users
+
+    existing = users.get_user_by_username("testuser")
+    if existing is not None:
+        return users.update_user("testuser", is_admin=is_admin, allowed_roles=allowed_roles or [])
+    return users.create_user("testuser", "unused-hash", is_admin=is_admin, allowed_roles=allowed_roles or [])
 
 
 # --- validate_role_access ---
@@ -1493,6 +1494,7 @@ def test_delete_object_for_role_single_file(mocker):
         return_value={"roles": [{"name": "RoleA", "type": "default"}]},
     )
     fake_client = mocker.MagicMock()
+    fake_client._asm_storage_fingerprint = mod.storage_target_fingerprint({"name": "RoleA", "type": "default"})
     # Single-key existence + exact-match check is now ONE list_objects_v2
     # call (Prefix=path, MaxKeys=1), not a paginated walk -- its lone result
     # is the exact key (an exact match, not merely a prefix match), which
@@ -1515,6 +1517,7 @@ def test_delete_object_for_role_not_found(mocker):
         return_value={"roles": [{"name": "RoleA", "type": "default"}]},
     )
     fake_client = mocker.MagicMock()
+    fake_client._asm_storage_fingerprint = mod.storage_target_fingerprint({"name": "RoleA", "type": "default"})
     # Listing finds nothing at all -> the key does not exist. Real S3's
     # DeleteObject is idempotent (it does NOT raise for a missing key), so
     # existence must be established from the listing itself, not by hoping
@@ -1540,6 +1543,7 @@ def test_delete_object_for_role_single_file_prefix_match_not_exact(mocker):
         return_value={"roles": [{"name": "RoleA", "type": "default"}]},
     )
     fake_client = mocker.MagicMock()
+    fake_client._asm_storage_fingerprint = mod.storage_target_fingerprint({"name": "RoleA", "type": "default"})
     fake_client.list_objects_v2.return_value = {"Contents": [{"Key": "gone.txt.bak"}]}
     mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
 
@@ -1990,7 +1994,15 @@ def test_role_uses_temporary_credentials(mocker):
 # copy_object_for_role / get_object_metadata_for_role (v1.0.2 MCP tools)
 # ---------------------------------------------------------------------------
 
-_ADMIN = {"username": "admin", "is_admin": True, "allowed_roles": []}
+_ADMIN = {}
+
+
+@pytest.fixture(autouse=True)
+def persisted_admin():
+    from another_s3_manager import users
+
+    _ADMIN.clear()
+    _ADMIN.update(users.load_users()["users"][0])
 
 
 def test_copy_object_for_role_copies_body(moto_s3):
@@ -2169,7 +2181,7 @@ def test_get_s3_client_survives_concurrent_invalidate_no_keyerror(mocker):
 
         def __contains__(self, key: object) -> bool:
             present = super().__contains__(key)
-            if present and key == cache_key:
+            if present and isinstance(key, tuple) and key[0] == cache_key:
                 racer = threading.Thread(target=module.invalidate_s3_client, args=(cache_key,))
                 racer.start()
                 racer.join(timeout=5)
@@ -2258,13 +2270,14 @@ def test_folder_delete_rechecks_policy_between_batches(moto_s3, monkeypatch, ret
 
     def delete_and_revoke(**kwargs):
         calls.append(kwargs)
+        result = original(**kwargs) if not retry or len(calls) == 1 else None
         if len(calls) == (2 if retry else 1):
             cfg = config.load_config()
             cfg["roles"][0]["allow_delete"] = False
             config.save_config(cfg)
             if retry:
                 raise ClientError({"Error": {"Code": "ExpiredToken"}}, "DeleteObjects")
-        return original(**kwargs)
+        return result
 
     monkeypatch.setattr(moto_s3, "delete_objects", delete_and_revoke)
     monkeypatch.setattr(s3_client, "get_s3_client", lambda role: moto_s3)
@@ -2322,7 +2335,7 @@ def test_folder_delete_denies_role_missing_after_listing(moto_s3, monkeypatch, c
     monkeypatch.setattr(s3_client, "get_s3_client", lambda role: moto_s3)
     with pytest.raises(AccessDenied) as caught:
         s3_client.delete_object_for_role("Default", "missing-role-delete", "folder/", _ADMIN)
-    assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+    assert caught.value.code == "role_not_found"
     assert caught.value.details["count"] == 0
     assert moto_s3.get_object(Bucket="missing-role-delete", Key="folder/a")["Body"].read() == b"keep"
 
@@ -2396,3 +2409,78 @@ def test_exact_key_delete_checks_access(moto_s3, denial):
     with pytest.raises(PermissionError):
         s3_client.delete_exact_key_for_role("Default", "exact-denied", "file", user)
     assert moto_s3.get_object(Bucket="exact-denied", Key="file")["Body"].read() == b"keep"
+
+
+@pytest.mark.parametrize(
+    "code", ["ExpiredToken", "ExpiredTokenException", "InvalidIdentityToken", "TokenExpired", "RequestExpired"]
+)
+def test_credential_expiry_uses_structured_client_error(code):
+    module = reload_s3_client()
+    error = ClientError({"Error": {"Code": code, "Message": "no textual expiry hint"}}, "DeleteObjects")
+    assert module._is_expired_credentials_error(error) is True
+
+
+@pytest.mark.parametrize(
+    "kind", ["text", "client-key", "fake-response", "partial", "move", "wrapped-partial", "wrapped-move"]
+)
+def test_domain_and_key_text_cannot_trigger_credential_retry(kind):
+    from another_s3_manager.errors import MoveError, PartialDeleteError
+
+    module = reload_s3_client()
+    if kind == "client-key":
+        error = ClientError({"Error": {"Code": "AccessDenied", "Message": "dir/expiredtoken.txt"}}, "DeleteObjects")
+    elif kind == "fake-response":
+        error = RuntimeError("token expired")
+        error.response = {"Error": {"Code": "ExpiredToken"}}
+    elif kind == "text":
+        error = RuntimeError("expiredtoken")
+    else:
+        domain = (
+            PartialDeleteError(0, {"dir/expiredtoken.txt": "ExpiredToken"})
+            if "partial" in kind
+            else MoveError("ExpiredToken")
+        )
+        domain.__cause__ = ClientError({"Error": {"Code": "ExpiredToken"}}, "DeleteObjects")
+        error = domain
+        if kind.startswith("wrapped"):
+            error = RuntimeError("wrapper")
+            error.__cause__ = domain
+    assert module._is_expired_credentials_error(error) is False
+
+
+def test_specialized_metadata_expiry_and_chained_client_error():
+    from botocore.exceptions import MetadataRetrievalError
+
+    module = reload_s3_client()
+    assert module._is_expired_credentials_error(MetadataRetrievalError(error_msg="Token is expired")) is True
+    assert module._is_expired_credentials_error(MetadataRetrievalError(error_msg="connection refused")) is False
+    error = RuntimeError("wrapper")
+    error.__cause__ = ClientError({"Error": {"Code": "ExpiredToken"}}, "DeleteObjects")
+    assert module._is_expired_credentials_error(error) is True
+
+
+def test_saved_config_is_visible_without_forced_client_reload(monkeypatch):
+    from unittest.mock import Mock
+
+    from another_s3_manager import config, s3_client
+
+    built = []
+
+    def create(role):
+        client = Mock()
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(s3_client, "_create_s3_client_from_role", create)
+    first = s3_client.get_s3_client("Default")
+    cfg = config.load_config()
+    cfg["roles"][0]["endpoint_url"] = "http://new-storage.test"
+    config.save_config(cfg)
+    load = Mock(wraps=config.load_config)
+    monkeypatch.setattr(config, "load_config", load)
+    second = s3_client.get_s3_client("Default")
+    assert second is not first
+    assert s3_client.get_s3_client("Default") is second
+    assert len(built) == 2
+    assert load.call_count == 2
+    assert all(call.kwargs == {"force_reload": False} for call in load.call_args_list)

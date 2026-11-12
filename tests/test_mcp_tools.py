@@ -7,11 +7,12 @@ going through the MCP transport layer.  E2E HTTP tests live in test_mcp_protocol
 """
 
 import base64
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
 from another_s3_manager import api_tokens as svc
+from another_s3_manager import config, s3_client
 from another_s3_manager.database import session_scope
 from another_s3_manager.mcp_server import (
     McpError,
@@ -951,7 +952,12 @@ async def test_copy_object_move_deletes_source(alice_user, tool_registry):
     """delete_source=True -> copy then delete source; moved=True."""
     _, plaintext = alice_user
     with (
-        patch("another_s3_manager.s3_client.get_s3_client", return_value=None),
+        patch(
+            "another_s3_manager.s3_client.get_s3_client",
+            return_value=Mock(
+                _asm_storage_fingerprint=s3_client.role_storage_fingerprint("Default", config.load_config())
+            ),
+        ),
         patch("another_s3_manager.s3_client._head_move_source", return_value={"ETag": '"old"'}),
         patch("another_s3_manager.s3_client._copy_object", return_value=None) as copy_mock,
         patch("another_s3_manager.s3_client._delete_exact_key", return_value={"count": 1}) as del_mock,
@@ -1289,7 +1295,12 @@ async def test_mcp_copy_delete_source_rechecks_before_delete(alice_user, tool_re
         config.save_config(cfg)
 
     with (
-        patch("another_s3_manager.s3_client.get_s3_client", return_value=None),
+        patch(
+            "another_s3_manager.s3_client.get_s3_client",
+            return_value=Mock(
+                _asm_storage_fingerprint=s3_client.role_storage_fingerprint("Default", config.load_config())
+            ),
+        ),
         patch("another_s3_manager.s3_client._head_move_source", return_value={"ETag": '"old"'}),
         patch("another_s3_manager.s3_client._copy_object", side_effect=revoke) as copy_mock,
         patch("another_s3_manager.s3_client._delete_exact_key") as delete_mock,
@@ -1369,7 +1380,12 @@ async def test_delete_tools_map_storage_revocation(alice_user, tool_registry, to
 
     _, plaintext = alice_user
     with (
-        patch("another_s3_manager.s3_client.get_s3_client", return_value=None),
+        patch(
+            "another_s3_manager.s3_client.get_s3_client",
+            return_value=Mock(
+                _asm_storage_fingerprint=s3_client.role_storage_fingerprint("Default", config.load_config())
+            ),
+        ),
         patch("another_s3_manager.s3_client._head_move_source", return_value={"ETag": '"old"'}),
         patch("another_s3_manager.s3_client._copy_object"),
         patch(
@@ -1705,3 +1721,41 @@ async def test_mcp_post_copy_s3_denial_keeps_partial_success(
         delete.assert_called_once()
     assert moto_s3.get_object(Bucket="post-copy-denied", Key="source")["Body"].read() == b"keep"
     assert moto_s3.get_object(Bucket="post-copy-denied", Key="dest")["Body"].read() == b"keep"
+
+
+@pytest.mark.asyncio
+async def test_mcp_move_target_change_after_copy_keeps_source(alice_user, tool_registry, moto_s3, monkeypatch):
+    from copy import deepcopy
+
+    from another_s3_manager import config, s3_client
+
+    moto_s3.create_bucket(Bucket="target-change")
+    moto_s3.put_object(Bucket="target-change", Key="source", Body=b"keep")
+    original = moto_s3.copy_object
+    s3_client._register_delete_handlers(moto_s3)
+
+    def copy_and_change(**kwargs):
+        result = original(**kwargs)
+        cfg = deepcopy(config.load_config())
+        cfg["roles"][0]["endpoint_url"] = "http://changed.test"
+        config.save_config(cfg)
+        return result
+
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: moto_s3)
+    monkeypatch.setattr(moto_s3, "copy_object", copy_and_change)
+    result = await _call(
+        tool_registry,
+        "copy_object",
+        _fake_request(alice_user[1]),
+        role="Default",
+        source_bucket="target-change",
+        source_path="source",
+        dest_bucket="target-change",
+        dest_path="dest",
+        delete_source=True,
+    )
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "ROLE_CHANGED"
+    for key in ("source", "dest"):
+        assert moto_s3.get_object(Bucket="target-change", Key=key)["Body"].read() == b"keep"

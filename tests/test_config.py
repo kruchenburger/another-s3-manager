@@ -486,3 +486,91 @@ def test_merge_role_security_fields_allows_explicit_repair(choice):
     roles = [{"name": "r", "allow_delete": choice}]
     merge_role_security_fields(roles, [{"name": "r", "allow_delete": "false"}])
     assert roles == [{"name": "r", "allow_delete": choice}]
+
+
+def test_save_serializes_with_reload(monkeypatch, tmp_path):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from copy import deepcopy
+
+    module = reload_config()
+    path = tmp_path / "config.json"
+    monkeypatch.setattr(module, "CONFIG_FILE", path)
+    module.save_config(module._get_default_config())
+    old = deepcopy(module.load_config(force_reload=True))
+    new = deepcopy(old)
+    new["roles"][0]["endpoint_url"] = "http://new.test"
+    read_old = threading.Event()
+    release = threading.Event()
+    save_attempted = threading.Event()
+    original_load = json.load
+
+    def paused_load(file):
+        result = original_load(file)
+        read_old.set()
+        assert release.wait(5)
+        return result
+
+    class ObservedLock:
+        def __enter__(self):
+            if threading.current_thread().name.startswith("config-save"):
+                save_attempted.set()
+            return original_lock.__enter__()
+
+        def __exit__(self, *args):
+            return original_lock.__exit__(*args)
+
+    original_lock = module._config_lock
+    monkeypatch.setattr(module, "_config_lock", ObservedLock())
+    monkeypatch.setattr(module.json, "load", paused_load)
+
+    def save():
+        try:
+            module.save_config(new)
+        finally:
+            # On the broken code save never acquires the lock.
+            save_attempted.set()
+
+    with (
+        ThreadPoolExecutor(max_workers=1) as reader,
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix="config-save") as writer,
+    ):
+        reload_future = reader.submit(module.load_config, True)
+        try:
+            assert read_old.wait(5)
+            save_future = writer.submit(save)
+            assert save_attempted.wait(5)
+        finally:
+            release.set()
+        reload_future.result(timeout=5)
+        save_future.result(timeout=5)
+
+    assert json.loads(path.read_text()) == new
+    assert module._config_cache == new
+    assert module._config_mtime == path.stat().st_mtime
+    assert module.load_config() == new
+
+
+def test_migration_save_can_reenter_config_lock(monkeypatch, tmp_path):
+    import threading
+
+    module = reload_config()
+    path = tmp_path / "legacy.json"
+    path.write_text('{"roles": []}')
+    monkeypatch.setattr(module, "CONFIG_FILE", path)
+    results = []
+    failures = []
+
+    def reload():
+        try:
+            results.append(module.load_config(force_reload=True))
+        except Exception as error:
+            failures.append(error)
+
+    worker = threading.Thread(target=reload, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive(), "Migration save deadlocked inside reload"
+    assert not failures
+    assert results and "mcp_enabled" in results[0]
+    assert json.loads(path.read_text()) == results[0]
