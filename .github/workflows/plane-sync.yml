@@ -1,0 +1,151 @@
+name: Plane sync
+
+# Plane's own GitHub connector does this, but it is a Pro feature and this
+# workspace is on Free. Without this workflow the engineering contract is
+# lying: it says "CI moves the work item", and nothing would.
+#
+# The identifier comes from the branch name (feat/BUD-42-...), not the PR
+# title the way Plane's connector reads it — the branch convention already
+# exists here and is followed.
+on:
+  pull_request:
+    types: [opened, reopened, closed]
+
+# Deliberately `pull_request`, never `pull_request_target`: the latter runs
+# with the base repo's secrets against the fork's code.
+permissions:
+  contents: read
+
+concurrency:
+  group: plane-sync-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    # A PR closed without merging leaves the item alone — the work may still
+    # be alive and moving it to Done would be a lie.
+    # Fork PRs do not participate in this repository-only integration.
+    if: >
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action != 'closed' || github.event.pull_request.merged)
+    # `pull_request` executes the PR's workflow revision, including the inline
+    # Python below, so it stays on an ephemeral GitHub-hosted runner; an
+    # in-workflow guard cannot protect a persistent one.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Move the work item
+        env:
+          PLANE_API_TOKEN: ${{ secrets.PLANE_API_TOKEN }}
+          WORKSPACE_SLUG: kruchenburger
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          MERGED: ${{ github.event.pull_request.merged }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys, urllib.error, urllib.request
+
+          BASE = "https://api.plane.so/api/v1"
+          SLUG = os.environ["WORKSPACE_SLUG"]
+          TOKEN = os.environ.get("PLANE_API_TOKEN") or ""
+          BRANCH = os.environ["BRANCH"]
+          MERGED = os.environ.get("MERGED") == "true"
+
+          def bail(msg):
+              # Not a failure: plenty of branches legitimately carry no
+              # identifier, and a red X on those trains people to ignore CI.
+              print(f"skip: {msg}")
+              sys.exit(0)
+
+          if not TOKEN:
+              bail("PLANE_API_TOKEN is not set")
+
+          # feat/BUD-42-short-description -> ("BUD", "42")
+          match = re.search(r"\b([A-Z][A-Z0-9]+)-(\d+)\b", BRANCH)
+          if not match:
+              bail(f"no work item identifier in branch {BRANCH!r}")
+          project_key, number = match.group(1), match.group(2)
+
+          def call(method, path, payload=None):
+              request = urllib.request.Request(
+                  f"{BASE}{path}",
+                  method=method,
+                  headers={
+                      "X-API-Key": TOKEN,
+                      "Content-Type": "application/json",
+                      # Cloudflare blocks Python-urllib's default agent with 1010.
+                      "User-Agent": "kruchenburger-plane-sync/1.0",
+                  },
+                  data=json.dumps(payload).encode() if payload is not None else None,
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  body = response.read()
+                  return json.loads(body) if body else None
+
+          def results(payload):
+              # Plane paginates some collections and returns others bare.
+              if isinstance(payload, dict):
+                  return payload.get("results", [])
+              return payload or []
+
+          projects = results(call("GET", f"/workspaces/{SLUG}/projects/"))
+          project = next(
+              (p for p in projects if p.get("identifier") == project_key), None
+          )
+          if project is None:
+              bail(f"no project with identifier {project_key}")
+          project_id = project["id"]
+
+          target_name = "Done" if MERGED else "In Review"
+          states = results(
+              call("GET", f"/workspaces/{SLUG}/projects/{project_id}/states/")
+          )
+          state = next(
+              (s for s in states if s.get("name", "").lower() == target_name.lower()),
+              None,
+          )
+          if state is None:
+              # Resolved by name, not a hardcoded UUID, so the same file drops
+              # into every repo — but that means a renamed state must be loud.
+              print(f"::error::project {project_key} has no state named {target_name!r}")
+              sys.exit(1)
+
+          try:
+              item = call(
+                  "GET",
+                  f"/workspaces/{SLUG}/work-items/{project_key}-{number}/",
+              )
+          except urllib.error.HTTPError as error:
+              if error.code == 404:
+                  bail(f"{project_key}-{number} does not exist in Plane")
+              raise
+          item_id = item["id"]
+
+          call(
+              "PATCH",
+              f"/workspaces/{SLUG}/projects/{project_id}/work-items/{item_id}/",
+              {"state": state["id"]},
+          )
+          print(f"{project_key}-{number} -> {target_name}")
+
+          # The status move above is the point of this job. The comment is a
+          # convenience, so its failure must not paint the run red after the
+          # move already succeeded — that would send someone debugging a
+          # transition that actually worked.
+          verb = "merged" if MERGED else "opened"
+          try:
+              call(
+                  "POST",
+                  f"/workspaces/{SLUG}/projects/{project_id}/work-items/{item_id}/comments/",
+                  {
+                      "comment_html": (
+                          f'<p>PR #{os.environ["PR_NUMBER"]} {verb}: '
+                          f'<a href="{os.environ["PR_URL"]}">'
+                          f'{os.environ["PR_URL"]}</a></p>'
+                      )
+                  },
+              )
+          except (urllib.error.HTTPError, urllib.error.URLError) as error:
+              print(f"::warning::state moved, but the comment failed: {error}")
+          PY
