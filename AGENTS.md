@@ -65,8 +65,10 @@ call it and translate its error.
   public API. Adapters map `AccessDenied.code` to their own answer in one table each.
 - Boundaries are enforced by import-linter (`[tool.importlinter]` in `pyproject.toml`,
   `uv run lint-imports`, also in CI): adapters (`main`, `mcp_server`,
-  `reset_admin_password`) do not import each other, and `access` imports no adapter, no
-  storage module and no web/MCP framework.
+  `reset_admin_password`) do not import each other, `access` imports no adapter, no
+  storage module and no web/MCP framework, and code outside `access` imports only its
+  package root (`from another_s3_manager import access`), never `access.service` /
+  `access.policies` / `access.errors`.
 - Test layout: each policy once at the service level in `tests/access/`, plus a thin
   mapping test per adapter.
 

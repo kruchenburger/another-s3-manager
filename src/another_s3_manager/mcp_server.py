@@ -160,17 +160,13 @@ _WRITE_DENIALS = {
 
 def _access_error(error: AccessDenied, tool: str, *, context: str = "gate") -> McpError:
     """Translate Access once, preserving each adapter call site's public contract."""
-    aliases = {"READ_ONLY_SERVER": "writes_disabled", "READ_ONLY_TOKEN": "read_only_token"}
-    key = aliases.get(error.code, error.code)
     code, message, reason = {
         **_WRITE_DENIALS,
         "bucket_not_allowed": ("BUCKET_NOT_ALLOWED", error.message, None),
-        "BUCKET_NOT_ALLOWED": ("BUCKET_NOT_ALLOWED", "Access to the bucket is no longer allowed.", None),
         "role_required": ("ROLE_NOT_ALLOWED", error.message, None),
         "role_not_allowed": ("ROLE_NOT_ALLOWED", error.message, None),
         "role_not_found": ("ROLE_NOT_ALLOWED", error.message, None),
-        "ROLE_NOT_ALLOWED": ("ROLE_NOT_ALLOWED", "Access to the role is no longer allowed.", None),
-    }.get(key, (error.code, error.message, None))
+    }.get(error.code, (error.code, error.message, None))
     if reason is not None:
         mcp_writes_denied_total.labels(tool=tool, reason=reason).inc()
     if code == "DELETION_DISABLED_FOR_ROLE":
@@ -184,6 +180,10 @@ def _access_error(error: AccessDenied, tool: str, *, context: str = "gate") -> M
         details["count"] = error.details["count"]
         message = f"{message}. {details['count']} object(s) were deleted before the change."
     if context == "copied":
+        if code == "BUCKET_NOT_ALLOWED":
+            message = "Access to the bucket is no longer allowed."
+        elif code == "ROLE_NOT_ALLOWED":
+            message = "Access to the role is no longer allowed."
         # Keep the established partial-success text for deletion-policy denials.
         message = "Copied, source kept" + (
             "" if code in {"DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"} else f". {message}"
@@ -1583,10 +1583,11 @@ async def copy_object(
         moved = result["moved"]
         if source_kept_reason:
             error_code = source_kept_reason
-            if source_kept_reason != "SOURCE_CHANGED":
+            if source_kept_reason not in {"SOURCE_CHANGED", "S3_ACCESS_DENIED"}:
                 mapped = _access_error(
                     AccessDenied(source_kept_reason, result["message"]), "copy_object", context="copied"
                 )
+                source_kept_reason = error_code = mapped.code
                 result["message"] = mapped.message
         logger.info(
             "mcp.copy_object",

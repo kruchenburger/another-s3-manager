@@ -144,7 +144,7 @@ def test_mcp_delete_calls_access_policy(monkeypatch):
             "role_deletion_disabled",
         ),
         (
-            "BUCKET_NOT_ALLOWED",
+            "bucket_not_allowed",
             "copied",
             "BUCKET_NOT_ALLOWED",
             "Copied, source kept. Access to the bucket is no longer allowed.",
@@ -152,7 +152,7 @@ def test_mcp_delete_calls_access_policy(monkeypatch):
             None,
         ),
         (
-            "ROLE_NOT_ALLOWED",
+            "role_not_allowed",
             "copied",
             "ROLE_NOT_ALLOWED",
             "Copied, source kept. Access to the role is no longer allowed.",
@@ -160,7 +160,7 @@ def test_mcp_delete_calls_access_policy(monkeypatch):
             None,
         ),
         (
-            "READ_ONLY_SERVER",
+            "writes_disabled",
             "copied",
             "READ_ONLY_SERVER",
             "Copied, source kept. Server config disables MCP writes",
@@ -168,7 +168,7 @@ def test_mcp_delete_calls_access_policy(monkeypatch):
             "writes_disabled",
         ),
         (
-            "READ_ONLY_TOKEN",
+            "read_only_token",
             "copied",
             "READ_ONLY_TOKEN",
             "Copied, source kept. This token is read-only",

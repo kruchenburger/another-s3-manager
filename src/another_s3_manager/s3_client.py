@@ -22,7 +22,12 @@ from another_s3_manager import access as access_service
 from another_s3_manager.access import AccessDenied
 from another_s3_manager.config import load_config
 from another_s3_manager.constants import S3_USE_SSL, S3_VERIFY_SSL
-from another_s3_manager.errors import RoleNotFoundError, SafeStorageLogFilter
+from another_s3_manager.errors import (
+    RoleNotFoundError,
+    S3AccessDeniedError,
+    SafeStorageLogFilter,
+    classify_boto_error,
+)
 from another_s3_manager.move_reservations import guarded_write
 
 # Cache for S3 clients per role
@@ -403,8 +408,6 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                         ),
                     ) from e
             except ClientError as e:
-                from another_s3_manager.errors import S3AccessDeniedError, classify_boto_error
-
                 error_code = (
                     e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") and e.response else ""
                 )
@@ -636,9 +639,7 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     from another_s3_manager.config import load_config
     from another_s3_manager.errors import (
         RoleNotFoundError,
-        S3AccessDeniedError,
         S3OperationError,
-        classify_boto_error,
     )
 
     # Use cache key based on role name
@@ -2353,7 +2354,6 @@ def move_object_for_role(
     _validate_bucket_access(role, dest_bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
     access_service.require_delete(role, load_config(force_reload=True))
-    from another_s3_manager.errors import S3AccessDeniedError, classify_boto_error
 
     try:
         source = execute_with_s3_retry(
@@ -2369,6 +2369,7 @@ def move_object_for_role(
     version_id = source.get("VersionId")
     copied = False
     reason = None
+    denial_message = None
     try:
         try:
             _copy_object(
@@ -2389,21 +2390,29 @@ def move_object_for_role(
     except AccessDenied as error:
         if not copied:
             raise
-        reason = {
-            "bucket_not_allowed": "BUCKET_NOT_ALLOWED",
-            "role_required": "ROLE_NOT_ALLOWED",
-            "role_not_allowed": "ROLE_NOT_ALLOWED",
-            "role_not_found": "ROLE_NOT_ALLOWED",
-            "writes_disabled": "READ_ONLY_SERVER",
-            "read_only_token": "READ_ONLY_TOKEN",
-            "deletion_disabled": "DELETION_DISABLED",
-        }.get(error.code, error.code)
+        reason = error.code
+        denial_message = error.message
+    except ClientError as error:
+        typed = classify_boto_error(error)
+        if not copied or not (isinstance(typed, S3AccessDeniedError) or typed.http_status == 403):
+            raise
+        reason = "S3_ACCESS_DENIED"
+        denial_message = f"Copied, source kept. Access denied by S3 during {error.operation_name}."
+    except S3AccessDeniedError:
+        # Typed 403 after the copy (e.g. a client rebuilt after ExpiredToken is refused
+        # by S3): the copy exists, so report the partial result instead of raising.
+        if not copied:
+            raise
+        reason = "S3_ACCESS_DENIED"
+        denial_message = "Copied, source kept. Access denied by S3 before the source could be deleted."
     return {
         "ok": copied,
         "copied": copied,
         "moved": copied and reason is None,
         "source_kept_reason": reason,
-        "message": (
+        "message": denial_message
+        if denial_message is not None
+        else (
             "Not copied: the source changed before the copy — nothing deleted"
             if not copied
             else "Copied, source changed after the copy — source kept"

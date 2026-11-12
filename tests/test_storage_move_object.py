@@ -102,7 +102,9 @@ def test_permission_revoked_after_copy(source, monkeypatch, global_flag):
     assert result["copied"] is True
     assert result["moved"] is False
     assert result["source_kept_reason"] == ("DELETION_DISABLED" if global_flag else "DELETION_DISABLED_FOR_ROLE")
-    assert result["message"] == "Copied, source kept"
+    assert result["message"] == (
+        "Deletion is disabled in server config" if global_flag else "Deleting is turned off for role 'Default'"
+    )
     delete.assert_not_called()
     assert body(source, "move-source", "file") == b"old"
     assert body(source, "move-dest", "copy") == b"old"
@@ -533,10 +535,10 @@ def test_copy_precondition_failure_message_says_not_copied(source, monkeypatch):
 @pytest.mark.parametrize(
     "denial,expected",
     [
-        ("bucket_not_allowed", "BUCKET_NOT_ALLOWED"),
-        ("role_not_allowed", "ROLE_NOT_ALLOWED"),
-        ("writes_disabled", "READ_ONLY_SERVER"),
-        ("read_only_token", "READ_ONLY_TOKEN"),
+        ("bucket_not_allowed", "bucket_not_allowed"),
+        ("role_not_allowed", "role_not_allowed"),
+        ("writes_disabled", "writes_disabled"),
+        ("read_only_token", "read_only_token"),
     ],
 )
 def test_any_access_denial_after_copy_preserves_result(source, monkeypatch, denial, expected):
@@ -550,6 +552,7 @@ def test_any_access_denial_after_copy_preserves_result(source, monkeypatch, deni
     assert result["copied"] is True
     assert result["moved"] is False
     assert result["source_kept_reason"] == expected
+    assert result["message"] == "revoked"
     assert body(source, "move-source", "file") == b"old"
     assert body(source, "move-dest", "copy") == b"old"
 
@@ -568,7 +571,7 @@ def test_bucket_revoked_after_successful_copy(source, monkeypatch):
     result = move()
     assert result["copied"] is True
     assert result["moved"] is False
-    assert result["source_kept_reason"] == "BUCKET_NOT_ALLOWED"
+    assert result["source_kept_reason"] == "bucket_not_allowed"
     assert body(source, "move-source", "file") == b"old"
     assert body(source, "move-dest", "copy") == b"old"
 
@@ -585,3 +588,51 @@ def test_access_denial_before_copy_still_raises(source, monkeypatch, code):
     with pytest.raises(ClientError) as missing:
         source.head_object(Bucket="move-dest", Key="copy")
     assert missing.value.response["Error"]["Code"] == "404"
+
+
+@pytest.mark.parametrize("operation,method", [("HeadObject", "head_object"), ("DeleteObject", "delete_object")])
+@pytest.mark.parametrize("code,status", [("AccessDenied", 403), ("403", 403), ("AccessDenied", 400), ("Unknown", 403)])
+def test_s3_denial_after_copy_preserves_both_objects(source, monkeypatch, operation, method, code, status):
+    original_head = source.head_object
+    heads = 0
+
+    def head(**kwargs):
+        nonlocal heads
+        heads += 1
+        if method == "head_object" and heads == 2:
+            raise ClientError({"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}}, operation)
+        return original_head(**kwargs)
+
+    delete = Mock(
+        side_effect=ClientError({"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}}, operation)
+    )
+    monkeypatch.setattr(source, "head_object", head)
+    monkeypatch.setattr(source, "delete_object", delete)
+    result = move()
+    assert result["ok"] is True
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "S3_ACCESS_DENIED"
+    assert result["message"] == f"Copied, source kept. Access denied by S3 during {operation}."
+    assert heads == 2
+    if method == "head_object":
+        delete.assert_not_called()
+    else:
+        delete.assert_called_once()
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"
+
+
+def test_typed_s3_denial_after_copy_preserves_both_objects(source, monkeypatch):
+    # A client rebuilt after ExpiredToken can be refused with an already-typed S3AccessDeniedError.
+    delete = Mock(side_effect=S3AccessDeniedError("AccessDenied", "Access denied by S3."))
+    monkeypatch.setattr(source, "delete_object", delete)
+    result = move()
+    assert result["ok"] is True
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "S3_ACCESS_DENIED"
+    assert result["message"] == "Copied, source kept. Access denied by S3 before the source could be deleted."
+    delete.assert_called_once()
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"

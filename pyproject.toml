@@ -115,3 +115,28 @@ forbidden_modules = [
     "starlette",
     "mcp",
 ]
+
+[[tool.importlinter.contracts]]
+id = "access-api-only"
+name = "Everything outside Access uses its public API (the package root), never its internals"
+type = "forbidden"
+source_modules = [
+    "another_s3_manager.api_tokens",
+    "another_s3_manager.auth",
+    "another_s3_manager.config",
+    "another_s3_manager.main",
+    "another_s3_manager.mcp_server",
+    "another_s3_manager.move_jobs",
+    "another_s3_manager.move_reservations",
+    "another_s3_manager.reset_admin_password",
+    "another_s3_manager.s3_client",
+    "another_s3_manager.users",
+    "another_s3_manager.utils",
+]
+forbidden_modules = [
+    "another_s3_manager.access.errors",
+    "another_s3_manager.access.policies",
+    "another_s3_manager.access.service",
+]
+# Reaching the internals through the package root is the point of the public API.
+allow_indirect_imports = true
