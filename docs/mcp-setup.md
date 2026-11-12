@@ -90,6 +90,39 @@ after copying: if permission was revoked, the copy stays and the response says
 only (both buckets must be in the role's allowed_buckets) — cross-role /
 cross-provider copy is not supported.
 
+A single-object move reserves both paths throughout copying and deletion, reads
+its source ETag and VersionId, and copies that exact state with
+`CopySourceIfMatch`. It rechecks the current source before deletion. If the
+source changed or disappeared, the result is `copied: true`, `moved: false`,
+`source_kept_reason: "SOURCE_CHANGED"`, with the message
+`Copied, source changed after the copy — source kept`. A copy precondition
+failure instead returns `ok: false`, `copied: false`, `moved: false` and
+`SOURCE_CHANGED`; nothing is deleted. Always inspect `copied` as well as the
+reason.
+
+For versioned sources the copy is pinned to the source's `VersionId`, but
+deletion never names a version: with versioning **enabled** it creates a delete
+marker, so the key disappears without exposing a previous version and all
+versions are retained (an external write after the final HEAD is hidden by the
+marker but stays available by its `VersionId`).
+
+Every guarded delete carries `If-Match` with the copied ETag; a failed
+precondition or a missing source during that DELETE returns `copied: true`,
+`moved: false`, `SOURCE_CHANGED`. The final HEAD compares ETag, VersionId,
+LastModified, ContentLength, ContentType and user Metadata, and the delete
+permission is checked again right after that comparison.
+
+Remaining window (accepted, best-effort): writes handled by this ASM process
+share the reservation, but external clients and other replicas are not
+coordinated. Between the final HEAD and the DELETE:
+
+- on a backend that ignores `If-Match` on DELETE — MinIO RELEASE.2026-10-23 does —
+  an external overwrite of an unversioned source is lost;
+- on any backend, an external overwrite that keeps the same bytes but changes
+  only metadata (same ETag) passes `If-Match` and is lost.
+
+Enable bucket versioning to keep that data: deletes then only add a marker.
+
 ### Tool annotations (auto-approval hints)
 
 All ten tools advertise MCP `readOnlyHint`/`destructiveHint`/`idempotentHint`

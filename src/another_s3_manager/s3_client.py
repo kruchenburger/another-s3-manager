@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, BinaryIO, Callable, Dict, Iterator, Optional, Tuple, TypeVar
 from typing import Any as AnyType
@@ -2162,53 +2163,234 @@ def copy_object_for_role(
     Raises PermissionError on role/bucket access violation.
     Raises FileNotFoundError if the source object does not exist.
     """
-    from botocore.exceptions import ClientError as _ClientError
+    _copy_object(role, source_bucket, source_path, dest_bucket, dest_path, user_dict)
 
+
+def _copy_object(
+    role: str,
+    source_bucket: str,
+    source_path: str,
+    dest_bucket: str,
+    dest_path: str,
+    user_dict: Dict[str, Any],
+    *,
+    etag: str | None = None,
+    version_id: str | None = None,
+) -> None:
+    """Copy under the caller's reservation, optionally pinning the source state."""
     from another_s3_manager.metrics import s3_objects_total, safe_role_label
 
-    # Validate BOTH buckets — a role scoped to specific allowed_buckets must be
-    # allowed to write the destination, not just read the source.
     _validate_bucket_access(role, source_bucket, user_dict)
     _validate_bucket_access(role, dest_bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
 
-    def do_copy(s3_client):
+    def do_copy(client):
+        copy_source = {"Bucket": source_bucket, "Key": source_path}
+        if version_id is not None:
+            copy_source["VersionId"] = version_id
+        conditions = {"CopySourceIfMatch": etag} if etag is not None else {}
         try:
-            s3_client.copy_object(
-                Bucket=dest_bucket,
-                Key=dest_path,
-                CopySource={"Bucket": source_bucket, "Key": source_path},
-            )
+            client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=copy_source, **conditions)
             s3_objects_total.labels(
-                role=safe_role_label(validated_role or "unknown"),
-                bucket=dest_bucket,  # the copy lands in the destination
-                operation="copy",
+                role=safe_role_label(validated_role or "unknown"), bucket=dest_bucket, operation="copy"
             ).inc()
-        except _ClientError as e:
-            error_code = e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
-            if error_code in {"404", "NoSuchKey"}:
-                raise FileNotFoundError(f"Source object '{source_path}' not found in bucket '{source_bucket}'") from e
+        except ClientError as error:
+            if etag is not None and _is_precondition_failed(error):
+                raise _SourceChanged from error
+            if error.response.get("Error", {}).get("Code") in {"404", "NoSuchKey"}:
+                raise FileNotFoundError(
+                    f"Source object '{source_path}' not found in bucket '{source_bucket}'"
+                ) from error
             raise
 
     execute_with_s3_retry(validated_role, "put", do_copy)
 
 
+class _SourceChanged(Exception):
+    """The copied source state no longer permits deletion."""
+
+
+def _is_precondition_failed(error: ClientError) -> bool:
+    return (
+        error.response.get("Error", {}).get("Code") in {"412", "PreconditionFailed"}
+        or error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 412
+    )
+
+
+_delete_condition = threading.local()
+_delete_handler_lock = threading.Lock()
+
+
+def _add_delete_if_match(request, **kwargs):
+    condition = getattr(_delete_condition, "value", None)
+    if condition is not None and request.context is condition[0]:
+        request.headers["If-Match"] = condition[1]
+
+
+def _mark_conditional_delete_context(params, context, **kwargs):
+    condition = getattr(_delete_condition, "value", None)
+    if condition is not None and condition[0] is None:
+        # Bind the condition to this request, including its SDK retries.
+        _delete_condition.value = (context, condition[1])
+
+
+@contextmanager
+def _conditional_delete(client, etag: str):
+    # Clients are shared across worker threads. Only registration is shared;
+    # the condition belongs to one call and is bound to its request context.
+    with _delete_handler_lock:
+        if not getattr(client, "_asm_conditional_delete_registered", False):
+            client.meta.events.register(
+                "before-parameter-build.s3.DeleteObject",
+                _mark_conditional_delete_context,
+                unique_id="asm-delete-if-match-context",
+            )
+            client.meta.events.register(
+                "before-sign.s3.DeleteObject",
+                _add_delete_if_match,
+                unique_id="asm-delete-if-match",
+            )
+            client._asm_conditional_delete_registered = True
+    previous = getattr(_delete_condition, "value", None)
+    _delete_condition.value = (None, etag)
+    try:
+        yield
+    finally:
+        _delete_condition.value = previous
+
+
+def _head_move_source(client, bucket: str, path: str) -> dict:
+    try:
+        return client.head_object(Bucket=bucket, Key=path)
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+            raise FileNotFoundError(f"Source object '{path}' not found in bucket '{bucket}'") from error
+        raise
+
+
 @guarded_write()
 def delete_exact_key_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> dict:
     """Delete only the supplied key, including a folder marker, never its children."""
+    return _delete_exact_key(role, bucket, path, user_dict)
+
+
+def _delete_exact_key(
+    role: str,
+    bucket: str,
+    path: str,
+    user_dict: Dict[str, Any],
+    *,
+    etag: str | None = None,
+    version_id: str | None = None,
+    source_head: dict | None = None,
+) -> dict:
+    """Delete one exact key under the caller's reservation, rechecking each retry."""
     from another_s3_manager.config import load_config
     from another_s3_manager.metrics import s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
 
-    def do_delete(s3_client):
+    def do_delete(client):
         access_service.require_delete(role, load_config(force_reload=True))
-        s3_client.delete_object(Bucket=bucket, Key=path)
+        if etag is not None:
+            try:
+                current = _head_move_source(client, bucket, path)
+            except FileNotFoundError as error:
+                raise _SourceChanged from error
+            if current.get("ETag") != etag or current.get("VersionId") != version_id:
+                raise _SourceChanged
+            if source_head is not None and any(
+                current.get(field) != source_head.get(field)
+                for field in ("LastModified", "ContentLength", "ContentType", "Metadata")
+            ):
+                raise _SourceChanged
+        # If-Match on every guarded delete: with versioning suspended, a real
+        # VersionId seen by both HEADs can still be replaced by a new "null" one.
+        conditional = etag is not None
+        access_service.require_delete(role, load_config(force_reload=True))
+        try:
+            # Never delete by VersionId: with versioning enabled a plain DELETE adds
+            # a delete marker and keeps every version.
+            if conditional:
+                with _conditional_delete(client, etag):
+                    client.delete_object(Bucket=bucket, Key=path)
+            else:
+                client.delete_object(Bucket=bucket, Key=path)
+        except ClientError as error:
+            if conditional and (
+                error.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}
+                or error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404
+            ):
+                raise _SourceChanged from error
+            if etag is not None and _is_precondition_failed(error):
+                raise _SourceChanged from error
+            raise
         s3_objects_total.labels(role=safe_role_label(validated_role), bucket=bucket, operation="delete").inc()
         return {"message": "Successfully deleted 1 object(s)", "count": 1}
 
     return execute_with_s3_retry(validated_role, "delete", do_delete)
+
+
+@guarded_write(copy=True)
+def move_object_for_role(
+    role: str,
+    source_bucket: str,
+    source_path: str,
+    dest_bucket: str,
+    dest_path: str,
+    user_dict: Dict[str, Any],
+) -> dict:
+    """Copy a pinned source state, then conditionally delete it in one reservation.
+
+    External writers can still race the final HEAD on backends ignoring DELETE
+    If-Match. Versioned deletes add a marker and retain all versions, including
+    concurrent writes that the marker may hide. Internal writers are reserved.
+    """
+    from another_s3_manager.config import load_config
+
+    _validate_bucket_access(role, source_bucket, user_dict)
+    _validate_bucket_access(role, dest_bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+    access_service.require_delete(role, load_config(force_reload=True))
+    source = execute_with_s3_retry(
+        validated_role, "head", lambda client: _head_move_source(client, source_bucket, source_path)
+    )
+    # A missing ETag cannot safely authorize an unconditional copy or delete.
+    etag = source["ETag"]
+    version_id = source.get("VersionId")
+    copied = False
+    reason = None
+    try:
+        _copy_object(
+            role, source_bucket, source_path, dest_bucket, dest_path, user_dict, etag=etag, version_id=version_id
+        )
+        copied = True
+        access_service.require_delete(role, load_config(force_reload=True))
+        _delete_exact_key(
+            role, source_bucket, source_path, user_dict, etag=etag, version_id=version_id, source_head=source
+        )
+    except _SourceChanged:
+        reason = "SOURCE_CHANGED"
+    except AccessDenied as error:
+        if not copied or error.code not in {"DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"}:
+            raise
+        reason = error.code
+    return {
+        "ok": copied,
+        "copied": copied,
+        "moved": copied and reason is None,
+        "source_kept_reason": reason,
+        "message": (
+            "Not copied: the source changed before the copy — nothing deleted"
+            if not copied
+            else "Copied, source changed after the copy — source kept"
+            if reason == "SOURCE_CHANGED"
+            else "Copied, source kept"
+            if reason
+            else "Copy complete"
+        ),
+    }
 
 
 @guarded_write()
