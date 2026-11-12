@@ -291,7 +291,12 @@ Minimum permissions for full functionality:
     },
     {
       "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
       "Resource": "arn:aws:s3:::YOUR-BUCKET/*"
     }
   ]
@@ -301,6 +306,7 @@ Minimum permissions for full functionality:
 What each action powers:
 
 - `s3:ListBucket` (on the bucket ARN) — browsing files.
+- `s3:GetObjectVersion` (optional) — lets MCP moves on versioned buckets copy the exact source version; without it they fall back to an unpinned copy guarded by the source ETag.
 - `s3:GetObject` — download / preview, object metadata, presigned share links, and the **source** of a copy/move.
 - `s3:PutObject` — upload, and the **destination** of a copy/move.
 - `s3:DeleteObject` — delete, and the source-removal half of a move/rename.

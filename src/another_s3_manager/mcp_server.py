@@ -22,10 +22,10 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 
 import another_s3_manager.config as _config_module
+from another_s3_manager import access as access_service
 from another_s3_manager import api_tokens as token_svc
 from another_s3_manager import s3_client as _s3_client
 from another_s3_manager.access import AccessDenied
-from another_s3_manager.access import service as access_service
 from another_s3_manager.errors import (
     CredentialsExpiredError,
     MoveError,
@@ -158,6 +158,39 @@ _WRITE_DENIALS = {
 }
 
 
+def _access_error(error: AccessDenied, tool: str, *, context: str = "gate") -> McpError:
+    """Translate Access once, preserving each adapter call site's public contract."""
+    code, message, reason = {
+        **_WRITE_DENIALS,
+        "bucket_not_allowed": ("BUCKET_NOT_ALLOWED", error.message, None),
+        "role_required": ("ROLE_NOT_ALLOWED", error.message, None),
+        "role_not_allowed": ("ROLE_NOT_ALLOWED", error.message, None),
+        "role_not_found": ("ROLE_NOT_ALLOWED", error.message, None),
+    }.get(error.code, (error.code, error.message, None))
+    if reason is not None:
+        mcp_writes_denied_total.labels(tool=tool, reason=reason).inc()
+    if code == "DELETION_DISABLED_FOR_ROLE":
+        message = error.message
+    details = {"tool": tool} if context == "gate" else {}
+    if context == "move" and reason is not None:
+        details = {"tool": tool}
+        if code != "DELETION_DISABLED_FOR_ROLE":
+            message = "Deletion is disabled in server config (delete_source requires it)"
+    if context == "delete" and reason is not None and "count" in error.details:
+        details["count"] = error.details["count"]
+        message = f"{message}. {details['count']} object(s) were deleted before the change."
+    if context == "copied":
+        if code == "BUCKET_NOT_ALLOWED":
+            message = "Access to the bucket is no longer allowed."
+        elif code == "ROLE_NOT_ALLOWED":
+            message = "Access to the role is no longer allowed."
+        # Keep the established partial-success text for deletion-policy denials.
+        message = "Copied, source kept" + (
+            "" if code in {"DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"} else f". {message}"
+        )
+    return McpError(code, message, details)
+
+
 def assert_write_allowed(token: Any, tool_name: str, config: dict, role: str | None = None) -> None:
     """Raise McpError if the given token/config combination disallows a write tool.
 
@@ -171,11 +204,7 @@ def assert_write_allowed(token: Any, tool_name: str, config: dict, role: str | N
         if tool_name == "delete_file":
             access_service.require_delete(role, config)
     except AccessDenied as error:
-        code, message, reason = _WRITE_DENIALS[error.code]
-        if error.code == "DELETION_DISABLED_FOR_ROLE":
-            message = error.message
-        mcp_writes_denied_total.labels(tool=tool_name, reason=reason).inc()
-        raise McpError(code, message, {"tool": tool_name}) from None
+        raise _access_error(error, tool_name) from None
 
 
 # ---------------------------------------------------------------------------
@@ -553,8 +582,7 @@ async def list_roles() -> dict:
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         config = _config_module.load_config(force_reload=False)
-        all_role_names = {r["name"] for r in config.get("roles", []) if r.get("name")}
-        visible = [r for r in user["allowed_roles"] if r in all_role_names]
+        visible = access_service.allowed_roles(user, config)
         logger.info("mcp.list_roles", extra={"user": user["username"], "count": len(visible)})
         return _observe_response_size("list_roles", token, {"roles": visible})
     except McpError as e:
@@ -1206,17 +1234,7 @@ async def delete_file(
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
         except AccessDenied as error:
-            if error.code in _WRITE_DENIALS:
-                code, message, reason = _WRITE_DENIALS[error.code]
-                mcp_writes_denied_total.labels(tool="delete_file", reason=reason).inc()
-                message = error.message if code == "DELETION_DISABLED_FOR_ROLE" else message
-                details = {}
-                if "count" in error.details:
-                    details["count"] = error.details["count"]
-                    message = f"{message}. {details['count']} object(s) were deleted before the change."
-                raise McpError(code, message, details) from None
-            code = "BUCKET_NOT_ALLOWED" if error.code == "bucket_not_allowed" else "ROLE_NOT_ALLOWED"
-            raise McpError(code, error.message) from None
+            raise _access_error(error, "delete_file", context="delete") from None
         except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
@@ -1555,17 +1573,7 @@ async def copy_object(
                     "message": "Copy complete",
                 }
         except AccessDenied as error:
-            if error.code not in _WRITE_DENIALS:
-                code = "BUCKET_NOT_ALLOWED" if error.code == "bucket_not_allowed" else "ROLE_NOT_ALLOWED"
-                raise McpError(code, error.message) from None
-            code, _, reason = _WRITE_DENIALS[error.code]
-            mcp_writes_denied_total.labels(tool="copy_object", reason=reason).inc()
-            message = (
-                error.message
-                if code == "DELETION_DISABLED_FOR_ROLE"
-                else "Deletion is disabled in server config (delete_source requires it)"
-            )
-            raise McpError(code, message, {"tool": "copy_object"}) from None
+            raise _access_error(error, "copy_object", context="move") from None
         except FileNotFoundError as error:
             raise McpError("FILE_NOT_FOUND", str(error), {"bucket": source_bucket, "path": source_path}) from None
         except (PermissionError, RoleNotFoundError) as error:
@@ -1575,9 +1583,12 @@ async def copy_object(
         moved = result["moved"]
         if source_kept_reason:
             error_code = source_kept_reason
-            if source_kept_reason in _WRITE_DENIALS:
-                _, _, reason = _WRITE_DENIALS[source_kept_reason]
-                mcp_writes_denied_total.labels(tool="copy_object", reason=reason).inc()
+            if source_kept_reason not in {"SOURCE_CHANGED", "S3_ACCESS_DENIED", "SOURCE_DELETE_FAILED"}:
+                mapped = _access_error(
+                    AccessDenied(source_kept_reason, result["message"]), "copy_object", context="copied"
+                )
+                source_kept_reason = error_code = mapped.code
+                result["message"] = mapped.message
         logger.info(
             "mcp.copy_object",
             extra={

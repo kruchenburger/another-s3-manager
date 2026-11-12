@@ -1225,3 +1225,35 @@ async def test_update_config_rejects_inherited_invalid_delete_permission(monkeyp
     assert caught.value.status_code == 422
     assert caught.value.detail == "allow_delete must be boolean"
     assert saved == []
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "role_required",
+        "role_not_allowed",
+        "role_not_found",
+        "bucket_not_allowed",
+        "writes_disabled",
+        "read_only_token",
+        "deletion_disabled",
+        "DELETION_DISABLED",
+        "DELETION_DISABLED_FOR_ROLE",
+    ],
+)
+@pytest.mark.parametrize("early", [False, True])
+def test_delete_access_error_table(reload_main, code, early):
+    from another_s3_manager.access import AccessDenied
+
+    result = reload_main._delete_access_error(AccessDenied(code, "revoked", {"count": 2}), early=early)
+    assert result.status_code == 403
+    if early and code == "DELETION_DISABLED":
+        assert result.detail == "File deletion is disabled by administrator"
+    elif code in {"DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"}:
+        assert result.detail == {
+            "code": code,
+            "message": "revoked. 2 object(s) were deleted before the change.",
+            "count": 2,
+        }
+    else:
+        assert result.detail == "revoked"

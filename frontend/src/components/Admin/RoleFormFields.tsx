@@ -16,6 +16,7 @@ import {
 } from "@mantine/core";
 import { Info } from "lucide-react";
 import type { UseFormReturnType } from "@mantine/form";
+import { roleAllowsDelete } from "@/features/admin/api/roleShape";
 import type { AppRole } from "@/types/api";
 import { RoleTypePicker, OPTIONS as ROLE_TYPE_OPTIONS } from "./RoleTypePicker";
 
@@ -268,7 +269,7 @@ export function RoleFormFields({ form, disabled, invalidDeletePermission, mode, 
             description="Turn off to block deleting through ASM for everyone using this role, admins included. Uploading over an existing file is still possible."
             disabled={disabled}
             {...form.getInputProps("allow_delete", { type: "checkbox" })}
-            checked={!Object.prototype.hasOwnProperty.call(form.values, "allow_delete") || form.values.allow_delete === true}
+            checked={roleAllowsDelete(form.values)}
           />
           {invalidDeletePermission && (
             <Alert color="yellow" variant="light">

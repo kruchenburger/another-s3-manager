@@ -14,9 +14,14 @@ def allowed_roles(user: dict, config: dict) -> list[str]:
     return policies.granted_roles(user, config)
 
 
-def require_role(role: str | None, user: dict, config: dict) -> str:
+def require_role_name(role: str | None) -> str:
     if role is None or not role.strip():
         raise AccessDenied("role_required", "A role is required for this request.")
+    return role
+
+
+def require_role(role: str | None, user: dict, config: dict) -> str:
+    role = require_role_name(role)
     if not policies.role_is_granted(role, user, config):
         raise AccessDenied("role_not_allowed", f"Access denied: You don't have permission to use role '{role}'")
     return role

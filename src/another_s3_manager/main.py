@@ -3,9 +3,8 @@ Another S3 Manager - Lightweight S3 file management interface
 Provides file browsing, upload, and deletion capabilities for S3 buckets
 """
 
+from another_s3_manager import access as access_service
 from another_s3_manager.access import AccessDenied
-from another_s3_manager.access import policies as access_policies
-from another_s3_manager.access import service as access_service
 from another_s3_manager.logging_setup import configure_logging, install_access_log_filter
 
 configure_logging()
@@ -894,9 +893,7 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
         "csrf_token": current_user.get("csrf_token"),  # Return CSRF token for client
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
         "allowed_roles": allowed_roles,
-        "role_permissions": {
-            role: {"delete": access_policies.deletion_allowed(config, role)} for role in allowed_roles
-        },
+        "role_permissions": {role: {"delete": access_service.deletion_allowed(config, role)} for role in allowed_roles},
         "default_role": default_role,
         "must_change_password": bool(current_user.get("must_change_password", False)),
         "disable_deletion": disable_deletion,
@@ -2149,14 +2146,28 @@ def _s3_error_to_http(error: S3OperationError) -> HTTPException:
     )
 
 
+def _delete_access_error(error: AccessDenied, *, early: bool = False) -> HTTPException:
+    if early and error.code == "DELETION_DISABLED":
+        return HTTPException(status_code=403, detail="File deletion is disabled by administrator")
+    if error.code in {"DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"}:
+        detail = {"code": error.code, "message": error.message}
+        deleted = error.details.get("count", 0)
+        if deleted:
+            detail["count"] = deleted
+            detail["message"] = f"{error.message}. {deleted} object(s) were deleted before the change."
+        return HTTPException(status_code=403, detail=detail)
+    return HTTPException(status_code=403, detail=error.message)
+
+
 def _require_role(role_name: Optional[str]) -> str:
     """Require an explicit role before dispatching a bucket request."""
-    if role_name is None or not role_name.strip():
+    try:
+        return access_service.require_role_name(role_name)
+    except AccessDenied as error:
         raise HTTPException(
             status_code=400,
-            detail={"code": "ROLE_REQUIRED", "message": "A role is required for this request."},
-        )
-    return role_name
+            detail={"code": "ROLE_REQUIRED", "message": error.message},
+        ) from None
 
 
 def validate_role_access(role_name: Optional[str], current_user: Dict[str, Any]) -> str:
@@ -2774,9 +2785,7 @@ async def delete_file(
         access_service.require_delete(None, load_config(force_reload=False))
     except AccessDenied as error:
         if error.code == "DELETION_DISABLED":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="File deletion is disabled by administrator"
-            ) from None
+            raise _delete_access_error(error, early=True) from None
     try:
         # A trailing "/" is the directory-delete signal delete_object_for_role
         # relies on (recursive delete vs. exact single-key delete) — capture it
@@ -2816,15 +2825,7 @@ async def delete_file(
     except HTTPException:
         raise
     except AccessDenied as error:
-        if error.code in {"DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"}:
-            detail = {"code": error.code, "message": error.message}
-            # Revoked mid-way through a folder delete: say what already happened.
-            deleted = error.details.get("count", 0)
-            if deleted:
-                detail["count"] = deleted
-                detail["message"] = f"{error.message}. {deleted} object(s) were deleted before the change."
-            raise HTTPException(status_code=403, detail=detail) from None
-        raise HTTPException(status_code=403, detail=error.message) from None
+        raise _delete_access_error(error) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except FileNotFoundError as e:

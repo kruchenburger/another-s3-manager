@@ -10,7 +10,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from another_s3_manager import config, move_reservations, s3_client
-from another_s3_manager.errors import MoveError
+from another_s3_manager.errors import MoveError, S3AccessDeniedError
 
 USER = {"is_admin": True, "allowed_roles": ["Default"]}
 
@@ -102,7 +102,9 @@ def test_permission_revoked_after_copy(source, monkeypatch, global_flag):
     assert result["copied"] is True
     assert result["moved"] is False
     assert result["source_kept_reason"] == ("DELETION_DISABLED" if global_flag else "DELETION_DISABLED_FOR_ROLE")
-    assert result["message"] == "Copied, source kept"
+    assert result["message"] == (
+        "Deletion is disabled in server config" if global_flag else "Deleting is turned off for role 'Default'"
+    )
     delete.assert_not_called()
     assert body(source, "move-source", "file") == b"old"
     assert body(source, "move-dest", "copy") == b"old"
@@ -319,7 +321,7 @@ def test_failed_move_releases_both_reservations(source, monkeypatch):
     monkeypatch.setattr(
         source, "copy_object", Mock(side_effect=ClientError({"Error": {"Code": "AccessDenied"}}, "CopyObject"))
     )
-    with pytest.raises(ClientError):
+    with pytest.raises(S3AccessDeniedError, match="CopyObject"):
         move()
     with move_reservations.reserve(
         "after-failure", [("Default", "move-source", "file"), ("Default", "move-dest", "copy")]
@@ -528,3 +530,270 @@ def test_copy_precondition_failure_message_says_not_copied(source, monkeypatch):
     assert result["moved"] is False
     assert result["message"].startswith("Not copied")
     assert body(source, "move-source", "file") == b"old"
+
+
+@pytest.mark.parametrize(
+    "denial,expected",
+    [
+        ("bucket_not_allowed", "bucket_not_allowed"),
+        ("role_not_allowed", "role_not_allowed"),
+        ("writes_disabled", "writes_disabled"),
+        ("read_only_token", "read_only_token"),
+    ],
+)
+def test_any_access_denial_after_copy_preserves_result(source, monkeypatch, denial, expected):
+    from another_s3_manager.access import AccessDenied
+
+    def denied(*args, **kwargs):
+        raise AccessDenied(denial, "revoked")
+
+    monkeypatch.setattr(s3_client, "_delete_exact_key", denied)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == expected
+    assert result["message"] == "revoked"
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"
+
+
+def test_bucket_revoked_after_successful_copy(source, monkeypatch):
+    original = source.copy_object
+
+    def copy_and_revoke(**kwargs):
+        result = original(**kwargs)
+        cfg = config.load_config()
+        cfg["roles"][0]["allowed_buckets"] = ["other-bucket"]
+        config.save_config(cfg)
+        return result
+
+    monkeypatch.setattr(source, "copy_object", copy_and_revoke)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "bucket_not_allowed"
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"
+
+
+@pytest.mark.parametrize("code", ["bucket_not_allowed", "role_not_allowed", "writes_disabled", "read_only_token"])
+def test_access_denial_before_copy_still_raises(source, monkeypatch, code):
+    from another_s3_manager.access import AccessDenied
+
+    monkeypatch.setattr(s3_client, "_copy_object", Mock(side_effect=AccessDenied(code, "denied")))
+    with pytest.raises(AccessDenied) as caught:
+        move()
+    assert caught.value.code == code
+    assert body(source, "move-source", "file") == b"old"
+    with pytest.raises(ClientError) as missing:
+        source.head_object(Bucket="move-dest", Key="copy")
+    assert missing.value.response["Error"]["Code"] == "404"
+
+
+@pytest.mark.parametrize("operation,method", [("HeadObject", "head_object"), ("DeleteObject", "delete_object")])
+@pytest.mark.parametrize("code,status", [("AccessDenied", 403), ("403", 403), ("AccessDenied", 400), ("Unknown", 403)])
+def test_s3_denial_after_copy_preserves_both_objects(source, monkeypatch, operation, method, code, status):
+    original_head = source.head_object
+    heads = 0
+
+    def head(**kwargs):
+        nonlocal heads
+        heads += 1
+        if method == "head_object" and heads == 2:
+            raise ClientError({"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}}, operation)
+        return original_head(**kwargs)
+
+    delete = Mock(
+        side_effect=ClientError({"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}}, operation)
+    )
+    monkeypatch.setattr(source, "head_object", head)
+    monkeypatch.setattr(source, "delete_object", delete)
+    result = move()
+    assert result["ok"] is True
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "S3_ACCESS_DENIED"
+    assert result["message"] == f"Copied, source kept. Access denied by S3 during {operation}."
+    assert heads == 2
+    if method == "head_object":
+        delete.assert_not_called()
+    else:
+        delete.assert_called_once()
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"
+
+
+def test_typed_s3_denial_after_copy_preserves_both_objects(source, monkeypatch):
+    # A client rebuilt after ExpiredToken can be refused with an already-typed S3AccessDeniedError.
+    delete = Mock(side_effect=S3AccessDeniedError("AccessDenied", "Access denied by S3."))
+    monkeypatch.setattr(source, "delete_object", delete)
+    result = move()
+    assert result["ok"] is True
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "S3_ACCESS_DENIED"
+    assert result["message"] == "Copied, source kept. Access denied by S3 before the source could be deleted."
+    delete.assert_called_once()
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"
+
+
+@pytest.mark.parametrize("method", ["head_object", "delete_object"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ClientError({"Error": {"Code": "InternalError"}, "ResponseMetadata": {"HTTPStatusCode": 500}}, "Op"),
+        ConnectionError("network down"),
+    ],
+)
+def test_other_failure_after_copy_keeps_copy_result(source, monkeypatch, method, failure):
+    original_head = source.head_object
+    heads = 0
+
+    def head(**kwargs):
+        nonlocal heads
+        heads += 1
+        if method == "head_object" and heads == 2:
+            raise failure
+        return original_head(**kwargs)
+
+    delete = Mock(side_effect=failure)
+    monkeypatch.setattr(source, "head_object", head)
+    monkeypatch.setattr(source, "delete_object", delete)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "SOURCE_DELETE_FAILED"
+    assert "may still exist" in result["message"]
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"
+
+
+def test_failure_before_copy_still_raises(source, monkeypatch):
+    def head(**kwargs):
+        raise ConnectionError("network down")
+
+    monkeypatch.setattr(source, "head_object", head)
+    with pytest.raises(ConnectionError):
+        move()
+    monkeypatch.undo()
+    with pytest.raises(ClientError):
+        source.head_object(Bucket="move-dest", Key="copy")
+
+
+def _deny_pinned_copy(source, monkeypatch):
+    """Simulate an IAM role without s3:GetObjectVersion: pinned copies are refused."""
+    original_copy = source.copy_object
+    calls = []
+
+    def copy_object(**kwargs):
+        calls.append(dict(kwargs["CopySource"]))
+        if "VersionId" in kwargs["CopySource"]:
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403}}, "CopyObject"
+            )
+        return original_copy(**kwargs)
+
+    monkeypatch.setattr(source, "copy_object", copy_object)
+    return calls
+
+
+def test_versioned_move_without_get_object_version_falls_back_to_unpinned_copy(source, monkeypatch):
+    source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+    source.put_object(Bucket="move-source", Key="file", Body=b"v2")
+    calls = _deny_pinned_copy(source, monkeypatch)
+    result = move()
+    assert result["moved"] is True
+    assert [("VersionId" in call) for call in calls] == [True, False]
+    assert body(source, "move-dest", "copy") == b"v2"
+
+
+def test_unversioned_move_never_pins_a_version(source, monkeypatch):
+    calls = _deny_pinned_copy(source, monkeypatch)
+    assert move()["moved"] is True
+    assert all("VersionId" not in call for call in calls) and len(calls) == 1
+
+
+def test_unpinned_fallback_still_refuses_a_changed_source(source, monkeypatch):
+    source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+    source.put_object(Bucket="move-source", Key="file", Body=b"v2")
+    original_copy = source.copy_object
+
+    def copy_object(**kwargs):
+        if "VersionId" in kwargs["CopySource"]:
+            # A writer replaces the source while the pinned copy is being refused.
+            source.put_object(Bucket="move-source", Key="file", Body=b"v3")
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403}}, "CopyObject"
+            )
+        # moto ignores CopySourceIfMatch; enforce it like S3 does.
+        if kwargs["CopySourceIfMatch"] != source.head_object(Bucket="move-source", Key="file")["ETag"]:
+            raise precondition("CopyObject")
+        return original_copy(**kwargs)
+
+    monkeypatch.setattr(source, "copy_object", copy_object)
+    result = move()
+    assert result["copied"] is False
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "SOURCE_CHANGED"
+    assert body(source, "move-source", "file") == b"v3"
+
+
+def test_unpinned_fallback_that_copied_another_version_keeps_source(source, monkeypatch):
+    # A -> pinned copy denied -> B written with the same bytes -> unpinned copy takes B ->
+    # B deleted (A current again): the second HEAD matches A, so only CopySourceVersionId
+    # shows that the destination holds B.
+    source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+    source.put_object(Bucket="move-source", Key="file", Body=b"same")
+    original_copy = source.copy_object
+
+    def copy_object(**kwargs):
+        if "VersionId" in kwargs["CopySource"]:
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403}}, "CopyObject"
+            )
+        newer = source.put_object(Bucket="move-source", Key="file", Body=b"same", ContentType="text/b")
+        response = original_copy(**kwargs)
+        source.delete_object(Bucket="move-source", Key="file", VersionId=newer["VersionId"])
+        return response
+
+    monkeypatch.setattr(source, "copy_object", copy_object)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "SOURCE_CHANGED"
+    assert body(source, "move-source", "file") == b"same"
+
+
+def test_unpinned_fallback_without_copied_version_keeps_source(source, monkeypatch):
+    source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+    source.put_object(Bucket="move-source", Key="file", Body=b"v2")
+    original_copy = source.copy_object
+
+    def copy_object(**kwargs):
+        if "VersionId" in kwargs["CopySource"]:
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403}}, "CopyObject"
+            )
+        response = original_copy(**kwargs)
+        response.pop("CopySourceVersionId", None)  # backend that does not report it
+        return response
+
+    monkeypatch.setattr(source, "copy_object", copy_object)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "SOURCE_CHANGED"
+    assert body(source, "move-source", "file") == b"v2"
+
+
+def test_unversioned_copy_reporting_a_version_still_moves(source, monkeypatch):
+    original_copy = source.copy_object
+
+    def copy_object(**kwargs):
+        response = original_copy(**kwargs)
+        response["CopySourceVersionId"] = "null"  # some S3-compatible backends report one
+        return response
+
+    monkeypatch.setattr(source, "copy_object", copy_object)
+    assert move()["moved"] is True

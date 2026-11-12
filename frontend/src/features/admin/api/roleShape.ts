@@ -1,5 +1,9 @@
 import type { AppRole } from "@/types/api";
 
+export function roleAllowsDelete(role: { allow_delete?: unknown }): boolean {
+  return !Object.prototype.hasOwnProperty.call(role, "allow_delete") || role.allow_delete === true;
+}
+
 /**
  * Build a clean role with only the fields applicable to its current `type`.
  *

@@ -15,9 +15,9 @@ from boto3.s3.transfer import TransferConfig
 from botocore.exceptions import ClientError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from another_s3_manager import access as access_service
 from another_s3_manager import config, s3_client, users
 from another_s3_manager.access import AccessDenied
-from another_s3_manager.access import service as access_service
 from another_s3_manager.errors import MoveError, safe_move_error, safe_storage_logging
 from another_s3_manager.metrics import move_jobs_total, s3_objects_total, safe_role_label
 from another_s3_manager.move_reservations import acquire, release, reserve
@@ -80,8 +80,10 @@ _ACCESS_ERROR_CODES = {
 
 
 def require_access(user: dict, role: str | None, bucket: str, *, deleting=False) -> None:
-    if not role or not role.strip():
-        raise MoveError("ROLE_REQUIRED")
+    try:
+        role = access_service.require_role_name(role)
+    except AccessDenied:
+        raise MoveError("ROLE_REQUIRED") from None
     if len(role.encode("utf-8")) > 1024:
         raise MoveError("INVALID_REQUEST")
     cfg = config.load_config(force_reload=True)
@@ -590,6 +592,7 @@ class MoveRegistry:
             with reserve(token, [(job.role, job.bucket, key) for key, _ in copied]):
                 failures = []
                 removed = 0
+                stopped_reason = None
                 for key, etag in copied:
                     try:
                         recheck(job)
@@ -628,8 +631,16 @@ class MoveRegistry:
                         if len(failures) < 1000:
                             failures.append(safe_move_error(error, "cleanup", key).detail())
                         if access_denied:
+                            stopped_reason = error.code
                             break
-                return {"removed": removed, "failures": failures}
+                with job.lock:
+                    remaining = len(job.copied)
+                return {
+                    "removed": removed,
+                    "failures": failures,
+                    "remaining": remaining,
+                    "stopped_reason": stopped_reason,
+                }
         finally:
             job.cleanup_lock.release()
 

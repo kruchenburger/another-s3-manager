@@ -325,3 +325,12 @@ it("shows no delete and preserves the flag in writable configuration", async () 
   const { toWritableConfig } = await import("@/features/admin/api/configShape");
   expect(toWritableConfig(config).roles[0].allow_delete).toBe(false);
 });
+
+
+it.each([null, "false", 0])("shows no delete for invalid permission %s", async (allow_delete) => {
+  vi.mocked(getConfig).mockResolvedValue({
+    ...baseConfig, roles: [{ ...baseRole, allow_delete }],
+  } as unknown as Awaited<ReturnType<typeof getConfig>>);
+  renderPage();
+  expect(await screen.findByText("no delete")).toBeInTheDocument();
+});

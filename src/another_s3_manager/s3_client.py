@@ -18,11 +18,16 @@ from botocore.credentials import RefreshableCredentials
 from botocore.exceptions import ClientError, CredentialRetrievalError, MetadataRetrievalError
 from botocore.session import Session as BotocoreSession
 
+from another_s3_manager import access as access_service
 from another_s3_manager.access import AccessDenied
-from another_s3_manager.access import service as access_service
 from another_s3_manager.config import load_config
 from another_s3_manager.constants import S3_USE_SSL, S3_VERIFY_SSL
-from another_s3_manager.errors import RoleNotFoundError, SafeStorageLogFilter
+from another_s3_manager.errors import (
+    RoleNotFoundError,
+    S3AccessDeniedError,
+    SafeStorageLogFilter,
+    classify_boto_error,
+)
 from another_s3_manager.move_reservations import guarded_write
 
 # Cache for S3 clients per role
@@ -403,8 +408,6 @@ def _create_s3_client_from_role(role: Dict[str, Any]) -> AnyType:
                         ),
                     ) from e
             except ClientError as e:
-                from another_s3_manager.errors import S3AccessDeniedError, classify_boto_error
-
                 error_code = (
                     e.response.get("Error", {}).get("Code", "") if hasattr(e, "response") and e.response else ""
                 )
@@ -636,9 +639,7 @@ def get_s3_client(role_name: Optional[str] = None) -> AnyType:
     from another_s3_manager.config import load_config
     from another_s3_manager.errors import (
         RoleNotFoundError,
-        S3AccessDeniedError,
         S3OperationError,
-        classify_boto_error,
     )
 
     # Use cache key based on role name
@@ -2176,8 +2177,12 @@ def _copy_object(
     *,
     etag: str | None = None,
     version_id: str | None = None,
-) -> None:
-    """Copy under the caller's reservation, optionally pinning the source state."""
+) -> str | None:
+    """Copy under the caller's reservation, optionally pinning the source state.
+
+    Returns the source VersionId that was actually copied (``None`` for an unversioned
+    source, or when an unpinned fallback copy got no ``CopySourceVersionId`` back).
+    """
     from another_s3_manager.metrics import s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, source_bucket, user_dict)
@@ -2190,10 +2195,26 @@ def _copy_object(
             copy_source["VersionId"] = version_id
         conditions = {"CopySourceIfMatch": etag} if etag is not None else {}
         try:
-            client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=copy_source, **conditions)
+            try:
+                response = client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=copy_source, **conditions)
+                copied_version = response.get("CopySourceVersionId") or version_id
+            except ClientError as error:
+                # Pinning a version needs s3:GetObjectVersion, which 1.2.x never required.
+                # Without it, fall back to the unpinned copy: CopySourceIfMatch still
+                # guarantees the copied bytes are the ones HEAD saw, and the second HEAD
+                # still compares VersionId before anything is deleted. The caller checks
+                # the returned CopySourceVersionId, since an unpinned copy may have
+                # taken a newer version with the same ETag.
+                if "VersionId" not in copy_source or not _is_access_denied(error):
+                    raise
+                logger.info("move: version-pinned copy denied, retrying without VersionId")
+                unpinned = {"Bucket": source_bucket, "Key": source_path}
+                response = client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=unpinned, **conditions)
+                copied_version = response.get("CopySourceVersionId")
             s3_objects_total.labels(
                 role=safe_role_label(validated_role or "unknown"), bucket=dest_bucket, operation="copy"
             ).inc()
+            return copied_version
         except ClientError as error:
             if etag is not None and _is_precondition_failed(error):
                 raise _SourceChanged from error
@@ -2203,11 +2224,18 @@ def _copy_object(
                 ) from error
             raise
 
-    execute_with_s3_retry(validated_role, "put", do_copy)
+    return execute_with_s3_retry(validated_role, "put", do_copy)
 
 
 class _SourceChanged(Exception):
     """The copied source state no longer permits deletion."""
+
+
+def _is_access_denied(error: ClientError) -> bool:
+    return (
+        error.response.get("Error", {}).get("Code") in {"AccessDenied", "403"}
+        or error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 403
+    )
 
 
 def _is_precondition_failed(error: ClientError) -> bool:
@@ -2353,19 +2381,37 @@ def move_object_for_role(
     _validate_bucket_access(role, dest_bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
     access_service.require_delete(role, load_config(force_reload=True))
-    source = execute_with_s3_retry(
-        validated_role, "head", lambda client: _head_move_source(client, source_bucket, source_path)
-    )
+
+    try:
+        source = execute_with_s3_retry(
+            validated_role, "head", lambda client: _head_move_source(client, source_bucket, source_path)
+        )
+    except ClientError as error:
+        typed = classify_boto_error(error)
+        if isinstance(typed, S3AccessDeniedError) or typed.http_status == 403:
+            raise S3AccessDeniedError(typed.code, "Access denied by S3 during HeadObject.") from error
+        raise
     # A missing ETag cannot safely authorize an unconditional copy or delete.
     etag = source["ETag"]
     version_id = source.get("VersionId")
     copied = False
     reason = None
+    denial_message = None
     try:
-        _copy_object(
-            role, source_bucket, source_path, dest_bucket, dest_path, user_dict, etag=etag, version_id=version_id
-        )
+        try:
+            copied_version = _copy_object(
+                role, source_bucket, source_path, dest_bucket, dest_path, user_dict, etag=etag, version_id=version_id
+            )
+        except ClientError as error:
+            typed = classify_boto_error(error)
+            if isinstance(typed, S3AccessDeniedError) or typed.http_status == 403:
+                raise S3AccessDeniedError(typed.code, "Access denied by S3 during CopyObject.") from error
+            raise
         copied = True
+        if version_id is not None and copied_version != version_id:
+            # The copy took another source version than HEAD saw (or could not confirm
+            # which): the destination holds that state, so keep the source.
+            raise _SourceChanged
         access_service.require_delete(role, load_config(force_reload=True))
         _delete_exact_key(
             role, source_bucket, source_path, user_dict, etag=etag, version_id=version_id, source_head=source
@@ -2373,15 +2419,49 @@ def move_object_for_role(
     except _SourceChanged:
         reason = "SOURCE_CHANGED"
     except AccessDenied as error:
-        if not copied or error.code not in {"DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"}:
+        if not copied:
             raise
         reason = error.code
+        denial_message = error.message
+    except ClientError as error:
+        if not copied:
+            raise
+        typed = classify_boto_error(error)
+        if isinstance(typed, S3AccessDeniedError) or typed.http_status == 403:
+            reason = "S3_ACCESS_DENIED"
+            denial_message = f"Copied, source kept. Access denied by S3 during {error.operation_name}."
+        else:
+            reason = "SOURCE_DELETE_FAILED"
+            denial_message = (
+                f"Copied, but {error.operation_name} failed before the source was confirmed deleted"
+                " — check the source; it may still exist."
+            )
+    except S3AccessDeniedError:
+        # Typed 403 after the copy (e.g. a client rebuilt after ExpiredToken is refused
+        # by S3): the copy exists, so report the partial result instead of raising.
+        if not copied:
+            raise
+        reason = "S3_ACCESS_DENIED"
+        denial_message = "Copied, source kept. Access denied by S3 before the source could be deleted."
+    except Exception:
+        # Any other failure after a confirmed copy (5xx, network, credential refresh):
+        # never hide that the destination now exists.
+        if not copied:
+            raise
+        logger.warning("move_object_for_role: failure after copy", exc_info=True)
+        reason = "SOURCE_DELETE_FAILED"
+        denial_message = (
+            "Copied, but removing the source failed before it was confirmed deleted"
+            " — check the source; it may still exist."
+        )
     return {
         "ok": copied,
         "copied": copied,
         "moved": copied and reason is None,
         "source_kept_reason": reason,
-        "message": (
+        "message": denial_message
+        if denial_message is not None
+        else (
             "Not copied: the source changed before the copy — nothing deleted"
             if not copied
             else "Copied, source changed after the copy — source kept"

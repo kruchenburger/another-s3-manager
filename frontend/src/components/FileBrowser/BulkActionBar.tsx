@@ -12,6 +12,7 @@ import {
 import { ChevronDown, Share2, Trash2, FolderInput } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { TtlPopover } from "@/components/TtlPopover/TtlPopover";
+import { MOVE_DISABLED, DELETION_DISABLED } from "@/features/files/utils/folderOperations";
 import classes from "./BulkActionBar.module.css";
 
 interface BulkActionBarProps {
@@ -165,7 +166,7 @@ export function BulkActionBar({
               </Button.Group>
               {onMove && (
                 <Tooltip
-                  label={deletionReason ?? "Moving is disabled because deletion is disabled in the server config."}
+                  label={deletionReason ?? MOVE_DISABLED}
                   disabled={!disableDeletion}
                 >
                   <Button
@@ -182,7 +183,7 @@ export function BulkActionBar({
                 </Tooltip>
               )}
               <Tooltip
-                label={deletionReason ?? "Deletion is disabled in the server config."}
+                label={deletionReason ?? DELETION_DISABLED}
                 withArrow
                 disabled={!disableDeletion}
               >

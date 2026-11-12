@@ -18,7 +18,7 @@ import {
   useSaveConfig,
 } from "@/features/admin/hooks/useAdminConfig";
 import { toWritableConfig } from "@/features/admin/api/configShape";
-import { stripIrrelevantFields } from "@/features/admin/api/roleShape";
+import { roleAllowsDelete, stripIrrelevantFields } from "@/features/admin/api/roleShape";
 import { ConfirmDeleteModal } from "@/components/Confirm/ConfirmDeleteModal";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { RoleDrawer } from "@/components/Admin/RoleDrawer";
@@ -209,7 +209,7 @@ export function RolesPage() {
                 <Table.Tr key={r.name} className={classes.row}>
                   <Table.Td>
                     {r.name}
-                    {r.allow_delete === false && <Badge ml="xs" variant="light" color="gray">no delete</Badge>}
+                    {!roleAllowsDelete(r) && <Badge ml="xs" variant="light" color="gray">no delete</Badge>}
                   </Table.Td>
                   <Table.Td>
                     {(() => {

@@ -100,6 +100,18 @@ failure instead returns `ok: false`, `copied: false`, `moved: false` and
 `SOURCE_CHANGED`; nothing is deleted. Always inspect `copied` as well as the
 reason.
 
+On versioned buckets the copy is pinned to the source `VersionId`, which needs
+`s3:GetObjectVersion`. Without that permission each copy attempt falls back to
+one copy without the version: `CopySourceIfMatch` still ensures the copied
+bytes are the ones read, the source is deleted only if the copy reports the same
+`CopySourceVersionId` that was read (otherwise `SOURCE_CHANGED`, source kept),
+and the final HEAD still compares the VersionId before deleting.
+
+Once the copy has succeeded, a later failure never hides it: an S3 403 returns
+`copied: true`, `moved: false`, `S3_ACCESS_DENIED`; any other failure before the
+source is confirmed deleted (5xx, network, credentials) returns
+`SOURCE_DELETE_FAILED` — check the source, it may still exist.
+
 For versioned sources the copy is pinned to the source's `VersionId`, but
 deletion never names a version: with versioning **enabled** it creates a delete
 marker, so the key disappears without exposing a previous version and all
@@ -121,7 +133,14 @@ coordinated. Between the final HEAD and the DELETE:
 - on any backend, an external overwrite that keeps the same bytes but changes
   only metadata (same ETag) passes `If-Match` and is lost.
 
-Enable bucket versioning to keep that data: deletes then only add a marker.
+A bucket with versioning **suspended** behaves like an unversioned one here: its
+objects carry the `null` version, which a new write replaces in place, so `null`
+does not identify one state. An external rewrite with the same bytes but
+different metadata can then be copied and later restored without any check
+noticing it; the destination keeps the rewritten metadata.
+
+Enable bucket versioning (status **Enabled**, not Suspended) to keep that data:
+deletes then only add a marker, and every write gets its own version.
 
 ### Tool annotations (auto-approval hints)
 

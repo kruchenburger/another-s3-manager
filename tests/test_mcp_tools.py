@@ -1478,3 +1478,230 @@ async def test_copy_object_move_delegates_to_storage(alice_user, tool_registry):
     assert result["copied"] is True
     assert result["moved"] is False
     assert result["source_kept_reason"] == "SOURCE_CHANGED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation,method", [("HeadObject", "head_object"), ("CopyObject", "copy_object")])
+@pytest.mark.parametrize("error_code", ["AccessDenied", "403"])
+async def test_versioned_move_s3_denial_names_operation(
+    alice_user, tool_registry, moto_s3, operation, method, error_code
+):
+    from botocore.exceptions import ClientError
+
+    _, plaintext = alice_user
+    moto_s3.create_bucket(Bucket="version-denied")
+    moto_s3.put_bucket_versioning(Bucket="version-denied", VersioningConfiguration={"Status": "Enabled"})
+    version = moto_s3.put_object(Bucket="version-denied", Key="source", Body=b"keep")["VersionId"]
+    with (
+        patch("another_s3_manager.s3_client.get_s3_client", return_value=moto_s3),
+        patch.object(
+            moto_s3,
+            method,
+            side_effect=ClientError(
+                {"Error": {"Code": error_code}, "ResponseMetadata": {"HTTPStatusCode": 403}}, operation
+            ),
+        ) as denied,
+        patch.object(moto_s3, "delete_object") as delete,
+    ):
+        with pytest.raises(McpError) as caught:
+            await _call(
+                tool_registry,
+                "copy_object",
+                _fake_request(plaintext),
+                role="Default",
+                source_bucket="version-denied",
+                source_path="source",
+                dest_bucket="version-denied",
+                dest_path="dest",
+                delete_source=True,
+            )
+    assert caught.value.code == "S3_ACCESS_DENIED"
+    assert operation in caught.value.message
+    if method == "copy_object":
+        # The pinned copy is tried first; without s3:GetObjectVersion it falls back to an
+        # unpinned copy, which this role is denied as well.
+        assert denied.call_args_list[0].kwargs["CopySource"]["VersionId"] == version
+        assert "VersionId" not in denied.call_args_list[-1].kwargs["CopySource"]
+    delete.assert_not_called()
+    assert moto_s3.get_object(Bucket="version-denied", Key="source")["Body"].read() == b"keep"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason,raw_message,public_code,message,metric",
+    [
+        (
+            "bucket_not_allowed",
+            "revoked",
+            "BUCKET_NOT_ALLOWED",
+            "Copied, source kept. Access to the bucket is no longer allowed.",
+            None,
+        ),
+        (
+            "role_required",
+            "revoked",
+            "ROLE_NOT_ALLOWED",
+            "Copied, source kept. Access to the role is no longer allowed.",
+            None,
+        ),
+        (
+            "role_not_allowed",
+            "revoked",
+            "ROLE_NOT_ALLOWED",
+            "Copied, source kept. Access to the role is no longer allowed.",
+            None,
+        ),
+        (
+            "role_not_found",
+            "revoked",
+            "ROLE_NOT_ALLOWED",
+            "Copied, source kept. Access to the role is no longer allowed.",
+            None,
+        ),
+        (
+            "writes_disabled",
+            "revoked",
+            "READ_ONLY_SERVER",
+            "Copied, source kept. Server config disables MCP writes",
+            "writes_disabled",
+        ),
+        (
+            "read_only_token",
+            "revoked",
+            "READ_ONLY_TOKEN",
+            "Copied, source kept. This token is read-only",
+            "read_only_token",
+        ),
+        ("deletion_disabled", "revoked", "DELETION_DISABLED", "Copied, source kept", "deletion_disabled"),
+        ("DELETION_DISABLED", "revoked", "DELETION_DISABLED", "Copied, source kept", "deletion_disabled"),
+        (
+            "DELETION_DISABLED_FOR_ROLE",
+            "revoked",
+            "DELETION_DISABLED_FOR_ROLE",
+            "Copied, source kept",
+            "role_deletion_disabled",
+        ),
+        (
+            "S3_ACCESS_DENIED",
+            "Copied, source kept. Access denied by S3 during HeadObject.",
+            "S3_ACCESS_DENIED",
+            "Copied, source kept. Access denied by S3 during HeadObject.",
+            None,
+        ),
+        (
+            "SOURCE_CHANGED",
+            "Copied, source changed after the copy - source kept",
+            "SOURCE_CHANGED",
+            "Copied, source changed after the copy - source kept",
+            None,
+        ),
+    ],
+)
+async def test_copy_partial_success_uses_access_mapping(
+    alice_user, tool_registry, reason, raw_message, public_code, message, metric
+):
+    from unittest.mock import Mock
+
+    from another_s3_manager import mcp_server
+
+    _, plaintext = alice_user
+    counter = Mock()
+    calls = Mock()
+    with (
+        patch(
+            "another_s3_manager.s3_client.move_object_for_role",
+            return_value={
+                "ok": True,
+                "copied": True,
+                "moved": False,
+                "source_kept_reason": reason,
+                "message": raw_message,
+            },
+        ),
+        patch.object(mcp_server, "mcp_writes_denied_total", counter),
+        patch.object(mcp_server, "mcp_tool_calls_total", calls),
+    ):
+        result = await _call(
+            tool_registry,
+            "copy_object",
+            _fake_request(plaintext),
+            role="Default",
+            source_bucket="source",
+            source_path="a",
+            dest_bucket="dest",
+            dest_path="b",
+            delete_source=True,
+        )
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == public_code
+    calls.labels.assert_called_once_with(tool="copy_object", error_code=public_code)
+    assert result["message"] == message
+    if metric:
+        counter.labels.assert_called_once_with(tool="copy_object", reason=metric)
+        counter.labels.return_value.inc.assert_called_once_with()
+    else:
+        counter.labels.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation,method", [("HeadObject", "head_object"), ("DeleteObject", "delete_object")])
+@pytest.mark.parametrize("code", ["AccessDenied", "403"])
+async def test_mcp_post_copy_s3_denial_keeps_partial_success(
+    alice_user, tool_registry, moto_s3, operation, method, code
+):
+    from unittest.mock import Mock
+
+    from botocore.exceptions import ClientError
+
+    from another_s3_manager import mcp_server
+
+    _, plaintext = alice_user
+    moto_s3.create_bucket(Bucket="post-copy-denied")
+    moto_s3.put_object(Bucket="post-copy-denied", Key="source", Body=b"keep")
+    original_head = moto_s3.head_object
+    heads = 0
+
+    def head(**kwargs):
+        nonlocal heads
+        heads += 1
+        if method == "head_object" and heads == 2:
+            raise ClientError({"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": 403}}, operation)
+        return original_head(**kwargs)
+
+    counter = Mock()
+    calls = Mock()
+    with (
+        patch("another_s3_manager.s3_client.get_s3_client", return_value=moto_s3),
+        patch.object(moto_s3, "head_object", side_effect=head),
+        patch.object(
+            moto_s3,
+            "delete_object",
+            side_effect=ClientError({"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": 403}}, operation),
+        ) as delete,
+        patch.object(mcp_server, "mcp_writes_denied_total", counter),
+        patch.object(mcp_server, "mcp_tool_calls_total", calls),
+    ):
+        result = await _call(
+            tool_registry,
+            "copy_object",
+            _fake_request(plaintext),
+            role="Default",
+            source_bucket="post-copy-denied",
+            source_path="source",
+            dest_bucket="post-copy-denied",
+            dest_path="dest",
+            delete_source=True,
+        )
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "S3_ACCESS_DENIED"
+    assert result["message"] == f"Copied, source kept. Access denied by S3 during {operation}."
+    counter.labels.assert_not_called()
+    calls.labels.assert_called_once_with(tool="copy_object", error_code="S3_ACCESS_DENIED")
+    if method == "head_object":
+        delete.assert_not_called()
+    else:
+        delete.assert_called_once()
+    assert moto_s3.get_object(Bucket="post-copy-denied", Key="source")["Body"].read() == b"keep"
+    assert moto_s3.get_object(Bucket="post-copy-denied", Key="dest")["Body"].read() == b"keep"
