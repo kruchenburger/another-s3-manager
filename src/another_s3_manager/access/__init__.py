@@ -10,6 +10,7 @@ from another_s3_manager.access.service import (
     require_not_deletion_disabled,
     require_role,
     require_role_name,
+    require_transfer,
     require_write,
 )
 
@@ -31,5 +32,6 @@ __all__ = [
     "require_destructive",
     "require_not_deletion_disabled",
     "require_role",
+    "require_transfer",
     "require_write",
 ]

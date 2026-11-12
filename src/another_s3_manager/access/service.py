@@ -41,6 +41,13 @@ def require_bucket(role: str, bucket: str, user: dict, config: dict) -> None:
         raise AccessDenied("bucket_not_allowed", f"bucket '{bucket}' not in allowed_buckets for role '{role}'")
 
 
+def require_transfer(user: dict, role: str, source_bucket: str, dest_bucket: str, config: dict) -> None:
+    """Authorize both ends of a transfer without requiring deletion permission."""
+    role = require_role(role, user, config)
+    require_bucket(role, source_bucket, user, config)
+    require_bucket(role, dest_bucket, user, config)
+
+
 def require_delete(role_name: str | None, config: dict) -> None:
     if not policies.deletion_allowed(config, None):
         raise AccessDenied("DELETION_DISABLED", _WRITE_MESSAGES["deletion_disabled"])

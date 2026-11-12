@@ -89,6 +89,7 @@ after copying: if permission was revoked, the copy stays and the response says
 `Copied, source kept`, with `moved: false` and `source_kept_reason`. `copy_object` copies within one role's credentials
 only (both buckets must be in the role's allowed_buckets) — cross-role /
 cross-provider copy is not supported.
+`copy_object` returns `ROLE_CHANGED` when the role's storage settings change mid-copy.
 
 A single-object move reserves both paths throughout copying and deletion, reads
 its source ETag and VersionId, and copies that exact state with
