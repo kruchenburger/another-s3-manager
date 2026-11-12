@@ -10,7 +10,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from another_s3_manager import config, move_reservations, s3_client
-from another_s3_manager.errors import MoveError
+from another_s3_manager.errors import MoveError, S3AccessDeniedError
 
 USER = {"is_admin": True, "allowed_roles": ["Default"]}
 
@@ -319,7 +319,7 @@ def test_failed_move_releases_both_reservations(source, monkeypatch):
     monkeypatch.setattr(
         source, "copy_object", Mock(side_effect=ClientError({"Error": {"Code": "AccessDenied"}}, "CopyObject"))
     )
-    with pytest.raises(ClientError):
+    with pytest.raises(S3AccessDeniedError, match="CopyObject"):
         move()
     with move_reservations.reserve(
         "after-failure", [("Default", "move-source", "file"), ("Default", "move-dest", "copy")]
@@ -528,3 +528,60 @@ def test_copy_precondition_failure_message_says_not_copied(source, monkeypatch):
     assert result["moved"] is False
     assert result["message"].startswith("Not copied")
     assert body(source, "move-source", "file") == b"old"
+
+
+@pytest.mark.parametrize(
+    "denial,expected",
+    [
+        ("bucket_not_allowed", "BUCKET_NOT_ALLOWED"),
+        ("role_not_allowed", "ROLE_NOT_ALLOWED"),
+        ("writes_disabled", "READ_ONLY_SERVER"),
+        ("read_only_token", "READ_ONLY_TOKEN"),
+    ],
+)
+def test_any_access_denial_after_copy_preserves_result(source, monkeypatch, denial, expected):
+    from another_s3_manager.access import AccessDenied
+
+    def denied(*args, **kwargs):
+        raise AccessDenied(denial, "revoked")
+
+    monkeypatch.setattr(s3_client, "_delete_exact_key", denied)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == expected
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"
+
+
+def test_bucket_revoked_after_successful_copy(source, monkeypatch):
+    original = source.copy_object
+
+    def copy_and_revoke(**kwargs):
+        result = original(**kwargs)
+        cfg = config.load_config()
+        cfg["roles"][0]["allowed_buckets"] = ["other-bucket"]
+        config.save_config(cfg)
+        return result
+
+    monkeypatch.setattr(source, "copy_object", copy_and_revoke)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "BUCKET_NOT_ALLOWED"
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"
+
+
+@pytest.mark.parametrize("code", ["bucket_not_allowed", "role_not_allowed", "writes_disabled", "read_only_token"])
+def test_access_denial_before_copy_still_raises(source, monkeypatch, code):
+    from another_s3_manager.access import AccessDenied
+
+    monkeypatch.setattr(s3_client, "_copy_object", Mock(side_effect=AccessDenied(code, "denied")))
+    with pytest.raises(AccessDenied) as caught:
+        move()
+    assert caught.value.code == code
+    assert body(source, "move-source", "file") == b"old"
+    with pytest.raises(ClientError) as missing:
+        source.head_object(Bucket="move-dest", Key="copy")
+    assert missing.value.response["Error"]["Code"] == "404"

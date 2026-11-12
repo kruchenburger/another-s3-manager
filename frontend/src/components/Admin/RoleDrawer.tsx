@@ -10,7 +10,7 @@ import {
 import { useEffect, useState } from "react";
 import { useForm } from "@mantine/form";
 import { notifications } from "@mantine/notifications";
-import { stripIrrelevantFields } from "@/features/admin/api/roleShape";
+import { roleAllowsDelete, stripIrrelevantFields } from "@/features/admin/api/roleShape";
 import { RoleFormFields } from "@/components/Admin/RoleFormFields";
 import type { AppConfig, AppRole } from "@/types/api";
 
@@ -175,7 +175,7 @@ export function RoleDrawer({
         ...EMPTY_ROLE,
         ...cleanedInitial,
         // Missing is the legacy default; malformed values must never enable deletion.
-        allow_delete: !Object.prototype.hasOwnProperty.call(initialRole, "allow_delete") || initialRole.allow_delete === true,
+        allow_delete: roleAllowsDelete(initialRole),
         secret_access_key: "",
       };
       form.setInitialValues(populated);

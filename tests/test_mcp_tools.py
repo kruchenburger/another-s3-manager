@@ -1478,3 +1478,100 @@ async def test_copy_object_move_delegates_to_storage(alice_user, tool_registry):
     assert result["copied"] is True
     assert result["moved"] is False
     assert result["source_kept_reason"] == "SOURCE_CHANGED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation,method", [("HeadObject", "head_object"), ("CopyObject", "copy_object")])
+@pytest.mark.parametrize("error_code", ["AccessDenied", "403"])
+async def test_versioned_move_s3_denial_names_operation(
+    alice_user, tool_registry, moto_s3, operation, method, error_code
+):
+    from botocore.exceptions import ClientError
+
+    _, plaintext = alice_user
+    moto_s3.create_bucket(Bucket="version-denied")
+    moto_s3.put_bucket_versioning(Bucket="version-denied", VersioningConfiguration={"Status": "Enabled"})
+    version = moto_s3.put_object(Bucket="version-denied", Key="source", Body=b"keep")["VersionId"]
+    with (
+        patch("another_s3_manager.s3_client.get_s3_client", return_value=moto_s3),
+        patch.object(
+            moto_s3,
+            method,
+            side_effect=ClientError(
+                {"Error": {"Code": error_code}, "ResponseMetadata": {"HTTPStatusCode": 403}}, operation
+            ),
+        ) as denied,
+        patch.object(moto_s3, "delete_object") as delete,
+    ):
+        with pytest.raises(McpError) as caught:
+            await _call(
+                tool_registry,
+                "copy_object",
+                _fake_request(plaintext),
+                role="Default",
+                source_bucket="version-denied",
+                source_path="source",
+                dest_bucket="version-denied",
+                dest_path="dest",
+                delete_source=True,
+            )
+    assert caught.value.code == "S3_ACCESS_DENIED"
+    assert operation in caught.value.message
+    if method == "copy_object":
+        assert denied.call_args.kwargs["CopySource"]["VersionId"] == version
+    delete.assert_not_called()
+    assert moto_s3.get_object(Bucket="version-denied", Key="source")["Body"].read() == b"keep"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason,message,metric",
+    [
+        ("BUCKET_NOT_ALLOWED", "Copied, source kept. Access to the bucket is no longer allowed.", None),
+        ("ROLE_NOT_ALLOWED", "Copied, source kept. Access to the role is no longer allowed.", None),
+        ("READ_ONLY_SERVER", "Copied, source kept. Server config disables MCP writes", "writes_disabled"),
+        ("READ_ONLY_TOKEN", "Copied, source kept. This token is read-only", "read_only_token"),
+        ("DELETION_DISABLED", "Copied, source kept", "deletion_disabled"),
+        ("DELETION_DISABLED_FOR_ROLE", "Copied, source kept", "role_deletion_disabled"),
+    ],
+)
+async def test_copy_partial_success_uses_access_mapping(alice_user, tool_registry, reason, message, metric):
+    from unittest.mock import Mock
+
+    from another_s3_manager import mcp_server
+
+    _, plaintext = alice_user
+    counter = Mock()
+    with (
+        patch(
+            "another_s3_manager.s3_client.move_object_for_role",
+            return_value={
+                "ok": True,
+                "copied": True,
+                "moved": False,
+                "source_kept_reason": reason,
+                "message": "Copied, source kept",
+            },
+        ),
+        patch.object(mcp_server, "mcp_writes_denied_total", counter),
+    ):
+        result = await _call(
+            tool_registry,
+            "copy_object",
+            _fake_request(plaintext),
+            role="Default",
+            source_bucket="source",
+            source_path="a",
+            dest_bucket="dest",
+            dest_path="b",
+            delete_source=True,
+        )
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == reason
+    assert result["message"] == message
+    if metric:
+        counter.labels.assert_called_once_with(tool="copy_object", reason=metric)
+        counter.labels.return_value.inc.assert_called_once_with()
+    else:
+        counter.labels.assert_not_called()

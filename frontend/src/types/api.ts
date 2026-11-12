@@ -53,6 +53,8 @@ export interface MoveJob {
 }
 export interface MoveCleanup {
   removed: number;
+  remaining: number;
+  stopped_reason: string | null;
   failures: MoveFailure[];
 }
 

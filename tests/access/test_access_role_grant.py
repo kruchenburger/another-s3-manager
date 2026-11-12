@@ -41,3 +41,18 @@ def test_denial_details_are_not_shared():
     second = AccessDenied("b", "other")
     first.details["role"] = "a"
     assert second.details == {}
+
+
+@pytest.mark.parametrize("role", [None, "", " "])
+def test_public_role_name_guard(role):
+    from another_s3_manager.access import require_role_name
+
+    with pytest.raises(AccessDenied) as caught:
+        require_role_name(role)
+    assert caught.value.code == "role_required"
+
+
+def test_public_role_name_guard_preserves_name():
+    from another_s3_manager.access import require_role_name
+
+    assert require_role_name(" a ") == " a "

@@ -11,7 +11,7 @@ import {
   resultMeaning,
   type MoveRecord,
 } from "@/features/files/jobs/MoveJobsProvider";
-import { MOVE_DISABLED } from "@/features/files/utils/folderOperations";
+import { DELETION_DISABLED, ROLE_DELETION_DISABLED, MOVE_DISABLED } from "@/features/files/utils/folderOperations";
 import { useRolePermissions } from "@/features/auth/hooks/useRolePermissions";
 import { getErrorMessage } from "@/utils/apiError";
 export function MoveJobDetails({
@@ -122,8 +122,18 @@ export function MoveJobDetails({
           <>
             <Text>
               Removed {cleanup.data.removed} partial copies.{" "}
-              {cleanup.data.failures.length} could not be removed.
+              {cleanup.data.remaining} remain.
             </Text>
+            {cleanup.data.stopped_reason && (
+              <Text size="sm">
+                Cleanup stopped because deleting is no longer allowed.{" "}
+                {cleanup.data.stopped_reason === "DELETION_DISABLED_FOR_ROLE"
+                  ? ROLE_DELETION_DISABLED.replace("<r>", record.role)
+                  : cleanup.data.stopped_reason === "DELETION_DISABLED"
+                    ? DELETION_DISABLED
+                    : "Access to this storage location is no longer allowed."}
+              </Text>
+            )}
             {cleanup.data.failures.map((failure, index) => (
               <Alert key={index} color="yellow">
                 {failure.code}: {failure.message} {failure.key}

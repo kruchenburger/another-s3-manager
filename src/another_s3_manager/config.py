@@ -142,7 +142,7 @@ def is_deletion_disabled(config: Optional[Dict[str, Any]] = None) -> bool:
     `disable_deletion` is set. Every delete path must call this instead of
     reading one of the two sources itself (ASM-64: MCP used to check only config).
     """
-    from another_s3_manager.access.policies import deletion_disabled
+    from another_s3_manager.access import deletion_disabled
 
     if config is None:
         if deletion_disabled({}):

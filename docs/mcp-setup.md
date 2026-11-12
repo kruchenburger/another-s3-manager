@@ -100,6 +100,8 @@ failure instead returns `ok: false`, `copied: false`, `moved: false` and
 `SOURCE_CHANGED`; nothing is deleted. Always inspect `copied` as well as the
 reason.
 
+MCP moves on versioned buckets also require `s3:GetObjectVersion` to copy the pinned source version.
+
 For versioned sources the copy is pinned to the source's `VersionId`, but
 deletion never names a version: with versioning **enabled** it creates a delete
 marker, so the key disappears without exposing a previous version and all

@@ -85,7 +85,7 @@ describe("move results", () => {
         { code: "OTHER", message: "Second page", phase: "copy", key: "y" },
       ],
     });
-    vi.spyOn(api, "cleanupJob").mockResolvedValue({ removed: 2, failures: [] });
+    vi.spyOn(api, "cleanupJob").mockResolvedValue({ removed: 2, remaining: 0, stopped_reason: null, failures: [] });
     details();
     expect(screen.getByText(/originals are untouched/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Load more failures" }));
@@ -96,7 +96,7 @@ describe("move results", () => {
     );
     await waitFor(() => expect(api.cleanupJob).toHaveBeenCalledWith("j"));
     expect(
-      await screen.findByText(/Removed 2 partial copies/),
+      await screen.findByText("Removed 2 partial copies. 0 remain."),
     ).toBeInTheDocument();
   });
   it.each(["done", "done_with_warnings", "failed_delete"] as const)(
@@ -113,7 +113,7 @@ describe("move results", () => {
     async (delete_started) => {
       const cleanup = vi
         .spyOn(api, "cleanupJob")
-        .mockResolvedValue({ removed: 1, failures: [] });
+        .mockResolvedValue({ removed: 1, remaining: 0, stopped_reason: null, failures: [] });
       // Pass undefined explicitly in the snapshot to cover legacy responses.
       render(
         <QueryClientProvider client={new QueryClient()}>
@@ -378,4 +378,17 @@ it.each([
     </QueryClientProvider>,
   );
   expect(screen.getByRole("dialog", { name: "Move details" })).toHaveTextContent(expected);
+});
+
+
+it("reports the complete cleanup remainder after permission revocation", async () => {
+  vi.spyOn(api, "cleanupJob").mockResolvedValue({
+    removed: 1, remaining: 1000, stopped_reason: "DELETION_DISABLED_FOR_ROLE",
+    failures: [{ code: "DELETION_DISABLED_FOR_ROLE", message: "Stopped", phase: "cleanup", key: "dest/1" }],
+  });
+  details();
+  fireEvent.click(screen.getByRole("button", { name: "Remove partial copies" }));
+  expect(await screen.findByText("Removed 1 partial copies. 1000 remain.")).toBeInTheDocument();
+  expect(screen.getByText(/Cleanup stopped because deleting is no longer allowed/)).toBeInTheDocument();
+  expect(screen.getByText(/Stopped dest\/1/)).toBeInTheDocument();
 });

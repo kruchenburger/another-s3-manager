@@ -2,8 +2,9 @@ from unittest.mock import Mock
 
 import pytest
 
+from another_s3_manager import access as service
 from another_s3_manager import move_jobs
-from another_s3_manager.access import AccessDenied, service
+from another_s3_manager.access import AccessDenied
 from another_s3_manager.errors import MoveError
 
 

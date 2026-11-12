@@ -18,8 +18,8 @@ from botocore.credentials import RefreshableCredentials
 from botocore.exceptions import ClientError, CredentialRetrievalError, MetadataRetrievalError
 from botocore.session import Session as BotocoreSession
 
+from another_s3_manager import access as access_service
 from another_s3_manager.access import AccessDenied
-from another_s3_manager.access import service as access_service
 from another_s3_manager.config import load_config
 from another_s3_manager.constants import S3_USE_SSL, S3_VERIFY_SSL
 from another_s3_manager.errors import RoleNotFoundError, SafeStorageLogFilter
@@ -2353,18 +2353,32 @@ def move_object_for_role(
     _validate_bucket_access(role, dest_bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
     access_service.require_delete(role, load_config(force_reload=True))
-    source = execute_with_s3_retry(
-        validated_role, "head", lambda client: _head_move_source(client, source_bucket, source_path)
-    )
+    from another_s3_manager.errors import S3AccessDeniedError, classify_boto_error
+
+    try:
+        source = execute_with_s3_retry(
+            validated_role, "head", lambda client: _head_move_source(client, source_bucket, source_path)
+        )
+    except ClientError as error:
+        typed = classify_boto_error(error)
+        if isinstance(typed, S3AccessDeniedError) or typed.http_status == 403:
+            raise S3AccessDeniedError(typed.code, "Access denied by S3 during HeadObject.") from error
+        raise
     # A missing ETag cannot safely authorize an unconditional copy or delete.
     etag = source["ETag"]
     version_id = source.get("VersionId")
     copied = False
     reason = None
     try:
-        _copy_object(
-            role, source_bucket, source_path, dest_bucket, dest_path, user_dict, etag=etag, version_id=version_id
-        )
+        try:
+            _copy_object(
+                role, source_bucket, source_path, dest_bucket, dest_path, user_dict, etag=etag, version_id=version_id
+            )
+        except ClientError as error:
+            typed = classify_boto_error(error)
+            if isinstance(typed, S3AccessDeniedError) or typed.http_status == 403:
+                raise S3AccessDeniedError(typed.code, "Access denied by S3 during CopyObject.") from error
+            raise
         copied = True
         access_service.require_delete(role, load_config(force_reload=True))
         _delete_exact_key(
@@ -2373,9 +2387,17 @@ def move_object_for_role(
     except _SourceChanged:
         reason = "SOURCE_CHANGED"
     except AccessDenied as error:
-        if not copied or error.code not in {"DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"}:
+        if not copied:
             raise
-        reason = error.code
+        reason = {
+            "bucket_not_allowed": "BUCKET_NOT_ALLOWED",
+            "role_required": "ROLE_NOT_ALLOWED",
+            "role_not_allowed": "ROLE_NOT_ALLOWED",
+            "role_not_found": "ROLE_NOT_ALLOWED",
+            "writes_disabled": "READ_ONLY_SERVER",
+            "read_only_token": "READ_ONLY_TOKEN",
+            "deletion_disabled": "DELETION_DISABLED",
+        }.get(error.code, error.code)
     return {
         "ok": copied,
         "copied": copied,

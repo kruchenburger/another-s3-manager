@@ -552,8 +552,13 @@ def test_snapshot_available_during_cleanup(storage, monkeypatch):
             assert error.value.code == "BUSY"
         finally:
             resume.set()
-        assert cleanup.result(timeout=5) == {"removed": 1, "failures": []}
-    assert moves.registry.cleanup(job.id, user) == {"removed": 0, "failures": []}
+        assert cleanup.result(timeout=5) == {"removed": 1, "failures": [], "remaining": 0, "stopped_reason": None}
+    assert moves.registry.cleanup(job.id, user) == {
+        "removed": 0,
+        "failures": [],
+        "remaining": 0,
+        "stopped_reason": None,
+    }
     job.copied["dest/file"] = s3.put_object(Bucket="move-bucket", Key="dest/file", Body=b"abc")["ETag"]
     recheck = moves.recheck
     checks = 0
@@ -570,7 +575,12 @@ def test_snapshot_available_during_cleanup(storage, monkeypatch):
         with pytest.raises(MoveError) as error:
             moves.registry.cleanup(job.id, user)
         assert error.value.code == "ACCESS_DENIED"
-    assert moves.registry.cleanup(job.id, user) == {"removed": 1, "failures": []}
+    assert moves.registry.cleanup(job.id, user) == {
+        "removed": 1,
+        "failures": [],
+        "remaining": 0,
+        "stopped_reason": None,
+    }
 
 
 @pytest.mark.parametrize("replacement_name", ["replacement", "owner"])
@@ -644,7 +654,8 @@ def test_plan_fingerprint_is_stable_and_binds_entries_and_request():
 def test_move_recheck_calls_access_policy(storage, monkeypatch):
     from unittest.mock import Mock
 
-    from another_s3_manager.access import AccessDenied, service
+    from another_s3_manager import access as service
+    from another_s3_manager.access import AccessDenied
 
     _, user = storage
     guard = Mock(side_effect=AccessDenied("DELETION_DISABLED_FOR_ROLE", "blocked"))
@@ -801,3 +812,33 @@ def test_move_delete_batch_rechecks_after_client_and_retry(storage, monkeypatch,
     assert len(deletes) == (1 if revoke_at == "retry" else 0)
     assert job.removed == 0
     assert s3.get_object(Bucket="move-bucket", Key="source/file")["Body"].read() == b"keep"
+
+
+def test_cleanup_reports_all_remaining_copies_after_revocation(storage, monkeypatch):
+    from another_s3_manager import config, s3_client
+
+    s3, user = storage
+    job = moves.Job("cleanup-many", moves.owner_identity(user), "Default", "move-bucket", "op", "hash")
+    job.state = "failed_copy"
+    job.copied = {f"dest/{i}": '"etag"' for i in range(1001)}
+    moves.registry.jobs[job.id] = job
+    from unittest.mock import Mock
+
+    client = Mock()
+    client.head_object.return_value = {"ETag": '"etag"'}
+
+    def delete(**kwargs):
+        cfg = config.load_config()
+        cfg["roles"][0]["allow_delete"] = False
+        config.save_config(cfg)
+        return {"Deleted": kwargs["Delete"]["Objects"]}
+
+    client.delete_objects.side_effect = delete
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: client)
+    result = moves.registry.cleanup(job.id, user)
+    assert result["removed"] == 1
+    assert result["remaining"] == 1000
+    assert result["stopped_reason"] == "DELETION_DISABLED_FOR_ROLE"
+    assert len(job.copied) == 1000
+    assert result["failures"][0]["code"] == "DELETION_DISABLED_FOR_ROLE"
+    client.delete_objects.assert_called_once()

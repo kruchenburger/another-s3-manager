@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import joinedload, selectinload
 
-from another_s3_manager.access.policies import effective_allowed_roles as effective_allowed_roles
+from another_s3_manager.access import effective_allowed_roles as effective_allowed_roles
 from another_s3_manager.constants import (
     DEFAULT_ADMIN_PASSWORD,
     PASSWORD_SET_VIA_CLI,
