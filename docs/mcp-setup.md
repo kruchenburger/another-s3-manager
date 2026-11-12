@@ -104,7 +104,10 @@ For versioned sources, deletion targets only the copied `VersionId`. Otherwise
 ASM sends a conditional `If-Match` DELETE; a failed precondition keeps the
 source. On backends that ignore `If-Match` on DELETE, the final check-to-delete
 window remains against writers outside this ASM process (including other
-replicas). Writes handled by this process share the reservation.
+replicas). Writes handled by this process share the reservation. MinIO
+(tested with RELEASE.2026-10-23) ignores `If-Match` on DELETE; enable bucket
+versioning there to close that window, since versioned deletes target the copied
+version only.
 
 ### Tool annotations (auto-approval hints)
 
