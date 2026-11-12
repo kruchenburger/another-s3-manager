@@ -34,6 +34,8 @@ dev = [
     "httpx==0.27.0",
     "moto[s3]==5.1.2",
     "ruff>=0.8",
+    # Enforces the DDD context boundaries ([tool.importlinter] below).
+    "import-linter>=2.1",
 ]
 
 [tool.setuptools.packages.find]
