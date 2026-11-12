@@ -7,6 +7,7 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Literal
@@ -185,12 +186,16 @@ class Plan:
     entries: tuple[Entry, ...]
     roots: tuple[tuple[str, str, str], ...]
     parents: tuple[str, ...]
+    # The role's storage target the plan was listed on: a confirmation given for one
+    # storage must never start a move on another one with an identical listing.
+    storage_fingerprint: str = ""
 
     def fingerprint(self, role, bucket, request):
         payload = [
             role,
             bucket,
             request.model_dump(),
+            self.storage_fingerprint,
             sorted((entry.source, entry.destination, entry.size, entry.etag) for entry in self.entries),
         ]
         return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -253,7 +258,8 @@ def enumerate_sources(role, bucket, roots, *, allow_missing=False):
 
 
 def build_plan(user, role, bucket, request):
-    require_access(user, role, bucket, deleting=True)
+    cfg = require_access(user, role, bucket, deleting=True)
+    storage_fingerprint = s3_client.role_storage_fingerprint(role, cfg)
     roots = roots_for(request)
     entries = enumerate_sources(role, bucket, roots)
     sources = {e.source for e in entries}
@@ -273,7 +279,9 @@ def build_plan(user, role, bucket, request):
     parents = tuple(sorted({item.path.rpartition("/")[0] for item in request.items if "/" in item.path}))
     for parent in parents:
         validate_source_key(parent + "/")
-    return Plan(entries, roots, parents)
+    # The listing must come from one target: a change while enumerating invalidates the plan.
+    s3_client.require_storage_target(role, storage_fingerprint, config.load_config(force_reload=True))
+    return Plan(entries, roots, parents, storage_fingerprint)
 
 
 def copy_entry(role, bucket, entry):
@@ -299,16 +307,26 @@ def copy_entry(role, bucket, entry):
             }
             if metadata.get("StorageClass", "STANDARD") != "STANDARD":
                 extra["StorageClass"] = metadata["StorageClass"]
-        client.copy(
-            {"Bucket": bucket, "Key": entry.source},
-            bucket,
-            entry.destination,
-            ExtraArgs=extra,
-            # s3transfer uses >=; the exact 5 GiB boundary still fits CopyObject.
-            Config=TransferConfig(
-                multipart_threshold=MULTIPART_THRESHOLD + (entry.size == MULTIPART_THRESHOLD), use_threads=False
-            ),
+        job = _active_job.get()
+        # Inside a job every signed copy attempt (CopyObject and the multipart stages,
+        # SDK retries included) re-checks access and the storage target. The
+        # verification HEAD below stays unguarded so an existing copy is always recorded.
+        guard = (
+            s3_client.destructive_delete_guard(client, lambda: recheck(job, client))
+            if job is not None
+            else nullcontext()
         )
+        with guard:
+            client.copy(
+                {"Bucket": bucket, "Key": entry.source},
+                bucket,
+                entry.destination,
+                ExtraArgs=extra,
+                # s3transfer uses >=; the exact 5 GiB boundary still fits CopyObject.
+                Config=TransferConfig(
+                    multipart_threshold=MULTIPART_THRESHOLD + (entry.size == MULTIPART_THRESHOLD), use_threads=False
+                ),
+            )
         result = client.head_object(Bucket=bucket, Key=entry.destination)
         return result["ETag"]
 

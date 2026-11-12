@@ -13,6 +13,21 @@ import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 
+@pytest.fixture(autouse=True)
+def _no_delete_handlers(monkeypatch):
+    # These fakes model only the probe; the delete guard handlers are covered in test_storage_delete_retry.py.
+    from another_s3_manager import s3_client as s3_client_module
+
+    monkeypatch.setattr(s3_client_module, "_register_delete_handlers", lambda client: None)
+
+
+def _cached(role: str):
+    """The client cache is keyed by (role name, storage-target fingerprint)."""
+    from another_s3_manager import s3_client as s3_client_module
+
+    return next((c for (name, _), c in s3_client_module._s3_clients_cache.items() if name == role), None)
+
+
 def _client_error(code: str, message: str = "boom", http_status: int = 400) -> ClientError:
     return ClientError(
         error_response={
@@ -97,7 +112,7 @@ def test_probe_failure_raises_typed_error_and_does_not_cache(monkeypatch, tmp_pa
     assert exc_info.value.code == "InvalidRegion"
     assert "eu-central-1" in str(exc_info.value)
     # Critical assertion: the broken client must NOT be cached.
-    assert "R2-bad" not in s3_client_module._s3_clients_cache
+    assert _cached("R2-bad") is None
 
 
 def test_probe_success_caches_client(monkeypatch, tmp_path):
@@ -136,7 +151,7 @@ def test_probe_success_caches_client(monkeypatch, tmp_path):
 
     client = s3_client_module.get_s3_client("Healthy")
     assert client is fake_client
-    assert s3_client_module._s3_clients_cache.get("Healthy") is fake_client
+    assert _cached("Healthy") is fake_client
     assert len(probe_calls) == 1, "probe must run once on cache miss"
 
     # Second call must hit the cache, not re-probe.
@@ -191,7 +206,7 @@ def test_probe_access_denied_falls_back_to_head_bucket(monkeypatch, tmp_path):
     client = s3_client_module.get_s3_client("ScopedR2")
     assert client is fake_client
     assert head_calls == ["my-bucket"]
-    assert "ScopedR2" in s3_client_module._s3_clients_cache
+    assert _cached("ScopedR2") is not None
 
 
 def test_probe_network_error_raises_s3networkerror(monkeypatch, tmp_path):
@@ -220,7 +235,7 @@ def test_probe_network_error_raises_s3networkerror(monkeypatch, tmp_path):
     with pytest.raises(S3NetworkError):
         s3_client_module.get_s3_client("BadEndpoint")
 
-    assert "BadEndpoint" not in s3_client_module._s3_clients_cache
+    assert _cached("BadEndpoint") is None
 
 
 def test_probe_iterates_allowed_buckets_until_one_succeeds(monkeypatch, tmp_path):
@@ -274,7 +289,7 @@ def test_probe_iterates_allowed_buckets_until_one_succeeds(monkeypatch, tmp_path
     assert client is fake_client
     # Both buckets tried in order; second succeeded → loop broke → cached.
     assert head_calls == ["legacy-archive", "active-data"]
-    assert "MultiBucket" in s3_client_module._s3_clients_cache
+    assert _cached("MultiBucket") is not None
 
 
 def test_probe_raises_when_all_allowed_buckets_fail(monkeypatch, tmp_path):
@@ -323,7 +338,7 @@ def test_probe_raises_when_all_allowed_buckets_fail(monkeypatch, tmp_path):
     # Message should list which buckets were tried so admins can debug.
     msg = str(exc_info.value)
     assert "a" in msg and "b" in msg
-    assert "AllGone" not in s3_client_module._s3_clients_cache
+    assert _cached("AllGone") is None
 
 
 def test_probe_access_denied_without_allowed_buckets_raises_actionable_error(monkeypatch, tmp_path):
@@ -375,7 +390,7 @@ def test_probe_access_denied_without_allowed_buckets_raises_actionable_error(mon
     # "scoped tokens (R2, MinIO, ...)" guidance — probe must NOT regress to
     # bare "Access Denied".
     assert "scoped token" in msg.lower(), "Friendly PR #14 copy must be preserved by probe"
-    assert "ScopedNoBuckets" not in s3_client_module._s3_clients_cache
+    assert _cached("ScopedNoBuckets") is None
 
 
 def test_assume_role_access_denied_includes_iam_trust_policy_hint(monkeypatch):

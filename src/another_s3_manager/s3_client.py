@@ -116,7 +116,17 @@ def _register_delete_handlers(client):
         if state is not None and state[0] is client:
             state[1]()
 
-    for operation in ("DeleteObject", "DeleteObjects", "CopyObject"):
+    # Writes of a move (single copy and the multipart copy stages) and its deletes.
+    # Reads such as HeadObject are deliberately not guarded: a refused verification
+    # HEAD would lose track of a copy that already exists.
+    for operation in (
+        "DeleteObject",
+        "DeleteObjects",
+        "CopyObject",
+        "CreateMultipartUpload",
+        "UploadPartCopy",
+        "CompleteMultipartUpload",
+    ):
         client.meta.events.register(
             f"before-sign.s3.{operation}", before_sign, unique_id=f"asm-destructive-{operation}"
         )
@@ -2301,7 +2311,10 @@ def _copy_object(
     def do_copy(client):
         def check_target():
             if storage_fingerprint is not None:
-                cfg = require_current_destructive(user_dict, role, source_bucket)
+                # A move: both ends are re-checked against one fresh snapshot on every attempt.
+                current, cfg = snapshot = load_destructive_state(user_dict.get("id"))
+                cfg = require_current_destructive(user_dict, role, source_bucket, snapshot=snapshot)
+                access_service.require_bucket(role, dest_bucket, current, cfg)
                 require_storage_target(role, storage_fingerprint, cfg, client)
 
         copy_source = {"Bucket": source_bucket, "Key": source_path}
