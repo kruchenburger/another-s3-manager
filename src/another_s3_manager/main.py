@@ -4,6 +4,7 @@ Provides file browsing, upload, and deletion capabilities for S3 buckets
 """
 
 from another_s3_manager.access import AccessDenied
+from another_s3_manager.access import policies as access_policies
 from another_s3_manager.access import service as access_service
 from another_s3_manager.logging_setup import configure_logging, install_access_log_filter
 
@@ -893,6 +894,9 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
         "csrf_token": current_user.get("csrf_token"),  # Return CSRF token for client
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
         "allowed_roles": allowed_roles,
+        "role_permissions": {
+            role: {"delete": access_policies.deletion_allowed(config, role)} for role in allowed_roles
+        },
         "default_role": default_role,
         "must_change_password": bool(current_user.get("must_change_password", False)),
         "disable_deletion": disable_deletion,
@@ -1994,6 +1998,10 @@ async def update_config(
             # Validate roles and preserve existing secret_access_key if not provided
             current_config = old_config
             current_roles = {r.get("name"): r for r in current_config.get("roles", [])}
+            try:
+                config_module.merge_role_security_fields(config.get("roles", []), current_config.get("roles", []))
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from None
 
             for role in config.get("roles", []):
                 if "name" not in role or "type" not in role:
@@ -2763,11 +2771,12 @@ async def delete_file(
     role = _require_role(role)
     # Check if deletion is disabled (from environment variable or config)
     try:
-        access_service.require_not_deletion_disabled(load_config(force_reload=False))
-    except AccessDenied:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="File deletion is disabled by administrator"
-        ) from None
+        access_service.require_delete(None, load_config(force_reload=False))
+    except AccessDenied as error:
+        if error.code == "DELETION_DISABLED":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="File deletion is disabled by administrator"
+            ) from None
     try:
         # A trailing "/" is the directory-delete signal delete_object_for_role
         # relies on (recursive delete vs. exact single-key delete) — capture it
@@ -2794,6 +2803,8 @@ async def delete_file(
         if wants_recursive_delete and not path.endswith("/"):
             path = path + "/"
 
+        # The role-specific delete policy is enforced inside delete_object_for_role,
+        # after its role/bucket access check and before every delete call.
         # Delegate to s3_client.delete_object_for_role. The helper does its own
         # role/bucket access validation, recursively deletes everything under
         # `path` when it ends with "/", otherwise deletes exactly that one key
@@ -2804,6 +2815,16 @@ async def delete_file(
         return await run_in_threadpool(delete_object_for_role, role, bucket_name, path, current_user)
     except HTTPException:
         raise
+    except AccessDenied as error:
+        if error.code in {"DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"}:
+            detail = {"code": error.code, "message": error.message}
+            # Revoked mid-way through a folder delete: say what already happened.
+            deleted = error.details.get("count", 0)
+            if deleted:
+                detail["count"] = deleted
+                detail["message"] = f"{error.message}. {deleted} object(s) were deleted before the change."
+            raise HTTPException(status_code=403, detail=detail) from None
+        raise HTTPException(status_code=403, detail=error.message) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except FileNotFoundError as e:

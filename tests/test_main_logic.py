@@ -1180,3 +1180,48 @@ async def test_delete_file_value_error(monkeypatch, reload_main):
     with pytest.raises(HTTPException) as exc:
         await main.delete_file(request, "bucket", path="file.txt", role="Default", current_user={"is_admin": True})
     assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_update_config_legacy_body_preserves_role_delete_permission(monkeypatch, reload_main):
+    main = reload_main
+    patch_load_config(monkeypatch, main, {"roles": [{"name": "r", "type": "default", "allow_delete": False}]})
+    saved = {}
+    monkeypatch.setattr(main, "save_config", lambda data: saved.update(copy.deepcopy(data)))
+    await main.update_config(None, {"roles": [{"name": "r", "type": "default"}]}, {"is_admin": True}, True)
+    assert saved["roles"][0]["allow_delete"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_config_rejects_string_role_delete_permission(reload_main):
+    with pytest.raises(HTTPException) as caught:
+        await reload_main.update_config(
+            None, {"roles": [{"name": "Default", "type": "default", "allow_delete": "false"}]}, {"is_admin": True}, True
+        )
+    assert caught.value.status_code == 422
+    assert caught.value.detail == "allow_delete must be boolean"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin", [False, True])
+async def test_me_role_permissions_are_computed_for_current_grants(monkeypatch, reload_main, admin):
+    main = reload_main
+    patch_load_config(monkeypatch, main, {"roles": [{"name": "r", "allow_delete": False}, {"name": "other"}]})
+    result = await main.get_current_user_info({"is_admin": admin, "allowed_roles": ["r", "gone"]})
+    assert result["role_permissions"] == (
+        {"r": {"delete": False}, "other": {"delete": True}} if admin else {"r": {"delete": False}}
+    )
+    assert result["disable_deletion"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_config_rejects_inherited_invalid_delete_permission(monkeypatch, reload_main):
+    main = reload_main
+    patch_load_config(monkeypatch, main, {"roles": [{"name": "r", "type": "default", "allow_delete": "false"}]})
+    saved = []
+    monkeypatch.setattr(main, "save_config", saved.append)
+    with pytest.raises(HTTPException) as caught:
+        await main.update_config(None, {"roles": [{"name": "r", "type": "default"}]}, {"is_admin": True}, True)
+    assert caught.value.status_code == 422
+    assert caught.value.detail == "allow_delete must be boolean"
+    assert saved == []

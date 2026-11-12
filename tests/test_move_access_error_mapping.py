@@ -10,11 +10,18 @@ from another_s3_manager.errors import MoveError
 @pytest.mark.parametrize(
     "source,code,expected,message",
     [
+        ("require_delete", "DELETION_DISABLED", "DELETION_DISABLED", "Deletion is disabled by the administrator."),
+        (
+            "require_delete",
+            "DELETION_DISABLED_FOR_ROLE",
+            "DELETION_DISABLED_FOR_ROLE",
+            "Deleting is turned off for this role. Partial copies stay at the destination.",
+        ),
         ("require_role", "role_required", "ACCESS_DENIED", "Access to this storage location is not allowed."),
         ("require_role", "role_not_allowed", "ACCESS_DENIED", "Access to this storage location is not allowed."),
         ("require_bucket", "bucket_not_allowed", "ACCESS_DENIED", "Access to this storage location is not allowed."),
         (
-            "require_not_deletion_disabled",
+            "require_delete",
             "deletion_disabled",
             "DELETION_DISABLED",
             "Deletion is disabled by the administrator.",

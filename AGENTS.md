@@ -60,7 +60,7 @@ exactly one home, and the web routes, MCP tools, move jobs and CLI are thin adap
 call it and translate its error.
 
 - `access/` — role grants, admin role expansion, bucket allow-lists, the MCP write gate and
-  the deletion gate. `policies.py` holds pure rules over a passed-in config, `service.py`
+  the deletion gate (instance-wide and per role: `deletion_allowed` / `require_delete`). `policies.py` holds pure rules over a passed-in config, `service.py`
   raises `AccessDenied(code, message)` (a `PermissionError` subclass), `__init__.py` is the
   public API. Adapters map `AccessDenied.code` to their own answer in one table each.
 - Boundaries are enforced by import-linter (`[tool.importlinter]` in `pyproject.toml`,
@@ -264,6 +264,7 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 - JWT authentication via `httpOnly + Secure + SameSite=Strict` cookie + CSRF protection (`X-CSRF-Token` from `/api/me`)
 - Automatic refresh of expired credentials
 - Granular per-role, per-bucket access control
+- Role-level delete permission: a role with `"allow_delete": false` in `config.json` blocks deleting (file, folder, move, move cleanup, MCP `delete_file` / `copy_object(delete_source)`) for everyone using it, admins included; checked again right before every destructive S3 call. Absent = allowed; any non-boolean value = denied. Overwriting a key by upload/copy is not covered. `POST /api/config` keeps the flag when the body omits it
 - Brute-force defense: per-username ban (3 failed attempts → 1h ban). **Admins exempt** to avoid DoS on the predictable `admin` username — admin protection must come from deployment layer (see "Production deployment" in README).
 - No application-level IP rate limit. Production exposure expects an authenticated reverse proxy (Cloudflare Access, Tunnel, WAF) — that's the right layer for IP-based throttling.
 - React SPA at `/`: collapsible sidebar with role/bucket tree, file browser (table+grid toggle, sortable columns — name/size/modified, both views — hover actions, bulk delete, drag-drop upload, preview modal, New folder, Move to… with an optional new name, multi-select and drag-and-drop moves reported in one move tray — there is no separate Rename action by design, since a move is copy + delete); sorting by size/date on a large (truncated) folder loads the whole level first so the order is exact.
@@ -283,8 +284,8 @@ The React SPA consumes existing backend endpoints plus a small set added for SPA
 - `POST /api/buckets/{b}/move/preflight?role=...` — validate and enumerate an immutable same-bucket plan, returning object/byte counts before writes.
 - `POST /api/buckets/{b}/move?role=...` — start a background copy-then-delete job; requires a UUID `operation_id`, items and destination; optional `new_name` for a single item. Returns 202 `{job_id}`. Roles are required on all three bucket routes.
 - `GET /api/jobs/{job_id}?failures_offset=0` — owner-only job progress and paginated failures; checks current role/bucket access.
-- `POST /api/jobs/{job_id}/cleanup` — owner-only, CSRF-protected removal of unchanged partial copies from that job. Move and cleanup obey `DISABLE_DELETION` OR config `disable_deletion`.
-- `GET /api/me` — extended to include `allowed_roles: string[]` and `disable_deletion: bool` (env `DISABLE_DELETION` OR `config.disable_deletion`, env wins; surfaces the flag so the React UI can disable Delete controls before the user clicks)
+- `POST /api/jobs/{job_id}/cleanup` — owner-only, CSRF-protected removal of unchanged partial copies from that job. Move and cleanup obey `DISABLE_DELETION` OR config `disable_deletion`, and the role's `allow_delete`.
+- `GET /api/me` — extended to include `allowed_roles: string[]`, `role_permissions: {role: {delete: bool}}` (the role-level delete policy, already combined with the global flag; the SPA reads it through `useRolePermissions`) and `disable_deletion: bool` (env `DISABLE_DELETION` OR `config.disable_deletion`, env wins; surfaces the flag so the React UI can disable Delete controls before the user clicks)
 - `GET /api/buckets?role=...` — list buckets (already existed)
 - `GET /api/buckets/{b}/files?path=...&role=...` — list files (already existed)
 - `GET /api/buckets/{b}/files?...&client_load=1&search=<prefix>` — server-side name-prefix search: lists the current folder's immediate children (folders + files) whose name starts with `<prefix>`, case-sensitive, via S3 `ListObjectsV2(Prefix=…)`. client_load mode only (else 400). Powers the "Search on server" affordance shown when a folder is truncated.

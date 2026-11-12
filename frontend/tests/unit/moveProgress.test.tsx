@@ -20,6 +20,9 @@ import type { MoveJob } from "@/types/api";
 import * as jobsModule from "@/features/files/jobs/MoveJobsProvider";
 import type { MoveRecord } from "@/features/files/jobs/MoveJobsProvider";
 import * as api from "@/features/files/api/filesApi";
+vi.mock("@/features/auth/hooks/useMe", () => ({
+  useMe: () => ({ data: { disable_deletion: false, role_permissions: { r: { delete: true } } } }),
+}));
 const record: MoveRecord = {
   job_id: "j",
   bucket: "b",
@@ -329,4 +332,50 @@ describe("move tray", () => {
     ).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("Moving… 0 of 1 done");
   });
+});
+
+
+it("explains partial deletion counts when role permission is revoked", () => {
+  expect(jobsModule.resultMeaning({
+    ...job,
+    state: "cancelled_access",
+    phase: "delete",
+    done: 1001,
+    total: 1001,
+    removed: 1000,
+    result: { moved: 1000, source_kept: 1 },
+    failures: [{ code: "DELETION_DISABLED_FOR_ROLE", message: "blocked", phase: "delete", key: null }],
+  })).toContain("1000 originals removed; 1 originals kept");
+});
+
+
+it.each([
+  ["copy", 100, "Copied 100 of 101 objects. The destination is incomplete. Originals are untouched. Reason: DELETION_DISABLED_FOR_ROLE."],
+  ["copy", 101, "Copied, source kept where deletion stopped. 0 originals removed; 101 originals kept. Reason: DELETION_DISABLED_FOR_ROLE."],
+  ["verify", 101, "Copied, source kept where deletion stopped. 0 originals removed; 101 originals kept. Reason: DELETION_DISABLED_FOR_ROLE."],
+  ["delete", 101, "Copied, source kept where deletion stopped. 0 originals removed; 101 originals kept. Reason: DELETION_DISABLED_FOR_ROLE."],
+] as const)("explains revoked deletion permission in %s after %i copies", (phase, done, expected) => {
+  const snapshot: MoveJob = {
+    ...job,
+    state: "cancelled_access",
+    phase,
+    done,
+    total: 101,
+    removed: 0,
+    result: { moved: 0 },
+    failures: [{ code: "DELETION_DISABLED_FOR_ROLE", message: "blocked", phase, key: null }],
+  };
+  expect(jobsModule.resultMeaning(snapshot)).toBe(expected);
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <MantineProvider>
+        <MoveJobDetails
+          record={{ ...record, snapshot }}
+          onClose={vi.fn()}
+          disableDeletion={true}
+        />
+      </MantineProvider>
+    </QueryClientProvider>,
+  );
+  expect(screen.getByRole("dialog", { name: "Move details" })).toHaveTextContent(expected);
 });

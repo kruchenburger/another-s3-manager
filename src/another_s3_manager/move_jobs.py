@@ -74,6 +74,8 @@ _ACCESS_ERROR_CODES = {
     "role_not_allowed": "ACCESS_DENIED",
     "bucket_not_allowed": "ACCESS_DENIED",
     "deletion_disabled": "DELETION_DISABLED",
+    "DELETION_DISABLED": "DELETION_DISABLED",
+    "DELETION_DISABLED_FOR_ROLE": "DELETION_DISABLED_FOR_ROLE",
 }
 
 
@@ -89,9 +91,12 @@ def require_access(user: dict, role: str | None, bucket: str, *, deleting=False)
         s3_client.validate_role_access(role, user)
         s3_client._validate_bucket_access(role, bucket, user)
         if deleting:
-            access_service.require_not_deletion_disabled(cfg)
+            access_service.require_delete(role, cfg)
     except AccessDenied as error:
-        raise MoveError(_ACCESS_ERROR_CODES[error.code], 403) from None
+        mapped = MoveError(_ACCESS_ERROR_CODES[error.code], 403)
+        if error.code == "DELETION_DISABLED_FOR_ROLE":
+            mapped.args = ("Deleting is turned off for this role. Partial copies stay at the destination.",)
+        raise mapped from None
     except PermissionError:
         raise MoveError("ACCESS_DENIED", 403) from None
 
@@ -360,7 +365,7 @@ class Job:
                 "failures_stored": len(self.failures),
                 "failures_offset": offset,
                 "next_failures_offset": offset + 100 if offset + 100 < len(self.failures) else None,
-                "result": {"moved": self.removed},
+                "result": {"moved": self.removed, "source_kept": total["objects"] - self.removed},
             }
 
 
@@ -373,13 +378,14 @@ def recheck(job):
 
 def delete_batch(job, keys):
     recheck(job)
-    result = s3_unit(
-        job.role,
-        "delete",
-        lambda client: client.delete_objects(
+
+    def delete(client):
+        recheck(job)
+        return client.delete_objects(
             Bucket=job.bucket, Delete={"Objects": [{"Key": key} for key in keys], "Quiet": False}
-        ),
-    )
+        )
+
+    result = s3_unit(job.role, "delete", delete)
     errors = {error["Key"]: error.get("Code", "STORAGE_ERROR") for error in result.get("Errors", [])}
     deleted = {item["Key"] for item in result.get("Deleted", [])}
     for key in keys:
@@ -462,7 +468,7 @@ def run_job(job):
         job.fail(error, job.phase)
         job.state = (
             "cancelled_access"
-            if error.code in {"ACCESS_DENIED", "ROLE_NOT_FOUND", "DELETION_DISABLED"}
+            if error.code in {"ACCESS_DENIED", "ROLE_NOT_FOUND", "DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"}
             else ("failed_delete" if job.delete_started else "failed_copy")
         )
     except Exception as error:
@@ -585,8 +591,8 @@ class MoveRegistry:
                 failures = []
                 removed = 0
                 for key, etag in copied:
-                    recheck(job)
                     try:
+                        recheck(job)
                         metadata = s3_unit(job.role, "head", lambda client: head(client, job.bucket, key))
                         if metadata is None:
                             with job.lock:
@@ -594,13 +600,14 @@ class MoveRegistry:
                             continue
                         if metadata["ETag"] != etag:
                             raise MoveError("CLEANUP_CHANGED", 409, "cleanup", key)
-                        result = s3_unit(
-                            job.role,
-                            "delete",
-                            lambda client: client.delete_objects(
+
+                        def delete(client):
+                            recheck(job)
+                            return client.delete_objects(
                                 Bucket=job.bucket, Delete={"Objects": [{"Key": key}], "Quiet": False}
-                            ),
-                        )
+                            )
+
+                        result = s3_unit(job.role, "delete", delete)
                         if result.get("Errors") or key not in {x["Key"] for x in result.get("Deleted", [])}:
                             raise MoveError("STORAGE_ERROR", 502, "cleanup", key)
                         with job.lock:
@@ -610,8 +617,18 @@ class MoveRegistry:
                             role=safe_role_label(job.role), bucket=job.bucket, operation="delete"
                         ).inc()
                     except Exception as error:
+                        access_denied = isinstance(error, MoveError) and error.code in {
+                            "ACCESS_DENIED",
+                            "ROLE_NOT_FOUND",
+                            "DELETION_DISABLED",
+                            "DELETION_DISABLED_FOR_ROLE",
+                        }
+                        if access_denied and not removed:
+                            raise
                         if len(failures) < 1000:
                             failures.append(safe_move_error(error, "cleanup", key).detail())
+                        if access_denied:
+                            break
                 return {"removed": removed, "failures": failures}
         finally:
             job.cleanup_lock.release()

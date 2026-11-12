@@ -24,6 +24,8 @@ interface FileTableProps {
   onCopyUrlWithTtl?: (name: string, ttlSeconds: number) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
+  disableDeletion?: boolean;
+  deletionReason?: string;
   /** Server default presigned TTL (seconds) — forwarded to FileRow → FileActions. */
   defaultTtl?: number;
   /** Configured max presigned TTL (seconds) — forwarded to FileRow → FileActions. */
@@ -107,6 +109,8 @@ export function FileTable({
   onCopyUrlWithTtl,
   onPreview,
   onDelete,
+  disableDeletion = true,
+  deletionReason,
   defaultTtl,
   maxTtl,
   scrollRef,
@@ -234,6 +238,8 @@ export function FileTable({
               onCopyUrlWithTtl={onCopyUrlWithTtl}
               onPreview={onPreview}
               onDelete={onDelete}
+              disableDeletion={disableDeletion}
+              deletionReason={deletionReason}
               defaultTtl={defaultTtl}
               maxTtl={maxTtl}
             />

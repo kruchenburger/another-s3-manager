@@ -82,7 +82,11 @@ a download link instead.
 Write tools (`upload_file`, `copy_object`, `delete_file`) are blocked for
 read-only tokens and when `mcp_disable_writes` is set; `delete_file` and
 `copy_object` with `delete_source=true` are additionally blocked when
-`disable_deletion` is set. `copy_object` copies within one role's credentials
+`disable_deletion` is set or the role has `allow_delete: false` (absent means
+allowed). The role restriction also binds administrators. It does not prevent
+uploading or copying over an existing key. A move rechecks deletion permission
+after copying: if permission was revoked, the copy stays and the response says
+`Copied, source kept`, with `moved: false` and `source_kept_reason`. `copy_object` copies within one role's credentials
 only (both buckets must be in the role's allowed_buckets) — cross-role /
 cross-provider copy is not supported.
 

@@ -117,3 +117,23 @@ describe("RoleFormFields", () => {
     });
   });
 });
+
+
+it.each(["default", "profile", "assume_role", "credentials", "s3_compatible"] as const)("defaults deletion on for %s", (type) => {
+  renderFields({ step: "all", initial: { type } });
+  expect(screen.getByRole("switch", { name: /^Allow deleting files/ })).toBeChecked();
+});
+
+it("preserves a disabled delete permission in read-only mode", () => {
+  renderFields({ step: "all", initial: { allow_delete: false }, disabled: true });
+  const control = screen.getByRole("switch", { name: /^Allow deleting files/ });
+  expect(control).not.toBeChecked();
+  expect(control).toBeDisabled();
+  expect(screen.getByText(/admins included/)).toBeInTheDocument();
+});
+
+
+it.each([null, "false", 0, undefined])("renders present invalid delete value %s as off", (value) => {
+  renderFields({ step: "all", initial: { allow_delete: value } as unknown as Partial<AppRole> });
+  expect(screen.getByRole("switch", { name: /^Allow deleting files/ })).not.toBeChecked();
+});

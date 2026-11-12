@@ -16,6 +16,7 @@ export function stripIrrelevantFields(role: AppRole): AppRole {
     type: role.type,
     description: role.description,
     allowed_buckets: role.allowed_buckets,
+    allow_delete: role.allow_delete,
   };
   switch (role.type) {
     case "default":

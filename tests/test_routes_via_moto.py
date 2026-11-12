@@ -16,6 +16,8 @@ The pattern is:
   4. Assert response shape + side effects via moto_s3 reads
 """
 
+import pytest
+
 from tests.test_main import login
 
 
@@ -84,3 +86,126 @@ def test_moto_fixture_smoke(moto_s3):
         {"username": "admin", "is_admin": True, "allowed_roles": []},
     )
     assert "smoke-bucket" in buckets
+
+
+def test_web_folder_delete_refused_for_role_keeps_objects(app_client, moto_s3):
+    from another_s3_manager import config
+
+    _, headers = login(app_client)
+    cfg = config.load_config()
+    cfg["roles"][0]["allow_delete"] = False
+    config.save_config(cfg)
+    moto_s3.create_bucket(Bucket="blocked-delete")
+    for key in ["folder/", "folder/a", "folder/b"]:
+        moto_s3.put_object(Bucket="blocked-delete", Key=key, Body=b"keep")
+    response = app_client.delete("/api/buckets/blocked-delete/files?path=folder/&role=Default", headers=headers)
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "code": "DELETION_DISABLED_FOR_ROLE",
+        "message": "Deleting is turned off for role 'Default'",
+    }
+    assert {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="blocked-delete")["Contents"]} == {
+        "folder/",
+        "folder/a",
+        "folder/b",
+    }
+
+
+def test_web_delete_calls_access_policy(app_client, moto_s3, monkeypatch):
+    from unittest.mock import Mock
+
+    from another_s3_manager.access import AccessDenied, service
+
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="guarded")
+    moto_s3.put_object(Bucket="guarded", Key="x", Body=b"keep")
+    guard = Mock(side_effect=AccessDenied("DELETION_DISABLED_FOR_ROLE", "Deleting is turned off for role 'Default'"))
+    monkeypatch.setattr(service, "require_delete", guard)
+    response = app_client.delete("/api/buckets/guarded/files?path=x&role=Default", headers=headers)
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "DELETION_DISABLED_FOR_ROLE"
+    assert guard.call_args.args[0] == "Default"
+    assert moto_s3.get_object(Bucket="guarded", Key="x")["Body"].read() == b"keep"
+
+
+def test_no_delete_role_config_round_trip_and_upload_overwrite(app_client, moto_s3):
+    from another_s3_manager import config
+
+    _, headers = login(app_client)
+    cfg = config.load_config()
+    cfg["roles"][0]["allow_delete"] = False
+    config.save_config(cfg)
+    assert app_client.get("/api/config", headers=headers).json()["roles"][0]["allow_delete"] is False
+    moto_s3.create_bucket(Bucket="overwrite-allowed")
+    moto_s3.put_object(Bucket="overwrite-allowed", Key="same.txt", Body=b"old")
+    response = app_client.post(
+        "/api/buckets/overwrite-allowed/upload",
+        data={"role": "Default", "key": "same.txt"},
+        files={"file": ("same.txt", b"new", "text/plain")},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert moto_s3.get_object(Bucket="overwrite-allowed", Key="same.txt")["Body"].read() == b"new"
+
+
+@pytest.mark.parametrize("denial", ["role", "bucket"])
+def test_web_delete_hides_inaccessible_role_policy(app_client, denial):
+    from another_s3_manager import config
+    from tests.test_main import create_user
+
+    cfg = config.load_config()
+    cfg["roles"][0].update(allow_delete=False, allowed_buckets=["allowed-bucket"])
+    config.save_config(cfg)
+    create_user("limited", allowed_roles=[] if denial == "role" else ["Default"])
+    _, headers = login(app_client, "limited", "password")
+    response = app_client.delete("/api/buckets/secret-bucket/files?path=file&role=Default", headers=headers)
+    assert response.status_code == 403
+    assert "DELETION_DISABLED_FOR_ROLE" not in response.text
+    assert ("permission to use role" if denial == "role" else "allowed_buckets") in response.text
+
+
+def test_web_delete_maps_storage_policy_revocation(app_client, monkeypatch):
+    from another_s3_manager import main
+    from another_s3_manager.access import AccessDenied
+
+    _, headers = login(app_client)
+
+    def denied(*args):
+        raise AccessDenied("DELETION_DISABLED_FOR_ROLE", "revoked")
+
+    monkeypatch.setattr(main, "delete_object_for_role", denied)
+    response = app_client.delete("/api/buckets/unused/files?path=x&role=Default", headers=headers)
+    assert response.status_code == 403
+    assert response.json()["detail"] == {"code": "DELETION_DISABLED_FOR_ROLE", "message": "revoked"}
+
+
+def test_web_delete_reports_objects_deleted_before_revocation(app_client, monkeypatch):
+    from another_s3_manager import main
+    from another_s3_manager.access import AccessDenied
+
+    _, headers = login(app_client)
+
+    def revoked_after_first_batch(*args):
+        raise AccessDenied("DELETION_DISABLED_FOR_ROLE", "Deleting is turned off for role 'Default'", {"count": 1000})
+
+    monkeypatch.setattr(main, "delete_object_for_role", revoked_after_first_batch)
+    response = app_client.delete("/api/buckets/unused/files?path=folder/&role=Default", headers=headers)
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "code": "DELETION_DISABLED_FOR_ROLE",
+        "message": "Deleting is turned off for role 'Default'. 1000 object(s) were deleted before the change.",
+        "count": 1000,
+    }
+
+
+def test_config_post_rejects_inherited_invalid_delete_permission(app_client):
+    from another_s3_manager import config
+
+    _, headers = login(app_client)
+    cfg = config.load_config()
+    cfg["roles"][0]["allow_delete"] = "false"
+    config.save_config(cfg)
+    response = app_client.post("/api/config", json={"roles": [{"name": "Default", "type": "default"}]}, headers=headers)
+    assert response.status_code == 422
+    assert response.json()["detail"] == "allow_delete must be boolean"
+    assert config.load_config(force_reload=True)["roles"][0]["allow_delete"] == "false"

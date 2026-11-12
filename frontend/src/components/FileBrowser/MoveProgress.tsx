@@ -137,7 +137,7 @@ export function MoveProgress({
   );
 }
 export function MoveJobsPanel() {
-  const { jobs, dismiss, disableDeletion } = useMoveJobs();
+  const { jobs, dismiss } = useMoveJobs();
   const [collapsed, setCollapsed] = useState(false);
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const details = jobs.find((job) => job.job_id === detailsId);
@@ -239,7 +239,6 @@ export function MoveJobsPanel() {
           key={details.job_id}
           record={details}
           onClose={() => setDetailsId(null)}
-          disableDeletion={disableDeletion}
         />
       )}
     </>

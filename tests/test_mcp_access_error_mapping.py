@@ -39,3 +39,16 @@ def test_mcp_permitted_write_does_not_increment_denials(monkeypatch):
     mcp_server.assert_write_allowed(SimpleNamespace(is_read_only=False), "upload_file", {})
     policy.assert_called_once_with(False, "upload_file", {})
     counter.labels.assert_not_called()
+
+
+def test_mcp_delete_calls_access_policy(monkeypatch):
+    guard = Mock(side_effect=AccessDenied("DELETION_DISABLED_FOR_ROLE", "Deleting is turned off for role 'r'"))
+    counter = Mock()
+    monkeypatch.setattr(service, "require_delete", guard)
+    monkeypatch.setattr(mcp_server, "mcp_writes_denied_total", counter)
+    with pytest.raises(mcp_server.McpError) as caught:
+        mcp_server.assert_write_allowed(SimpleNamespace(is_read_only=False), "delete_file", {}, "r")
+    guard.assert_called_once_with("r", {})
+    assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+    assert caught.value.message == "Deleting is turned off for role 'r'"
+    counter.labels.assert_called_once_with(tool="delete_file", reason="role_deletion_disabled")

@@ -315,3 +315,13 @@ describe("RolesPage", () => {
     );
   });
 });
+
+
+it("shows no delete and preserves the flag in writable configuration", async () => {
+  const config = { ...baseConfig, roles: [{ ...baseRole, allow_delete: false }] };
+  vi.mocked(getConfig).mockResolvedValue(config);
+  renderPage();
+  expect(await screen.findByText("no delete")).toBeInTheDocument();
+  const { toWritableConfig } = await import("@/features/admin/api/configShape");
+  expect(toWritableConfig(config).roles[0].allow_delete).toBe(false);
+});

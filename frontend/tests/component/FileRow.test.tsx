@@ -1,25 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MantineProvider, Table } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 import { FileRow } from "@/components/FileBrowser/FileRow";
 import type { FileEntry } from "@/types/api";
 
-vi.mock("@/features/auth/hooks/useMe", () => ({
-  useMe: vi.fn(),
-}));
 vi.mock("@/hooks/useConfig", () => ({
   useConfig: () => ({ data: { preview_text_extensions: [] } }),
 }));
-
-import { useMe } from "@/features/auth/hooks/useMe";
-
-beforeEach(() => {
-  // Default: deletion enabled. Individual tests can override before render.
-  vi.mocked(useMe).mockReturnValue({
-    data: { disable_deletion: false },
-  } as never);
-});
 
 type RowCallbacks = Partial<{
   onToggleSelect: (name: string) => void;
@@ -28,6 +16,8 @@ type RowCallbacks = Partial<{
   onCopyUrl: (name: string) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
+  disableDeletion: boolean;
+  deletionReason: string;
 }>;
 
 function renderRow(file: FileEntry, callbacks: RowCallbacks = {}) {
@@ -35,6 +25,7 @@ function renderRow(file: FileEntry, callbacks: RowCallbacks = {}) {
     file,
     index: 0,
     selected: false,
+    disableDeletion: false,
     onToggleSelect: vi.fn(),
     onNavigate: vi.fn(),
     onDownload: vi.fn(),
@@ -46,7 +37,7 @@ function renderRow(file: FileEntry, callbacks: RowCallbacks = {}) {
   return {
     ...render(
       <MantineProvider>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={["/r/Default/b/b"]}>
           <Table>
             <Table.Tbody>
               <FileRow {...props} />
@@ -103,7 +94,7 @@ describe("FileRow", () => {
   it("preview button only for previewable extensions", () => {
     const { rerender } = render(
       <MantineProvider>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={["/r/Default/b/b"]}>
           <Table><Table.Tbody>
             <FileRow
               file={{ name: "x.zip", is_directory: false, size: 100 }}
@@ -120,7 +111,7 @@ describe("FileRow", () => {
 
     rerender(
       <MantineProvider>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={["/r/Default/b/b"]}>
           <Table><Table.Tbody>
             <FileRow
               file={{ name: "img.png", is_directory: false, size: 100 }}
@@ -137,10 +128,7 @@ describe("FileRow", () => {
   });
 
   it("renders Delete disabled when me.disable_deletion is true", () => {
-    vi.mocked(useMe).mockReturnValue({
-      data: { disable_deletion: true },
-    } as never);
-    renderRow({ name: "x.txt", is_directory: false, size: 100 });
+    renderRow({ name: "x.txt", is_directory: false, size: 100 }, { disableDeletion: true });
     expect(screen.getByLabelText("Delete")).toBeDisabled();
   });
 
@@ -171,4 +159,19 @@ describe("FileRow", () => {
     fireEvent.click(screen.getByLabelText("Select x.txt"), { shiftKey: true });
     expect(props.onToggleSelect).toHaveBeenCalledWith("x.txt", true);
   });
+});
+
+
+it("disables Delete with the role permission tooltip", async () => {
+  const { props } = renderRow(
+    { name: "keep.txt", is_directory: false, size: 1 },
+    { disableDeletion: true, deletionReason: "Deleting is turned off for role Default" },
+  );
+  const button = screen.getByLabelText("Delete");
+  expect(button).toBeDisabled();
+  expect(button).toHaveAttribute("data-disabled-reason", "Deleting is turned off for role Default");
+  fireEvent.mouseEnter(button);
+  expect(await screen.findByRole("tooltip")).toHaveTextContent("Deleting is turned off for role Default");
+  fireEvent.click(button);
+  expect(props.onDelete).not.toHaveBeenCalled();
 });

@@ -22,6 +22,7 @@ const REDACTED = "***REDACTED***";
 // stored "initial" snapshot with the edited role's values, and reset() would
 // restore those — leaking the previous role's data into the create form.
 const EMPTY_ROLE = {
+  allow_delete: true,
   name: "",
   type: "default",
   description: "",
@@ -173,6 +174,8 @@ export function RoleDrawer({
       const populated: AppRole = {
         ...EMPTY_ROLE,
         ...cleanedInitial,
+        // Missing is the legacy default; malformed values must never enable deletion.
+        allow_delete: !Object.prototype.hasOwnProperty.call(initialRole, "allow_delete") || initialRole.allow_delete === true,
         secret_access_key: "",
       };
       form.setInitialValues(populated);
@@ -358,6 +361,11 @@ export function RoleDrawer({
               form={form}
               disabled={readOnly}
               mode="edit"
+              invalidDeletePermission={
+                initialRole !== undefined &&
+                Object.prototype.hasOwnProperty.call(initialRole, "allow_delete") &&
+                typeof initialRole.allow_delete !== "boolean"
+              }
               step="all"
             />
           </Stack>

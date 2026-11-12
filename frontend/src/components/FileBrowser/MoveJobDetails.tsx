@@ -12,16 +12,19 @@ import {
   type MoveRecord,
 } from "@/features/files/jobs/MoveJobsProvider";
 import { MOVE_DISABLED } from "@/features/files/utils/folderOperations";
+import { useRolePermissions } from "@/features/auth/hooks/useRolePermissions";
 import { getErrorMessage } from "@/utils/apiError";
 export function MoveJobDetails({
   record,
   onClose,
-  disableDeletion,
+  disableDeletion: disabledByCaller = false,
 }: {
   record: MoveRecord;
   onClose: () => void;
-  disableDeletion: boolean;
+  disableDeletion?: boolean;
 }) {
+  const { canDelete, reason } = useRolePermissions(record.role);
+  const disableDeletion = disabledByCaller || !canDelete;
   const qc = useQueryClient();
   const [loadError, setLoadError] = useState<string | null>(null);
   const job = record.snapshot;
@@ -97,9 +100,8 @@ export function MoveJobDetails({
         )}
         {job &&
           (job.state === "failed_copy" || job.state === "cancelled_access") &&
-          job.delete_started === false &&
-          !disableDeletion && (
-            <Tooltip label={MOVE_DISABLED} disabled={!disableDeletion}>
+          job.delete_started === false && !disabledByCaller && (
+            <Tooltip label={reason ?? MOVE_DISABLED} disabled={!disableDeletion}>
               <Button
                 variant="light"
                 color="red"

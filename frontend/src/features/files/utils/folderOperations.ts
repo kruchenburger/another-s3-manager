@@ -5,6 +5,9 @@ export const MOVE_EXPLANATION =
   "Object storage has no rename or move. ASM copies each object to the new location and then deletes the original. This moves {objects} objects ({size}).";
 export const LARGE_MOVE_WARNING =
   "This can take a while; you can keep working — progress stays in the corner.";
+export const DELETION_DISABLED = "Deletion is disabled in the server config.";
+export const ROLE_DELETION_DISABLED = "Deleting is turned off for role <r>";
+
 export const MOVE_DISABLED =
   "Moving is disabled because deletion is disabled in the server config.";
 export const INTERNAL_DRAG_TYPE = "application/x-as3m-keys";

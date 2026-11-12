@@ -150,24 +150,30 @@ WRITE_TOOLS = {"upload_file", "delete_file", "copy_object"}
 
 
 _WRITE_DENIALS = {
+    "DELETION_DISABLED": ("DELETION_DISABLED", "Deletion is disabled in server config", "deletion_disabled"),
+    "DELETION_DISABLED_FOR_ROLE": ("DELETION_DISABLED_FOR_ROLE", "", "role_deletion_disabled"),
     "writes_disabled": ("READ_ONLY_SERVER", "Server config disables MCP writes", "writes_disabled"),
     "read_only_token": ("READ_ONLY_TOKEN", "This token is read-only", "read_only_token"),
     "deletion_disabled": ("DELETION_DISABLED", "Deletion is disabled in server config", "deletion_disabled"),
 }
 
 
-def assert_write_allowed(token: Any, tool_name: str, config: dict) -> None:
+def assert_write_allowed(token: Any, tool_name: str, config: dict, role: str | None = None) -> None:
     """Raise McpError if the given token/config combination disallows a write tool.
 
     Decision order (most authoritative first):
     1. Server-wide write disable (mcp_disable_writes in config).
     2. Per-token read-only flag.
-    3. delete_file blocked when server-level deletion is disabled.
+    3. delete_file requires the instance and role deletion permissions.
     """
     try:
         access_service.require_write(token.is_read_only, tool_name, config)
+        if tool_name == "delete_file":
+            access_service.require_delete(role, config)
     except AccessDenied as error:
         code, message, reason = _WRITE_DENIALS[error.code]
+        if error.code == "DELETION_DISABLED_FOR_ROLE":
+            message = error.message
         mcp_writes_denied_total.labels(tool=tool_name, reason=reason).inc()
         raise McpError(code, message, {"tool": tool_name}) from None
 
@@ -1177,7 +1183,7 @@ async def delete_file(
     """Delete a file from a bucket (WRITE / DESTRUCTIVE operation — the object is
     permanently removed; a `path` ending in "/" deletes the whole folder
     recursively). Blocked for read-only tokens, when the server disables MCP
-    writes, and when deletion is disabled server-wide.
+    writes, and when deletion is disabled server-wide or for the role.
 
     Args:
         role: Role name (must be in user's allowed_roles).
@@ -1194,9 +1200,23 @@ async def delete_file(
         config = _config_module.load_config(force_reload=False)
         assert_write_allowed(token, "delete_file", config)
         try:
+            _s3_client._validate_bucket_access(role, bucket, user)
+            assert_write_allowed(token, "delete_file", config, role)
             await run_in_threadpool(_s3_client.delete_object_for_role, role, bucket, path, user)
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
+        except AccessDenied as error:
+            if error.code in _WRITE_DENIALS:
+                code, message, reason = _WRITE_DENIALS[error.code]
+                mcp_writes_denied_total.labels(tool="delete_file", reason=reason).inc()
+                message = error.message if code == "DELETION_DISABLED_FOR_ROLE" else message
+                details = {}
+                if "count" in error.details:
+                    details["count"] = error.details["count"]
+                    message = f"{message}. {details['count']} object(s) were deleted before the change."
+                raise McpError(code, message, details) from None
+            code = "BUCKET_NOT_ALLOWED" if error.code == "bucket_not_allowed" else "ROLE_NOT_ALLOWED"
+            raise McpError(code, error.message) from None
         except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
@@ -1488,7 +1508,7 @@ async def copy_object(
             description=(
                 "If True, delete the source object after a successful copy — this turns the call into "
                 "a MOVE/RENAME rather than a copy. DESTRUCTIVE and irreversible, and additionally "
-                "requires deletion to be enabled server-wide (blocked with DELETION_DISABLED otherwise)."
+                "requires deletion to be enabled server-wide and for the role. A revoked permission after copying keeps the source."
             )
         ),
     ] = False,
@@ -1500,7 +1520,8 @@ async def copy_object(
     Server-side copy within one role's credentials — source and destination
     buckets must both be accessible to `role`. Set delete_source=true to MOVE
     (or rename) instead of copy: the source is deleted after a successful copy,
-    which additionally requires deletion to be enabled server-wide. Blocked for
+    which additionally requires deletion to be enabled server-wide and for the role.
+    If permission is revoked after copying, the copy and source both stay. Blocked for
     read-only tokens and when the server disables MCP writes.
     """
     error_code = "none"
@@ -1511,23 +1532,49 @@ async def copy_object(
         assert_write_allowed(token, "copy_object", config)
         try:
             if delete_source:
-                access_service.require_not_deletion_disabled(config)
-        except AccessDenied:
+                access_service.require_delete(None, config)
+                _s3_client._validate_bucket_access(role, source_bucket, user)
+                _s3_client._validate_bucket_access(role, dest_bucket, user)
+                access_service.require_delete(role, config)
+        except AccessDenied as error:
+            if error.code not in _WRITE_DENIALS:
+                code = "BUCKET_NOT_ALLOWED" if error.code == "bucket_not_allowed" else "ROLE_NOT_ALLOWED"
+                raise McpError(code, error.message) from None
             # This guard lives outside assert_write_allowed (it's conditional on
             # delete_source, not just the tool name), but it's still a write
             # denial for the same reason and must be counted identically.
-            mcp_writes_denied_total.labels(tool="copy_object", reason="deletion_disabled").inc()
-            raise McpError(
-                "DELETION_DISABLED",
-                "Deletion is disabled in server config (delete_source requires it)",
-                {"tool": "copy_object"},
+            code, _, reason = _WRITE_DENIALS[error.code]
+            mcp_writes_denied_total.labels(tool="copy_object", reason=reason).inc()
+            message = (
+                error.message
+                if code == "DELETION_DISABLED_FOR_ROLE"
+                else "Deletion is disabled in server config (delete_source requires it)"
             )
+            raise McpError(code, message, {"tool": "copy_object"})
+        except (PermissionError, RoleNotFoundError) as error:
+            code = "BUCKET_NOT_ALLOWED" if "bucket" in str(error).lower() else "ROLE_NOT_ALLOWED"
+            raise McpError(code, str(error)) from None
+        moved = False
+        source_kept_reason = None
         try:
             await run_in_threadpool(
                 _s3_client.copy_object_for_role, role, source_bucket, source_path, dest_bucket, dest_path, user
             )
             if delete_source:
-                await run_in_threadpool(_s3_client.delete_object_for_role, role, source_bucket, source_path, user)
+                try:
+                    fresh_config = await run_in_threadpool(_config_module.load_config, force_reload=True)
+                    access_service.require_delete(role, fresh_config)
+                    await run_in_threadpool(
+                        _s3_client.delete_exact_key_for_role, role, source_bucket, source_path, user
+                    )
+                    moved = True
+                except AccessDenied as error:
+                    if error.code not in _WRITE_DENIALS:
+                        raise
+                    source_kept_reason = error.code
+                    error_code = error.code
+                    _, _, reason = _WRITE_DENIALS[error.code]
+                    mcp_writes_denied_total.labels(tool="copy_object", reason=reason).inc()
         except FileNotFoundError as e:
             raise McpError("FILE_NOT_FOUND", str(e), {"bucket": source_bucket, "path": source_path})
         except (PermissionError, RoleNotFoundError) as e:
@@ -1547,7 +1594,8 @@ async def copy_object(
                 "source_path": source_path,
                 "dest_bucket": dest_bucket,
                 "dest_path": dest_path,
-                "moved": delete_source,
+                "moved": moved,
+                "source_kept_reason": source_kept_reason,
             },
         )
         return _observe_response_size(
@@ -1555,11 +1603,14 @@ async def copy_object(
             token,
             {
                 "ok": True,
+                "copied": True,
+                "message": "Copied, source kept" if source_kept_reason else "Copy complete",
                 "source_bucket": source_bucket,
                 "source_path": source_path,
                 "dest_bucket": dest_bucket,
                 "dest_path": dest_path,
-                "moved": delete_source,
+                "moved": moved,
+                "source_kept_reason": source_kept_reason,
             },
         )
     except McpError as e:

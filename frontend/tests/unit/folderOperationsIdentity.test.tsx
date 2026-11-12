@@ -30,7 +30,7 @@ vi.mock("@tanstack/react-virtual", () => ({
   }),
 }));
 vi.mock("@/features/auth/hooks/useMe", () => ({
-  useMe: () => ({ data: { username: "alice", disable_deletion: false } }),
+  useMe: () => ({ data: { username: "alice", disable_deletion: false, role_permissions: { r: { delete: true } } } }),
   meQueryKey: ["auth", "me"],
 }));
 vi.mock("@/hooks/useConfig", () => ({

@@ -36,9 +36,19 @@ def require_bucket(role: str, bucket: str, user: dict, config: dict) -> None:
         raise AccessDenied("bucket_not_allowed", f"bucket '{bucket}' not in allowed_buckets for role '{role}'")
 
 
+def require_delete(role_name: str | None, config: dict) -> None:
+    if not policies.deletion_allowed(config, None):
+        raise AccessDenied("DELETION_DISABLED", _WRITE_MESSAGES["deletion_disabled"])
+    if not policies.deletion_allowed(config, role_name):
+        raise AccessDenied("DELETION_DISABLED_FOR_ROLE", f"Deleting is turned off for role '{role_name}'")
+
+
 def require_not_deletion_disabled(config: dict) -> None:
-    if policies.deletion_disabled(config):
-        raise AccessDenied("deletion_disabled", _WRITE_MESSAGES["deletion_disabled"])
+    """Compatibility API for callers that only know the instance-wide gate."""
+    try:
+        require_delete(None, config)
+    except AccessDenied as error:
+        raise AccessDenied("deletion_disabled", error.message) from None
 
 
 def require_write(token_is_read_only: bool, tool_name: str, config: dict) -> None:

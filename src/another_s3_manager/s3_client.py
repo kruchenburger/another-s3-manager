@@ -17,6 +17,7 @@ from botocore.credentials import RefreshableCredentials
 from botocore.exceptions import ClientError, CredentialRetrievalError, MetadataRetrievalError
 from botocore.session import Session as BotocoreSession
 
+from another_s3_manager.access import AccessDenied
 from another_s3_manager.access import service as access_service
 from another_s3_manager.config import load_config
 from another_s3_manager.constants import S3_USE_SSL, S3_VERIFY_SSL
@@ -2193,6 +2194,24 @@ def copy_object_for_role(
 
 
 @guarded_write()
+def delete_exact_key_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> dict:
+    """Delete only the supplied key, including a folder marker, never its children."""
+    from another_s3_manager.config import load_config
+    from another_s3_manager.metrics import s3_objects_total, safe_role_label
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_delete(s3_client):
+        access_service.require_delete(role, load_config(force_reload=True))
+        s3_client.delete_object(Bucket=bucket, Key=path)
+        s3_objects_total.labels(role=safe_role_label(validated_role), bucket=bucket, operation="delete").inc()
+        return {"message": "Successfully deleted 1 object(s)", "count": 1}
+
+    return execute_with_s3_retry(validated_role, "delete", do_delete)
+
+
+@guarded_write()
 def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> dict:
     """
     Delete a file or recursively delete a directory from `bucket`.
@@ -2209,16 +2228,27 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
     Raises FileNotFoundError if the object/directory does not exist.
     Returns {"message": ..., "count": N}.
     """
+    from another_s3_manager.config import load_config
     from another_s3_manager.metrics import s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
+    access_service.require_delete(role, load_config(force_reload=True))
 
     is_directory = path.endswith("/")
     prefix = path.rstrip("/")
 
+    deleted_count = 0
+
+    def require_current_delete():
+        try:
+            access_service.require_delete(role, load_config(force_reload=True))
+        except AccessDenied as error:
+            error.details["count"] = deleted_count
+            raise
+
     def do_delete(s3_client):
-        deleted_count = 0
+        nonlocal deleted_count
 
         if is_directory:
             # Directory delete lists the "prefix/" subtree and takes every key
@@ -2238,8 +2268,12 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
 
             for i in range(0, len(objects_to_delete), 1000):
                 batch = objects_to_delete[i : i + 1000]
+                require_current_delete()
                 s3_client.delete_objects(Bucket=bucket, Delete={"Objects": batch, "Quiet": True})
                 deleted_count += len(batch)
+                s3_objects_total.labels(
+                    role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="delete"
+                ).inc(len(batch))
         else:
             # Single-key existence + exact-match check in ONE list call
             # instead of paginating the entire prefix subtree. S3 returns
@@ -2261,12 +2295,12 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
 
             # Exact match confirmed — delete_object is equivalent to, and
             # cheaper than, the batch API for a single key.
+            require_current_delete()
             s3_client.delete_object(Bucket=bucket, Key=prefix)
-            deleted_count = 1
-
-        s3_objects_total.labels(
-            role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="delete"
-        ).inc(deleted_count)
+            deleted_count += 1
+            s3_objects_total.labels(
+                role=safe_role_label(validated_role or "unknown"), bucket=bucket, operation="delete"
+            ).inc()
 
         return {"message": f"Successfully deleted {deleted_count} object(s)", "count": deleted_count}
 

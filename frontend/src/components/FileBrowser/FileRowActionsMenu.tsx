@@ -8,7 +8,7 @@ import {
   FolderInput,
 } from "lucide-react";
 
-import { MOVE_DISABLED } from "@/features/files/utils/folderOperations";
+import { MOVE_DISABLED, DELETION_DISABLED } from "@/features/files/utils/folderOperations";
 
 interface FileRowActionsMenuProps {
   isDirectory: boolean;
@@ -21,6 +21,7 @@ interface FileRowActionsMenuProps {
   onMove?: () => void;
   /** When true, Delete is rendered disabled (deletion off in server config). */
   disabled?: boolean;
+  deletionReason?: string;
 }
 
 /** Compact touch variant of FileActions: a single ⋮ trigger + menu.
@@ -38,6 +39,7 @@ export function FileRowActionsMenu({
   onDelete,
   onMove,
   disabled = false,
+  deletionReason,
 }: FileRowActionsMenuProps) {
   return (
     <Menu position="bottom-end" withinPortal>
@@ -67,7 +69,7 @@ export function FileRowActionsMenu({
           </Menu.Item>
         )}
         {onMove && (
-          <Tooltip label={MOVE_DISABLED} disabled={!disabled}>
+          <Tooltip label={deletionReason ?? MOVE_DISABLED} disabled={!disabled}>
             <Menu.Item
               leftSection={<FolderInput size={14} />}
               onClick={onMove}
@@ -77,6 +79,7 @@ export function FileRowActionsMenu({
             </Menu.Item>
           </Tooltip>
         )}
+        <Tooltip label={deletionReason ?? DELETION_DISABLED} disabled={!disabled}>
         <Menu.Item
           color="red"
           leftSection={<Trash2 size={14} />}
@@ -85,6 +88,7 @@ export function FileRowActionsMenu({
         >
           Delete
         </Menu.Item>
+        </Tooltip>
       </Menu.Dropdown>
     </Menu>
   );

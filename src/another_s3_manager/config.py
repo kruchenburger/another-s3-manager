@@ -66,6 +66,10 @@ def load_config(force_reload: bool = False) -> Dict[str, Any]:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             new_config = json.load(f)
 
+        for role in new_config.get("roles", []):
+            if "allow_delete" in role and type(role["allow_delete"]) is not bool:
+                logger.warning("Non-boolean allow_delete for role '%s'; deletion denied", role.get("name"))
+
         # Migrate config: add missing fields if they don't exist.
         # Prevent recursive migration calls.
         global _migrating
@@ -117,6 +121,18 @@ def resolve_max_file_size(config: Optional[Dict[str, Any]] = None) -> int:
     if max_file_size is None:
         return int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))
     return int(max_file_size)
+
+
+def merge_role_security_fields(new_roles: list[dict], old_roles: list[dict]) -> None:
+    """Preserve omitted role security fields and reject non-boolean input."""
+    existing = {role.get("name"): role for role in old_roles}
+    for role in new_roles:
+        if "allow_delete" not in role:
+            old = existing.get(role.get("name"), {})
+            if "allow_delete" in old:
+                role["allow_delete"] = old["allow_delete"]
+        if "allow_delete" in role and type(role["allow_delete"]) is not bool:
+            raise ValueError("allow_delete must be boolean")
 
 
 def is_deletion_disabled(config: Optional[Dict[str, Any]] = None) -> bool:

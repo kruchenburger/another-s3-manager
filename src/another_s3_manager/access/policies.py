@@ -36,11 +36,20 @@ def deletion_disabled(config: dict) -> bool:
     return bool(config.get("disable_deletion", False))
 
 
+def deletion_allowed(config: dict, role_name: str | None) -> bool:
+    if deletion_disabled(config):
+        return False
+    if role_name is None:
+        return True
+    role = next((r for r in config.get("roles", []) if r.get("name") == role_name), None)
+    return role is not None and role.get("allow_delete", True) is True
+
+
 def write_denial(token_is_read_only: bool, tool_name: str, config: dict) -> str | None:
     if config.get("mcp_disable_writes", False):
         return "writes_disabled"
     if token_is_read_only:
         return "read_only_token"
-    if tool_name == "delete_file" and deletion_disabled(config):
+    if tool_name == "delete_file" and not deletion_allowed(config, None):
         return "deletion_disabled"
     return None

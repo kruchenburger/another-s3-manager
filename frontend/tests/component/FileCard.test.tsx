@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
 vi.mock("@/features/auth/hooks/useMe", () => ({
-  useMe: () => ({ data: { disable_deletion: false } }),
+  useMe: () => ({ data: { disable_deletion: false, role_permissions: { r: { delete: true } } } }),
 }));
 vi.mock("@/hooks/useConfig", () => ({
   useConfig: () => ({ data: { preview_text_extensions: [] } }),

@@ -3,7 +3,6 @@ import { formatBytes } from "@/utils/formatBytes";
 import { getFileIcon } from "@/utils/fileIcon";
 import { FileRowActionsMenu } from "./FileRowActionsMenu";
 import { formatDate } from "@/utils/formatDate";
-import { useMe } from "@/features/auth/hooks/useMe";
 import { useConfig } from "@/hooks/useConfig";
 import { getPreviewType } from "@/utils/filePreview";
 import { FileActions } from "./FileActions";
@@ -34,6 +33,8 @@ interface FileRowProps {
   onCopyUrlWithTtl?: (name: string, ttlSeconds: number) => void;
   onPreview: (name: string) => void;
   onDelete: (name: string) => void;
+  disableDeletion?: boolean;
+  deletionReason?: string;
   /** Server default presigned TTL (seconds) — forwarded to FileActions. */
   defaultTtl?: number;
   /** Configured max presigned TTL (seconds) — forwarded to FileActions. */
@@ -55,13 +56,13 @@ export function FileRow({
   onCopyUrlWithTtl,
   onPreview,
   onDelete,
+  disableDeletion = true,
+  deletionReason,
   defaultTtl,
   maxTtl,
 }: FileRowProps) {
   const actionId = identity ?? file.name;
   const dragProps = drag?.row(entryItem(path, file));
-  const me = useMe();
-  const disableDeletion = me.data?.disable_deletion ?? false;
   const { data: config } = useConfig();
   const canPreview =
     !file.is_directory &&
@@ -181,6 +182,7 @@ export function FileRow({
             onMove={onMove ? () => onMove(actionId) : undefined}
             onDelete={() => onDelete(actionId)}
             disabled={disableDeletion}
+            deletionReason={deletionReason ?? undefined}
             defaultTtl={defaultTtl}
             maxTtl={maxTtl}
           />
@@ -196,6 +198,7 @@ export function FileRow({
             onMove={onMove ? () => onMove(actionId) : undefined}
             onDelete={() => onDelete(actionId)}
             disabled={disableDeletion}
+            deletionReason={deletionReason ?? undefined}
           />
         </Box>
       </Table.Td>

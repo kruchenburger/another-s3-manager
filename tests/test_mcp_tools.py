@@ -928,7 +928,7 @@ async def test_copy_object_happy_path(alice_user, tool_registry):
     _, plaintext = alice_user
     with (
         patch("another_s3_manager.s3_client.copy_object_for_role", return_value=None) as copy_mock,
-        patch("another_s3_manager.s3_client.delete_object_for_role") as del_mock,
+        patch("another_s3_manager.s3_client.delete_exact_key_for_role") as del_mock,
     ):
         result = await _call(
             tool_registry,
@@ -952,7 +952,7 @@ async def test_copy_object_move_deletes_source(alice_user, tool_registry):
     _, plaintext = alice_user
     with (
         patch("another_s3_manager.s3_client.copy_object_for_role", return_value=None) as copy_mock,
-        patch("another_s3_manager.s3_client.delete_object_for_role", return_value={"count": 1}) as del_mock,
+        patch("another_s3_manager.s3_client.delete_exact_key_for_role", return_value={"count": 1}) as del_mock,
     ):
         result = await _call(
             tool_registry,
@@ -1269,3 +1269,170 @@ async def test_no_tool_parameter_has_numeric_bounds_in_schema():
             if any(_iter_numeric_constraint_keys(schema)):
                 offenders.append(f"{tool.name}.{param_name}")
     assert offenders == [], f"Numeric constraints must not be added to the schema: {offenders}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("global_flag", [False, True])
+async def test_mcp_copy_delete_source_rechecks_before_delete(alice_user, tool_registry, global_flag):
+    from another_s3_manager import config
+
+    _, plaintext = alice_user
+
+    def revoke(*args):
+        cfg = config.load_config()
+        if global_flag:
+            cfg["disable_deletion"] = True
+        else:
+            cfg["roles"][0]["allow_delete"] = False
+        config.save_config(cfg)
+
+    with (
+        patch("another_s3_manager.s3_client.copy_object_for_role", side_effect=revoke) as copy_mock,
+        patch("another_s3_manager.s3_client.delete_exact_key_for_role") as delete_mock,
+    ):
+        result = await _call(
+            tool_registry,
+            "copy_object",
+            _fake_request(plaintext),
+            role="Default",
+            source_bucket="b",
+            source_path="a",
+            dest_bucket="b",
+            dest_path="c",
+            delete_source=True,
+        )
+    copy_mock.assert_called_once()
+    delete_mock.assert_not_called()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["message"] == "Copied, source kept"
+    assert result["source_kept_reason"] == ("DELETION_DISABLED" if global_flag else "DELETION_DISABLED_FOR_ROLE")
+
+
+@pytest.mark.asyncio
+async def test_mcp_role_delete_denied_before_copy_but_plain_copy_allowed(alice_user, tool_registry):
+    from another_s3_manager import config
+
+    _, plaintext = alice_user
+    cfg = config.load_config()
+    cfg["roles"][0]["allow_delete"] = False
+    config.save_config(cfg)
+    kwargs = dict(role="Default", source_bucket="b", source_path="a", dest_bucket="b", dest_path="c")
+    with patch("another_s3_manager.s3_client.copy_object_for_role") as copy_mock:
+        with pytest.raises(McpError) as caught:
+            await _call(tool_registry, "copy_object", _fake_request(plaintext), **kwargs, delete_source=True)
+        assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+        copy_mock.assert_not_called()
+        result = await _call(tool_registry, "copy_object", _fake_request(plaintext), **kwargs)
+        assert result["moved"] is False
+        copy_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["delete_file", "copy_object"])
+@pytest.mark.parametrize("denial", ["role", "bucket"])
+async def test_delete_tools_hide_inaccessible_role_policy(alice_user, tool_registry, tool, denial):
+    from another_s3_manager import config
+
+    _, plaintext = alice_user
+    cfg = config.load_config()
+    if denial == "role":
+        cfg["roles"].append({"name": "Hidden", "type": "default", "allow_delete": False})
+        role = "Hidden"
+    else:
+        cfg["roles"][0].update(allow_delete=False, allowed_buckets=["allowed-bucket"])
+        role = "Default"
+    config.save_config(cfg)
+    kwargs = {"role": role, "bucket": "secret-bucket", "path": "file"}
+    if tool == "copy_object":
+        kwargs = dict(
+            role=role,
+            source_bucket="allowed-bucket",
+            source_path="file",
+            dest_bucket="secret-bucket",
+            dest_path="copy",
+            delete_source=True,
+        )
+    with pytest.raises(McpError) as caught:
+        await _call(tool_registry, tool, _fake_request(plaintext), **kwargs)
+    assert caught.value.code == ("ROLE_NOT_ALLOWED" if denial == "role" else "BUCKET_NOT_ALLOWED")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["delete_file", "copy_object"])
+async def test_delete_tools_map_storage_revocation(alice_user, tool_registry, tool):
+    from another_s3_manager.access import AccessDenied
+
+    _, plaintext = alice_user
+    with (
+        patch("another_s3_manager.s3_client.copy_object_for_role"),
+        patch(
+            "another_s3_manager.s3_client."
+            + ("delete_object_for_role" if tool == "delete_file" else "delete_exact_key_for_role"),
+            side_effect=AccessDenied("DELETION_DISABLED_FOR_ROLE", "revoked"),
+        ),
+    ):
+        if tool == "delete_file":
+            with pytest.raises(McpError) as caught:
+                await _call(tool_registry, tool, _fake_request(plaintext), role="Default", bucket="b", path="f")
+            assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+        else:
+            result = await _call(
+                tool_registry,
+                tool,
+                _fake_request(plaintext),
+                role="Default",
+                source_bucket="b",
+                source_path="f",
+                dest_bucket="b",
+                dest_path="g",
+                delete_source=True,
+            )
+            assert result["copied"] is True
+            assert result["moved"] is False
+            assert result["source_kept_reason"] == "DELETION_DISABLED_FOR_ROLE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"])
+@pytest.mark.parametrize("count", [0, 1000])
+async def test_delete_file_reports_partial_count(alice_user, tool_registry, code, count):
+    from another_s3_manager.access import AccessDenied
+
+    _, plaintext = alice_user
+    with patch(
+        "another_s3_manager.s3_client.delete_object_for_role",
+        side_effect=AccessDenied(code, "revoked", {"count": count}),
+    ):
+        with pytest.raises(McpError) as caught:
+            await _call(
+                tool_registry, "delete_file", _fake_request(plaintext), role="Default", bucket="b", path="folder/"
+            )
+    assert caught.value.code == code
+    assert caught.value.details["count"] == count
+    assert f"{count} object(s) were deleted before the change." in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_copy_marker_deletes_only_copied_key(alice_user, tool_registry, moto_s3):
+    _, plaintext = alice_user
+    moto_s3.create_bucket(Bucket="mcp-marker")
+    for key in ["folder/", "folder/a", "folder/deep/b"]:
+        moto_s3.put_object(Bucket="mcp-marker", Key=key, Body=b"keep")
+    result = await _call(
+        tool_registry,
+        "copy_object",
+        _fake_request(plaintext),
+        role="Default",
+        source_bucket="mcp-marker",
+        source_path="folder/",
+        dest_bucket="mcp-marker",
+        dest_path="copied/",
+        delete_source=True,
+    )
+    assert result["moved"] is True
+    assert {o["Key"] for o in moto_s3.list_objects_v2(Bucket="mcp-marker")["Contents"]} == {
+        "copied/",
+        "folder/a",
+        "folder/deep/b",
+    }

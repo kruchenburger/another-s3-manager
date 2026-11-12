@@ -19,6 +19,7 @@ import {
   deleteFile,
   getPresignedDownloadUrl,
 } from "@/features/files/api/filesApi";
+import { useRolePermissions } from "@/features/auth/hooks/useRolePermissions";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { useConfig } from "@/hooks/useConfig";
@@ -215,7 +216,8 @@ export function FileBrowser() {
   const uploadMutation = useUpload();
   const { mode, setMode } = useDisplayMode(roleId, bucket);
   const me = useMe();
-  const disableDeletion = me.data?.disable_deletion ?? false;
+  const { canDelete, reason: deletionReason } = useRolePermissions(roleId);
+  const disableDeletion = !canDelete;
 
   const {
     selected,
@@ -1091,6 +1093,8 @@ export function FileBrowser() {
           ) : mode === "table" ? (
             <>
               <FileTable
+                disableDeletion={disableDeletion}
+                deletionReason={deletionReason ?? undefined}
                 path={pathFromUrl}
                 drag={drag}
                 onMove={openMove}
@@ -1125,6 +1129,8 @@ export function FileBrowser() {
           ) : (
             <>
               <FileGrid
+                disableDeletion={disableDeletion}
+                deletionReason={deletionReason ?? undefined}
                 drag={drag}
                 onMove={openMove}
                 files={filteredItems}
@@ -1248,6 +1254,7 @@ export function FileBrowser() {
         onCopyUrls={handleBulkCopyUrl}
         onDelete={() => requestDelete(Array.from(selected))}
         disableDeletion={disableDeletion}
+        deletionReason={deletionReason ?? undefined}
         defaultTtl={presignedDefaultTtl}
         maxTtl={presignedMaxTtl}
         busy={bulkCopying}
