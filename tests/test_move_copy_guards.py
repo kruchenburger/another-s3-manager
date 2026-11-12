@@ -78,6 +78,33 @@ def test_confirmed_plan_does_not_start_on_another_target(moto_s3, monkeypatch):
     move_jobs.registry.jobs.clear()
 
 
+def test_job_target_must_match_confirmed_plan_target(moto_s3, monkeypatch):
+    # A -> B when the job is created, back to A for the plan: the confirmation matches,
+    # but the job pinned B, so it must not start.
+    user = users.load_users()["users"][0]
+    moto_s3.create_bucket(Bucket="move-bucket")
+    moto_s3.put_object(Bucket="move-bucket", Key="source/file", Body=b"keep")
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: moto_s3)
+    req = move_jobs.MoveRequest(items=[{"path": "source/file", "kind": "file"}], destination="dest")
+    confirmed = move_jobs.build_plan(user, "Default", "move-bucket", req).fingerprint("Default", "move-bucket", req)
+    original = config.load_config()
+    switched = config.load_config(force_reload=True)
+    switched["roles"][0]["endpoint_url"] = "http://other-storage.test"
+    real_build = move_jobs.build_plan
+
+    def build_on_a(*args, **kwargs):
+        config.save_config(original)
+        return real_build(*args, **kwargs)
+
+    config.save_config(switched)
+    monkeypatch.setattr(move_jobs, "build_plan", build_on_a)
+    with pytest.raises(MoveError) as caught:
+        move_jobs.registry.start(user, "Default", "move-bucket", req, str(uuid.uuid4()), confirmed)
+    assert caught.value.code == "ROLE_CHANGED"
+    assert "Contents" not in moto_s3.list_objects_v2(Bucket="move-bucket", Prefix="dest/")
+    move_jobs.registry.jobs.clear()
+
+
 @pytest.mark.parametrize("revoke", [False, True])
 def test_job_copy_sdk_retry_rechecks_access(monkeypatch, revoke):
     user = users.load_users()["users"][0]

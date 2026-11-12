@@ -592,6 +592,10 @@ class MoveRegistry:
                 raise
             if job.plan.fingerprint(role, bucket, request) != plan_fingerprint:
                 raise MoveError("PLAN_CHANGED", 409)
+            # The job may only act on the target the confirmed plan was listed on; every
+            # later recheck compares against job.storage_fingerprint.
+            if job.plan.storage_fingerprint != job.storage_fingerprint:
+                raise MoveError("ROLE_CHANGED", 409)
             job.future = _executor.submit(self._run, job)
             return job
         except Exception as error:
