@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-12
+
+### Added
+
+- A role can forbid deleting files: set **Allow deleting files** off in
+  **Admin → Roles** (or `"allow_delete": false` in `config.json`). Deleting a
+  file or folder, moving (which deletes the source), and cleaning up a partial
+  move are then refused for everyone using that role, including admins, in
+  the web UI, over MCP and in background moves. Buttons for these actions are
+  greyed out with the reason. A role without the field allows deletion as
+  before; the instance-wide `DISABLE_DELETION` still wins. Uploading or copying
+  over an existing file is not blocked.
+- A deletion permission revoked while a large folder delete or move is running
+  stops it before the next batch; the response says how much was already done.
+- The roles table marks roles that forbid deletion with a **no delete** badge.
+
+### Changed
+
+- MCP `copy_object` with `delete_source=true` no longer deletes a source that
+  changed after it was copied. It copies exactly the state it read, checks the
+  source again before deleting, and deletes only if it is unchanged; otherwise
+  the copy stays and the result is `copied: true`, `moved: false`,
+  `source_kept_reason: "SOURCE_CHANGED"`. On buckets with versioning enabled
+  the move leaves a delete marker instead of removing a version, so every
+  version is kept. Two narrow races with other S3 clients remain and are
+  accepted (see Upgrade notes and `docs/mcp-setup.md`).
+- Once that copy has succeeded, no later failure hides it: a lost permission,
+  an S3 403 or any other error before the source is deleted returns
+  `copied: true`, `moved: false` with the reason (`S3_ACCESS_DENIED`,
+  `SOURCE_DELETE_FAILED`, `BUCKET_NOT_ALLOWED`, …) instead of a bare error.
+- When **Remove partial copies** stops because deleting is no longer allowed,
+  the move details say how many copies remain and why, instead of counting
+  only the one that failed.
+- Access checks (role grants, bucket lists, write and delete gates) now live
+  in one place shared by the web UI, MCP and background moves, so they cannot
+  drift apart again.
+- Saving a role without the `allow_delete` field keeps its stored value; a
+  value other than `true` or `false` is rejected.
+- README: an Alternatives section comparing ASM with other S3 web UIs, and
+  corrected feature claims.
+
+### Upgrade notes
+
+- No action is needed: existing roles have no `allow_delete` field and keep
+  allowing deletion.
+- A hand-edited `config.json` with `allow_delete` set to anything other than
+  `true` (for example the string `"false"` or `null`) now forbids deletion for
+  that role.
+- MCP clients that use `copy_object(delete_source=true)` should check `moved`
+  and `source_kept_reason`, not only `ok`.
+- No new IAM permission is required. On versioned buckets (versioning enabled
+  or suspended), MCP `copy_object(delete_source=true)` first copies the exact
+  source version, which needs `s3:GetObjectVersion`. Without it the move
+  retries once with an unpinned copy guarded by the source ETag and deletes
+  the source only if S3 reports the same version was copied. Granting
+  `s3:GetObjectVersion` (now in the README IAM example) gives the stricter
+  pinned copy. Web moves and plain copies never pin a version.
+- For full protection of MCP moves against other S3 clients, set bucket
+  versioning to **Enabled**. **Suspended** versioning behaves like an
+  unversioned bucket. On unversioned and suspended buckets two races remain,
+  both limited to writes from clients other than this ASM instance:
+  - a write in the instant between the final check and the delete is lost on
+    backends that ignore `If-Match` on DELETE (MinIO does);
+  - a rewrite that keeps the same bytes but changes only metadata (content
+    type, user metadata) is not detected; the destination may keep the
+    rewritten metadata, or the rewrite may be lost.
+
 ## [1.2.2] - 2026-11-11
 
 ### Changed
@@ -782,7 +849,8 @@ in _s3_clients_cache` before indexing into it — two separate,
 - CSRF protection
 - Login attempt rate limiting
 
-[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/kruchenburger/another-s3-manager/compare/v1.1.7...v1.2.0

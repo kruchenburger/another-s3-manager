@@ -75,8 +75,8 @@ credentials stay on the server, and AI agents connect through MCP with the token
 
 **What ASM is not:** an admin console. It works with the data inside buckets (browse, upload, move, share) and does
 no bucket administration: no creating or deleting buckets, no policies, versioning, lifecycle or encryption settings.
-Other limits: a single instance on SQLite and a ~112 MB image. Access control is per bucket: a role cannot be limited
-to a prefix, and deletion is switched on or off for the whole instance, not per user.
+Other limits: a single instance on SQLite and a ~59 MB image. Access control is per bucket: a role cannot be limited
+to a prefix, and deletion is switched on or off per instance or per role, not per user.
 
 ## Configuration
 
