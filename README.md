@@ -111,6 +111,13 @@ Configure roles through the web UI (**Admin console → Roles**; global settings
 
 Role types: `default`, `profile`, `assume_role`, `credentials`. Any role can include `endpoint_url`, `use_ssl`, `verify_ssl`, `path_style` for S3-compatible services.
 
+Any role may set `"allow_delete": false` to block deleting files and folders
+through ASM, including moves and cleanup of partial copies. It defaults to
+`true` when absent and applies to everyone using the role, including admins.
+The instance-wide `DISABLE_DELETION` / `disable_deletion` gate still wins.
+This permission does not prevent uploading or copying over an existing key.
+Omitting the field when saving an existing role preserves its current value.
+
 ### Upload limits
 
 The maximum upload size is the admin-editable `max_file_size` config field

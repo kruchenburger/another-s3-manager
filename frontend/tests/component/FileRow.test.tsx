@@ -17,7 +17,7 @@ import { useMe } from "@/features/auth/hooks/useMe";
 beforeEach(() => {
   // Default: deletion enabled. Individual tests can override before render.
   vi.mocked(useMe).mockReturnValue({
-    data: { disable_deletion: false },
+    data: { disable_deletion: false, role_permissions: { Default: { delete: true } } },
   } as never);
 });
 
@@ -46,7 +46,7 @@ function renderRow(file: FileEntry, callbacks: RowCallbacks = {}) {
   return {
     ...render(
       <MantineProvider>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={["/r/Default/b/b"]}>
           <Table>
             <Table.Tbody>
               <FileRow {...props} />
@@ -103,7 +103,7 @@ describe("FileRow", () => {
   it("preview button only for previewable extensions", () => {
     const { rerender } = render(
       <MantineProvider>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={["/r/Default/b/b"]}>
           <Table><Table.Tbody>
             <FileRow
               file={{ name: "x.zip", is_directory: false, size: 100 }}
@@ -120,7 +120,7 @@ describe("FileRow", () => {
 
     rerender(
       <MantineProvider>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={["/r/Default/b/b"]}>
           <Table><Table.Tbody>
             <FileRow
               file={{ name: "img.png", is_directory: false, size: 100 }}
@@ -171,4 +171,17 @@ describe("FileRow", () => {
     fireEvent.click(screen.getByLabelText("Select x.txt"), { shiftKey: true });
     expect(props.onToggleSelect).toHaveBeenCalledWith("x.txt", true);
   });
+});
+
+
+it("disables Delete with the role permission tooltip", async () => {
+  vi.mocked(useMe).mockReturnValue({ data: { disable_deletion: false, role_permissions: { Default: { delete: false } } } } as never);
+  const { props } = renderRow({ name: "keep.txt", is_directory: false, size: 1 });
+  const button = screen.getByLabelText("Delete");
+  expect(button).toBeDisabled();
+  expect(button).toHaveAttribute("data-disabled-reason", "Deleting is turned off for role Default");
+  fireEvent.mouseEnter(button);
+  expect(await screen.findByRole("tooltip")).toHaveTextContent("Deleting is turned off for role Default");
+  fireEvent.click(button);
+  expect(props.onDelete).not.toHaveBeenCalled();
 });

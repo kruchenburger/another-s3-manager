@@ -730,3 +730,12 @@ describe("RoleDrawer", () => {
     expect(screen.getByText(/review & save/i)).toBeInTheDocument();
   });
 });
+
+
+it("saves an edited role without relaxing its delete permission", async () => {
+  const { onSubmit } = renderDrawer({ opened: true, mode: "edit", initialRole: { name: "kept", type: "default", allow_delete: false } });
+  expect(screen.getByRole("switch", { name: /^Allow deleting files/ })).not.toBeChecked();
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+  expect(onSubmit.mock.calls[0][0]).toMatchObject({ name: "kept", allow_delete: false });
+});

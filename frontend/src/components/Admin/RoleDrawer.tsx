@@ -22,6 +22,7 @@ const REDACTED = "***REDACTED***";
 // stored "initial" snapshot with the edited role's values, and reset() would
 // restore those — leaking the previous role's data into the create form.
 const EMPTY_ROLE = {
+  allow_delete: true,
   name: "",
   type: "default",
   description: "",

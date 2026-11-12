@@ -1269,3 +1269,60 @@ async def test_no_tool_parameter_has_numeric_bounds_in_schema():
             if any(_iter_numeric_constraint_keys(schema)):
                 offenders.append(f"{tool.name}.{param_name}")
     assert offenders == [], f"Numeric constraints must not be added to the schema: {offenders}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("global_flag", [False, True])
+async def test_mcp_copy_delete_source_rechecks_before_delete(alice_user, tool_registry, global_flag):
+    from another_s3_manager import config
+
+    _, plaintext = alice_user
+
+    def revoke(*args):
+        cfg = config.load_config()
+        if global_flag:
+            cfg["disable_deletion"] = True
+        else:
+            cfg["roles"][0]["allow_delete"] = False
+        config.save_config(cfg)
+
+    with (
+        patch("another_s3_manager.s3_client.copy_object_for_role", side_effect=revoke) as copy_mock,
+        patch("another_s3_manager.s3_client.delete_object_for_role") as delete_mock,
+    ):
+        result = await _call(
+            tool_registry,
+            "copy_object",
+            _fake_request(plaintext),
+            role="Default",
+            source_bucket="b",
+            source_path="a",
+            dest_bucket="b",
+            dest_path="c",
+            delete_source=True,
+        )
+    copy_mock.assert_called_once()
+    delete_mock.assert_not_called()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["message"] == "Copied, source kept"
+    assert result["source_kept_reason"] == ("DELETION_DISABLED" if global_flag else "DELETION_DISABLED_FOR_ROLE")
+
+
+@pytest.mark.asyncio
+async def test_mcp_role_delete_denied_before_copy_but_plain_copy_allowed(alice_user, tool_registry):
+    from another_s3_manager import config
+
+    _, plaintext = alice_user
+    cfg = config.load_config()
+    cfg["roles"][0]["allow_delete"] = False
+    config.save_config(cfg)
+    kwargs = dict(role="Default", source_bucket="b", source_path="a", dest_bucket="b", dest_path="c")
+    with patch("another_s3_manager.s3_client.copy_object_for_role") as copy_mock:
+        with pytest.raises(McpError) as caught:
+            await _call(tool_registry, "copy_object", _fake_request(plaintext), **kwargs, delete_source=True)
+        assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+        copy_mock.assert_not_called()
+        result = await _call(tool_registry, "copy_object", _fake_request(plaintext), **kwargs)
+        assert result["moved"] is False
+        copy_mock.assert_called_once()

@@ -119,6 +119,19 @@ def resolve_max_file_size(config: Optional[Dict[str, Any]] = None) -> int:
     return int(max_file_size)
 
 
+def merge_role_security_fields(new_roles: list[dict], old_roles: list[dict]) -> None:
+    """Preserve omitted role security fields and reject non-boolean input."""
+    existing = {role.get("name"): role for role in old_roles}
+    for role in new_roles:
+        if "allow_delete" in role:
+            if type(role["allow_delete"]) is not bool:
+                raise ValueError("allow_delete must be boolean")
+        else:
+            old = existing.get(role.get("name"), {})
+            if "allow_delete" in old:
+                role["allow_delete"] = old["allow_delete"]
+
+
 def is_deletion_disabled(config: Optional[Dict[str, Any]] = None) -> bool:
     """Single deletion gate for the web UI, move jobs and MCP.
 

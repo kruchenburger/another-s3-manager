@@ -72,18 +72,18 @@ file path.
 
 ### MCP
 
-| Metric                           | Type      | Labels               | Notes                                                                                   |
-| -------------------------------- | --------- | -------------------- | --------------------------------------------------------------------------------------- |
-| `as3m_mcp_tool_calls_total`      | Counter   | `tool`, `error_code` | `error_code="none"` on success                                                          |
-| `as3m_mcp_tool_duration_seconds` | Histogram | `tool`               |                                                                                         |
-| `as3m_mcp_bytes_read_total`      | Counter   | `bucket`             | Bytes returned from `read_file`                                                         |
-| `as3m_mcp_tool_response_bytes`   | Histogram | `tool`               | JSON response size — a proxy for LLM context consumed (~4 bytes/token)                  |
-| `as3m_mcp_auth_failures_total`   | Counter   | `reason`             | `invalid_token` \| `revoked` \| `malformed`                                             |
-| `as3m_mcp_active_tokens`         | Gauge     | —                    | Non-revoked MCP tokens                                                                  |
-| `as3m_mcp_tokens_issued_total`   | Counter   | —                    | MCP tokens created — rate-able companion to `as3m_mcp_active_tokens`                    |
-| `as3m_mcp_tokens_revoked_total`  | Counter   | —                    | MCP tokens revoked — rate-able companion to `as3m_mcp_active_tokens`                    |
-| `as3m_mcp_writes_denied_total`   | Counter   | `tool`, `reason`     | `writes_disabled` \| `read_only_token` \| `deletion_disabled`                           |
-| `as3m_mcp_reads_refused_total`   | Counter   | `tool`, `reason`     | `file_too_large` \| `binary_content` — `read_file` refuses outright, it never truncates |
+| Metric                           | Type      | Labels               | Notes                                                                                     |
+| -------------------------------- | --------- | -------------------- | ----------------------------------------------------------------------------------------- |
+| `as3m_mcp_tool_calls_total`      | Counter   | `tool`, `error_code` | `error_code="none"` on success                                                            |
+| `as3m_mcp_tool_duration_seconds` | Histogram | `tool`               |                                                                                           |
+| `as3m_mcp_bytes_read_total`      | Counter   | `bucket`             | Bytes returned from `read_file`                                                           |
+| `as3m_mcp_tool_response_bytes`   | Histogram | `tool`               | JSON response size — a proxy for LLM context consumed (~4 bytes/token)                    |
+| `as3m_mcp_auth_failures_total`   | Counter   | `reason`             | `invalid_token` \| `revoked` \| `malformed`                                               |
+| `as3m_mcp_active_tokens`         | Gauge     | —                    | Non-revoked MCP tokens                                                                    |
+| `as3m_mcp_tokens_issued_total`   | Counter   | —                    | MCP tokens created — rate-able companion to `as3m_mcp_active_tokens`                      |
+| `as3m_mcp_tokens_revoked_total`  | Counter   | —                    | MCP tokens revoked — rate-able companion to `as3m_mcp_active_tokens`                      |
+| `as3m_mcp_writes_denied_total`   | Counter   | `tool`, `reason`     | `writes_disabled` \| `read_only_token` \| `deletion_disabled` \| `role_deletion_disabled` |
+| `as3m_mcp_reads_refused_total`   | Counter   | `tool`, `reason`     | `file_too_large` \| `binary_content` — `read_file` refuses outright, it never truncates   |
 
 ### App health
 

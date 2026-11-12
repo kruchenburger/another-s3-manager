@@ -429,3 +429,25 @@ def test_load_config_reload_never_exposes_partially_migrated_dict(monkeypatch, t
     )
     assert "mcp_enabled" in loaded
     assert loaded["mcp_list_max_page_size"] == 10_000
+
+
+@pytest.mark.parametrize("value", ["false", 0, 1, None, [], {}])
+def test_merge_role_security_fields_rejects_non_boolean(value):
+    from another_s3_manager.config import merge_role_security_fields
+
+    with pytest.raises(ValueError, match="^allow_delete must be boolean$"):
+        merge_role_security_fields([{"name": "r", "allow_delete": value}], [])
+
+
+def test_merge_role_security_fields_preserves_only_same_name_and_explicit_value():
+    from another_s3_manager.config import merge_role_security_fields
+
+    roles = [{"name": "kept"}, {"name": "enabled", "allow_delete": True}, {"name": "new"}]
+    merge_role_security_fields(
+        roles, [{"name": "kept", "allow_delete": False}, {"name": "enabled", "allow_delete": False}]
+    )
+    assert roles == [
+        {"name": "kept", "allow_delete": False},
+        {"name": "enabled", "allow_delete": True},
+        {"name": "new"},
+    ]

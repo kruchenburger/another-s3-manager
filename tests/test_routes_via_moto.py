@@ -84,3 +84,60 @@ def test_moto_fixture_smoke(moto_s3):
         {"username": "admin", "is_admin": True, "allowed_roles": []},
     )
     assert "smoke-bucket" in buckets
+
+
+def test_web_folder_delete_refused_for_role_keeps_objects(app_client, moto_s3):
+    from another_s3_manager import config
+
+    _, headers = login(app_client)
+    cfg = config.load_config()
+    cfg["roles"][0]["allow_delete"] = False
+    config.save_config(cfg)
+    moto_s3.create_bucket(Bucket="blocked-delete")
+    for key in ["folder/", "folder/a", "folder/b"]:
+        moto_s3.put_object(Bucket="blocked-delete", Key=key, Body=b"keep")
+    response = app_client.delete("/api/buckets/blocked-delete/files?path=folder/&role=Default", headers=headers)
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "code": "DELETION_DISABLED_FOR_ROLE",
+        "message": "Deleting is turned off for role 'Default'",
+    }
+    assert {obj["Key"] for obj in moto_s3.list_objects_v2(Bucket="blocked-delete")["Contents"]} == {
+        "folder/",
+        "folder/a",
+        "folder/b",
+    }
+
+
+def test_web_delete_calls_access_policy(app_client, monkeypatch):
+    from unittest.mock import Mock
+
+    from another_s3_manager.access import AccessDenied, service
+
+    _, headers = login(app_client)
+    guard = Mock(side_effect=AccessDenied("DELETION_DISABLED_FOR_ROLE", "Deleting is turned off for role 'Default'"))
+    monkeypatch.setattr(service, "require_delete", guard)
+    response = app_client.delete("/api/buckets/unused/files?path=x&role=Default", headers=headers)
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "DELETION_DISABLED_FOR_ROLE"
+    assert guard.call_args.args[0] == "Default"
+
+
+def test_no_delete_role_config_round_trip_and_upload_overwrite(app_client, moto_s3):
+    from another_s3_manager import config
+
+    _, headers = login(app_client)
+    cfg = config.load_config()
+    cfg["roles"][0]["allow_delete"] = False
+    config.save_config(cfg)
+    assert app_client.get("/api/config", headers=headers).json()["roles"][0]["allow_delete"] is False
+    moto_s3.create_bucket(Bucket="overwrite-allowed")
+    moto_s3.put_object(Bucket="overwrite-allowed", Key="same.txt", Body=b"old")
+    response = app_client.post(
+        "/api/buckets/overwrite-allowed/upload",
+        data={"role": "Default", "key": "same.txt"},
+        files={"file": ("same.txt", b"new", "text/plain")},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert moto_s3.get_object(Bucket="overwrite-allowed", Key="same.txt")["Body"].read() == b"new"

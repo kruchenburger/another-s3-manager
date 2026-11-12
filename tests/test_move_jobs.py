@@ -639,3 +639,75 @@ def test_plan_fingerprint_is_stable_and_binds_entries_and_request():
     assert plan.fingerprint("Other", "bucket", req) != fingerprint
     assert plan.fingerprint("Default", "other", req) != fingerprint
     assert plan.fingerprint("Default", "bucket", request(destination="other")) != fingerprint
+
+
+def test_move_recheck_calls_access_policy(storage, monkeypatch):
+    from unittest.mock import Mock
+
+    from another_s3_manager.access import AccessDenied, service
+
+    _, user = storage
+    guard = Mock(side_effect=AccessDenied("DELETION_DISABLED_FOR_ROLE", "blocked"))
+    monkeypatch.setattr(service, "require_delete", guard)
+    job = moves.Job("j", moves.owner_identity(user), "Default", "move-bucket", "op", "hash")
+    with pytest.raises(MoveError) as caught:
+        moves.recheck(job)
+    assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+    assert caught.value.http_status == 403
+    assert guard.call_args.args[0] == "Default"
+
+
+def test_move_cleanup_refused_for_role(storage, monkeypatch):
+    from another_s3_manager import config
+
+    s3, user = storage
+    s3.put_object(Bucket="move-bucket", Key="source/file", Body=b"abc")
+    original = moves.copy_entry
+
+    def copy_and_revoke(*args):
+        result = original(*args)
+        cfg = config.load_config()
+        cfg["roles"][0]["allow_delete"] = False
+        config.save_config(cfg)
+        return result
+
+    monkeypatch.setattr(moves, "copy_entry", copy_and_revoke)
+    job = start(user, request())
+    job.future.result(timeout=10)
+    assert job.state == "cancelled_access"
+    assert job.snapshot()["result"] == {"moved": 0, "source_kept": 1}
+    assert job.failures[0]["code"] == "DELETION_DISABLED_FOR_ROLE"
+    assert s3.get_object(Bucket="move-bucket", Key="source/file")["Body"].read() == b"abc"
+    assert s3.get_object(Bucket="move-bucket", Key="dest/file")["Body"].read() == b"abc"
+    with pytest.raises(MoveError) as caught:
+        moves.registry.cleanup(job.id, user)
+    assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+    assert "copies stay" in str(caught.value)
+    assert s3.get_object(Bucket="move-bucket", Key="dest/file")["Body"].read() == b"abc"
+
+
+def test_move_role_flip_between_delete_batches_reports_both_counts(storage, monkeypatch):
+    from another_s3_manager import config
+
+    s3, user = storage
+    for index in range(1001):
+        s3.put_object(Bucket="move-bucket", Key=f"source/{index:04}", Body=b"abc")
+    original = moves.delete_batch
+
+    def delete_then_revoke(job, keys):
+        deleted = original(job, keys)
+        cfg = config.load_config()
+        cfg["roles"][0]["allow_delete"] = False
+        config.save_config(cfg)
+        return deleted
+
+    monkeypatch.setattr(moves, "delete_batch", delete_then_revoke)
+    job = start(user, request([{"path": "source", "kind": "folder"}]))
+    job.future.result(timeout=30)
+    assert job.state == "cancelled_access"
+    assert job.snapshot()["result"] == {"moved": 1000, "source_kept": 1}
+    assert job.failures[0]["code"] == "DELETION_DISABLED_FOR_ROLE"
+    assert [obj["Key"] for obj in s3.list_objects_v2(Bucket="move-bucket", Prefix="source/").get("Contents", [])] == [
+        "source/1000"
+    ]
+    assert s3.list_objects_v2(Bucket="move-bucket", Prefix="dest/source/", MaxKeys=2000)["KeyCount"] == 1001

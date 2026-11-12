@@ -22,11 +22,14 @@ import type { MoveJob } from "@/types/api";
 import { showToast } from "@/utils/toast";
 import { notifications } from "@mantine/notifications";
 import { createStorageStandIn } from "./storageStandIn";
-const auth = vi.hoisted(() => ({ username: "alice" as string | undefined }));
+const auth = vi.hoisted(() => ({
+  username: "alice" as string | undefined,
+  permissions: { r: { delete: true }, blocked: { delete: false } },
+}));
 vi.mock("@/features/auth/hooks/useMe", () => ({
   useMe: () => ({
     data: auth.username
-      ? { username: auth.username, disable_deletion: false }
+      ? { username: auth.username, disable_deletion: false, role_permissions: auth.permissions }
       : undefined,
   }),
   meQueryKey: ["auth", "me"],
@@ -677,4 +680,14 @@ describe("app-level move jobs", () => {
     );
     expect(localStorage.getItem(jobsStorageKey("bob", "j"))).toBeNull();
   });
+});
+
+
+it("checks the job role for cleanup, independently of another allowed role", async () => {
+  vi.spyOn(api, "getJob").mockResolvedValue({ ...snapshot, state: "cancelled_access", delete_started: false });
+  const { result } = setup();
+  act(() => result.current.add({ ...saved, role: "blocked" }));
+  await waitFor(() => expect(result.current.jobs[0]?.snapshot?.state).toBe("cancelled_access"));
+  fireEvent.click(screen.getByRole("button", { name: /details/i }));
+  expect(screen.getByRole("button", { name: "Remove partial copies" })).toBeDisabled();
 });

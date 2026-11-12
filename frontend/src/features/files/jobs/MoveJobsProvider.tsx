@@ -30,10 +30,11 @@ export interface MoveRecord {
   unavailable?: string;
 }
 interface JobsContext {
+  /** Session availability only; action callers supply the role permission. */
+  disableDeletion: boolean;
   jobs: MoveRecord[];
   add: (job: MoveRecord) => void;
   dismiss: (id: string) => void;
-  disableDeletion: boolean;
 }
 const Context = createContext<JobsContext | null>(null);
 const jobsPrefix = (username: string) =>
@@ -318,16 +319,22 @@ export function resultMeaning(job: MoveJob): string {
     case "failed_delete":
       return "A complete copy is at the destination. Some originals could not be removed and remain as duplicates.";
     case "cancelled_access":
+      if (job.failures.some((failure) => failure.code === "DELETION_DISABLED_FOR_ROLE")) {
+        const copyCompleted =
+          ["copy", "verify", "delete"].includes(job.phase) && job.done === job.total;
+        if (!copyCompleted) {
+          return `Copied ${job.done} of ${job.total} objects. The destination is incomplete. Originals are untouched. Reason: DELETION_DISABLED_FOR_ROLE.`;
+        }
+        return `Copied, source kept where deletion stopped. ${job.removed} originals removed; ${job.result.source_kept ?? job.total - job.removed} originals kept. Reason: DELETION_DISABLED_FOR_ROLE.`;
+      }
       return "The move stopped because access or deletion permissions changed. Check the counts and details before taking further action.";
   }
 }
 function JobsSession({
   username,
-  disableDeletion,
   children,
 }: {
   username?: string;
-  disableDeletion: boolean;
   children: ReactNode;
 }) {
   const [jobs, setJobs] = useState(() => restore(username));
@@ -471,7 +478,7 @@ function JobsSession({
     return () => window.removeEventListener("storage", sync);
   }, [username, replace]);
   return (
-    <Context.Provider value={{ jobs, add, dismiss, disableDeletion }}>
+    <Context.Provider value={{ jobs, add, dismiss, disableDeletion: !username }}>
       {children}
       {username &&
         jobs.map((record) => (
@@ -496,7 +503,6 @@ export function MoveJobsProvider({ children }: { children: ReactNode }) {
     <JobsSession
       key={username ?? "anonymous"}
       username={username}
-      disableDeletion={me.data?.disable_deletion ?? true}
     >
       {children}
     </JobsSession>
@@ -507,12 +513,12 @@ export function useMoveJobs() {
   // Browsing can be embedded without job tracking; moves require the provider.
   return (
     context ?? {
+      disableDeletion: true,
       jobs: [],
       add: () => {
         throw new Error("MoveJobsProvider is required");
       },
       dismiss: () => {},
-      disableDeletion: true,
     }
   );
 }

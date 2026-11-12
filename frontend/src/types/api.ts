@@ -69,6 +69,7 @@ export interface MeResponse {
   app_name: string;
   app_version: string;
   allowed_roles: string[];
+  role_permissions?: Record<string, { delete: boolean }>;
   /** User's chosen default role. Computed: explicit choice if still in
    *  allowed_roles, else first of allowed_roles, else null. Set via
    *  PUT /api/me/default-role. */
@@ -147,6 +148,7 @@ export interface AdminUser {
   username: string;
   is_admin: boolean;
   allowed_roles: string[];
+  role_permissions?: Record<string, { delete: boolean }>;
   missing_roles: string[];
   // created_at: not currently rendered — backend returns it but frontend
   // doesn't display it. Add back with a "Created" column when wanted.
@@ -162,6 +164,7 @@ export interface CreateUserPayload {
   password: string;
   is_admin: boolean;
   allowed_roles: string[];
+  role_permissions?: Record<string, { delete: boolean }>;
   must_change_password?: boolean;
 }
 
@@ -171,6 +174,7 @@ export interface UpdateUserPayload {
 }
 
 export interface AppRole {
+  allow_delete?: boolean;
   name: string;
   type: "default" | "profile" | "assume_role" | "credentials" | "s3_compatible";
   description?: string;

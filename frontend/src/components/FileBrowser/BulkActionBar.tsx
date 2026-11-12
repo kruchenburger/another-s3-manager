@@ -27,6 +27,7 @@ interface BulkActionBarProps {
   modalOpen?: boolean;
   /** When true, Delete renders disabled with a config-aware tooltip. */
   disableDeletion?: boolean;
+  deletionReason?: string;
   /** Server default presigned TTL (seconds). */
   defaultTtl?: number;
   /** Configured max presigned TTL (seconds). */
@@ -56,6 +57,7 @@ export function BulkActionBar({
   onMove,
   modalOpen = false,
   disableDeletion = false,
+  deletionReason,
   defaultTtl = 3600,
   maxTtl = 604800,
   busy = false,
@@ -163,7 +165,7 @@ export function BulkActionBar({
               </Button.Group>
               {onMove && (
                 <Tooltip
-                  label="Moving is disabled because deletion is disabled in the server config."
+                  label={deletionReason ?? "Moving is disabled because deletion is disabled in the server config."}
                   disabled={!disableDeletion}
                 >
                   <Button
@@ -180,7 +182,7 @@ export function BulkActionBar({
                 </Tooltip>
               )}
               <Tooltip
-                label="Deletion is disabled in the server config."
+                label={deletionReason ?? "Deletion is disabled in the server config."}
                 withArrow
                 disabled={!disableDeletion}
               >

@@ -261,6 +261,13 @@ export function RoleFormFields({ form, disabled, mode, step }: Props) {
             </>
           )}
 
+          <Switch
+            label="Allow deleting files"
+            description="Turn off to block deleting through ASM for everyone using this role, admins included. Uploading over an existing file is still possible."
+            disabled={disabled}
+            {...form.getInputProps("allow_delete", { type: "checkbox" })}
+            checked={form.values.allow_delete !== false}
+          />
           <TagsInput
             label="Allowed buckets"
             description="Required for R2 and other scoped tokens that cannot list all buckets. Leave empty only if your credentials have permission to list every bucket in the account."

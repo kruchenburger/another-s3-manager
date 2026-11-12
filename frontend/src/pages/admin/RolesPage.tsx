@@ -207,7 +207,10 @@ export function RolesPage() {
             <Table.Tbody>
               {config.roles.map((r) => (
                 <Table.Tr key={r.name} className={classes.row}>
-                  <Table.Td>{r.name}</Table.Td>
+                  <Table.Td>
+                    {r.name}
+                    {r.allow_delete === false && <Badge ml="xs" variant="light" color="gray">no delete</Badge>}
+                  </Table.Td>
                   <Table.Td>
                     {(() => {
                       const meta = roleTypeMeta(r.type);

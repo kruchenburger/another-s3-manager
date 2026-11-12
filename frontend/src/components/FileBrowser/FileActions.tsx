@@ -1,6 +1,6 @@
 import { ActionIcon, Group, Tooltip } from "@mantine/core";
 import { Download, Eye, Share2, Trash2, FolderInput } from "lucide-react";
-import { MOVE_DISABLED } from "@/features/files/utils/folderOperations";
+import { MOVE_DISABLED, DELETION_DISABLED } from "@/features/files/utils/folderOperations";
 import { useState } from "react";
 import { TtlPopover } from "@/components/TtlPopover/TtlPopover";
 
@@ -19,13 +19,14 @@ export interface FileActionsProps {
   onMove?: () => void;
   /** When true, Delete is rendered disabled with a config-aware tooltip. */
   disabled?: boolean;
+  deletionReason?: string;
   /** Server default presigned TTL (seconds) — preselected in the popover. */
   defaultTtl?: number;
   /** Configured max presigned TTL (seconds) — caps the popover options. */
   maxTtl?: number;
 }
 
-const DISABLED_DELETE_LABEL = "Deletion is disabled in the server config.";
+const DISABLED_DELETE_LABEL = DELETION_DISABLED;
 
 export function FileActions({
   isDirectory,
@@ -38,6 +39,7 @@ export function FileActions({
   onDelete,
   onMove,
   disabled = false,
+  deletionReason,
   defaultTtl = 3600,
   maxTtl = 604800,
 }: FileActionsProps) {
@@ -123,7 +125,7 @@ export function FileActions({
         </Tooltip>
       )}
       {onMove && (
-        <Tooltip label={disabled ? MOVE_DISABLED : "Move to…"} withArrow>
+        <Tooltip label={disabled ? (deletionReason ?? MOVE_DISABLED) : "Move to…"} withArrow>
           <ActionIcon
             size="sm"
             variant="subtle"
@@ -135,7 +137,7 @@ export function FileActions({
           </ActionIcon>
         </Tooltip>
       )}
-      <Tooltip label={disabled ? DISABLED_DELETE_LABEL : "Delete"} withArrow>
+      <Tooltip label={disabled ? (deletionReason ?? DISABLED_DELETE_LABEL) : "Delete"} withArrow>
         <ActionIcon
           size="sm"
           variant="subtle"
@@ -143,7 +145,7 @@ export function FileActions({
           onClick={onDelete}
           aria-label="Delete"
           disabled={disabled}
-          data-disabled-reason={disabled ? DISABLED_DELETE_LABEL : undefined}
+          data-disabled-reason={disabled ? (deletionReason ?? DISABLED_DELETE_LABEL) : undefined}
         >
           <Trash2 size={16} />
         </ActionIcon>
