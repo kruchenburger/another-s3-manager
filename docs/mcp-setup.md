@@ -133,7 +133,14 @@ coordinated. Between the final HEAD and the DELETE:
 - on any backend, an external overwrite that keeps the same bytes but changes
   only metadata (same ETag) passes `If-Match` and is lost.
 
-Enable bucket versioning to keep that data: deletes then only add a marker.
+A bucket with versioning **suspended** behaves like an unversioned one here: its
+objects carry the `null` version, which a new write replaces in place, so `null`
+does not identify one state. An external rewrite with the same bytes but
+different metadata can then be copied and later restored without any check
+noticing it; the destination keeps the rewritten metadata.
+
+Enable bucket versioning (status **Enabled**, not Suspended) to keep that data:
+deletes then only add a marker, and every write gets its own version.
 
 ### Tool annotations (auto-approval hints)
 
