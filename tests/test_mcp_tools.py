@@ -1518,7 +1518,10 @@ async def test_versioned_move_s3_denial_names_operation(
     assert caught.value.code == "S3_ACCESS_DENIED"
     assert operation in caught.value.message
     if method == "copy_object":
-        assert denied.call_args.kwargs["CopySource"]["VersionId"] == version
+        # The pinned copy is tried first; without s3:GetObjectVersion it falls back to an
+        # unpinned copy, which this role is denied as well.
+        assert denied.call_args_list[0].kwargs["CopySource"]["VersionId"] == version
+        assert "VersionId" not in denied.call_args_list[-1].kwargs["CopySource"]
     delete.assert_not_called()
     assert moto_s3.get_object(Bucket="version-denied", Key="source")["Body"].read() == b"keep"
 

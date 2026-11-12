@@ -100,7 +100,10 @@ failure instead returns `ok: false`, `copied: false`, `moved: false` and
 `SOURCE_CHANGED`; nothing is deleted. Always inspect `copied` as well as the
 reason.
 
-MCP moves on versioned buckets also require `s3:GetObjectVersion` to copy the pinned source version.
+On versioned buckets the copy is pinned to the source `VersionId`, which needs
+`s3:GetObjectVersion`. Without that permission the move retries once without
+the version: `CopySourceIfMatch` still ensures the copied bytes are the ones
+read, and the final HEAD still compares the VersionId before deleting.
 
 Once the copy has succeeded, a later failure never hides it: an S3 403 returns
 `copied: true`, `moved: false`, `S3_ACCESS_DENIED`; any other failure before the

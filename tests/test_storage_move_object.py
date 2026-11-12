@@ -679,3 +679,61 @@ def test_failure_before_copy_still_raises(source, monkeypatch):
     monkeypatch.undo()
     with pytest.raises(ClientError):
         source.head_object(Bucket="move-dest", Key="copy")
+
+
+def _deny_pinned_copy(source, monkeypatch):
+    """Simulate an IAM role without s3:GetObjectVersion: pinned copies are refused."""
+    original_copy = source.copy_object
+    calls = []
+
+    def copy_object(**kwargs):
+        calls.append(dict(kwargs["CopySource"]))
+        if "VersionId" in kwargs["CopySource"]:
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403}}, "CopyObject"
+            )
+        return original_copy(**kwargs)
+
+    monkeypatch.setattr(source, "copy_object", copy_object)
+    return calls
+
+
+def test_versioned_move_without_get_object_version_falls_back_to_unpinned_copy(source, monkeypatch):
+    source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+    source.put_object(Bucket="move-source", Key="file", Body=b"v2")
+    calls = _deny_pinned_copy(source, monkeypatch)
+    result = move()
+    assert result["moved"] is True
+    assert [("VersionId" in call) for call in calls] == [True, False]
+    assert body(source, "move-dest", "copy") == b"v2"
+
+
+def test_unversioned_move_never_pins_a_version(source, monkeypatch):
+    calls = _deny_pinned_copy(source, monkeypatch)
+    assert move()["moved"] is True
+    assert all("VersionId" not in call for call in calls) and len(calls) == 1
+
+
+def test_unpinned_fallback_still_refuses_a_changed_source(source, monkeypatch):
+    source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+    source.put_object(Bucket="move-source", Key="file", Body=b"v2")
+    original_copy = source.copy_object
+
+    def copy_object(**kwargs):
+        if "VersionId" in kwargs["CopySource"]:
+            # A writer replaces the source while the pinned copy is being refused.
+            source.put_object(Bucket="move-source", Key="file", Body=b"v3")
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403}}, "CopyObject"
+            )
+        # moto ignores CopySourceIfMatch; enforce it like S3 does.
+        if kwargs["CopySourceIfMatch"] != source.head_object(Bucket="move-source", Key="file")["ETag"]:
+            raise precondition("CopyObject")
+        return original_copy(**kwargs)
+
+    monkeypatch.setattr(source, "copy_object", copy_object)
+    result = move()
+    assert result["copied"] is False
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "SOURCE_CHANGED"
+    assert body(source, "move-source", "file") == b"v3"

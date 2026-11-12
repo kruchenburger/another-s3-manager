@@ -301,7 +301,7 @@ Minimum permissions for full functionality:
 What each action powers:
 
 - `s3:ListBucket` (on the bucket ARN) — browsing files.
-- `s3:GetObjectVersion` — MCP moves on versioned buckets copy the pinned source version.
+- `s3:GetObjectVersion` (optional) — lets MCP moves on versioned buckets copy the exact source version; without it they fall back to an unpinned copy guarded by the source ETag.
 - `s3:GetObject` — download / preview, object metadata, presigned share links, and the **source** of a copy/move.
 - `s3:PutObject` — upload, and the **destination** of a copy/move.
 - `s3:DeleteObject` — delete, and the source-removal half of a move/rename.

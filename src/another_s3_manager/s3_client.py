@@ -2191,7 +2191,18 @@ def _copy_object(
             copy_source["VersionId"] = version_id
         conditions = {"CopySourceIfMatch": etag} if etag is not None else {}
         try:
-            client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=copy_source, **conditions)
+            try:
+                client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=copy_source, **conditions)
+            except ClientError as error:
+                # Pinning a version needs s3:GetObjectVersion, which 1.2.x never required.
+                # Without it, fall back to the unpinned copy: CopySourceIfMatch still
+                # guarantees the copied bytes are the ones HEAD saw, and the second HEAD
+                # still compares VersionId before anything is deleted.
+                if "VersionId" not in copy_source or not _is_access_denied(error):
+                    raise
+                logger.info("move: version-pinned copy denied, retrying without VersionId")
+                unpinned = {"Bucket": source_bucket, "Key": source_path}
+                client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=unpinned, **conditions)
             s3_objects_total.labels(
                 role=safe_role_label(validated_role or "unknown"), bucket=dest_bucket, operation="copy"
             ).inc()
@@ -2209,6 +2220,13 @@ def _copy_object(
 
 class _SourceChanged(Exception):
     """The copied source state no longer permits deletion."""
+
+
+def _is_access_denied(error: ClientError) -> bool:
+    return (
+        error.response.get("Error", {}).get("Code") in {"AccessDenied", "403"}
+        or error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 403
+    )
 
 
 def _is_precondition_failed(error: ClientError) -> bool:
