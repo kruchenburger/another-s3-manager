@@ -100,14 +100,22 @@ failure instead returns `ok: false`, `copied: false`, `moved: false` and
 `SOURCE_CHANGED`; nothing is deleted. Always inspect `copied` as well as the
 reason.
 
-For versioned sources, deletion targets only the copied `VersionId`. Otherwise
-ASM sends a conditional `If-Match` DELETE; a failed precondition keeps the
-source. On backends that ignore `If-Match` on DELETE, the final check-to-delete
-window remains against writers outside this ASM process (including other
-replicas). Writes handled by this process share the reservation. MinIO
-(tested with RELEASE.2026-10-23) ignores `If-Match` on DELETE; enable bucket
-versioning there to close that window, since versioned deletes target the copied
-version only.
+For versioned sources with a real `VersionId` (not `"null"`), the copy is pinned
+to that version, but deletion omits `VersionId`: it creates a delete marker so
+the key disappears without exposing a previous version. All object versions are
+retained. An external write after the final HEAD can be hidden by this marker,
+but its version remains available explicitly by `VersionId`.
+
+For `"null"` or absent VersionId, ASM sends a conditional `If-Match` DELETE;
+a failed precondition or a missing source during that DELETE returns
+`copied: true`, `moved: false`, `SOURCE_CHANGED`. The final HEAD also compares
+LastModified, ContentLength, ContentType and user Metadata, in addition to ETag
+and VersionId. Delete permission is checked again after that comparison.
+On backends that ignore `If-Match` on DELETE, the final check-to-delete window
+remains against writers outside this ASM process (including other replicas).
+Writes handled by this process share the reservation. MinIO
+(tested with RELEASE.2026-10-23) ignores `If-Match` on DELETE; bucket versioning
+preserves versions rather than permanently deleting their data in that window.
 
 ### Tool annotations (auto-approval hints)
 

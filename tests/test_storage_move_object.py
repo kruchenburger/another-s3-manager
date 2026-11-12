@@ -155,21 +155,23 @@ def test_versioned_delete_targets_only_copied_version(source, monkeypatch):
     monkeypatch.setattr(source, "copy_object", copy)
     original = source.delete_object
     calls = []
+    newer_versions = []
 
     def replace_then_delete(**kwargs):
         calls.append(kwargs)
-        source.put_object(Bucket="move-source", Key="file", Body=b"new")
+        newer_versions.append(source.put_object(Bucket="move-source", Key="file", Body=b"new")["VersionId"])
         return original(**kwargs)
 
     monkeypatch.setattr(source, "delete_object", replace_then_delete)
     assert move()["moved"] is True
-    assert calls == [{"Bucket": "move-source", "Key": "file", "VersionId": version}]
+    assert calls == [{"Bucket": "move-source", "Key": "file"}]
     assert copy.call_args.kwargs["CopySource"] == {"Bucket": "move-source", "Key": "file", "VersionId": version}
     assert copy.call_args.kwargs["CopySourceIfMatch"] == etag
-    assert body(source, "move-source", "file") == b"new"
-    assert body(source, "move-dest", "copy") == b"old"
     with pytest.raises(ClientError):
-        source.get_object(Bucket="move-source", Key="file", VersionId=version)
+        source.head_object(Bucket="move-source", Key="file")
+    assert body(source, "move-dest", "copy") == b"old"
+    assert source.get_object(Bucket="move-source", Key="file", VersionId=version)["Body"].read() == b"old"
+    assert source.get_object(Bucket="move-source", Key="file", VersionId=newer_versions[0])["Body"].read() == b"new"
 
 
 def test_if_match_is_signed_and_does_not_leak_between_threads(source):
@@ -367,3 +369,138 @@ def test_null_version_uses_conditional_delete_not_version_delete(source, monkeyp
     assert move()["moved"] is True
     assert calls == [{"Bucket": "move-source", "Key": "file"}]
     assert headers == [etag.encode()]
+
+
+def test_versioned_move_hides_key_and_preserves_history(source):
+    source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+    v1 = source.put_object(Bucket="move-source", Key="file", Body=b"v1")["VersionId"]
+    v2 = source.put_object(Bucket="move-source", Key="file", Body=b"v2")["VersionId"]
+    assert move()["moved"] is True
+    assert body(source, "move-dest", "copy") == b"v2"
+    with pytest.raises(ClientError) as caught:
+        source.head_object(Bucket="move-source", Key="file")
+    assert caught.value.response["Error"]["Code"] == "404"
+    versions = source.list_object_versions(Bucket="move-source", Prefix="file")
+    assert any(marker["IsLatest"] for marker in versions["DeleteMarkers"])
+    for version, expected in [(v1, b"v1"), (v2, b"v2")]:
+        assert source.get_object(Bucket="move-source", Key="file", VersionId=version)["Body"].read() == expected
+
+
+@pytest.mark.parametrize("global_flag", [False, True])
+@pytest.mark.parametrize("retry", [False, True])
+def test_permission_revoked_during_final_head(source, monkeypatch, global_flag, retry):
+    original_head = source.head_object
+    original_delete = source.delete_object
+    heads = 0
+
+    def head_and_revoke(**kwargs):
+        nonlocal heads
+        result = original_head(**kwargs)
+        heads += 1
+        if heads == (3 if retry else 2):
+            cfg = config.load_config()
+            if global_flag:
+                cfg["disable_deletion"] = True
+            else:
+                cfg["roles"][0]["allow_delete"] = False
+            config.save_config(cfg)
+        return result
+
+    def expire_once(**kwargs):
+        if delete.call_count == 1:
+            raise ClientError({"Error": {"Code": "ExpiredToken"}}, "DeleteObject")
+        return original_delete(**kwargs)
+
+    delete = Mock(side_effect=expire_once if retry else original_delete)
+    copies = Mock(wraps=source.copy_object)
+    monkeypatch.setattr(source, "head_object", head_and_revoke)
+    monkeypatch.setattr(source, "delete_object", delete)
+    monkeypatch.setattr(source, "copy_object", copies)
+    monkeypatch.setattr(s3_client, "invalidate_s3_client", lambda role: None)
+    monkeypatch.setattr(s3_client, "_clear_boto3_cached_credentials", lambda: None)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == ("DELETION_DISABLED" if global_flag else "DELETION_DISABLED_FOR_ROLE")
+    assert delete.call_count == (1 if retry else 0)
+    copies.assert_called_once()
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"
+
+
+@pytest.mark.parametrize("code", ["404", "NoSuchKey", "NotFound", "UnknownMissing"])
+@pytest.mark.parametrize("kind", ["conditional", "versioned", "plain"])
+def test_missing_delete_is_source_changed_only_for_conditional_move(source, monkeypatch, code, kind):
+    if kind == "versioned":
+        source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+        source.put_object(Bucket="move-source", Key="file", Body=b"old")
+    error = ClientError({"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": 404}}, "DeleteObject")
+    monkeypatch.setattr(source, "delete_object", Mock(side_effect=error))
+    if kind == "conditional":
+        result = move()
+        assert result["copied"] is True
+        assert result["moved"] is False
+        assert result["source_kept_reason"] == "SOURCE_CHANGED"
+        assert body(source, "move-dest", "copy") == b"old"
+    else:
+        with pytest.raises(ClientError) as caught:
+            if kind == "plain":
+                s3_client.delete_exact_key_for_role("Default", "move-source", "file", USER)
+            else:
+                move()
+        assert caught.value is error
+    assert body(source, "move-source", "file") == b"old"
+
+
+@pytest.mark.parametrize("field", ["Metadata", "ContentType"])
+def test_same_bytes_metadata_overwrite_keeps_source(source, monkeypatch, field):
+    original_copy = source.copy_object
+    original_etag = source.head_object(Bucket="move-source", Key="file")["ETag"]
+
+    def copy_and_overwrite(**kwargs):
+        result = original_copy(**kwargs)
+        extra = {"Metadata": {"owner": "new"}} if field == "Metadata" else {"ContentType": "text/plain"}
+        source.put_object(Bucket="move-source", Key="file", Body=b"old", **extra)
+        return result
+
+    monkeypatch.setattr(source, "copy_object", copy_and_overwrite)
+    delete = Mock(wraps=source.delete_object)
+    monkeypatch.setattr(source, "delete_object", delete)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "SOURCE_CHANGED"
+    delete.assert_not_called()
+    current = source.head_object(Bucket="move-source", Key="file")
+    assert current["ETag"] == original_etag
+    assert current[field] == ({"owner": "new"} if field == "Metadata" else "text/plain")
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"
+
+
+@pytest.mark.parametrize("field", ["LastModified", "ContentLength"])
+def test_other_source_head_changes_prevent_delete(source, monkeypatch, field):
+    from datetime import timedelta
+
+    original_head = source.head_object
+    heads = 0
+
+    def changed_head(**kwargs):
+        nonlocal heads
+        result = original_head(**kwargs)
+        heads += 1
+        if heads == 2:
+            # Model a backend state change without relying on moto's timestamp precision.
+            result[field] += timedelta(seconds=1) if field == "LastModified" else 1
+        return result
+
+    monkeypatch.setattr(source, "head_object", changed_head)
+    delete = Mock(wraps=source.delete_object)
+    monkeypatch.setattr(source, "delete_object", delete)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "SOURCE_CHANGED"
+    delete.assert_not_called()
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"

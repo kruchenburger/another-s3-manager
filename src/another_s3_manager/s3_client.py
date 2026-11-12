@@ -2282,6 +2282,7 @@ def _delete_exact_key(
     *,
     etag: str | None = None,
     version_id: str | None = None,
+    source_head: dict | None = None,
 ) -> dict:
     """Delete one exact key under the caller's reservation, rechecking each retry."""
     from another_s3_manager.config import load_config
@@ -2299,17 +2300,27 @@ def _delete_exact_key(
                 raise _SourceChanged from error
             if current.get("ETag") != etag or current.get("VersionId") != version_id:
                 raise _SourceChanged
+            if source_head is not None and any(
+                current.get(field) != source_head.get(field)
+                for field in ("LastModified", "ContentLength", "ContentType", "Metadata")
+            ):
+                raise _SourceChanged
+        conditional = etag is not None and version_id in (None, "null")
+        access_service.require_delete(role, load_config(force_reload=True))
         try:
-            # "null" (unversioned object in a suspended bucket) is not immutable:
-            # the next PUT overwrites it, so it needs the If-Match guard instead.
-            if version_id is not None and version_id != "null":
-                client.delete_object(Bucket=bucket, Key=path, VersionId=version_id)
-            elif etag is not None:
+            # Real versions are retained: a plain DELETE adds a delete marker.
+            # "null" versions can be overwritten, so they still need If-Match.
+            if conditional:
                 with _conditional_delete(client, etag):
                     client.delete_object(Bucket=bucket, Key=path)
             else:
                 client.delete_object(Bucket=bucket, Key=path)
         except ClientError as error:
+            if conditional and (
+                error.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}
+                or error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404
+            ):
+                raise _SourceChanged from error
             if etag is not None and _is_precondition_failed(error):
                 raise _SourceChanged from error
             raise
@@ -2331,7 +2342,8 @@ def move_object_for_role(
     """Copy a pinned source state, then conditionally delete it in one reservation.
 
     External writers can still race the final HEAD on backends ignoring DELETE
-    If-Match. VersionId targets the copied version; internal writers are reserved.
+    If-Match. Versioned deletes add a marker and retain all versions, including
+    concurrent writes that the marker may hide. Internal writers are reserved.
     """
     from another_s3_manager.config import load_config
 
@@ -2353,7 +2365,9 @@ def move_object_for_role(
         )
         copied = True
         access_service.require_delete(role, load_config(force_reload=True))
-        _delete_exact_key(role, source_bucket, source_path, user_dict, etag=etag, version_id=version_id)
+        _delete_exact_key(
+            role, source_bucket, source_path, user_dict, etag=etag, version_id=version_id, source_head=source
+        )
     except _SourceChanged:
         reason = "SOURCE_CHANGED"
     except AccessDenied as error:
