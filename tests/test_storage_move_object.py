@@ -24,6 +24,8 @@ def source(moto_s3, monkeypatch):
     moto_s3.create_bucket(Bucket="move-source")
     moto_s3.create_bucket(Bucket="move-dest")
     moto_s3.put_object(Bucket="move-source", Key="file", Body=b"old")
+    # get_s3_client installs the delete handlers before publishing a client; the stub must too.
+    s3_client._register_delete_handlers(moto_s3)
     monkeypatch.setattr(s3_client, "get_s3_client", lambda role: moto_s3)
     return moto_s3
 
@@ -292,19 +294,18 @@ def test_delete_credential_retry_rechecks_without_recopying(source, monkeypatch,
         assert body(source, "move-source", "file") == (b"new" if change == "source" else b"old")
 
 
-def test_conditional_handler_is_registered_once_per_client(source, monkeypatch):
+def test_delete_handlers_are_never_registered_per_call(source, monkeypatch):
+    # Handlers are installed once when the client is built (the fixture mirrors
+    # get_s3_client); registering per call races botocore's handler cache.
     register = Mock(wraps=source.meta.events.register)
+    unregister = Mock(wraps=source.meta.events.unregister)
     monkeypatch.setattr(source.meta.events, "register", register)
+    monkeypatch.setattr(source.meta.events, "unregister", unregister)
     assert move()["moved"] is True
     source.put_object(Bucket="move-source", Key="file", Body=b"second")
     assert move()["moved"] is True
-    events = [
-        call.args[0]
-        for call in register.call_args_list
-        if call.kwargs.get("unique_id", "").startswith("asm-delete-if-match")
-    ]
-    assert events.count("before-sign.s3.DeleteObject") == 1
-    assert events.count("before-parameter-build.s3.DeleteObject") == 1
+    register.assert_not_called()
+    unregister.assert_not_called()
 
 
 def test_external_change_after_head_is_protected_by_conditional_delete(source):

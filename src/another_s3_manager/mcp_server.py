@@ -193,6 +193,12 @@ def _access_error(error: AccessDenied, tool: str, *, context: str = "gate") -> M
 
 
 _STORAGE_ERROR_MAPPINGS = {
+    MoveError: lambda error: McpError(error.code, str(error), {"http_status": error.http_status}),
+    S3AccessDeniedError: lambda error: McpError("S3_ACCESS_DENIED", str(error), {"boto_code": error.code}),
+    S3NotFoundError: lambda error: McpError("S3_NOT_FOUND", str(error), {"boto_code": error.code}),
+    CredentialsExpiredError: lambda error: McpError("CREDENTIALS_EXPIRED", str(error), {"boto_code": error.code}),
+    S3ConfigError: lambda error: McpError("S3_CONFIG_ERROR", str(error), {"boto_code": error.code}),
+    S3NetworkError: lambda error: McpError("S3_NETWORK_ERROR", str(error), {"boto_code": error.code}),
     PartialDeleteError: lambda error: McpError(
         error.code, str(error), {"deleted": error.deleted_count, "failed_count": len(error.failed)}
     ),
@@ -275,6 +281,7 @@ async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
         )
         user_dict = {
             "id": u.id,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
             "username": u.username,
             "is_admin": u.is_admin,
             "allowed_roles": allowed_roles,
@@ -1265,29 +1272,6 @@ async def delete_file(
     except McpError as e:
         error_code = e.code
         raise
-    except MoveError as e:
-        error_code = e.code
-        raise McpError(e.code, str(e), {"http_status": e.http_status}) from None
-    except S3AccessDeniedError as e:
-        error_code = "S3_ACCESS_DENIED"
-        logger.warning("mcp.delete_file.access_denied", extra={"boto_code": e.code})
-        raise McpError("S3_ACCESS_DENIED", str(e), {"boto_code": e.code})
-    except S3NotFoundError as e:
-        error_code = "S3_NOT_FOUND"
-        logger.warning("mcp.delete_file.not_found", extra={"boto_code": e.code})
-        raise McpError("S3_NOT_FOUND", str(e), {"boto_code": e.code})
-    except S3ConfigError as e:
-        error_code = "S3_CONFIG_ERROR"
-        logger.warning("mcp.delete_file.config_error", extra={"boto_code": e.code})
-        raise McpError("S3_CONFIG_ERROR", str(e), {"boto_code": e.code})
-    except S3NetworkError as e:
-        error_code = "S3_NETWORK_ERROR"
-        logger.warning("mcp.delete_file.network_error", extra={"boto_code": e.code})
-        raise McpError("S3_NETWORK_ERROR", str(e), {"boto_code": e.code})
-    except CredentialsExpiredError as e:
-        error_code = "CREDENTIALS_EXPIRED"
-        logger.warning("mcp.delete_file.credentials_expired", extra={"boto_code": e.code})
-        raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
     except S3OperationError as e:
         # Unknown S3 subclass — still better than INTERNAL_ERROR.
         mapped = _storage_error_to_mcp(e)

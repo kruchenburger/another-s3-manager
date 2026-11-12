@@ -189,3 +189,71 @@ def test_cleanup_stops_on_target_change_after_partial_cleanup(moto_s3, monkeypat
     assert result["stopped_reason"] == "ROLE_CHANGED"
     assert result["failures"][0]["code"] == "ROLE_CHANGED"
     assert moto_s3.get_object(Bucket="pinned-cleanup", Key="second")["Body"].read() == b"keep"
+
+
+def test_recreated_account_cannot_resume_delete():
+    original = users.create_user("reused", "password123", allowed_roles=["Default"])
+    users.delete_user("reused")
+    replacement = users.create_user("reused", "password123", allowed_roles=["Default"])
+    assert replacement["id"] == original["id"]
+    assert replacement["created_at"] != original["created_at"]
+    with pytest.raises(access.AccessDenied) as caught:
+        s3_client.require_current_destructive(original, "Default", "bucket")
+    assert caught.value.code == "role_not_allowed"
+
+
+def test_current_identity_normalizes_sqlite_timestamp():
+    original = users.create_user("utc", "password123", allowed_roles=["Default"])
+    current = users.get_user_by_id(original["id"])
+    original["created_at"] = current["created_at"].removesuffix("+00:00") + "+00:00"
+    assert s3_client.require_current_destructive(original, "Default", "bucket")["roles"][0]["name"] == "Default"
+
+
+def test_directory_credential_retry_preserves_keys_and_unique_results(monkeypatch):
+    from botocore.exceptions import ClientError
+
+    from another_s3_manager.metrics import s3_objects_total
+
+    user = users.load_users()["users"][0]
+    keys = [f"dir/{i:04}" for i in range(1001)]
+    client = Mock()
+    client.get_paginator.return_value.paginate.side_effect = [
+        [{"Contents": [{"Key": key} for key in keys]}],
+        AssertionError("Credential refresh must not enumerate a different key set"),
+    ]
+    first = {"Deleted": [{"Key": key} for key in keys[:999]], "Errors": [{"Key": keys[999], "Code": "AccessDenied"}]}
+    client.delete_objects.side_effect = [
+        first,
+        ClientError({"Error": {"Code": "ExpiredToken", "Message": "expired"}}, "DeleteObjects"),
+        {"Deleted": [{"Key": key} for key in keys[:1000]]},
+        {"Deleted": [{"Key": keys[1000]}]},
+    ]
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: client)
+    monkeypatch.setattr(s3_client, "_clear_boto3_cached_credentials", lambda: None)
+    metric = s3_objects_total.labels(role="Default", bucket="retry-results", operation="delete")
+    before = metric._value.get()
+    assert s3_client.delete_object_for_role("Default", "retry-results", "dir/", user)["count"] == 1001
+    assert metric._value.get() - before == 1001
+    client.get_paginator.return_value.paginate.assert_called_once()
+    batches = [call.kwargs["Delete"]["Objects"] for call in client.delete_objects.call_args_list]
+    assert batches[0] == batches[2]
+    assert batches[1] == batches[3]
+
+
+@pytest.mark.parametrize("key,code", [("dir/expiredtoken.txt", "AccessDenied"), ("dir/file", "ExpiredToken")])
+def test_partial_delete_is_never_a_credential_retry(monkeypatch, key, code):
+    from another_s3_manager.errors import PartialDeleteError
+
+    user = users.load_users()["users"][0]
+    client = Mock()
+    client.get_paginator.return_value.paginate.return_value = [{"Contents": [{"Key": key}]}]
+    client.delete_objects.return_value = {"Errors": [{"Key": key, "Code": code}]}
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: client)
+    refresh = Mock()
+    monkeypatch.setattr(s3_client, "_clear_boto3_cached_credentials", refresh)
+    with pytest.raises(PartialDeleteError) as caught:
+        s3_client.delete_object_for_role("Default", "bucket", "dir/", user)
+    assert caught.value.failed == {key: code}
+    assert caught.value.deleted_count == 0
+    assert client.delete_objects.call_count == 1
+    refresh.assert_not_called()

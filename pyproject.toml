@@ -140,3 +140,19 @@ forbidden_modules = [
 ]
 # Reaching the internals through the package root is the point of the public API.
 allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+id = "storage-no-adapters"
+name = "Storage (S3 client, move jobs, reservations) imports no adapter"
+type = "forbidden"
+source_modules = [
+    "another_s3_manager.s3_client",
+    "another_s3_manager.move_jobs",
+    "another_s3_manager.move_reservations",
+]
+forbidden_modules = [
+    "another_s3_manager.main",
+    "another_s3_manager.mcp_server",
+    "another_s3_manager.reset_admin_password",
+]
+# Not yet forbidden: fastapi (s3_client raises HTTPException; users -> auth -> fastapi).

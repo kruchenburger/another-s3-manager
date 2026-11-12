@@ -2406,3 +2406,78 @@ def test_exact_key_delete_checks_access(moto_s3, denial):
     with pytest.raises(PermissionError):
         s3_client.delete_exact_key_for_role("Default", "exact-denied", "file", user)
     assert moto_s3.get_object(Bucket="exact-denied", Key="file")["Body"].read() == b"keep"
+
+
+@pytest.mark.parametrize(
+    "code", ["ExpiredToken", "ExpiredTokenException", "InvalidIdentityToken", "TokenExpired", "RequestExpired"]
+)
+def test_credential_expiry_uses_structured_client_error(code):
+    module = reload_s3_client()
+    error = ClientError({"Error": {"Code": code, "Message": "no textual expiry hint"}}, "DeleteObjects")
+    assert module._is_expired_credentials_error(error) is True
+
+
+@pytest.mark.parametrize(
+    "kind", ["text", "client-key", "fake-response", "partial", "move", "wrapped-partial", "wrapped-move"]
+)
+def test_domain_and_key_text_cannot_trigger_credential_retry(kind):
+    from another_s3_manager.errors import MoveError, PartialDeleteError
+
+    module = reload_s3_client()
+    if kind == "client-key":
+        error = ClientError({"Error": {"Code": "AccessDenied", "Message": "dir/expiredtoken.txt"}}, "DeleteObjects")
+    elif kind == "fake-response":
+        error = RuntimeError("token expired")
+        error.response = {"Error": {"Code": "ExpiredToken"}}
+    elif kind == "text":
+        error = RuntimeError("expiredtoken")
+    else:
+        domain = (
+            PartialDeleteError(0, {"dir/expiredtoken.txt": "ExpiredToken"})
+            if "partial" in kind
+            else MoveError("ExpiredToken")
+        )
+        domain.__cause__ = ClientError({"Error": {"Code": "ExpiredToken"}}, "DeleteObjects")
+        error = domain
+        if kind.startswith("wrapped"):
+            error = RuntimeError("wrapper")
+            error.__cause__ = domain
+    assert module._is_expired_credentials_error(error) is False
+
+
+def test_specialized_metadata_expiry_and_chained_client_error():
+    from botocore.exceptions import MetadataRetrievalError
+
+    module = reload_s3_client()
+    assert module._is_expired_credentials_error(MetadataRetrievalError(error_msg="Token is expired")) is True
+    assert module._is_expired_credentials_error(MetadataRetrievalError(error_msg="connection refused")) is False
+    error = RuntimeError("wrapper")
+    error.__cause__ = ClientError({"Error": {"Code": "ExpiredToken"}}, "DeleteObjects")
+    assert module._is_expired_credentials_error(error) is True
+
+
+def test_saved_config_is_visible_without_forced_client_reload(monkeypatch):
+    from unittest.mock import Mock
+
+    from another_s3_manager import config, s3_client
+
+    built = []
+
+    def create(role):
+        client = Mock()
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(s3_client, "_create_s3_client_from_role", create)
+    first = s3_client.get_s3_client("Default")
+    cfg = config.load_config()
+    cfg["roles"][0]["endpoint_url"] = "http://new-storage.test"
+    config.save_config(cfg)
+    load = Mock(wraps=config.load_config)
+    monkeypatch.setattr(config, "load_config", load)
+    second = s3_client.get_s3_client("Default")
+    assert second is not first
+    assert s3_client.get_s3_client("Default") is second
+    assert len(built) == 2
+    assert load.call_count == 2
+    assert all(call.kwargs == {"force_reload": False} for call in load.call_args_list)

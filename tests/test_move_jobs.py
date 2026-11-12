@@ -418,6 +418,8 @@ def test_failure_storage_and_pagination():
 
 
 def test_access_rechecked_after_100_copies(storage, monkeypatch):
+    from another_s3_manager import users
+
     _, user = storage
     entries = tuple(moves.Entry("source/" + str(i), "dest/" + str(i), "etag", 1, None) for i in range(101))
     job = moves.Job(
@@ -429,14 +431,14 @@ def test_access_rechecked_after_100_copies(storage, monkeypatch):
         "hash",
         plan=moves.Plan(entries, (("source/", "dest/", "folder"),), ()),
     )
-    original = moves.users.get_user_by_id
+    original = users.get_user_by_id
     checks = []
 
     def owner(user_id):
         checks.append(user_id)
         return original(user_id) if len(copied) < 100 else None
 
-    monkeypatch.setattr(moves.users, "get_user_by_id", owner)
+    monkeypatch.setattr(users, "get_user_by_id", owner)
     copied = []
 
     def copy(*args):
@@ -882,3 +884,29 @@ def test_storage_target_change_before_delete(storage, monkeypatch, changed_role)
         assert caught.value.http_status == 409
     else:
         assert job.state == "done"
+
+
+def test_destructive_role_denial_precedes_role_existence(storage):
+    from another_s3_manager import users
+
+    user = users.create_user("no-grant", "password123", allowed_roles=[])
+    with pytest.raises(MoveError) as caught:
+        moves.require_access(user, "missing", "move-bucket", deleting=True)
+    assert caught.value.code == "ACCESS_DENIED"
+    assert caught.value.http_status == 403
+
+
+def test_recheck_loads_one_snapshot(storage, monkeypatch):
+    from unittest.mock import Mock
+
+    from another_s3_manager import config, users
+
+    _, user = storage
+    job = moves.Job("snapshot", moves.owner_identity(user), "Default", "move-bucket", "op", "hash")
+    get_user = Mock(wraps=users.get_user_by_id)
+    get_config = Mock(wraps=config.load_config)
+    monkeypatch.setattr(users, "get_user_by_id", get_user)
+    monkeypatch.setattr(config, "load_config", get_config)
+    moves.recheck(job)
+    get_user.assert_called_once_with(user["id"])
+    get_config.assert_called_once_with(force_reload=True)

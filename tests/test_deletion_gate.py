@@ -220,3 +220,47 @@ async def test_mcp_destructive_paths_use_current_helper(alice_user, tool_registr
     assert helper.call_args.args[0]["id"] == alice_user[0]
     assert helper.call_args.args[1:] == ("Default", "mcp-helper")
     assert "file" not in {item["Key"] for item in moto_s3.list_objects_v2(Bucket="mcp-helper").get("Contents", [])}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind,code,details",
+    [
+        ("MoveError", "ROLE_CHANGED", {"http_status": 409}),
+        ("S3AccessDeniedError", "S3_ACCESS_DENIED", {"boto_code": "AccessDenied"}),
+        ("CredentialsExpiredError", "CREDENTIALS_EXPIRED", {"boto_code": "ExpiredToken"}),
+        ("S3ConfigError", "S3_CONFIG_ERROR", {"boto_code": "InvalidRegion"}),
+        ("S3NotFoundError", "S3_NOT_FOUND", {"boto_code": "NoSuchKey"}),
+        ("S3NetworkError", "S3_NETWORK_ERROR", {"boto_code": "EndpointConnectionError"}),
+        ("S3OperationError", "S3_OPERATION_ERROR", {"boto_code": "Unknown"}),
+    ],
+)
+async def test_delete_storage_mapping_contract(alice_user, tool_registry, monkeypatch, kind, code, details):  # noqa: F811
+    from another_s3_manager import errors, mcp_server
+
+    error = (
+        errors.MoveError("ROLE_CHANGED", 409)
+        if kind == "MoveError"
+        else getattr(errors, kind)(details["boto_code"], "storage message")
+    )
+
+    def fail(*args):
+        raise error
+
+    monkeypatch.setattr("another_s3_manager.s3_client.delete_object_for_role", fail)
+    with pytest.raises(mcp_server.McpError) as caught:
+        await _call(
+            tool_registry, "delete_file", _fake_request(alice_user[1]), role="Default", bucket="bucket", path="file"
+        )
+    assert caught.value.code == code
+    assert caught.value.message == str(error)
+    assert caught.value.details == details
+
+
+@pytest.mark.asyncio
+async def test_mcp_user_snapshot_contains_account_generation(alice_user):  # noqa: F811
+    from another_s3_manager import mcp_server, users
+
+    _, user = await mcp_server.authenticate_mcp_request(_fake_request(alice_user[1]))
+    current = users.get_user_by_id(alice_user[0])
+    assert user["created_at"] == current["created_at"]

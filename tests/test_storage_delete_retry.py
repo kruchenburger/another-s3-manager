@@ -32,6 +32,7 @@ def test_sdk_retry_refreshes_access(monkeypatch, path, revoke):
         aws_secret_access_key="test",
         config=Config(retries={"mode": "standard", "total_max_attempts": 3}),
     )
+    s3_client._register_delete_handlers(client)
     sent = []
     retries = []
 
@@ -101,6 +102,7 @@ def test_sdk_retry_refreshes_access(monkeypatch, path, revoke):
 
 def test_guard_unregisters_on_exception(monkeypatch):
     client = boto3.client("s3", region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test")
+    s3_client._register_delete_handlers(client)
     check = Mock(side_effect=access.AccessDenied("role_not_allowed", "revoked"))
     with pytest.raises(access.AccessDenied):
         with s3_client.destructive_delete_guard(client, check):
@@ -122,6 +124,7 @@ def test_guard_isolates_threads_on_shared_client(monkeypatch):
         aws_access_key_id="test",
         aws_secret_access_key="test",
     )
+    s3_client._register_delete_handlers(client)
     barrier = threading.Barrier(2)
     checks = {"allowed": 0, "denied": 0}
     sent = []
@@ -154,3 +157,113 @@ def test_guard_isolates_threads_on_shared_client(monkeypatch):
     assert checks == {"allowed": 2, "denied": 2}
     assert len(sent) == 2
     client.close()
+
+
+@pytest.mark.parametrize("conditional", [False, True])
+def test_shared_client_retry_has_permanent_isolated_handlers(monkeypatch, conditional):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import nullcontext
+
+    client = boto3.client(
+        "s3",
+        region_name="us-east-1",
+        endpoint_url="http://s3.test",
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+        config=Config(retries={"mode": "standard", "total_max_attempts": 2}),
+    )
+    monkeypatch.setattr(s3_client, "_create_s3_client_from_role", lambda role: client)
+    monkeypatch.setattr(client, "list_buckets", lambda: {})
+    assert s3_client.get_s3_client("Default") is client
+    entered = threading.Event()
+    retry_check = threading.Event()
+    left = threading.Event()
+    counts = {"a": 0, "b": 0}
+    sent = []
+
+    def check(name):
+        assert threading.current_thread().name.endswith(name)
+        counts[name] += 1
+        if name == "a" and counts[name] == 3:
+            retry_check.set()
+            assert left.wait(5)
+
+    def send(request):
+        name = request.url.rsplit("/", 1)[-1]
+        sent.append((name, request.headers.get("If-Match")))
+        status = 500 if name == "a" and sum(key == "a" for key, _ in sent) == 1 else 204
+        return AWSResponse(
+            request.url, status, {}, Raw(b"<Error><Code>InternalError</Code></Error>" if status == 500 else b"")
+        )
+
+    def retry(attempts, **kwargs):
+        if threading.current_thread().name.endswith("a") and attempts == 1:
+            assert entered.wait(5)
+
+    client.meta.events.register("needs-retry.s3.DeleteObject", retry)
+    register = Mock(wraps=client.meta.events.register)
+    unregister = Mock(wraps=client.meta.events.unregister)
+    monkeypatch.setattr(client.meta.events, "register", register)
+    monkeypatch.setattr(client.meta.events, "unregister", unregister)
+    monkeypatch.setattr(client._endpoint.http_session, "send", send)
+    monkeypatch.setattr("botocore.endpoint.time.sleep", lambda _: None)
+
+    def delete(name):
+        threading.current_thread().name = "delete-" + name
+        condition = s3_client._conditional_delete(client, '"etag-' + name + '"') if conditional else nullcontext()
+        with s3_client.destructive_delete_guard(client, lambda: check(name)), condition:
+            if name == "b":
+                entered.set()
+            client.delete_object(Bucket="bucket", Key=name)
+            if name == "b":
+                assert retry_check.wait(5)
+        if name == "b":
+            left.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a = pool.submit(delete, "a")
+        b = pool.submit(delete, "b")
+        a.result(timeout=15)
+        b.result(timeout=15)
+    assert counts == {"a": 3, "b": 2}
+    assert sum(name == "a" for name, _ in sent) == 2
+    if conditional:
+        assert all(etag == ('"etag-' + name + '"').encode() for name, etag in sent)
+    register.assert_not_called()
+    unregister.assert_not_called()
+    client.delete_object(Bucket="bucket", Key="after")
+    assert counts == {"a": 3, "b": 2}
+    client.close()
+
+
+def test_nested_guard_restores_callback_and_client_scope():
+    outer = Mock()
+    inner = Mock()
+    first = Mock()
+    second = Mock()
+    s3_client._register_delete_handlers(first)
+    s3_client._register_delete_handlers(second)
+    first_handler = first.meta.events.register.call_args_list[0].args[1]
+    second_handler = second.meta.events.register.call_args_list[0].args[1]
+    with s3_client.destructive_delete_guard(first, outer):
+        outer.reset_mock()
+        first_handler()
+        outer.assert_called_once_with()
+        with pytest.raises(ValueError, match="inner failure"):
+            with s3_client.destructive_delete_guard(second, inner):
+                inner.reset_mock()
+                first_handler()
+                second_handler()
+                inner.assert_called_once_with()
+                raise ValueError("inner failure")
+        outer.reset_mock()
+        first_handler()
+        second_handler()
+        outer.assert_called_once_with()
+    outer.reset_mock()
+    inner.reset_mock()
+    first_handler()
+    second_handler()
+    outer.assert_not_called()
+    inner.assert_not_called()

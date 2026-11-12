@@ -9,7 +9,6 @@ from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Literal
 
 from boto3.s3.transfer import TransferConfig
@@ -17,7 +16,7 @@ from botocore.exceptions import ClientError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from another_s3_manager import access as access_service
-from another_s3_manager import config, s3_client, users
+from another_s3_manager import config, s3_client
 from another_s3_manager.access import AccessDenied
 from another_s3_manager.errors import MoveError, safe_move_error, safe_storage_logging
 from another_s3_manager.metrics import move_jobs_total, s3_objects_total, safe_role_label
@@ -82,19 +81,19 @@ _ACCESS_ERROR_CODES = {
 }
 
 
-def require_access(user: dict, role: str | None, bucket: str, *, deleting=False) -> None:
+def require_access(user: dict, role: str | None, bucket: str, *, deleting=False, snapshot=None) -> dict | None:
     try:
         role = access_service.require_role_name(role)
     except AccessDenied:
         raise MoveError("ROLE_REQUIRED") from None
     if len(role.encode("utf-8")) > 1024:
         raise MoveError("INVALID_REQUEST")
-    cfg = config.load_config(force_reload=True)
-    if not any(r.get("name") == role for r in cfg.get("roles", [])):
-        raise MoveError("ROLE_NOT_FOUND")
     try:
         if deleting:
-            return s3_client.require_current_destructive(user, role, bucket)
+            return s3_client.require_current_destructive(user, role, bucket, snapshot=snapshot)
+        cfg = config.load_config(force_reload=True)
+        if not any(r.get("name") == role for r in cfg.get("roles", [])):
+            raise MoveError("ROLE_NOT_FOUND")
         access_service.require_role(role, user, cfg)
         access_service.require_bucket(role, bucket, user, cfg)
     except AccessDenied as error:
@@ -322,12 +321,7 @@ def copy_entry(role, bucket, entry):
 
 
 def owner_identity(user):
-    created_at = user["created_at"]
-    if created_at is not None:
-        # SQLite reloads UTC timestamps without the timezone attached at creation.
-        timestamp = datetime.fromisoformat(created_at)
-        created_at = timestamp.replace(tzinfo=timestamp.tzinfo or UTC).astimezone(UTC).isoformat()
-    return (user["id"], user["username"], created_at)
+    return s3_client.account_identity(user)
 
 
 @dataclass
@@ -392,10 +386,10 @@ class Job:
 
 
 def recheck(job):
-    user = users.get_user_by_id(job.owner[0])
+    user, cfg = s3_client.load_destructive_state(job.owner[0])
     if user is None or owner_identity(user) != job.owner:
         raise MoveError("ACCESS_DENIED", 403)
-    cfg = require_access(user, job.role, job.bucket, deleting=True)
+    require_access(user, job.role, job.bucket, deleting=True, snapshot=(user, cfg))
     if s3_client.role_storage_fingerprint(job.role, cfg) != job.storage_fingerprint:
         raise MoveError("ROLE_CHANGED", 409)
 
