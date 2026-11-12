@@ -31,6 +31,7 @@ another-s3-manager/
 ├── src/
 │   └── another_s3_manager/
 │       ├── __init__.py
+│       ├── access/          # Access context: the one home of access policies (see "Contexts")
 │       ├── main.py          # FastAPI app, API endpoints
 │       ├── auth.py           # JWT auth, CSRF, ban logic
 │       ├── config.py         # Config management (config.json)
@@ -51,6 +52,23 @@ another-s3-manager/
 ├── docker-compose.yml
 └── uv.lock
 ```
+
+## Contexts
+
+The code moves to bounded contexts one release at a time. Rule: every access policy has
+exactly one home, and the web routes, MCP tools, move jobs and CLI are thin adapters that
+call it and translate its error.
+
+- `access/` — role grants, admin role expansion, bucket allow-lists, the MCP write gate and
+  the deletion gate. `policies.py` holds pure rules over a passed-in config, `service.py`
+  raises `AccessDenied(code, message)` (a `PermissionError` subclass), `__init__.py` is the
+  public API. Adapters map `AccessDenied.code` to their own answer in one table each.
+- Boundaries are enforced by import-linter (`[tool.importlinter]` in `pyproject.toml`,
+  `uv run lint-imports`, also in CI): adapters (`main`, `mcp_server`,
+  `reset_admin_password`) do not import each other, and `access` imports no adapter, no
+  storage module and no web/MCP framework.
+- Test layout: each policy once at the service level in `tests/access/`, plus a thin
+  mapping test per adapter.
 
 ## Database
 
@@ -94,6 +112,9 @@ uv sync
 # Linter and formatting
 uv run ruff check .
 uv run ruff format .
+
+# Context boundaries
+uv run lint-imports
 
 # Tests
 uv run pytest --cov

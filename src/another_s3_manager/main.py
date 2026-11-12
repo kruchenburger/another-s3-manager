@@ -3,6 +3,8 @@ Another S3 Manager - Lightweight S3 file management interface
 Provides file browsing, upload, and deletion capabilities for S3 buckets
 """
 
+from another_s3_manager.access import AccessDenied
+from another_s3_manager.access import service as access_service
 from another_s3_manager.logging_setup import configure_logging, install_access_log_filter
 
 configure_logging()
@@ -866,12 +868,7 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
     config = load_config()
     # Admins can access every role in the config — surface the full list so the
     # React sidebar matches admin permissions without an extra /api/config call.
-    if is_admin:
-        allowed_roles = [r["name"] for r in config.get("roles", []) if r.get("name")]
-    else:
-        allowed_roles = users_module.effective_allowed_roles(
-            current_user.get("allowed_roles", []), {r["name"] for r in config.get("roles", []) if r.get("name")}
-        )
+    allowed_roles = access_service.allowed_roles(current_user, config)
     # disable_deletion: env var OR config (env wins). Mirrors the same combined
     # check used in /api/config so the two endpoints don't disagree.
     disable_deletion = config_module.is_deletion_disabled(config)
@@ -1143,12 +1140,7 @@ def _effective_allowed_roles(current_user: Dict[str, Any]) -> list[str]:
     `allowed_roles`. Extracted so the PUT endpoint validates against the same
     set the GET endpoint reports.
     """
-    if current_user.get("is_admin", False):
-        config = load_config()
-        return [r["name"] for r in config.get("roles", []) if r.get("name")]
-    return users_module.effective_allowed_roles(
-        current_user.get("allowed_roles", []), {r["name"] for r in load_config().get("roles", []) if r.get("name")}
-    )
+    return access_service.allowed_roles(current_user, load_config())
 
 
 @app.put("/api/me/default-role", response_model=UpdateDefaultRoleResponse)
@@ -2163,9 +2155,9 @@ def validate_role_access(role_name: Optional[str], current_user: Dict[str, Any])
     """Validate that user has access to the specified role"""
     role_name = _require_role(role_name)
 
-    # Admins have access to all roles
+    # Preserve the admin shortcut without a user lookup or config load.
     if current_user.get("is_admin", False):
-        return role_name
+        return access_service.require_role(role_name, current_user, {})
 
     # Check if user has access to this role — targeted lookup, not a full-table
     # load_users() scan (this runs on most bucket/file requests for non-admins).
@@ -2173,15 +2165,12 @@ def validate_role_access(role_name: Optional[str], current_user: Dict[str, Any])
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    allowed_roles = users_module.effective_allowed_roles(
-        user.get("allowed_roles", []), {r["name"] for r in load_config().get("roles", []) if r.get("name")}
-    )
-    if role_name not in allowed_roles:
-        raise HTTPException(
-            status_code=403, detail=f"Access denied: You don't have permission to use role '{role_name}'"
-        )
-
-    return role_name
+    try:
+        # The original authorization used the authenticated admin flag, not
+        # the reloaded user's flag; the lookup supplies only fresh grants.
+        return access_service.require_role(role_name, {"allowed_roles": user.get("allowed_roles", [])}, load_config())
+    except AccessDenied as error:
+        raise HTTPException(status_code=403, detail=str(error)) from None
 
 
 @app.get("/api/buckets")
@@ -2773,8 +2762,12 @@ async def delete_file(
     """Delete a file or recursively delete a directory from S3"""
     role = _require_role(role)
     # Check if deletion is disabled (from environment variable or config)
-    if config_module.is_deletion_disabled(load_config(force_reload=False)):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File deletion is disabled by administrator")
+    try:
+        access_service.require_not_deletion_disabled(load_config(force_reload=False))
+    except AccessDenied:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="File deletion is disabled by administrator"
+        ) from None
     try:
         # A trailing "/" is the directory-delete signal delete_object_for_role
         # relies on (recursive delete vs. exact single-key delete) — capture it
