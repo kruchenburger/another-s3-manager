@@ -17,11 +17,11 @@ from botocore.credentials import RefreshableCredentials
 from botocore.exceptions import ClientError, CredentialRetrievalError, MetadataRetrievalError
 from botocore.session import Session as BotocoreSession
 
+from another_s3_manager.access import service as access_service
 from another_s3_manager.config import load_config
 from another_s3_manager.constants import S3_USE_SSL, S3_VERIFY_SSL
 from another_s3_manager.errors import RoleNotFoundError, SafeStorageLogFilter
 from another_s3_manager.move_reservations import guarded_write
-from another_s3_manager.users import effective_allowed_roles
 
 # Cache for S3 clients per role
 _s3_clients_cache: Dict[str, AnyType] = {}
@@ -938,23 +938,17 @@ def validate_role_access(role_name: Optional[str], user_dict: Dict[str, Any]) ->
     Returns the explicit, non-empty role name.
     """
     if role_name is None or not role_name.strip():
-        raise PermissionError("A role is required for this request.")
+        return access_service.require_role(role_name, user_dict, {})
 
     # Admins have access to all roles.
     if user_dict.get("is_admin", False):
-        return role_name
+        return access_service.require_role(role_name, user_dict, {})
 
     # Late import, like the other helpers here, so the module-level config
     # loader is the one tests patch (another_s3_manager.config.load_config).
     from another_s3_manager.config import load_config as _load_config
 
-    allowed_roles = effective_allowed_roles(
-        user_dict.get("allowed_roles", []), {r["name"] for r in _load_config().get("roles", []) if r.get("name")}
-    )
-    if role_name not in allowed_roles:
-        raise PermissionError(f"Access denied: You don't have permission to use role '{role_name}'")
-
-    return role_name
+    return access_service.require_role(role_name, user_dict, _load_config())
 
 
 def _validate_bucket_access(role: str, bucket: str, user_dict: Dict[str, Any]) -> None:
@@ -975,9 +969,7 @@ def _validate_bucket_access(role: str, bucket: str, user_dict: Dict[str, Any]) -
     role_config = next((r for r in roles if r.get("name") == role), None)
     if role_config is None:
         raise RoleNotFoundError(f"Role '{role}' not found in configuration")
-    allowed_buckets = role_config.get("allowed_buckets")
-    if allowed_buckets and bucket not in allowed_buckets:
-        raise PermissionError(f"bucket '{bucket}' not in allowed_buckets for role '{role}'")
+    access_service.require_bucket(role, bucket, user_dict, config)
 
 
 # Role types that sign with temporary (STS) credentials — a presigned URL

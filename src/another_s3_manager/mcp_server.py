@@ -24,6 +24,8 @@ from starlette.requests import Request
 import another_s3_manager.config as _config_module
 from another_s3_manager import api_tokens as token_svc
 from another_s3_manager import s3_client as _s3_client
+from another_s3_manager.access import AccessDenied
+from another_s3_manager.access import service as access_service
 from another_s3_manager.errors import (
     CredentialsExpiredError,
     MoveError,
@@ -43,7 +45,6 @@ from another_s3_manager.metrics import (
     mcp_writes_denied_total,
     upload_rejected_total,
 )
-from another_s3_manager.users import effective_allowed_roles
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,13 @@ class McpError(Exception):
 WRITE_TOOLS = {"upload_file", "delete_file", "copy_object"}
 
 
+_WRITE_DENIALS = {
+    "writes_disabled": ("READ_ONLY_SERVER", "Server config disables MCP writes", "writes_disabled"),
+    "read_only_token": ("READ_ONLY_TOKEN", "This token is read-only", "read_only_token"),
+    "deletion_disabled": ("DELETION_DISABLED", "Deletion is disabled in server config", "deletion_disabled"),
+}
+
+
 def assert_write_allowed(token: Any, tool_name: str, config: dict) -> None:
     """Raise McpError if the given token/config combination disallows a write tool.
 
@@ -156,27 +164,12 @@ def assert_write_allowed(token: Any, tool_name: str, config: dict) -> None:
     2. Per-token read-only flag.
     3. delete_file blocked when server-level deletion is disabled.
     """
-    if config.get("mcp_disable_writes", False):
-        mcp_writes_denied_total.labels(tool=tool_name, reason="writes_disabled").inc()
-        raise McpError(
-            "READ_ONLY_SERVER",
-            "Server config disables MCP writes",
-            {"tool": tool_name},
-        )
-    if token.is_read_only:
-        mcp_writes_denied_total.labels(tool=tool_name, reason="read_only_token").inc()
-        raise McpError(
-            "READ_ONLY_TOKEN",
-            "This token is read-only",
-            {"tool": tool_name},
-        )
-    if tool_name == "delete_file" and _config_module.is_deletion_disabled(config):
-        mcp_writes_denied_total.labels(tool=tool_name, reason="deletion_disabled").inc()
-        raise McpError(
-            "DELETION_DISABLED",
-            "Deletion is disabled in server config",
-            {"tool": tool_name},
-        )
+    try:
+        access_service.require_write(token.is_read_only, tool_name, config)
+    except AccessDenied as error:
+        code, message, reason = _WRITE_DENIALS[error.code]
+        mcp_writes_denied_total.labels(tool=tool_name, reason=reason).inc()
+        raise McpError(code, message, {"tool": tool_name}) from None
 
 
 # ---------------------------------------------------------------------------
@@ -226,12 +219,9 @@ async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
         # allowed_roles column is empty (admins manage roles, they don't get
         # explicit assignments).
         cfg = _config_module.load_config()
-        if u.is_admin:
-            allowed_roles = [r["name"] for r in cfg.get("roles", []) if r.get("name")]
-        else:
-            allowed_roles = effective_allowed_roles(
-                [r.role_name for r in u.roles], {r["name"] for r in cfg.get("roles", []) if r.get("name")}
-            )
+        allowed_roles = access_service.allowed_roles(
+            {"is_admin": u.is_admin, "allowed_roles": [r.role_name for r in u.roles]}, cfg
+        )
         user_dict = {
             "username": u.username,
             "is_admin": u.is_admin,
@@ -1519,7 +1509,10 @@ async def copy_object(
         token, user = await authenticate_mcp_request(_get_current_request())
         config = _config_module.load_config(force_reload=False)
         assert_write_allowed(token, "copy_object", config)
-        if delete_source and _config_module.is_deletion_disabled(config):
+        try:
+            if delete_source:
+                access_service.require_not_deletion_disabled(config)
+        except AccessDenied:
             # This guard lives outside assert_write_allowed (it's conditional on
             # delete_source, not just the tool name), but it's still a write
             # denial for the same reason and must be counted identically.

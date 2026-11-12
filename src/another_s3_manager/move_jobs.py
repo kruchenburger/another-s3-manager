@@ -16,6 +16,8 @@ from botocore.exceptions import ClientError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from another_s3_manager import config, s3_client, users
+from another_s3_manager.access import AccessDenied
+from another_s3_manager.access import service as access_service
 from another_s3_manager.errors import MoveError, safe_move_error, safe_storage_logging
 from another_s3_manager.metrics import move_jobs_total, s3_objects_total, safe_role_label
 from another_s3_manager.move_reservations import acquire, release, reserve
@@ -67,6 +69,14 @@ class MoveRequest(BaseModel):
         return self
 
 
+_ACCESS_ERROR_CODES = {
+    "role_required": "ACCESS_DENIED",
+    "role_not_allowed": "ACCESS_DENIED",
+    "bucket_not_allowed": "ACCESS_DENIED",
+    "deletion_disabled": "DELETION_DISABLED",
+}
+
+
 def require_access(user: dict, role: str | None, bucket: str, *, deleting=False) -> None:
     if not role or not role.strip():
         raise MoveError("ROLE_REQUIRED")
@@ -78,10 +88,12 @@ def require_access(user: dict, role: str | None, bucket: str, *, deleting=False)
     try:
         s3_client.validate_role_access(role, user)
         s3_client._validate_bucket_access(role, bucket, user)
+        if deleting:
+            access_service.require_not_deletion_disabled(cfg)
+    except AccessDenied as error:
+        raise MoveError(_ACCESS_ERROR_CODES[error.code], 403) from None
     except PermissionError:
         raise MoveError("ACCESS_DENIED", 403) from None
-    if deleting and config.is_deletion_disabled(cfg):
-        raise MoveError("DELETION_DISABLED", 403)
 
 
 def s3_unit(role, operation, callback):

@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import joinedload, selectinload
 
+from another_s3_manager.access.policies import effective_allowed_roles as effective_allowed_roles
 from another_s3_manager.constants import (
     DEFAULT_ADMIN_PASSWORD,
     PASSWORD_SET_VIA_CLI,
@@ -341,16 +342,6 @@ def _reconcile_default_role(current: Optional[str], new_roles: List[str]) -> Opt
     if current is None or current in new_roles:
         return current
     return new_roles[0] if new_roles else None
-
-
-def effective_allowed_roles(stored: list[str], config_role_names: Collection[str]) -> list[str]:
-    """Return stored grants that still exist in configuration, preserving order."""
-    # This protects new application-authorized operations, not already issued
-    # presigned URLs (valid until expiry). An in-flight request authenticated
-    # before a same-name delete/recreate is not guaranteed to be rechecked.
-    # External restoration of a name can revive grants: identities have no generations.
-    names = set(config_role_names)
-    return [name for name in stored if name in names]
 
 
 def count_grants_by_role() -> dict[str, int]:

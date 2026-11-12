@@ -126,11 +126,13 @@ def is_deletion_disabled(config: Optional[Dict[str, Any]] = None) -> bool:
     `disable_deletion` is set. Every delete path must call this instead of
     reading one of the two sources itself (ASM-64: MCP used to check only config).
     """
-    if os.getenv("DISABLE_DELETION", "").lower() == "true":
-        return True
+    from another_s3_manager.access.policies import deletion_disabled
+
     if config is None:
+        if deletion_disabled({}):
+            return True
         config = load_config()
-    return bool(config.get("disable_deletion", False))
+    return deletion_disabled(config)
 
 
 def resolve_move_max_objects(config: Optional[Dict[str, Any]] = None) -> int:
