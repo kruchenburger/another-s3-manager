@@ -1326,3 +1326,67 @@ async def test_mcp_role_delete_denied_before_copy_but_plain_copy_allowed(alice_u
         result = await _call(tool_registry, "copy_object", _fake_request(plaintext), **kwargs)
         assert result["moved"] is False
         copy_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["delete_file", "copy_object"])
+@pytest.mark.parametrize("denial", ["role", "bucket"])
+async def test_delete_tools_hide_inaccessible_role_policy(alice_user, tool_registry, tool, denial):
+    from another_s3_manager import config
+
+    _, plaintext = alice_user
+    cfg = config.load_config()
+    if denial == "role":
+        cfg["roles"].append({"name": "Hidden", "type": "default", "allow_delete": False})
+        role = "Hidden"
+    else:
+        cfg["roles"][0].update(allow_delete=False, allowed_buckets=["allowed-bucket"])
+        role = "Default"
+    config.save_config(cfg)
+    kwargs = {"role": role, "bucket": "secret-bucket", "path": "file"}
+    if tool == "copy_object":
+        kwargs = dict(
+            role=role,
+            source_bucket="allowed-bucket",
+            source_path="file",
+            dest_bucket="secret-bucket",
+            dest_path="copy",
+            delete_source=True,
+        )
+    with pytest.raises(McpError) as caught:
+        await _call(tool_registry, tool, _fake_request(plaintext), **kwargs)
+    assert caught.value.code == ("ROLE_NOT_ALLOWED" if denial == "role" else "BUCKET_NOT_ALLOWED")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["delete_file", "copy_object"])
+async def test_delete_tools_map_storage_revocation(alice_user, tool_registry, tool):
+    from another_s3_manager.access import AccessDenied
+
+    _, plaintext = alice_user
+    with (
+        patch("another_s3_manager.s3_client.copy_object_for_role"),
+        patch(
+            "another_s3_manager.s3_client.delete_object_for_role",
+            side_effect=AccessDenied("DELETION_DISABLED_FOR_ROLE", "revoked"),
+        ),
+    ):
+        if tool == "delete_file":
+            with pytest.raises(McpError) as caught:
+                await _call(tool_registry, tool, _fake_request(plaintext), role="Default", bucket="b", path="f")
+            assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+        else:
+            result = await _call(
+                tool_registry,
+                tool,
+                _fake_request(plaintext),
+                role="Default",
+                source_bucket="b",
+                source_path="f",
+                dest_bucket="b",
+                dest_path="g",
+                delete_source=True,
+            )
+            assert result["copied"] is True
+            assert result["moved"] is False
+            assert result["source_kept_reason"] == "DELETION_DISABLED_FOR_ROLE"

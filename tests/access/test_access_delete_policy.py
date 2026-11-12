@@ -25,3 +25,13 @@ def test_delete_permission_matrix(monkeypatch, env, global_flag, role_flag, admi
         assert caught.value.code == ("DELETION_DISABLED" if env or global_flag else "DELETION_DISABLED_FOR_ROLE")
         if not env and not global_flag:
             assert str(caught.value) == "Deleting is turned off for role 'storage'"
+
+
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, None, [], {}])
+def test_non_boolean_delete_permission_fails_closed(monkeypatch, value):
+    monkeypatch.delenv("DISABLE_DELETION", raising=False)
+    config = {"roles": [{"name": "storage", "allow_delete": value}]}
+    assert policies.deletion_allowed(config, "storage") is False
+    with pytest.raises(AccessDenied) as caught:
+        service.require_delete("storage", config)
+    assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"

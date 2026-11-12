@@ -38,7 +38,7 @@ def deletion_disabled(config: dict) -> bool:
 
 def deletion_allowed(config: dict, role_name: str | None) -> bool:
     role = next((r for r in config.get("roles", []) if r.get("name") == role_name), {})
-    return not deletion_disabled(config) and role.get("allow_delete", True) is not False
+    return not deletion_disabled(config) and role.get("allow_delete", True) is True
 
 
 def write_denial(token_is_read_only: bool, tool_name: str, config: dict) -> str | None:

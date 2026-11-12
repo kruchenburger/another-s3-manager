@@ -2241,3 +2241,59 @@ def test_create_s3_client_default_builds_explicit_session_not_default(mocker):
 
     default_session_client.assert_not_called()
     session_mock.client.assert_called_once()
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_folder_delete_rechecks_policy_between_batches(moto_s3, monkeypatch, retry):
+    from botocore.exceptions import ClientError
+
+    from another_s3_manager import config, s3_client
+    from another_s3_manager.access import AccessDenied
+
+    moto_s3.create_bucket(Bucket="revoked-folder")
+    for index in range(1001):
+        moto_s3.put_object(Bucket="revoked-folder", Key=f"folder/{index:04}", Body=b"x")
+    original = moto_s3.delete_objects
+    calls = []
+
+    def delete_and_revoke(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == (2 if retry else 1):
+            cfg = config.load_config()
+            cfg["roles"][0]["allow_delete"] = False
+            config.save_config(cfg)
+            if retry:
+                raise ClientError({"Error": {"Code": "ExpiredToken"}}, "DeleteObjects")
+        return original(**kwargs)
+
+    monkeypatch.setattr(moto_s3, "delete_objects", delete_and_revoke)
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: moto_s3)
+    monkeypatch.setattr(s3_client, "_clear_boto3_cached_credentials", lambda: None)
+    with pytest.raises(AccessDenied) as caught:
+        s3_client.delete_object_for_role("Default", "revoked-folder", "folder/", _ADMIN)
+    assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+    assert caught.value.details["count"] == 1000
+    assert len(calls) == (2 if retry else 1)
+    assert [o["Key"] for o in moto_s3.list_objects_v2(Bucket="revoked-folder")["Contents"]] == ["folder/1000"]
+
+
+def test_single_delete_rechecks_after_listing(moto_s3, monkeypatch):
+    from another_s3_manager import config, s3_client
+    from another_s3_manager.access import AccessDenied
+
+    moto_s3.create_bucket(Bucket="revoked-single")
+    moto_s3.put_object(Bucket="revoked-single", Key="file", Body=b"keep")
+    original = moto_s3.list_objects_v2
+
+    def list_and_revoke(**kwargs):
+        result = original(**kwargs)
+        cfg = config.load_config()
+        cfg["roles"][0]["allow_delete"] = False
+        config.save_config(cfg)
+        return result
+
+    monkeypatch.setattr(moto_s3, "list_objects_v2", list_and_revoke)
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: moto_s3)
+    with pytest.raises(AccessDenied):
+        s3_client.delete_object_for_role("Default", "revoked-single", "file", _ADMIN)
+    assert moto_s3.get_object(Bucket="revoked-single", Key="file")["Body"].read() == b"keep"

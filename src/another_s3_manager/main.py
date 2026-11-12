@@ -2771,16 +2771,12 @@ async def delete_file(
     role = _require_role(role)
     # Check if deletion is disabled (from environment variable or config)
     try:
-        access_service.require_delete(role, load_config(force_reload=False))
+        access_service.require_delete(None, load_config(force_reload=False))
     except AccessDenied as error:
-        if error.code == "DELETION_DISABLED_FOR_ROLE":
-            # Same {detail: {code, message}} shape as the other file-ops errors (frontend apiError.ts).
+        if error.code == "DELETION_DISABLED":
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail={"code": error.code, "message": error.message}
+                status_code=status.HTTP_403_FORBIDDEN, detail="File deletion is disabled by administrator"
             ) from None
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="File deletion is disabled by administrator"
-        ) from None
     try:
         # A trailing "/" is the directory-delete signal delete_object_for_role
         # relies on (recursive delete vs. exact single-key delete) — capture it
@@ -2807,6 +2803,8 @@ async def delete_file(
         if wants_recursive_delete and not path.endswith("/"):
             path = path + "/"
 
+        # The role-specific delete policy is enforced inside delete_object_for_role,
+        # after its role/bucket access check and before every delete call.
         # Delegate to s3_client.delete_object_for_role. The helper does its own
         # role/bucket access validation, recursively deletes everything under
         # `path` when it ends with "/", otherwise deletes exactly that one key
@@ -2817,6 +2815,16 @@ async def delete_file(
         return await run_in_threadpool(delete_object_for_role, role, bucket_name, path, current_user)
     except HTTPException:
         raise
+    except AccessDenied as error:
+        if error.code in {"DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"}:
+            detail = {"code": error.code, "message": error.message}
+            # Revoked mid-way through a folder delete: say what already happened.
+            deleted = error.details.get("count", 0)
+            if deleted:
+                detail["count"] = deleted
+                detail["message"] = f"{error.message}. {deleted} object(s) were deleted before the change."
+            raise HTTPException(status_code=403, detail=detail) from None
+        raise HTTPException(status_code=403, detail=error.message) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except FileNotFoundError as e:

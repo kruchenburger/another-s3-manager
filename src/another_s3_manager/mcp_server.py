@@ -1198,11 +1198,20 @@ async def delete_file(
     try:
         token, user = await authenticate_mcp_request(_get_current_request())
         config = _config_module.load_config(force_reload=False)
-        assert_write_allowed(token, "delete_file", config, role)
+        assert_write_allowed(token, "delete_file", config)
         try:
+            _s3_client._validate_bucket_access(role, bucket, user)
+            assert_write_allowed(token, "delete_file", config, role)
             await run_in_threadpool(_s3_client.delete_object_for_role, role, bucket, path, user)
         except FileNotFoundError:
             raise McpError("FILE_NOT_FOUND", "Object not found", {"bucket": bucket, "path": path})
+        except AccessDenied as error:
+            if error.code in _WRITE_DENIALS:
+                code, message, reason = _WRITE_DENIALS[error.code]
+                mcp_writes_denied_total.labels(tool="delete_file", reason=reason).inc()
+                raise McpError(code, error.message if code == "DELETION_DISABLED_FOR_ROLE" else message) from None
+            code = "BUCKET_NOT_ALLOWED" if error.code == "bucket_not_allowed" else "ROLE_NOT_ALLOWED"
+            raise McpError(code, error.message) from None
         except (PermissionError, RoleNotFoundError) as e:
             msg = str(e).lower()
             if "bucket" in msg:
@@ -1518,8 +1527,14 @@ async def copy_object(
         assert_write_allowed(token, "copy_object", config)
         try:
             if delete_source:
+                access_service.require_delete(None, config)
+                _s3_client._validate_bucket_access(role, source_bucket, user)
+                _s3_client._validate_bucket_access(role, dest_bucket, user)
                 access_service.require_delete(role, config)
         except AccessDenied as error:
+            if error.code not in _WRITE_DENIALS:
+                code = "BUCKET_NOT_ALLOWED" if error.code == "bucket_not_allowed" else "ROLE_NOT_ALLOWED"
+                raise McpError(code, error.message) from None
             # This guard lives outside assert_write_allowed (it's conditional on
             # delete_source, not just the tool name), but it's still a write
             # denial for the same reason and must be counted identically.
@@ -1531,6 +1546,9 @@ async def copy_object(
                 else "Deletion is disabled in server config (delete_source requires it)"
             )
             raise McpError(code, message, {"tool": "copy_object"})
+        except (PermissionError, RoleNotFoundError) as error:
+            code = "BUCKET_NOT_ALLOWED" if "bucket" in str(error).lower() else "ROLE_NOT_ALLOWED"
+            raise McpError(code, str(error)) from None
         moved = False
         source_kept_reason = None
         try:
@@ -1541,14 +1559,15 @@ async def copy_object(
                 try:
                     fresh_config = await run_in_threadpool(_config_module.load_config, force_reload=True)
                     access_service.require_delete(role, fresh_config)
+                    await run_in_threadpool(_s3_client.delete_object_for_role, role, source_bucket, source_path, user)
+                    moved = True
                 except AccessDenied as error:
+                    if error.code not in _WRITE_DENIALS:
+                        raise
                     source_kept_reason = error.code
                     error_code = error.code
                     _, _, reason = _WRITE_DENIALS[error.code]
                     mcp_writes_denied_total.labels(tool="copy_object", reason=reason).inc()
-                else:
-                    await run_in_threadpool(_s3_client.delete_object_for_role, role, source_bucket, source_path, user)
-                    moved = True
         except FileNotFoundError as e:
             raise McpError("FILE_NOT_FOUND", str(e), {"bucket": source_bucket, "path": source_path})
         except (PermissionError, RoleNotFoundError) as e:

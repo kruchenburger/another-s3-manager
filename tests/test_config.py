@@ -451,3 +451,21 @@ def test_merge_role_security_fields_preserves_only_same_name_and_explicit_value(
         {"name": "enabled", "allow_delete": True},
         {"name": "new"},
     ]
+
+
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, None])
+def test_load_warns_once_per_load_for_invalid_delete_permission(value, caplog):
+    config = reload_config()
+    cfg = config.load_config(force_reload=True)
+    cfg["roles"][0]["allow_delete"] = value
+    cfg["roles"][0]["secret_access_key"] = "never-log-this-secret"
+    config.CONFIG_FILE.write_text(json.dumps(cfg), encoding="utf-8")
+    caplog.clear()
+    config.load_config(force_reload=True)
+    config.load_config()
+    warnings = [r for r in caplog.records if "allow_delete" in r.getMessage()]
+    assert len(warnings) == 1
+    assert warnings[0].getMessage() == "Non-boolean allow_delete for role 'Default'; deletion denied"
+    assert "never-log-this-secret" not in caplog.text
+    config.load_config(force_reload=True)
+    assert len([r for r in caplog.records if "allow_delete" in r.getMessage()]) == 2

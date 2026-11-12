@@ -66,6 +66,10 @@ def load_config(force_reload: bool = False) -> Dict[str, Any]:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             new_config = json.load(f)
 
+        for role in new_config.get("roles", []):
+            if "allow_delete" in role and type(role["allow_delete"]) is not bool:
+                logger.warning("Non-boolean allow_delete for role '%s'; deletion denied", role.get("name"))
+
         # Migrate config: add missing fields if they don't exist.
         # Prevent recursive migration calls.
         global _migrating
