@@ -32,6 +32,7 @@ def test_sdk_retry_refreshes_access(monkeypatch, path, revoke):
         aws_secret_access_key="test",
         config=Config(retries={"mode": "standard", "total_max_attempts": 3}),
     )
+    client._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", config.load_config())
     s3_client._register_delete_handlers(client)
     sent = []
     retries = []
@@ -102,6 +103,7 @@ def test_sdk_retry_refreshes_access(monkeypatch, path, revoke):
 
 def test_guard_unregisters_on_exception(monkeypatch):
     client = boto3.client("s3", region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test")
+    client._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", config.load_config())
     s3_client._register_delete_handlers(client)
     check = Mock(side_effect=access.AccessDenied("role_not_allowed", "revoked"))
     with pytest.raises(access.AccessDenied):
@@ -124,6 +126,7 @@ def test_guard_isolates_threads_on_shared_client(monkeypatch):
         aws_access_key_id="test",
         aws_secret_access_key="test",
     )
+    client._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", config.load_config())
     s3_client._register_delete_handlers(client)
     barrier = threading.Barrier(2)
     checks = {"allowed": 0, "denied": 0}
@@ -267,3 +270,54 @@ def test_nested_guard_restores_callback_and_client_scope():
     second_handler()
     outer.assert_not_called()
     inner.assert_not_called()
+
+
+@pytest.mark.parametrize("path", ["single", "job"])
+@pytest.mark.parametrize("changed", ["config", "client"])
+def test_sdk_retry_refuses_changed_storage_target(monkeypatch, path, changed):
+    from copy import deepcopy
+
+    user = users.load_users()["users"][0]
+    client = boto3.client(
+        "s3",
+        region_name="us-east-1",
+        endpoint_url="http://a.test",
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+        config=Config(retries={"mode": "standard", "total_max_attempts": 2}),
+    )
+    client._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", config.load_config())
+    s3_client._register_delete_handlers(client)
+    sent = []
+    retries = []
+
+    def send(request):
+        sent.append(request.url)
+        return AWSResponse(request.url, 500, {}, Raw(b"<Error><Code>InternalError</Code></Error>"))
+
+    def change(attempts, **kwargs):
+        retries.append(attempts)
+        if changed == "client":
+            client._asm_storage_fingerprint = "different-client-target"
+        else:
+            cfg = deepcopy(config.load_config())
+            cfg["roles"][0]["endpoint_url"] = "http://b.test"
+            config.save_config(cfg)
+
+    client.meta.events.register("needs-retry.s3", change)
+    monkeypatch.setattr(client._endpoint.http_session, "send", send)
+    monkeypatch.setattr("botocore.endpoint.time.sleep", lambda _: None)
+    monkeypatch.setattr(client, "list_objects_v2", lambda **kwargs: {"Contents": [{"Key": "file"}]})
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: client)
+    try:
+        with pytest.raises(MoveError) as caught:
+            if path == "job":
+                job = move_jobs.Job("retry-job", move_jobs.owner_identity(user), "Default", "bucket", "op", "hash")
+                move_jobs.delete_batch(job, ["file"])
+            else:
+                s3_client.delete_object_for_role("Default", "bucket", "file", user)
+        assert caught.value.code == "ROLE_CHANGED"
+        assert len(sent) == 1
+        assert retries == [1]
+    finally:
+        client.close()

@@ -264,3 +264,18 @@ async def test_mcp_user_snapshot_contains_account_generation(alice_user):  # noq
     _, user = await mcp_server.authenticate_mcp_request(_fake_request(alice_user[1]))
     current = users.get_user_by_id(alice_user[0])
     assert user["created_at"] == current["created_at"]
+
+
+def test_web_role_changed_mapping(app_client, monkeypatch):
+    _, headers = login(app_client)
+
+    def changed(*args):
+        raise MoveError("ROLE_CHANGED", 409)
+
+    monkeypatch.setattr("another_s3_manager.main.delete_object_for_role", changed)
+    response = app_client.delete("/api/buckets/bucket/files?path=file&role=Default", headers=headers)
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ROLE_CHANGED"
+    assert response.json()["detail"]["message"] == (
+        "The role's storage settings changed while this move was running. Nothing more was copied or deleted."
+    )

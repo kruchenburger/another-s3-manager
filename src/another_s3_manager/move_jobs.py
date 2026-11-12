@@ -112,10 +112,7 @@ def s3_unit(role, operation, callback):
 
         def checked(client):
             if job is not None:
-                recheck(job)
-                fingerprint = client.__dict__.get("_asm_storage_fingerprint")
-                if fingerprint is not None and fingerprint != job.storage_fingerprint:
-                    raise MoveError("ROLE_CHANGED", 409)
+                recheck(job, client)
             return callback(client)
 
         return s3_client.execute_with_s3_retry(role, operation, checked)
@@ -385,13 +382,12 @@ class Job:
             }
 
 
-def recheck(job):
+def recheck(job, client=None):
     user, cfg = s3_client.load_destructive_state(job.owner[0])
     if user is None or owner_identity(user) != job.owner:
         raise MoveError("ACCESS_DENIED", 403)
     require_access(user, job.role, job.bucket, deleting=True, snapshot=(user, cfg))
-    if s3_client.role_storage_fingerprint(job.role, cfg) != job.storage_fingerprint:
-        raise MoveError("ROLE_CHANGED", 409)
+    s3_client.require_storage_target(job.role, job.storage_fingerprint, cfg, client)
 
 
 def delete_batch(job, keys):
@@ -399,7 +395,7 @@ def delete_batch(job, keys):
 
     def delete(client):
         recheck(job)
-        with s3_client.destructive_delete_guard(client, lambda: recheck(job)):
+        with s3_client.destructive_delete_guard(client, lambda: recheck(job, client)):
             return s3_client.delete_keys_batch(client, job.bucket, keys)
 
     succeeded, errors = s3_unit(job.role, "delete", delete)
@@ -629,7 +625,7 @@ class MoveRegistry:
 
                         def delete(client):
                             recheck(job)
-                            with s3_client.destructive_delete_guard(client, lambda: recheck(job)):
+                            with s3_client.destructive_delete_guard(client, lambda: recheck(job, client)):
                                 return s3_client.delete_keys_batch(client, job.bucket, [key])
 
                         deleted, failed = s3_unit(job.role, "delete", delete)

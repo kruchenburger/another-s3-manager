@@ -1494,6 +1494,7 @@ def test_delete_object_for_role_single_file(mocker):
         return_value={"roles": [{"name": "RoleA", "type": "default"}]},
     )
     fake_client = mocker.MagicMock()
+    fake_client._asm_storage_fingerprint = mod.storage_target_fingerprint({"name": "RoleA", "type": "default"})
     # Single-key existence + exact-match check is now ONE list_objects_v2
     # call (Prefix=path, MaxKeys=1), not a paginated walk -- its lone result
     # is the exact key (an exact match, not merely a prefix match), which
@@ -1516,6 +1517,7 @@ def test_delete_object_for_role_not_found(mocker):
         return_value={"roles": [{"name": "RoleA", "type": "default"}]},
     )
     fake_client = mocker.MagicMock()
+    fake_client._asm_storage_fingerprint = mod.storage_target_fingerprint({"name": "RoleA", "type": "default"})
     # Listing finds nothing at all -> the key does not exist. Real S3's
     # DeleteObject is idempotent (it does NOT raise for a missing key), so
     # existence must be established from the listing itself, not by hoping
@@ -1541,6 +1543,7 @@ def test_delete_object_for_role_single_file_prefix_match_not_exact(mocker):
         return_value={"roles": [{"name": "RoleA", "type": "default"}]},
     )
     fake_client = mocker.MagicMock()
+    fake_client._asm_storage_fingerprint = mod.storage_target_fingerprint({"name": "RoleA", "type": "default"})
     fake_client.list_objects_v2.return_value = {"Contents": [{"Key": "gone.txt.bak"}]}
     mocker.patch.object(mod, "get_s3_client", return_value=fake_client)
 

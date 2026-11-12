@@ -569,12 +569,12 @@ def test_snapshot_available_during_cleanup(storage, monkeypatch):
     recheck = moves.recheck
     checks = 0
 
-    def revoke_during_cleanup(job):
+    def revoke_during_cleanup(job, client=None):
         nonlocal checks
         checks += 1
         if checks == 2:
             raise MoveError("ACCESS_DENIED", 403)
-        recheck(job)
+        recheck(job, client)
 
     with monkeypatch.context() as patch:
         patch.setattr(moves, "recheck", revoke_during_cleanup)
@@ -831,7 +831,7 @@ def test_cleanup_reports_all_remaining_copies_after_revocation(storage, monkeypa
     moves.registry.jobs[job.id] = job
     from unittest.mock import Mock
 
-    client = Mock()
+    client = Mock(_asm_storage_fingerprint=s3._asm_storage_fingerprint)
     client.head_object.return_value = {"ETag": '"etag"'}
 
     def delete(**kwargs):

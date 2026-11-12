@@ -56,6 +56,7 @@ def test_directory_partial_delete_continues_and_counts(moto_s3, monkeypatch):
     keys = [f"dir/{i:04}" for i in range(1001)]
     # Stub enumeration/HTTP results rather than create a thousand remote objects.
     client = Mock()
+    client._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", config.load_config())
     client.get_paginator.return_value.paginate.return_value = [{"Contents": [{"Key": key} for key in keys]}]
     client.delete_objects.side_effect = [
         {"Deleted": [{"Key": key} for key in keys[:999]], "Errors": [{"Key": keys[999], "Code": "AccessDenied"}]},
@@ -217,6 +218,7 @@ def test_directory_credential_retry_preserves_keys_and_unique_results(monkeypatc
     user = users.load_users()["users"][0]
     keys = [f"dir/{i:04}" for i in range(1001)]
     client = Mock()
+    client._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", config.load_config())
     client.get_paginator.return_value.paginate.side_effect = [
         [{"Contents": [{"Key": key} for key in keys]}],
         AssertionError("Credential refresh must not enumerate a different key set"),
@@ -246,6 +248,7 @@ def test_partial_delete_is_never_a_credential_retry(monkeypatch, key, code):
 
     user = users.load_users()["users"][0]
     client = Mock()
+    client._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", config.load_config())
     client.get_paginator.return_value.paginate.return_value = [{"Contents": [{"Key": key}]}]
     client.delete_objects.return_value = {"Errors": [{"Key": key, "Code": code}]}
     monkeypatch.setattr(s3_client, "get_s3_client", lambda role: client)
@@ -257,3 +260,64 @@ def test_partial_delete_is_never_a_credential_retry(monkeypatch, key, code):
     assert caught.value.deleted_count == 0
     assert client.delete_objects.call_count == 1
     refresh.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["folder_retry", "single_stale", "rebuilt_client", "unrelated"])
+def test_delete_pins_first_storage_target(monkeypatch, kind):
+    from copy import deepcopy
+
+    from botocore.exceptions import ClientError
+
+    from another_s3_manager.errors import MoveError
+
+    user = users.load_users()["users"][0]
+    original = config.load_config(force_reload=True)
+    first = Mock()
+    first._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", original)
+    second = Mock()
+    second._asm_storage_fingerprint = "different-target"
+    first.list_objects_v2.return_value = {"Contents": [{"Key": "dir/file"}]}
+    first.get_paginator.return_value.paginate.return_value = [{"Contents": [{"Key": "dir/file"}]}]
+    first.delete_objects.return_value = {"Deleted": [{"Key": "dir/file"}]}
+
+    def change_target():
+        changed = deepcopy(original)
+        if kind == "unrelated":
+            changed["roles"].append({"name": "other", "type": "default", "endpoint_url": "http://b.test"})
+        elif kind != "rebuilt_client":
+            changed["roles"][0]["endpoint_url"] = "http://b.test"
+        config.save_config(changed)
+        if kind == "folder_retry":
+            second._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", changed)
+
+    if kind in {"folder_retry", "rebuilt_client"}:
+
+        def expired(**kwargs):
+            change_target()
+            raise ClientError({"Error": {"Code": "ExpiredToken"}}, "DeleteObjects")
+
+        first.delete_objects.side_effect = expired
+        monkeypatch.setattr(s3_client, "get_s3_client", Mock(side_effect=[first, second]))
+        monkeypatch.setattr(s3_client, "_clear_boto3_cached_credentials", lambda: None)
+    else:
+
+        def list_and_change(**kwargs):
+            change_target()
+            return {"Contents": [{"Key": "dir/file"}]}
+
+        first.list_objects_v2.side_effect = list_and_change
+        monkeypatch.setattr(s3_client, "get_s3_client", lambda role: first)
+
+    if kind == "unrelated":
+        assert s3_client.delete_object_for_role("Default", "bucket", "dir/file", user)["count"] == 1
+        first.delete_object.assert_called_once()
+    else:
+        with pytest.raises(MoveError) as caught:
+            s3_client.delete_object_for_role(
+                "Default", "bucket", "dir/" if kind in {"folder_retry", "rebuilt_client"} else "dir/file", user
+            )
+        assert caught.value.code == "ROLE_CHANGED"
+        assert caught.value.http_status == 409
+        first.delete_object.assert_not_called()
+    second.delete_objects.assert_not_called()
+    second.delete_object.assert_not_called()

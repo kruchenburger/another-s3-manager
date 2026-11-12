@@ -134,6 +134,9 @@ def fake_s3_client():
 
     class FakeS3Client:
         def __init__(self):
+            from another_s3_manager import config, s3_client
+
+            self._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", config.load_config())
             self.objects = {}
             self.uploads = []
             self.deleted = []
@@ -259,4 +262,7 @@ def moto_s3():
 
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")
+        from another_s3_manager import config, s3_client
+
+        client._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", config.load_config())
         yield client

@@ -92,6 +92,19 @@ def role_storage_fingerprint(role: str, cfg: dict) -> str:
     return storage_target_fingerprint(role_config)
 
 
+def require_storage_target(role: str, fingerprint: str | None, cfg: dict, client=None) -> str:
+    """Pin one operation to its first client and reject config/client target drift."""
+    actual = client.__dict__.get("_asm_storage_fingerprint") if client is not None else None
+    expected = fingerprint if fingerprint is not None else actual
+    if (
+        not isinstance(expected, str)
+        or role_storage_fingerprint(role, cfg) != expected
+        or (client is not None and actual != expected)
+    ):
+        raise MoveError("ROLE_CHANGED", 409)
+    return expected
+
+
 _delete_guard_state = threading.local()
 
 
@@ -103,7 +116,7 @@ def _register_delete_handlers(client):
         if state is not None and state[0] is client:
             state[1]()
 
-    for operation in ("DeleteObject", "DeleteObjects"):
+    for operation in ("DeleteObject", "DeleteObjects", "CopyObject"):
         client.meta.events.register(
             f"before-sign.s3.{operation}", before_sign, unique_id=f"asm-destructive-{operation}"
         )
@@ -2272,6 +2285,7 @@ def _copy_object(
     *,
     etag: str | None = None,
     version_id: str | None = None,
+    storage_fingerprint: str | None = None,
 ) -> str | None:
     """Copy under the caller's reservation, optionally pinning the source state.
 
@@ -2285,13 +2299,21 @@ def _copy_object(
     validated_role = validate_role_access(role, user_dict)
 
     def do_copy(client):
+        def check_target():
+            if storage_fingerprint is not None:
+                cfg = require_current_destructive(user_dict, role, source_bucket)
+                require_storage_target(role, storage_fingerprint, cfg, client)
+
         copy_source = {"Bucket": source_bucket, "Key": source_path}
         if version_id is not None:
             copy_source["VersionId"] = version_id
         conditions = {"CopySourceIfMatch": etag} if etag is not None else {}
         try:
             try:
-                response = client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=copy_source, **conditions)
+                with destructive_delete_guard(client, check_target):
+                    response = client.copy_object(
+                        Bucket=dest_bucket, Key=dest_path, CopySource=copy_source, **conditions
+                    )
                 copied_version = response.get("CopySourceVersionId") or version_id
             except ClientError as error:
                 # Pinning a version needs s3:GetObjectVersion, which 1.2.x never required.
@@ -2304,7 +2326,8 @@ def _copy_object(
                     raise
                 logger.info("move: version-pinned copy denied, retrying without VersionId")
                 unpinned = {"Bucket": source_bucket, "Key": source_path}
-                response = client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=unpinned, **conditions)
+                with destructive_delete_guard(client, check_target):
+                    response = client.copy_object(Bucket=dest_bucket, Key=dest_path, CopySource=unpinned, **conditions)
                 copied_version = response.get("CopySourceVersionId")
             s3_objects_total.labels(
                 role=safe_role_label(validated_role or "unknown"), bucket=dest_bucket, operation="copy"
@@ -2391,6 +2414,7 @@ def _delete_exact_key(
     etag: str | None = None,
     version_id: str | None = None,
     source_head: dict | None = None,
+    storage_fingerprint: str | None = None,
 ) -> dict:
     """Delete one exact key under the caller's reservation, rechecking each retry."""
     from another_s3_manager.metrics import s3_objects_total, safe_role_label
@@ -2399,7 +2423,14 @@ def _delete_exact_key(
     validated_role = validate_role_access(role, user_dict)
 
     def do_delete(client):
-        require_current_destructive(user_dict, role, bucket)
+        nonlocal storage_fingerprint
+
+        def check_target():
+            nonlocal storage_fingerprint
+            cfg = require_current_destructive(user_dict, role, bucket)
+            storage_fingerprint = require_storage_target(role, storage_fingerprint, cfg, client)
+
+        check_target()
         if etag is not None:
             try:
                 current = _head_move_source(client, bucket, path)
@@ -2415,11 +2446,11 @@ def _delete_exact_key(
         # If-Match on every guarded delete: with versioning suspended, a real
         # VersionId seen by both HEADs can still be replaced by a new "null" one.
         conditional = etag is not None
-        require_current_destructive(user_dict, role, bucket)
+        check_target()
         try:
             # Never delete by VersionId: with versioning enabled a plain DELETE adds
             # a delete marker and keeps every version.
-            with destructive_delete_guard(client, lambda: require_current_destructive(user_dict, role, bucket)):
+            with destructive_delete_guard(client, check_target):
                 if conditional:
                     with _conditional_delete(client, etag):
                         client.delete_object(Bucket=bucket, Key=path)
@@ -2461,10 +2492,16 @@ def move_object_for_role(
     validated_role = validate_role_access(role, user_dict)
     require_current_destructive(user_dict, role, source_bucket)
 
+    storage_fingerprint = None
+
+    def head_source(client):
+        nonlocal storage_fingerprint
+        cfg = require_current_destructive(user_dict, role, source_bucket)
+        storage_fingerprint = require_storage_target(role, storage_fingerprint, cfg, client)
+        return _head_move_source(client, source_bucket, source_path)
+
     try:
-        source = execute_with_s3_retry(
-            validated_role, "head", lambda client: _head_move_source(client, source_bucket, source_path)
-        )
+        source = execute_with_s3_retry(validated_role, "head", head_source)
     except ClientError as error:
         typed = classify_boto_error(error)
         if isinstance(typed, S3AccessDeniedError) or typed.http_status == 403:
@@ -2479,7 +2516,15 @@ def move_object_for_role(
     try:
         try:
             copied_version = _copy_object(
-                role, source_bucket, source_path, dest_bucket, dest_path, user_dict, etag=etag, version_id=version_id
+                role,
+                source_bucket,
+                source_path,
+                dest_bucket,
+                dest_path,
+                user_dict,
+                etag=etag,
+                version_id=version_id,
+                storage_fingerprint=storage_fingerprint,
             )
         except ClientError as error:
             typed = classify_boto_error(error)
@@ -2493,8 +2538,20 @@ def move_object_for_role(
             raise _SourceChanged
         require_current_destructive(user_dict, role, source_bucket)
         _delete_exact_key(
-            role, source_bucket, source_path, user_dict, etag=etag, version_id=version_id, source_head=source
+            role,
+            source_bucket,
+            source_path,
+            user_dict,
+            etag=etag,
+            version_id=version_id,
+            source_head=source,
+            storage_fingerprint=storage_fingerprint,
         )
+    except MoveError as error:
+        if not copied or error.code != "ROLE_CHANGED":
+            raise
+        reason = error.code
+        denial_message = str(error)
     except _SourceChanged:
         reason = "SOURCE_CHANGED"
     except AccessDenied as error:
@@ -2582,15 +2639,20 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
     failed: dict[str, str] = {}
     objects_to_delete: list[dict] | None = None
 
-    def require_current_delete():
+    storage_fingerprint = None
+
+    def require_current_delete(client):
+        nonlocal storage_fingerprint
         try:
-            require_current_destructive(user_dict, role, bucket)
+            cfg = require_current_destructive(user_dict, role, bucket)
+            storage_fingerprint = require_storage_target(role, storage_fingerprint, cfg, client)
         except AccessDenied as error:
             error.details["count"] = len(deleted_keys)
             raise
 
     def do_delete(s3_client):
         nonlocal objects_to_delete
+        require_current_delete(s3_client)
 
         if is_directory:
             # Directory delete lists the "prefix/" subtree and takes every key
@@ -2612,7 +2674,7 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
 
             for i in range(0, len(objects_to_delete), 1000):
                 batch = objects_to_delete[i : i + 1000]
-                with destructive_delete_guard(s3_client, require_current_delete):
+                with destructive_delete_guard(s3_client, lambda: require_current_delete(s3_client)):
                     deleted, failures = delete_keys_batch(s3_client, bucket, [item["Key"] for item in batch])
                 newly_deleted = deleted.difference(deleted_keys)
                 deleted_keys.update(deleted)
@@ -2643,7 +2705,7 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
 
             # Exact match confirmed — delete_object is equivalent to, and
             # cheaper than, the batch API for a single key.
-            with destructive_delete_guard(s3_client, require_current_delete):
+            with destructive_delete_guard(s3_client, lambda: require_current_delete(s3_client)):
                 s3_client.delete_object(Bucket=bucket, Key=prefix)
             newly_deleted = prefix not in deleted_keys
             deleted_keys.add(prefix)

@@ -806,3 +806,65 @@ def test_unversioned_copy_reporting_a_version_still_moves(source, monkeypatch):
 
     monkeypatch.setattr(source, "copy_object", copy_object)
     assert move()["moved"] is True
+
+
+@pytest.mark.parametrize("phase", ["head", "copy", "delete_retry", "fallback"])
+def test_move_keeps_original_storage_target(source, monkeypatch, phase):
+    from copy import deepcopy
+
+    original_head = source.head_object
+    original_copy = source.copy_object
+    original_delete = source.delete_object
+    copies = []
+    deletes = []
+
+    def change():
+        cfg = deepcopy(config.load_config())
+        cfg["roles"][0]["endpoint_url"] = "http://changed.test"
+        config.save_config(cfg)
+
+    def head(**kwargs):
+        result = original_head(**kwargs)
+        if phase == "head":
+            change()
+        return result
+
+    def copy(**kwargs):
+        copies.append(kwargs)
+        if phase == "fallback":
+            change()
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "CopyObject")
+        result = original_copy(**kwargs)
+        if phase == "copy":
+            change()
+        return result
+
+    def delete(**kwargs):
+        deletes.append(kwargs)
+        if phase == "delete_retry":
+            change()
+            raise ClientError({"Error": {"Code": "ExpiredToken"}}, "DeleteObject")
+        return original_delete(**kwargs)
+
+    if phase == "fallback":
+        source.put_bucket_versioning(Bucket="move-source", VersioningConfiguration={"Status": "Enabled"})
+        source.put_object(Bucket="move-source", Key="file", Body=b"old")
+    monkeypatch.setattr(source, "head_object", head)
+    monkeypatch.setattr(source, "copy_object", copy)
+    monkeypatch.setattr(source, "delete_object", delete)
+    monkeypatch.setattr(s3_client, "_clear_boto3_cached_credentials", lambda: None)
+    if phase in {"head", "fallback"}:
+        with pytest.raises(MoveError) as caught:
+            move()
+        assert caught.value.code == "ROLE_CHANGED"
+        assert len(copies) == (1 if phase == "fallback" else 0)
+        assert not deletes
+    else:
+        result = move()
+        assert result["copied"] is True
+        assert result["moved"] is False
+        assert result["source_kept_reason"] == "ROLE_CHANGED"
+        assert len(copies) == 1
+        assert len(deletes) == (1 if phase == "delete_retry" else 0)
+        assert body(source, "move-dest", "copy") == b"old"
+    assert body(source, "move-source", "file") == b"old"
