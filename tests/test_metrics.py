@@ -253,6 +253,10 @@ def test_folder_delete_counts_every_object_not_every_api_call(monkeypatch):
     monkeypatch.setattr(sc, "_validate_bucket_access", lambda *a, **k: None)
     monkeypatch.setattr(sc, "validate_role_access", lambda role, _u: role)
     monkeypatch.setattr(sc, "execute_with_s3_retry", lambda _r, _op, cb: cb(_FakeClient()))
+    # The role-level delete policy (ASM-69) fails closed for a role missing from config.
+    import another_s3_manager.config as config_module
+
+    monkeypatch.setattr(config_module, "load_config", lambda *a, **k: {"roles": [{"name": "r1", "type": "default"}]})
 
     result = sc.delete_object_for_role("r1", "b1", "folder/", {"username": "u"})
 
