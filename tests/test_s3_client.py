@@ -2297,3 +2297,102 @@ def test_single_delete_rechecks_after_listing(moto_s3, monkeypatch):
     with pytest.raises(AccessDenied):
         s3_client.delete_object_for_role("Default", "revoked-single", "file", _ADMIN)
     assert moto_s3.get_object(Bucket="revoked-single", Key="file")["Body"].read() == b"keep"
+
+
+@pytest.mark.parametrize("change", ["remove", "rename"])
+def test_folder_delete_denies_role_missing_after_listing(moto_s3, monkeypatch, change):
+    from another_s3_manager import config, s3_client
+    from another_s3_manager.access import AccessDenied
+
+    moto_s3.create_bucket(Bucket="missing-role-delete")
+    moto_s3.put_object(Bucket="missing-role-delete", Key="folder/a", Body=b"keep")
+    original = moto_s3.list_objects_v2
+
+    def list_and_change_role(**kwargs):
+        result = original(**kwargs)
+        cfg = config.load_config()
+        if change == "remove":
+            cfg["roles"] = []
+        else:
+            cfg["roles"][0]["name"] = "Renamed"
+        config.save_config(cfg)
+        return result
+
+    monkeypatch.setattr(moto_s3, "list_objects_v2", list_and_change_role)
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: moto_s3)
+    with pytest.raises(AccessDenied) as caught:
+        s3_client.delete_object_for_role("Default", "missing-role-delete", "folder/", _ADMIN)
+    assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+    assert caught.value.details["count"] == 0
+    assert moto_s3.get_object(Bucket="missing-role-delete", Key="folder/a")["Body"].read() == b"keep"
+
+
+def test_delete_denied_before_listing(moto_s3, monkeypatch, mocker):
+    from another_s3_manager import config, s3_client
+    from another_s3_manager.access import AccessDenied
+
+    cfg = config.load_config()
+    cfg["roles"][0]["allow_delete"] = False
+    config.save_config(cfg)
+    moto_s3.create_bucket(Bucket="early-denied")
+    moto_s3.put_object(Bucket="early-denied", Key="folder/a", Body=b"keep")
+    client = moto_s3
+    mocker.spy(client, "get_paginator")
+    mocker.spy(client, "list_objects_v2")
+    mocker.spy(client, "delete_objects")
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: client)
+    with pytest.raises(AccessDenied) as caught:
+        s3_client.delete_object_for_role("Default", "early-denied", "folder/", _ADMIN)
+    assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+    client.get_paginator.assert_not_called()
+    client.list_objects_v2.assert_not_called()
+    client.delete_objects.assert_not_called()
+
+
+def test_exact_key_delete_preserves_folder_children(moto_s3):
+    from another_s3_manager import s3_client
+
+    moto_s3.create_bucket(Bucket="exact-marker")
+    for key in ["folder/", "folder/a", "folder/deep/b"]:
+        moto_s3.put_object(Bucket="exact-marker", Key=key, Body=b"keep")
+    result = s3_client.delete_exact_key_for_role("Default", "exact-marker", "folder/", _ADMIN)
+    assert result["count"] == 1
+    assert {o["Key"] for o in moto_s3.list_objects_v2(Bucket="exact-marker")["Contents"]} == {
+        "folder/a",
+        "folder/deep/b",
+    }
+
+
+def test_exact_key_delete_rechecks_before_call(moto_s3, monkeypatch):
+    from another_s3_manager import config, s3_client
+    from another_s3_manager.access import AccessDenied
+
+    moto_s3.create_bucket(Bucket="exact-revoked")
+    moto_s3.put_object(Bucket="exact-revoked", Key="folder/", Body=b"keep")
+
+    def get_client_and_revoke(role):
+        cfg = config.load_config()
+        cfg["roles"][0]["allow_delete"] = False
+        config.save_config(cfg)
+        return moto_s3
+
+    monkeypatch.setattr(s3_client, "get_s3_client", get_client_and_revoke)
+    with pytest.raises(AccessDenied) as caught:
+        s3_client.delete_exact_key_for_role("Default", "exact-revoked", "folder/", _ADMIN)
+    assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+    assert moto_s3.get_object(Bucket="exact-revoked", Key="folder/")["Body"].read() == b"keep"
+
+
+@pytest.mark.parametrize("denial", ["role", "bucket"])
+def test_exact_key_delete_checks_access(moto_s3, denial):
+    from another_s3_manager import config, s3_client
+
+    cfg = config.load_config()
+    cfg["roles"][0]["allowed_buckets"] = ["allowed"]
+    config.save_config(cfg)
+    moto_s3.create_bucket(Bucket="exact-denied")
+    moto_s3.put_object(Bucket="exact-denied", Key="file", Body=b"keep")
+    user = _make_user(allowed_roles=[] if denial == "role" else ["Default"])
+    with pytest.raises(PermissionError):
+        s3_client.delete_exact_key_for_role("Default", "exact-denied", "file", user)
+    assert moto_s3.get_object(Bucket="exact-denied", Key="file")["Body"].read() == b"keep"

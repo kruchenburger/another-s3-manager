@@ -1209,7 +1209,12 @@ async def delete_file(
             if error.code in _WRITE_DENIALS:
                 code, message, reason = _WRITE_DENIALS[error.code]
                 mcp_writes_denied_total.labels(tool="delete_file", reason=reason).inc()
-                raise McpError(code, error.message if code == "DELETION_DISABLED_FOR_ROLE" else message) from None
+                message = error.message if code == "DELETION_DISABLED_FOR_ROLE" else message
+                details = {}
+                if "count" in error.details:
+                    details["count"] = error.details["count"]
+                    message = f"{message}. {details['count']} object(s) were deleted before the change."
+                raise McpError(code, message, details) from None
             code = "BUCKET_NOT_ALLOWED" if error.code == "bucket_not_allowed" else "ROLE_NOT_ALLOWED"
             raise McpError(code, error.message) from None
         except (PermissionError, RoleNotFoundError) as e:
@@ -1559,7 +1564,9 @@ async def copy_object(
                 try:
                     fresh_config = await run_in_threadpool(_config_module.load_config, force_reload=True)
                     access_service.require_delete(role, fresh_config)
-                    await run_in_threadpool(_s3_client.delete_object_for_role, role, source_bucket, source_path, user)
+                    await run_in_threadpool(
+                        _s3_client.delete_exact_key_for_role, role, source_bucket, source_path, user
+                    )
                     moved = True
                 except AccessDenied as error:
                     if error.code not in _WRITE_DENIALS:

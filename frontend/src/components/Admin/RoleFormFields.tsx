@@ -1,4 +1,5 @@
 import {
+  Alert,
   Autocomplete,
   Badge,
   Code,
@@ -58,6 +59,7 @@ const AWS_REGIONS = [
 interface Props {
   form: UseFormReturnType<AppRole>;
   disabled?: boolean;
+  invalidDeletePermission?: boolean;
   mode: "create" | "edit";
   /**
    * Controls which subset of fields renders.
@@ -96,7 +98,7 @@ function RoleTypeSummary({ type }: { type: AppRole["type"] }) {
   );
 }
 
-export function RoleFormFields({ form, disabled, mode, step }: Props) {
+export function RoleFormFields({ form, disabled, invalidDeletePermission, mode, step }: Props) {
   const type = form.values.type;
   const showType = step === "type" || step === "all";
   const showCredentials = step === "credentials" || step === "all";
@@ -266,8 +268,13 @@ export function RoleFormFields({ form, disabled, mode, step }: Props) {
             description="Turn off to block deleting through ASM for everyone using this role, admins included. Uploading over an existing file is still possible."
             disabled={disabled}
             {...form.getInputProps("allow_delete", { type: "checkbox" })}
-            checked={form.values.allow_delete !== false}
+            checked={!Object.prototype.hasOwnProperty.call(form.values, "allow_delete") || form.values.allow_delete === true}
           />
+          {invalidDeletePermission && (
+            <Alert color="yellow" variant="light">
+              This role's allow_delete value in config.json is not true/false; deleting is blocked until you save a choice.
+            </Alert>
+          )}
           <TagsInput
             label="Allowed buckets"
             description="Required for R2 and other scoped tokens that cannot list all buckets. Leave empty only if your credentials have permission to list every bucket in the account."

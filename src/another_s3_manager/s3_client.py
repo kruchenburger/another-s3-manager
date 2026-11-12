@@ -2194,6 +2194,24 @@ def copy_object_for_role(
 
 
 @guarded_write()
+def delete_exact_key_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> dict:
+    """Delete only the supplied key, including a folder marker, never its children."""
+    from another_s3_manager.config import load_config
+    from another_s3_manager.metrics import s3_objects_total, safe_role_label
+
+    _validate_bucket_access(role, bucket, user_dict)
+    validated_role = validate_role_access(role, user_dict)
+
+    def do_delete(s3_client):
+        access_service.require_delete(role, load_config(force_reload=True))
+        s3_client.delete_object(Bucket=bucket, Key=path)
+        s3_objects_total.labels(role=safe_role_label(validated_role), bucket=bucket, operation="delete").inc()
+        return {"message": "Successfully deleted 1 object(s)", "count": 1}
+
+    return execute_with_s3_retry(validated_role, "delete", do_delete)
+
+
+@guarded_write()
 def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[str, Any]) -> dict:
     """
     Delete a file or recursively delete a directory from `bucket`.
@@ -2210,10 +2228,12 @@ def delete_object_for_role(role: str, bucket: str, path: str, user_dict: Dict[st
     Raises FileNotFoundError if the object/directory does not exist.
     Returns {"message": ..., "count": N}.
     """
+    from another_s3_manager.config import load_config
     from another_s3_manager.metrics import s3_objects_total, safe_role_label
 
     _validate_bucket_access(role, bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
+    access_service.require_delete(role, load_config(force_reload=True))
 
     is_directory = path.endswith("/")
     prefix = path.rstrip("/")

@@ -1212,3 +1212,16 @@ async def test_me_role_permissions_are_computed_for_current_grants(monkeypatch, 
         {"r": {"delete": False}, "other": {"delete": True}} if admin else {"r": {"delete": False}}
     )
     assert result["disable_deletion"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_config_rejects_inherited_invalid_delete_permission(monkeypatch, reload_main):
+    main = reload_main
+    patch_load_config(monkeypatch, main, {"roles": [{"name": "r", "type": "default", "allow_delete": "false"}]})
+    saved = []
+    monkeypatch.setattr(main, "save_config", saved.append)
+    with pytest.raises(HTTPException) as caught:
+        await main.update_config(None, {"roles": [{"name": "r", "type": "default"}]}, {"is_admin": True}, True)
+    assert caught.value.status_code == 422
+    assert caught.value.detail == "allow_delete must be boolean"
+    assert saved == []

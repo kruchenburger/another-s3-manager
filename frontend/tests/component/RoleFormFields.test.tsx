@@ -131,3 +131,9 @@ it("preserves a disabled delete permission in read-only mode", () => {
   expect(control).toBeDisabled();
   expect(screen.getByText(/admins included/)).toBeInTheDocument();
 });
+
+
+it.each([null, "false", 0, undefined])("renders present invalid delete value %s as off", (value) => {
+  renderFields({ step: "all", initial: { allow_delete: value } as unknown as Partial<AppRole> });
+  expect(screen.getByRole("switch", { name: /^Allow deleting files/ })).not.toBeChecked();
+});

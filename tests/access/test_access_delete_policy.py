@@ -35,3 +35,17 @@ def test_non_boolean_delete_permission_fails_closed(monkeypatch, value):
     with pytest.raises(AccessDenied) as caught:
         service.require_delete("storage", config)
     assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+
+
+@pytest.mark.parametrize("roles", [[], [{"name": "renamed"}]])
+def test_missing_named_role_denies_delete_but_none_checks_only_instance(monkeypatch, roles):
+    monkeypatch.delenv("DISABLE_DELETION", raising=False)
+    config = {"roles": roles}
+    assert policies.deletion_allowed(config, "missing") is False
+    with pytest.raises(AccessDenied) as caught:
+        service.require_delete("missing", config)
+    assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+    assert policies.deletion_allowed(config, None) is True
+    assert service.require_delete(None, config) is None
+    config["disable_deletion"] = True
+    assert policies.deletion_allowed(config, None) is False

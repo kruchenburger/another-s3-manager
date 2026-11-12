@@ -928,7 +928,7 @@ async def test_copy_object_happy_path(alice_user, tool_registry):
     _, plaintext = alice_user
     with (
         patch("another_s3_manager.s3_client.copy_object_for_role", return_value=None) as copy_mock,
-        patch("another_s3_manager.s3_client.delete_object_for_role") as del_mock,
+        patch("another_s3_manager.s3_client.delete_exact_key_for_role") as del_mock,
     ):
         result = await _call(
             tool_registry,
@@ -952,7 +952,7 @@ async def test_copy_object_move_deletes_source(alice_user, tool_registry):
     _, plaintext = alice_user
     with (
         patch("another_s3_manager.s3_client.copy_object_for_role", return_value=None) as copy_mock,
-        patch("another_s3_manager.s3_client.delete_object_for_role", return_value={"count": 1}) as del_mock,
+        patch("another_s3_manager.s3_client.delete_exact_key_for_role", return_value={"count": 1}) as del_mock,
     ):
         result = await _call(
             tool_registry,
@@ -1288,7 +1288,7 @@ async def test_mcp_copy_delete_source_rechecks_before_delete(alice_user, tool_re
 
     with (
         patch("another_s3_manager.s3_client.copy_object_for_role", side_effect=revoke) as copy_mock,
-        patch("another_s3_manager.s3_client.delete_object_for_role") as delete_mock,
+        patch("another_s3_manager.s3_client.delete_exact_key_for_role") as delete_mock,
     ):
         result = await _call(
             tool_registry,
@@ -1367,7 +1367,8 @@ async def test_delete_tools_map_storage_revocation(alice_user, tool_registry, to
     with (
         patch("another_s3_manager.s3_client.copy_object_for_role"),
         patch(
-            "another_s3_manager.s3_client.delete_object_for_role",
+            "another_s3_manager.s3_client."
+            + ("delete_object_for_role" if tool == "delete_file" else "delete_exact_key_for_role"),
             side_effect=AccessDenied("DELETION_DISABLED_FOR_ROLE", "revoked"),
         ),
     ):
@@ -1390,3 +1391,48 @@ async def test_delete_tools_map_storage_revocation(alice_user, tool_registry, to
             assert result["copied"] is True
             assert result["moved"] is False
             assert result["source_kept_reason"] == "DELETION_DISABLED_FOR_ROLE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["DELETION_DISABLED", "DELETION_DISABLED_FOR_ROLE"])
+@pytest.mark.parametrize("count", [0, 1000])
+async def test_delete_file_reports_partial_count(alice_user, tool_registry, code, count):
+    from another_s3_manager.access import AccessDenied
+
+    _, plaintext = alice_user
+    with patch(
+        "another_s3_manager.s3_client.delete_object_for_role",
+        side_effect=AccessDenied(code, "revoked", {"count": count}),
+    ):
+        with pytest.raises(McpError) as caught:
+            await _call(
+                tool_registry, "delete_file", _fake_request(plaintext), role="Default", bucket="b", path="folder/"
+            )
+    assert caught.value.code == code
+    assert caught.value.details["count"] == count
+    assert f"{count} object(s) were deleted before the change." in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_copy_marker_deletes_only_copied_key(alice_user, tool_registry, moto_s3):
+    _, plaintext = alice_user
+    moto_s3.create_bucket(Bucket="mcp-marker")
+    for key in ["folder/", "folder/a", "folder/deep/b"]:
+        moto_s3.put_object(Bucket="mcp-marker", Key=key, Body=b"keep")
+    result = await _call(
+        tool_registry,
+        "copy_object",
+        _fake_request(plaintext),
+        role="Default",
+        source_bucket="mcp-marker",
+        source_path="folder/",
+        dest_bucket="mcp-marker",
+        dest_path="copied/",
+        delete_source=True,
+    )
+    assert result["moved"] is True
+    assert {o["Key"] for o in moto_s3.list_objects_v2(Bucket="mcp-marker")["Contents"]} == {
+        "copied/",
+        "folder/a",
+        "folder/deep/b",
+    }

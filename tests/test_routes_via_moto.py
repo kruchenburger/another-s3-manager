@@ -196,3 +196,16 @@ def test_web_delete_reports_objects_deleted_before_revocation(app_client, monkey
         "message": "Deleting is turned off for role 'Default'. 1000 object(s) were deleted before the change.",
         "count": 1000,
     }
+
+
+def test_config_post_rejects_inherited_invalid_delete_permission(app_client):
+    from another_s3_manager import config
+
+    _, headers = login(app_client)
+    cfg = config.load_config()
+    cfg["roles"][0]["allow_delete"] = "false"
+    config.save_config(cfg)
+    response = app_client.post("/api/config", json={"roles": [{"name": "Default", "type": "default"}]}, headers=headers)
+    assert response.status_code == 422
+    assert response.json()["detail"] == "allow_delete must be boolean"
+    assert config.load_config(force_reload=True)["roles"][0]["allow_delete"] == "false"

@@ -469,3 +469,20 @@ def test_load_warns_once_per_load_for_invalid_delete_permission(value, caplog):
     assert "never-log-this-secret" not in caplog.text
     config.load_config(force_reload=True)
     assert len([r for r in caplog.records if "allow_delete" in r.getMessage()]) == 2
+
+
+@pytest.mark.parametrize("value", ["false", None, 0, [], {}])
+def test_merge_role_security_fields_validates_inherited_value(value):
+    from another_s3_manager.config import merge_role_security_fields
+
+    with pytest.raises(ValueError, match="^allow_delete must be boolean$"):
+        merge_role_security_fields([{"name": "r"}], [{"name": "r", "allow_delete": value}])
+
+
+@pytest.mark.parametrize("choice", [False, True])
+def test_merge_role_security_fields_allows_explicit_repair(choice):
+    from another_s3_manager.config import merge_role_security_fields
+
+    roles = [{"name": "r", "allow_delete": choice}]
+    merge_role_security_fields(roles, [{"name": "r", "allow_delete": "false"}])
+    assert roles == [{"name": "r", "allow_delete": choice}]

@@ -739,3 +739,33 @@ it("saves an edited role without relaxing its delete permission", async () => {
   await waitFor(() => expect(onSubmit).toHaveBeenCalled());
   expect(onSubmit.mock.calls[0][0]).toMatchObject({ name: "kept", allow_delete: false });
 });
+
+
+const INVALID_DELETE_WARNING = "This role's allow_delete value in config.json is not true/false; deleting is blocked until you save a choice.";
+
+it.each([null, "false"])("keeps invalid allow_delete=%s blocked when only description changes", async (value) => {
+  const initialRole = { name: "invalid", type: "default", allow_delete: value } as unknown as AppRole;
+  const { onSubmit } = renderDrawer({ opened: true, mode: "edit", initialRole });
+  expect(screen.getByRole("switch", { name: /^Allow deleting files/ })).not.toBeChecked();
+  expect(screen.getByText(INVALID_DELETE_WARNING)).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText(/description/i), { target: { value: "Updated" } });
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+  expect(onSubmit.mock.calls[0][0]).toMatchObject({ allow_delete: false, description: "Updated" });
+});
+
+it.each([null, "false"])("saves explicit enable for invalid allow_delete=%s", async (value) => {
+  const { onSubmit } = renderDrawer({ opened: true, mode: "edit", initialRole: { name: "invalid", type: "default", allow_delete: value } as unknown as AppRole });
+  fireEvent.click(screen.getByRole("switch", { name: /^Allow deleting files/ }));
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+  expect(onSubmit.mock.calls[0][0].allow_delete).toBe(true);
+});
+
+it("clears invalid delete state when reopening a legacy role", () => {
+  const { rerender } = renderDrawer({ opened: true, mode: "edit", initialRole: { name: "invalid", type: "default", allow_delete: null } as unknown as AppRole });
+  expect(screen.getByText(INVALID_DELETE_WARNING)).toBeInTheDocument();
+  rerender(<MantineProvider><RoleDrawer opened mode="edit" readOnly={false} initialRole={{ name: "legacy", type: "default" }} config={baseConfig} onSubmit={vi.fn()} onClose={vi.fn()} /></MantineProvider>);
+  expect(screen.queryByText(INVALID_DELETE_WARNING)).not.toBeInTheDocument();
+  expect(screen.getByRole("switch", { name: /^Allow deleting files/ })).toBeChecked();
+});

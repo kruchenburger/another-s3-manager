@@ -127,13 +127,12 @@ def merge_role_security_fields(new_roles: list[dict], old_roles: list[dict]) -> 
     """Preserve omitted role security fields and reject non-boolean input."""
     existing = {role.get("name"): role for role in old_roles}
     for role in new_roles:
-        if "allow_delete" in role:
-            if type(role["allow_delete"]) is not bool:
-                raise ValueError("allow_delete must be boolean")
-        else:
+        if "allow_delete" not in role:
             old = existing.get(role.get("name"), {})
             if "allow_delete" in old:
                 role["allow_delete"] = old["allow_delete"]
+        if "allow_delete" in role and type(role["allow_delete"]) is not bool:
+            raise ValueError("allow_delete must be boolean")
 
 
 def is_deletion_disabled(config: Optional[Dict[str, Any]] = None) -> bool:
