@@ -877,11 +877,12 @@ def test_execute_with_s3_retry_increments_error_counter_on_failure(monkeypatch):
 
 def _make_user(is_admin=False, allowed_roles=None):
     """Create a minimal user_dict for testing."""
-    return {
-        "username": "testuser",
-        "is_admin": is_admin,
-        "allowed_roles": allowed_roles or [],
-    }
+    from another_s3_manager import users
+
+    existing = users.get_user_by_username("testuser")
+    if existing is not None:
+        return users.update_user("testuser", is_admin=is_admin, allowed_roles=allowed_roles or [])
+    return users.create_user("testuser", "unused-hash", is_admin=is_admin, allowed_roles=allowed_roles or [])
 
 
 # --- validate_role_access ---
@@ -1990,7 +1991,15 @@ def test_role_uses_temporary_credentials(mocker):
 # copy_object_for_role / get_object_metadata_for_role (v1.0.2 MCP tools)
 # ---------------------------------------------------------------------------
 
-_ADMIN = {"username": "admin", "is_admin": True, "allowed_roles": []}
+_ADMIN = {}
+
+
+@pytest.fixture(autouse=True)
+def persisted_admin():
+    from another_s3_manager import users
+
+    _ADMIN.clear()
+    _ADMIN.update(users.load_users()["users"][0])
 
 
 def test_copy_object_for_role_copies_body(moto_s3):
@@ -2169,7 +2178,7 @@ def test_get_s3_client_survives_concurrent_invalidate_no_keyerror(mocker):
 
         def __contains__(self, key: object) -> bool:
             present = super().__contains__(key)
-            if present and key == cache_key:
+            if present and isinstance(key, tuple) and key[0] == cache_key:
                 racer = threading.Thread(target=module.invalidate_s3_client, args=(cache_key,))
                 racer.start()
                 racer.join(timeout=5)
@@ -2258,13 +2267,14 @@ def test_folder_delete_rechecks_policy_between_batches(moto_s3, monkeypatch, ret
 
     def delete_and_revoke(**kwargs):
         calls.append(kwargs)
+        result = original(**kwargs) if not retry or len(calls) == 1 else None
         if len(calls) == (2 if retry else 1):
             cfg = config.load_config()
             cfg["roles"][0]["allow_delete"] = False
             config.save_config(cfg)
             if retry:
                 raise ClientError({"Error": {"Code": "ExpiredToken"}}, "DeleteObjects")
-        return original(**kwargs)
+        return result
 
     monkeypatch.setattr(moto_s3, "delete_objects", delete_and_revoke)
     monkeypatch.setattr(s3_client, "get_s3_client", lambda role: moto_s3)
@@ -2322,7 +2332,7 @@ def test_folder_delete_denies_role_missing_after_listing(moto_s3, monkeypatch, c
     monkeypatch.setattr(s3_client, "get_s3_client", lambda role: moto_s3)
     with pytest.raises(AccessDenied) as caught:
         s3_client.delete_object_for_role("Default", "missing-role-delete", "folder/", _ADMIN)
-    assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+    assert caught.value.code == "role_not_found"
     assert caught.value.details["count"] == 0
     assert moto_s3.get_object(Bucket="missing-role-delete", Key="folder/a")["Body"].read() == b"keep"
 

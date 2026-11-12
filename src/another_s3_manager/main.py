@@ -78,7 +78,13 @@ from another_s3_manager.constants import (
     PRESIGNED_URL_MIN_TTL,
     STATIC_DIR,
 )
-from another_s3_manager.errors import MoveError, RoleNotFoundError, S3OperationError, safe_move_error
+from another_s3_manager.errors import (
+    MoveError,
+    PartialDeleteError,
+    RoleNotFoundError,
+    S3OperationError,
+    safe_move_error,
+)
 from another_s3_manager.metrics import (
     REGISTRY,
     _seed_zero_series,
@@ -2138,7 +2144,7 @@ def _s3_error_to_http(error: S3OperationError) -> HTTPException:
     Frontend reads ``message`` for display and ``code`` for per-code UI hints
     (e.g. "Open admin to fix" when code == "InvalidRegion").
     """
-    if isinstance(error, MoveError):
+    if isinstance(error, (MoveError, PartialDeleteError)):
         return HTTPException(status_code=error.http_status, detail=error.detail())
     return HTTPException(
         status_code=error.http_status,

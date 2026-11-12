@@ -142,6 +142,15 @@ noticing it; the destination keeps the rewritten metadata.
 Enable bucket versioning (status **Enabled**, not Suspended) to keep that data:
 deletes then only add a marker, and every write gets its own version.
 
+### Partial directory deletion
+
+`delete_file` with a trailing `/` attempts every batch. If S3 refuses any keys,
+its tool error is `PARTIAL_DELETE`: `details.deleted` is the number of confirmed
+deletions and `details.failed_count` is the number of failed keys. The message
+names the first failed key and its storage code (for example `AccessDenied`).
+Keys missing from both S3 result lists count as failures with `STORAGE_ERROR`.
+A permission revoked while deleting stops further requests immediately.
+
 ### Tool annotations (auto-approval hints)
 
 All ten tools advertise MCP `readOnlyHint`/`destructiveHint`/`idempotentHint`

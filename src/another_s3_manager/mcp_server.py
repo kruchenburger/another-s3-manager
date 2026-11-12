@@ -29,6 +29,7 @@ from another_s3_manager.access import AccessDenied
 from another_s3_manager.errors import (
     CredentialsExpiredError,
     MoveError,
+    PartialDeleteError,
     RoleNotFoundError,
     S3AccessDeniedError,
     S3ConfigError,
@@ -191,6 +192,21 @@ def _access_error(error: AccessDenied, tool: str, *, context: str = "gate") -> M
     return McpError(code, message, details)
 
 
+_STORAGE_ERROR_MAPPINGS = {
+    PartialDeleteError: lambda error: McpError(
+        error.code, str(error), {"deleted": error.deleted_count, "failed_count": len(error.failed)}
+    ),
+    S3OperationError: lambda error: McpError("S3_OPERATION_ERROR", str(error), {"boto_code": error.code}),
+}
+
+
+def _storage_error_to_mcp(error: S3OperationError) -> McpError:
+    for error_type, mapper in _STORAGE_ERROR_MAPPINGS.items():
+        if isinstance(error, error_type):
+            return mapper(error)
+    raise TypeError("Expected a Storage error")
+
+
 def assert_write_allowed(token: Any, tool_name: str, config: dict, role: str | None = None) -> None:
     """Raise McpError if the given token/config combination disallows a write tool.
 
@@ -258,6 +274,7 @@ async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
             {"is_admin": u.is_admin, "allowed_roles": [r.role_name for r in u.roles]}, cfg
         )
         user_dict = {
+            "id": u.id,
             "username": u.username,
             "is_admin": u.is_admin,
             "allowed_roles": allowed_roles,
@@ -1273,9 +1290,10 @@ async def delete_file(
         raise McpError("CREDENTIALS_EXPIRED", str(e), {"boto_code": e.code})
     except S3OperationError as e:
         # Unknown S3 subclass — still better than INTERNAL_ERROR.
-        error_code = "S3_OPERATION_ERROR"
+        mapped = _storage_error_to_mcp(e)
+        error_code = mapped.code
         logger.warning("mcp.delete_file.s3_operation_error", extra={"boto_code": e.code})
-        raise McpError("S3_OPERATION_ERROR", str(e), {"boto_code": e.code})
+        raise mapped from None
     except Exception:
         error_code = "INTERNAL_ERROR"
         logger.exception("mcp.delete_file.error")

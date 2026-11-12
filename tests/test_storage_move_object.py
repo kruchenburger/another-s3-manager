@@ -17,6 +17,10 @@ USER = {"is_admin": True, "allowed_roles": ["Default"]}
 
 @pytest.fixture
 def source(moto_s3, monkeypatch):
+    from another_s3_manager import users
+
+    USER.clear()
+    USER.update(users.load_users()["users"][0])
     moto_s3.create_bucket(Bucket="move-source")
     moto_s3.create_bucket(Bucket="move-dest")
     moto_s3.put_object(Bucket="move-source", Key="file", Body=b"old")
@@ -294,7 +298,11 @@ def test_conditional_handler_is_registered_once_per_client(source, monkeypatch):
     assert move()["moved"] is True
     source.put_object(Bucket="move-source", Key="file", Body=b"second")
     assert move()["moved"] is True
-    events = [call.args[0] for call in register.call_args_list]
+    events = [
+        call.args[0]
+        for call in register.call_args_list
+        if call.kwargs.get("unique_id", "").startswith("asm-delete-if-match")
+    ]
     assert events.count("before-sign.s3.DeleteObject") == 1
     assert events.count("before-parameter-build.s3.DeleteObject") == 1
 

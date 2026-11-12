@@ -53,6 +53,29 @@ class S3OperationError(Exception):
         super().__init__(message)
 
 
+class PartialDeleteError(S3OperationError):
+    """A directory delete completed with explicit per-key failures."""
+
+    def __init__(self, deleted_count: int, failed: dict[str, str]):
+        self.deleted_count = deleted_count
+        self.failed = dict(failed)
+        key, code = next(iter(self.failed.items()))
+        super().__init__(
+            "PARTIAL_DELETE",
+            f"Deleted {deleted_count} of {deleted_count + len(failed)} objects; "
+            f"{len(failed)} could not be deleted (first: {key}: {code})",
+            502,
+        )
+
+    def detail(self) -> dict:
+        return {
+            "code": self.code,
+            "message": str(self),
+            "deleted": self.deleted_count,
+            "failed_count": len(self.failed),
+        }
+
+
 class S3ConfigError(S3OperationError):
     """Bad role config — invalid region, malformed endpoint, missing creds."""
 
@@ -80,6 +103,7 @@ class MoveError(S3OperationError):
             "KEY_TOO_LONG": "The object key exceeds 1024 UTF-8 bytes.",
             "INVALID_REQUEST": "The request is invalid.",
             "ROLE_REQUIRED": "A storage role is required.",
+            "ROLE_CHANGED": "The role's storage settings changed while this move was running. Nothing more was copied or deleted.",
             "ROLE_NOT_FOUND": "The storage role does not exist.",
             "ACCESS_DENIED": "Access to this storage location is not allowed.",
             "DELETION_DISABLED": "Deletion is disabled by the administrator.",

@@ -130,6 +130,93 @@ def test_web_reports_same_gate(app_client, monkeypatch, env, cfg_flag, expected)
 @pytest.mark.parametrize("env,cfg_flag,expected", BLOCKED_CASES)
 def test_move_blocked(app_client, monkeypatch, env, cfg_flag, expected):
     _apply(monkeypatch, env, cfg_flag)
+    from another_s3_manager import users
+
+    user = users.load_users()["users"][0]
     with pytest.raises(MoveError) as exc_info:
-        move_jobs.require_access({"username": "admin", "is_admin": True}, "Default", "b", deleting=True)
+        move_jobs.require_access(user, "Default", "b", deleting=True)
     assert exc_info.value.code == "DELETION_DISABLED"
+
+
+def test_web_partial_delete_mapping(app_client, monkeypatch):
+    from another_s3_manager.errors import PartialDeleteError
+
+    _, headers = login(app_client)
+
+    def partial(*args):
+        raise PartialDeleteError(2, {"dir/denied": "AccessDenied"})
+
+    monkeypatch.setattr("another_s3_manager.main.delete_object_for_role", partial)
+    response = app_client.delete("/api/buckets/bucket/files?path=dir/&role=Default", headers=headers)
+    assert response.status_code == 502
+    assert response.json()["detail"] == {
+        "code": "PARTIAL_DELETE",
+        "message": "Deleted 2 of 3 objects; 1 could not be deleted (first: dir/denied: AccessDenied)",
+        "deleted": 2,
+        "failed_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_mcp_partial_delete_mapping(alice_user, tool_registry, monkeypatch):  # noqa: F811
+    from another_s3_manager.errors import PartialDeleteError
+
+    def partial(*args):
+        raise PartialDeleteError(2, {"dir/denied": "AccessDenied"})
+
+    monkeypatch.setattr("another_s3_manager.s3_client.delete_object_for_role", partial)
+    with pytest.raises(McpError) as caught:
+        await _call(
+            tool_registry, "delete_file", _fake_request(alice_user[1]), role="Default", bucket="bucket", path="dir/"
+        )
+    assert caught.value.code == "PARTIAL_DELETE"
+    assert caught.value.details["deleted"] == 2
+    assert caught.value.details["failed_count"] == 1
+    assert caught.value.message == "Deleted 2 of 3 objects; 1 could not be deleted (first: dir/denied: AccessDenied)"
+
+
+def test_web_delete_calls_current_destructive_helper(app_client, moto_s3, monkeypatch):
+    from unittest.mock import Mock
+
+    from another_s3_manager import s3_client
+
+    _, headers = login(app_client)
+    moto_s3.create_bucket(Bucket="web-helper")
+    moto_s3.put_object(Bucket="web-helper", Key="file", Body=b"x")
+    helper = Mock(wraps=s3_client.require_current_destructive)
+    monkeypatch.setattr(s3_client, "require_current_destructive", helper)
+    response = app_client.delete("/api/buckets/web-helper/files?path=file&role=Default", headers=headers)
+    assert response.status_code == 200
+    assert helper.call_args.args[1:] == ("Default", "web-helper")
+    assert helper.call_args.args[0]["id"] is not None
+    assert not moto_s3.list_objects_v2(Bucket="web-helper").get("Contents")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["delete_file", "copy_object"])
+async def test_mcp_destructive_paths_use_current_helper(alice_user, tool_registry, moto_s3, monkeypatch, tool):  # noqa: F811
+    from unittest.mock import Mock
+
+    from another_s3_manager import s3_client
+
+    moto_s3.create_bucket(Bucket="mcp-helper")
+    moto_s3.put_object(Bucket="mcp-helper", Key="file", Body=b"x")
+    helper = Mock(wraps=s3_client.require_current_destructive)
+    monkeypatch.setattr(s3_client, "require_current_destructive", helper)
+    kwargs = (
+        {"path": "file"}
+        if tool == "delete_file"
+        else {
+            "source_bucket": "mcp-helper",
+            "source_path": "file",
+            "dest_bucket": "mcp-helper",
+            "dest_path": "copy",
+            "delete_source": True,
+        }
+    )
+    if tool == "delete_file":
+        kwargs["bucket"] = "mcp-helper"
+    await _call(tool_registry, tool, _fake_request(alice_user[1]), role="Default", **kwargs)
+    assert helper.call_args.args[0]["id"] == alice_user[0]
+    assert helper.call_args.args[1:] == ("Default", "mcp-helper")
+    assert "file" not in {item["Key"] for item in moto_s3.list_objects_v2(Bucket="mcp-helper").get("Contents", [])}

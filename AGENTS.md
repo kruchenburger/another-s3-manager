@@ -60,7 +60,7 @@ exactly one home, and the web routes, MCP tools, move jobs and CLI are thin adap
 call it and translate its error.
 
 - `access/` — role grants, admin role expansion, bucket allow-lists, the MCP write gate and
-  the deletion gate (instance-wide and per role: `deletion_allowed` / `require_delete`). `policies.py` holds pure rules over a passed-in config, `service.py`
+  the deletion gate (instance-wide and per role: `deletion_allowed` / `require_delete`), composed by `require_destructive` (role grant, bucket allow-list, then deletion gate). `policies.py` holds pure rules over a passed-in config, `service.py`
   raises `AccessDenied(code, message)` (a `PermissionError` subclass), `__init__.py` is the
   public API. Adapters map `AccessDenied.code` to their own answer in one table each.
 - Boundaries are enforced by import-linter (`[tool.importlinter]` in `pyproject.toml`,
@@ -266,7 +266,7 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 - JWT authentication via `httpOnly + Secure + SameSite=Strict` cookie + CSRF protection (`X-CSRF-Token` from `/api/me`)
 - Automatic refresh of expired credentials
 - Granular per-role, per-bucket access control
-- Role-level delete permission: a role with `"allow_delete": false` in `config.json` blocks deleting (file, folder, move, move cleanup, MCP `delete_file` / `copy_object(delete_source)`) for everyone using it, admins included; checked again right before every destructive S3 call. Absent = allowed; any non-boolean value = denied. Overwriting a key by upload/copy is not covered. `POST /api/config` keeps the flag when the body omits it
+- Role-level delete permission: a role with `"allow_delete": false` in `config.json` blocks deleting (file, folder, move, move cleanup, MCP `delete_file` / `copy_object(delete_source)`) for everyone using it, admins included; before every destructive S3 HTTP attempt (including SDK retries), Storage reloads config and the current user by id and rechecks role grants, bucket access and the deletion gate through Access. Absent = allowed; any non-boolean value = denied. Overwriting a key by upload/copy is not covered. `POST /api/config` keeps the flag when the body omits it
 - Brute-force defense: per-username ban (3 failed attempts → 1h ban). **Admins exempt** to avoid DoS on the predictable `admin` username — admin protection must come from deployment layer (see "Production deployment" in README).
 - No application-level IP rate limit. Production exposure expects an authenticated reverse proxy (Cloudflare Access, Tunnel, WAF) — that's the right layer for IP-based throttling.
 - React SPA at `/`: collapsible sidebar with role/bucket tree, file browser (table+grid toggle, sortable columns — name/size/modified, both views — hover actions, bulk delete, drag-drop upload, preview modal, New folder, Move to… with an optional new name, multi-select and drag-and-drop moves reported in one move tray — there is no separate Rename action by design, since a move is copy + delete); sorting by size/date on a large (truncated) folder loads the whole level first so the order is exact.

@@ -6,6 +6,7 @@ from another_s3_manager.access.policies import deletion_allowed, deletion_disabl
 from another_s3_manager.access.service import (
     allowed_roles,
     require_bucket,
+    require_destructive,
     require_not_deletion_disabled,
     require_role,
     require_role_name,
@@ -27,6 +28,7 @@ __all__ = [
     "require_role_name",
     "require_bucket",
     "require_delete",
+    "require_destructive",
     "require_not_deletion_disabled",
     "require_role",
     "require_write",

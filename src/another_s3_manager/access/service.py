@@ -48,6 +48,13 @@ def require_delete(role_name: str | None, config: dict) -> None:
         raise AccessDenied("DELETION_DISABLED_FOR_ROLE", f"Deleting is turned off for role '{role_name}'")
 
 
+def require_destructive(user: dict, role: str, bucket: str, config: dict) -> None:
+    """Authorize a destructive operation using one supplied state snapshot."""
+    role = require_role(role, user, config)
+    require_bucket(role, bucket, user, config)
+    require_delete(role, config)
+
+
 def require_not_deletion_disabled(config: dict) -> None:
     """Compatibility API for callers that only know the instance-wide gate."""
     try:
