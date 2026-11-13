@@ -1,7 +1,7 @@
 """Web authentication dependencies and compatibility helper exports."""
 
 import secrets
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 from fastapi import Depends, HTTPException, Request, status
 
@@ -32,10 +32,27 @@ from another_s3_manager.access import (
 )
 from another_s3_manager.constants import MAX_LOGIN_ATTEMPTS as MAX_LOGIN_ATTEMPTS
 
-_SESSION_ERRORS = {
-    "invalid_session": (401, "Invalid authentication credentials"),
-    "user_not_found": (401, "User not found"),
+_WEB_AUTH_ERRORS = {
+    "cookie": {
+        "missing_credentials": (401, "Not authenticated", None),
+        "invalid_session": (401, "Invalid authentication credentials", None),
+        "user_not_found": (401, "User not found", None),
+    },
+    "login": {
+        "banned": (403, None, "banned"),
+        "invalid_password": (401, None, "invalid_password"),
+    },
+    "download": {"refused": (401, "Authentication required", None)},
 }
+
+
+def map_web_auth_error(
+    door: Literal["cookie", "login", "download"], error: access.AuthenticationError | None = None
+) -> tuple[int, str, str | None]:
+    """Preserve each web door's legacy status, detail and metric reason."""
+    code = error.code if error is not None else "missing_credentials"
+    status_code, detail, reason = _WEB_AUTH_ERRORS[door]["refused" if door == "download" else code]
+    return status_code, detail if detail is not None else error.message, reason
 
 
 def _decode_session_payload(request: Request):
@@ -49,12 +66,13 @@ def has_valid_session(request: Request) -> bool:
 def get_current_user(request: Request) -> Dict[str, Any]:
     token = request.cookies.get("access_token")
     if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        status_code, detail, _ = map_web_auth_error("cookie")
+        raise HTTPException(status_code=status_code, detail=detail)
     try:
         return access.authenticate_session(token).to_user_dict()
     except access.AuthenticationError as error:
-        code, detail = _SESSION_ERRORS[error.code]
-        raise HTTPException(status_code=code, detail=detail) from None
+        status_code, detail, _ = map_web_auth_error("cookie", error)
+        raise HTTPException(status_code=status_code, detail=detail) from None
 
 
 def verify_csrf_token(request: Request, current_user: Dict[str, Any] = Depends(get_current_user)) -> bool:

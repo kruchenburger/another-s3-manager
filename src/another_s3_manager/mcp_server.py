@@ -242,9 +242,10 @@ _BEARER_AUTH_ERRORS = {
 
 async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
     """Authenticate inside each tool and preserve its legacy MCP answer."""
-    cfg = _config_module.load_config()
     try:
-        result = access_service.authenticate_bearer(request.headers.get("authorization", ""), cfg)
+        result = access_service.authenticate_bearer(
+            request.headers.get("authorization", ""), _config_module.load_config
+        )
     except access_service.AuthenticationError as error:
         code, message, reason = _BEARER_AUTH_ERRORS[error.code]
         mcp_auth_failures_total.labels(reason=reason).inc()
@@ -255,7 +256,7 @@ async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
         "created_at": user["created_at"],
         "username": user["username"],
         "is_admin": user["is_admin"],
-        "allowed_roles": access_service.allowed_roles(user, cfg),
+        "allowed_roles": result.projected_roles,
     }
 
 

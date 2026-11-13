@@ -40,3 +40,4 @@ class Principal:
 class BearerAuthentication:
     token: Any
     principal: Principal
+    projected_roles: list[str]

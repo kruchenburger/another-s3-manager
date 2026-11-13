@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import time
+from collections.abc import Callable
 from typing import Any, Dict
 
 from another_s3_manager.access import passwords, policies, sessions, tokens, users
@@ -174,9 +175,9 @@ def record_login_attempt(username: str, success: bool) -> None:
             logger.warning("User %s banned until %s", username, datetime.fromtimestamp(banned_until))
 
 
-def authenticate_session(token: str) -> Principal:
+def authenticate_session(token: str, *, require_subject: bool = False) -> Principal:
     payload = sessions.decode_session_payload(token)
-    if payload is None or payload.get("sub") is None:
+    if payload is None or payload.get("sub") is None or (require_subject and not payload.get("sub")):
         raise AuthenticationError("invalid_session", "Invalid authentication credentials")
     user = users.get_user_by_username(payload["sub"])
     if user is None:
@@ -200,7 +201,7 @@ def principal_for(user_id: int, *, expected_identity=None) -> Principal:
     return Principal(user)
 
 
-def authenticate_bearer(authorization: str, config: dict) -> BearerAuthentication:
+def authenticate_bearer(authorization: str, config_loader: Callable[[], dict]) -> BearerAuthentication:
     if not authorization.startswith("Bearer "):
         raise AuthenticationError("malformed_bearer", "Missing or malformed Bearer token")
     plaintext = authorization[len("Bearer ") :]
@@ -214,8 +215,10 @@ def authenticate_bearer(authorization: str, config: dict) -> BearerAuthenticatio
     if user is None:
         raise AuthenticationError("orphan_token", "Token's user no longer exists")
     principal = Principal(user)
+    config = config_loader()
+    projected_roles = allowed_roles(user, config)
     tokens.touch_last_used(token.id)
-    return BearerAuthentication(token, principal)
+    return BearerAuthentication(token, principal, projected_roles)
 
 
 def authenticate_local(username: str, password: str, config: dict) -> Principal:

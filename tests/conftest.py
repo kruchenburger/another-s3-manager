@@ -33,32 +33,25 @@ def isolated_environment(monkeypatch, tmp_path):
     - Environment variables required by the app
     - Reset module-level caches
     """
-    # Alembic's fileConfig disables existing loggers, including the moved Access
-    # owners, and replaces pytest capture handlers. Keep this process-wide state
-    # isolated while still running the real migration and all log assertions.
-    original_file_config = logging.config.fileConfig
+    # Snapshot logging for fixture setup and teardown only. Test bodies must
+    # observe the real effects of production startup and Alembic fileConfig.
+    root_logger = logging.getLogger()
+    handlers = list(root_logger.handlers)
+    level = root_logger.level
+    states = [
+        (logger, logger.disabled, logger.level, logger.propagate, list(logger.handlers))
+        for logger in logging.Logger.manager.loggerDict.values()
+        if isinstance(logger, logging.Logger)
+    ]
 
-    def isolated_file_config(*args, **kwargs):
-        root_logger = logging.getLogger()
-        handlers = list(root_logger.handlers)
-        level = root_logger.level
-        states = [
-            (logger, logger.disabled, logger.level, logger.propagate, list(logger.handlers))
-            for logger in logging.Logger.manager.loggerDict.values()
-            if isinstance(logger, logging.Logger)
-        ]
-        try:
-            return original_file_config(*args, **kwargs)
-        finally:
-            root_logger.handlers = handlers
-            root_logger.setLevel(level)
-            for logger, disabled, logger_level, propagate, logger_handlers in states:
-                logger.disabled = disabled
-                logger.setLevel(logger_level)
-                logger.propagate = propagate
-                logger.handlers = logger_handlers
-
-    monkeypatch.setattr(logging.config, "fileConfig", isolated_file_config)
+    def restore_logging():
+        root_logger.handlers = handlers
+        root_logger.setLevel(level)
+        for logger, disabled, logger_level, propagate, logger_handlers in states:
+            logger.disabled = disabled
+            logger.setLevel(logger_level)
+            logger.propagate = propagate
+            logger.handlers = logger_handlers
 
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(_default_config()))
@@ -105,10 +98,12 @@ def isolated_environment(monkeypatch, tmp_path):
 
     Base.metadata.create_all(database_module.get_engine())
 
-    yield
-
-    # Dispose engine so the next test gets a fresh one
-    database_module.reset_engine_for_tests()
+    restore_logging()
+    try:
+        yield
+    finally:
+        database_module.reset_engine_for_tests()
+        restore_logging()
     # Cleanup of files is handled by tmp_path fixture automatically
 
 

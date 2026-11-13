@@ -310,6 +310,7 @@ async def test_authentication_delegates_to_access(monkeypatch):
                     "allowed_roles": ["Default"],
                 }
             ),
+            ["Default"],
         )
 
     monkeypatch.setattr(access, "authenticate_bearer", authenticate)
@@ -323,3 +324,24 @@ async def test_authentication_delegates_to_access(monkeypatch):
         "allowed_roles": ["Default"],
     }
     assert calls == ["Bearer as3m_example"]
+
+
+@pytest.mark.asyncio
+async def test_revoked_token_with_broken_config_preserves_failure_reason(alice_user, monkeypatch):
+    from another_s3_manager import mcp_server
+    from another_s3_manager.metrics import mcp_auth_failures_total
+
+    token, plaintext = svc.create_token(alice_user, "broken-config", is_read_only=True, max_read_bytes=1024)
+    svc.revoke_token(token.id, by_user_id=alice_user, by_is_admin=False)
+
+    def broken_config():
+        raise ValueError("broken config")
+
+    monkeypatch.setattr(mcp_server._config_module, "load_config", broken_config)
+    counter = mcp_auth_failures_total.labels(reason="invalid_token")
+    before = counter._value.get()
+    with pytest.raises(McpError) as error:
+        await authenticate_mcp_request(_FakeRequest({"authorization": "Bearer " + plaintext}))
+    assert error.value.code == "INVALID_TOKEN"
+    assert error.value.message == "Invalid or revoked token"
+    assert counter._value.get() == before + 1

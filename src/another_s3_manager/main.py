@@ -59,6 +59,7 @@ from another_s3_manager.auth import (
     get_jwt_secret_key,
     has_valid_session,
     hash_password,
+    map_web_auth_error,
     verify_csrf_token,
     verify_password,
 )
@@ -769,12 +770,6 @@ def _enforce_password_policy(password: str) -> None:
 # ============================================================================
 
 
-_LOCAL_AUTH_ERRORS = {
-    "banned": (403, "banned"),
-    "invalid_password": (401, "invalid_password"),
-}
-
-
 @app.post("/api/login")
 async def login(
     request: Request,
@@ -787,9 +782,9 @@ async def login(
         try:
             principal = access_service.authenticate_local(username, password, {})
         except access_service.AuthenticationError as error:
-            status_code, reason = _LOCAL_AUTH_ERRORS[error.code]
+            status_code, detail, reason = map_web_auth_error("login", error)
             auth_logins_total.labels(result=reason).inc()
-            raise HTTPException(status_code=status_code, detail=error.message) from None
+            raise HTTPException(status_code=status_code, detail=detail) from None
         user = principal.to_user_dict()
         auth_logins_total.labels(result="success").inc()
 
@@ -2516,13 +2511,12 @@ def get_user_for_download(token: Optional[str] = Query(None), request: Request =
             candidates.append(cookie_token)
     for candidate in candidates:
         try:
-            principal = access_service.authenticate_session(candidate)
-            # The download door historically requires a truthy username.
-            if principal.username:
-                return principal.to_user_dict()
+            principal = access_service.authenticate_session(candidate, require_subject=True)
+            return principal.to_user_dict()
         except (access_service.AuthenticationError, ValueError):
             continue
-    raise HTTPException(status_code=401, detail="Authentication required")
+    status_code, detail, _ = map_web_auth_error("download")
+    raise HTTPException(status_code=status_code, detail=detail)
 
 
 @app.get("/api/buckets/{bucket_name}/download")

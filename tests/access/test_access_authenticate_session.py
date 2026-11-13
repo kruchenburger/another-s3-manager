@@ -75,3 +75,19 @@ def test_principal_for_checks_expected_identity():
     assert principal.username == "alice"
     with pytest.raises(access.AuthenticationError):
         access.principal_for(user["id"], expected_identity=(0, "different", None))
+
+
+def test_download_empty_subject_skips_lookup_but_cookie_keeps_lookup(monkeypatch):
+    from another_s3_manager.access import users
+
+    def fail(username):
+        assert username == ""
+        raise RuntimeError("lookup reached")
+
+    monkeypatch.setattr(users, "get_user_by_username", fail)
+    token = access.create_access_token({"sub": ""})
+    with pytest.raises(access.AuthenticationError) as error:
+        access.authenticate_session(token, require_subject=True)
+    assert error.value.code == "invalid_session"
+    with pytest.raises(RuntimeError, match="lookup reached"):
+        access.authenticate_session(token)
