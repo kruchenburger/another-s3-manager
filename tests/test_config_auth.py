@@ -144,3 +144,28 @@ def test_oidc_origin_secret_precedence_and_secure_cookie_validation(monkeypatch,
         monkeypatch.setenv("COOKIE_SECURE", "false")
         with pytest.raises(ValueError, match="secure cookies"):
             access.oidc_settings({})
+
+
+@pytest.mark.parametrize(
+    "auth,detail",
+    [
+        ({"local_login": "private-input-canary"}, "Invalid local login policy"),
+        ({"oidc": {"role_mapping": {"mode": "private-input-canary"}}}, "Invalid mapping mode"),
+        ({"oidc": {"role_mapping": {"require_match": False}}}, "require_match must be true"),
+    ],
+)
+def test_config_post_reports_specific_secret_free_auth_error(app_client, monkeypatch, auth, detail):
+    from another_s3_manager import users
+    from tests.test_web_user_lifecycle import authenticate
+
+    actor = users.create_user("local-admin", "hash", is_admin=True)
+    headers = authenticate(app_client, actor)
+    previous = config.load_config()
+    disk = config.CONFIG_FILE.read_bytes()
+    monkeypatch.setenv("OIDC_CLIENT_SECRET", "client-secret-canary")
+    response = app_client.post("/api/config", json={**previous, "auth": auth}, headers=headers)
+    assert response.status_code == 422
+    assert response.json() == {"detail": detail}
+    assert "canary" not in response.text
+    assert config.CONFIG_FILE.read_bytes() == disk
+    assert config.load_config() == previous

@@ -22,6 +22,10 @@ if (process.env.OIDC_E2E && !process.env.OIDC_PRIVATE_OUTPUT) {
  *   #  "addressing_style":"path","allowed_buckets":["e2e-test"]}
  *   cd frontend && npx playwright test
  */
+const ministackIgnore = process.env.E2E_IGNORE_MINISTACK
+  ? ["**/ministack.spec.ts"]
+  : [];
+
 export default defineConfig({
   testDir: "./tests/e2e",
   // The ministack spec needs the AWS emulator (S3+IAM+STS) on :4566, which only
@@ -29,7 +33,7 @@ export default defineConfig({
   // provides. The MinIO CI job sets E2E_IGNORE_MINISTACK=1 so those 4 tests
   // don't burn 3 retries × 30s each against a backend that can't serve them.
   testIgnore: [
-    ...(process.env.E2E_IGNORE_MINISTACK ? ["**/ministack.spec.ts"] : []),
+    ...ministackIgnore,
     ...(!process.env.OIDC_E2E ? ["**/oidc-login.spec.ts"] : []),
   ],
   outputDir: process.env.OIDC_E2E
@@ -53,7 +57,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: ["**/oidc-login.spec.ts"],
+      testIgnore: [...ministackIgnore, "**/oidc-login.spec.ts"],
       use: { ...devices["Desktop Chrome"] },
     },
     ...(process.env.OIDC_E2E

@@ -321,3 +321,37 @@ def test_install_access_filter_idempotent(monkeypatch, _clean_access_logger):
     install_access_log_filter()
     installed = [f for f in _clean_access_logger.filters if isinstance(f, _AccessLogPathFilter)]
     assert len(installed) == 1
+
+
+@pytest.mark.parametrize("format", ["text", "json"])
+def test_ordinary_exception_keeps_message_level_and_safe_traceback(monkeypatch, capsys, format):
+    from another_s3_manager.logging_setup import _AuthRedactionFilter
+
+    monkeypatch.setenv("LOG_FORMAT", format)
+    configure_logging()
+    try:
+        raise RuntimeError("upstream-exception-canary")
+    except RuntimeError:
+        import sys
+
+        record = logging.LogRecord(
+            "another_s3_manager.main",
+            logging.ERROR,
+            __file__,
+            0,
+            "Unexpected error in %s",
+            ("list_files",),
+            sys.exc_info(),
+        )
+    redact = _AuthRedactionFilter()
+    assert redact.filter(record)
+    assert redact.filter(record)
+    assert record.getMessage() == "Unexpected error in list_files"
+    assert record.levelno == logging.ERROR
+    assert record.exc_info is not None
+    logging.getLogger(record.name).handle(record)
+    output = capsys.readouterr().out
+    assert "Unexpected error in list_files" in output
+    assert "Traceback" in output
+    assert "test_ordinary_exception_keeps_message_level_and_safe_traceback" in output
+    assert "upstream-exception-canary" not in output

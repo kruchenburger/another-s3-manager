@@ -568,6 +568,7 @@ export function FileBrowser() {
         queryKey: fileSearchFolderKey(bucket, roleId, pathFromUrl),
       }),
     ]);
+    if (!action.isCurrent()) return;
     setBulkDeletedCount(0);
 
     if (aborted) {
@@ -749,6 +750,7 @@ export function FileBrowser() {
       const updated = [...items];
 
       const renderToast = () => {
+        if (!action.isCurrent()) return;
         notifications.update({
           id: notifId,
           message: (
@@ -879,14 +881,18 @@ export function FileBrowser() {
         // entirely if no file actually landed (every upload failed, or the
         // user cancelled before the first one succeeded) — nothing changed
         // server-side, so the GET would just return the same list.
+        if (!action.isCurrent()) return;
         const anyUploaded = updated.some((u) => u.status === "done");
         if (anyUploaded) {
-          queryClient.invalidateQueries({
-            queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
-          });
-          queryClient.invalidateQueries({
-            queryKey: fileSearchFolderKey(bucket, roleId, pathFromUrl),
-          });
+          await Promise.all([
+            queryClient.invalidateQueries({
+              queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
+            }),
+            queryClient.invalidateQueries({
+              queryKey: fileSearchFolderKey(bucket, roleId, pathFromUrl),
+            }),
+          ]);
+          if (!action.isCurrent()) return;
         }
 
         // Final summary toast — `UploadSummary` surfaces failed filenames + their

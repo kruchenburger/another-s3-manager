@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import sys
+import traceback
 from urllib.parse import unquote
 
 from pythonjsonlogger.json import JsonFormatter
@@ -83,6 +84,10 @@ def _redact_value(value):
     return redact_auth_material(value)
 
 
+class _RedactedException(Exception):
+    """Safe exception marker: no original value, traceback, cause or context."""
+
+
 class _AuthRedactionFilter(logging.Filter):
     def filter(self, record):
         if record.name.startswith(("httpx", "httpcore")):
@@ -101,10 +106,19 @@ class _AuthRedactionFilter(logging.Filter):
                 setattr(record, name, "[redacted]")
             elif name not in {"exc_info", "args"}:
                 setattr(record, name, _redact_value(value))
-        if record.exc_info:
-            # Exception messages/locals may contain upstream bodies or credentials.
-            record.exc_info = None
-            record.exc_text = "[exception details redacted]"
+        if record.exc_info and not isinstance(record.exc_info[1], _RedactedException):
+            # Retain locations, never source lines, locals, exception bodies or chains.
+            frames = traceback.StackSummary.extract(traceback.walk_tb(record.exc_info[2]), lookup_lines=False)
+            record.exc_text = (
+                "Traceback (most recent call last):\n"
+                + "\n".join(
+                    redact_auth_material(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}')
+                    for frame in frames
+                )
+                + "\n[exception details redacted]"
+            )
+            safe_error = _RedactedException(record.exc_text)
+            record.exc_info = (_RedactedException, safe_error, None)
         return True
 
 

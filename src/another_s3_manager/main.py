@@ -955,7 +955,7 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
         "is_admin": is_admin,
         "auth_source": current_user.get("auth_source", "local"),
         "managed_by_sso": access_service.managed_by_sso(current_user),
-        "session_identity": access_service.session_identity(current_user),
+        **({"session_identity": current_user["session_identity"]} if current_user.get("session_identity") else {}),
         "csrf_token": current_user.get("csrf_token"),  # Return CSRF token for client
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
         "allowed_roles": allowed_roles,
@@ -1838,8 +1838,8 @@ async def update_config(
                 new_names.append(name)
             try:
                 config = config_module.merge_and_validate_update(config, old_config)
-            except ValueError:
-                raise HTTPException(422, detail="Invalid authentication configuration") from None
+            except ValueError as error:
+                raise HTTPException(422, detail=str(error)) from None
             added = set(new_names) - old_names
             removed = old_names - set(new_names)
 

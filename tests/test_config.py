@@ -49,11 +49,17 @@ def test_load_config_creates_default_when_missing(tmp_path):
 def test_load_config_uses_cache(monkeypatch):
     config = reload_config()
     config.CONFIG_FILE = Path(os.environ["S3_FILE_MANAGER_CONFIG"])
-    config._config_cache = {"cached": True}
-    config._config_mtime = config.CONFIG_FILE.stat().st_mtime
+    first = config.load_config(force_reload=True)
 
-    data = config.load_config(force_reload=False)
-    assert data == {"cached": True}
+    def unexpected_read(*args, **kwargs):
+        pytest.fail("Cache hit re-read the configuration file")
+
+    monkeypatch.setattr(builtins, "open", unexpected_read)
+    second = config.load_config()
+    assert second == first
+    assert second is not first
+    second["roles"][0]["name"] = "changed snapshot"
+    assert config.load_config() == first
 
 
 def test_migrate_config_adds_missing_fields(tmp_path):
@@ -520,8 +526,8 @@ def test_save_serializes_with_reload(monkeypatch, tmp_path):
         def __exit__(self, *args):
             return original_lock.__exit__(*args)
 
-    original_lock = module._config_lock
-    monkeypatch.setattr(module, "_config_lock", ObservedLock())
+    original_lock = module.access.role_grants_lock
+    monkeypatch.setattr(module.access, "role_grants_lock", ObservedLock())
     monkeypatch.setattr(module.json, "load", paused_load)
 
     def save():
@@ -540,6 +546,9 @@ def test_save_serializes_with_reload(monkeypatch, tmp_path):
             assert read_old.wait(5)
             save_future = writer.submit(save)
             assert save_attempted.wait(5)
+            assert not save_future.done()
+            assert json.loads(path.read_text()) == old
+            assert module._config_cache == old
         finally:
             release.set()
         reload_future.result(timeout=5)
@@ -547,7 +556,7 @@ def test_save_serializes_with_reload(monkeypatch, tmp_path):
 
     assert json.loads(path.read_text()) == new
     assert module._config_cache == new
-    assert module._config_mtime == path.stat().st_mtime
+    assert module._config_mtime == path.stat().st_mtime_ns
     assert module.load_config() == new
 
 

@@ -188,9 +188,14 @@ def authenticate_session(token: str, *, require_subject: bool = False) -> Princi
         raise AuthenticationError("ACCOUNT_REPLACED", "Invalid authentication credentials")
     if principal.user["session_epoch"] != payload["sv"]:
         raise AuthenticationError("SESSION_EPOCH_MISMATCH", "Invalid authentication credentials")
-    return Principal(
-        {**principal.user, "csrf_token": payload["csrf_token"], "amr": payload["amr"], "sid": payload["sid"]}
-    )
+    authenticated = {
+        **principal.user,
+        "csrf_token": payload["csrf_token"],
+        "amr": payload["amr"],
+        "sid": payload["sid"],
+    }
+    authenticated["session_identity"] = session_identity(authenticated)
+    return Principal(authenticated)
 
 
 def session_token_is_wellformed(token: str) -> bool:

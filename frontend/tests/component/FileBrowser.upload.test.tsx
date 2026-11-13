@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   render,
   fireEvent,
@@ -8,7 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
-import { Notifications } from "@mantine/notifications";
+import { Notifications, notifications } from "@mantine/notifications";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -126,11 +126,17 @@ async function renderBrowser() {
       </QueryClientProvider>
     </MantineProvider>,
   );
-  return { ...view, coordinator };
+  return { ...view, coordinator, qc };
 }
 
 describe("FileBrowser — folder upload", () => {
+  afterEach(() => {
+    act(() => notifications.clean());
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
+    act(() => notifications.clean());
     fileList.length = 0;
     vi.mocked(deleteFile).mockReset();
     mutateAsyncMock.mockReset();
@@ -253,4 +259,111 @@ describe("FileBrowser — folder upload", () => {
     expect(vi.mocked(deleteFile).mock.calls[0][3]?.aborted).toBe(true);
     expect(deleteFile).toHaveBeenCalledTimes(1);
   });
+
+  it.each([false, true])(
+    "delete final refetch keeps selection and notification isolation (replace=%s)",
+    async (replace) => {
+      fileList.push({
+        name: "a-private.txt",
+        is_directory: false,
+        size: 1,
+        last_modified: "",
+      });
+      const { coordinator, qc } = await renderBrowser();
+      let finish!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const invalidation = vi
+        .spyOn(qc, "invalidateQueries")
+        .mockReturnValue(pending);
+      const show = vi.spyOn(notifications, "show");
+      vi.mocked(deleteFile).mockRejectedValueOnce(new Error("a-private-error"));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Select all" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(invalidation).toHaveBeenCalledTimes(2));
+      show.mockClear();
+      await act(async () => {
+        if (replace) {
+          await coordinator.accept(
+            {
+              username: "b",
+              session_identity: "b",
+              csrf_token: "csrf-b",
+            } as MeResponse,
+            coordinator.generation,
+          );
+        }
+        finish();
+      });
+      if (replace) {
+        expect(show).not.toHaveBeenCalled();
+        expect(
+          screen.getByRole("checkbox", { name: "Select all" }),
+        ).toBeChecked();
+        expect(screen.queryByText(/a-private-error/)).not.toBeInTheDocument();
+      } else {
+        expect(show).toHaveBeenCalledWith(
+          expect.objectContaining({ color: "red" }),
+        );
+        expect(await screen.findByText(/a-private-error/)).toBeInTheDocument();
+        expect(
+          screen.getByRole("checkbox", { name: "Select all" }),
+        ).not.toBeChecked();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "upload final refetch isolates its summary (replace=%s)",
+    async (replace) => {
+      const { coordinator, qc } = await renderBrowser();
+      let finish!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const invalidation = vi
+        .spyOn(qc, "invalidateQueries")
+        .mockReturnValue(pending);
+      const update = vi.spyOn(notifications, "update");
+      mutateAsyncMock
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error("a-private-error"));
+      const input = document.querySelector(
+        'input[type="file"][webkitdirectory]',
+      )!;
+      Object.defineProperty(input, "files", {
+        value: [
+          new File(["a"], "a-private.txt"),
+          new File(["b"], "b-private.txt"),
+        ],
+      });
+      fireEvent.change(input);
+      await waitFor(() => expect(invalidation).toHaveBeenCalledTimes(2));
+      update.mockClear();
+      await act(async () => {
+        if (replace) {
+          await coordinator.accept(
+            {
+              username: "b",
+              session_identity: "b",
+              csrf_token: "csrf-b",
+            } as MeResponse,
+            coordinator.generation,
+          );
+        }
+        finish();
+      });
+      if (replace) {
+        expect(update).not.toHaveBeenCalled();
+        expect(screen.queryByText(/a-private-error/)).not.toBeInTheDocument();
+      } else {
+        expect(update).toHaveBeenCalledWith(
+          expect.objectContaining({ color: "yellow", withCloseButton: true }),
+        );
+      }
+    },
+  );
 });
