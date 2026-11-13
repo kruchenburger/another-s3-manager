@@ -1822,7 +1822,7 @@ async def test_folder_delete_refusal_after_batch_reaches_mcp(alice_user, tool_re
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "code", ["ACCOUNT_DISABLED", "ACCOUNT_REPLACED", "SESSION_EPOCH_MISMATCH", "SSO_AUTHZ_EXPIRED"]
+    "code", ["ACCOUNT_DISABLED", "ACCOUNT_REPLACED", "SESSION_EPOCH_MISMATCH", "SSO_AUTHZ_EXPIRED", "user_not_found"]
 )
 async def test_mcp_current_account_refusal_keeps_confirmed_copy(alice_user, tool_registry, monkeypatch, moto_s3, code):
     from another_s3_manager import access

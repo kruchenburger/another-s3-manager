@@ -158,6 +158,8 @@ _MCP_ACCESS_ERRORS = {
         **{
             code: ("INVALID_TOKEN", "Invalid or revoked token", None) for code in access_service.CURRENT_ACCOUNT_DENIALS
         },
+        # An account deleted after authentication answers like a revoked token here too.
+        "user_not_found": ("INVALID_TOKEN", "Invalid or revoked token", None),
         "bucket_not_allowed": ("BUCKET_NOT_ALLOWED", None, None),
         "role_required": ("ROLE_NOT_ALLOWED", None, None),
         "role_not_allowed": ("ROLE_NOT_ALLOWED", None, None),
