@@ -13,7 +13,7 @@ vi.mock("@/features/auth/hooks/useMe", () => ({
   useMe: vi.fn(),
 }));
 vi.mock("@mantine/notifications", () => ({
-  notifications: { show: vi.fn() },
+  notifications: { show: vi.fn(), hide: vi.fn() },
 }));
 import { useMe } from "@/features/auth/hooks/useMe";
 import { notifications } from "@mantine/notifications";
@@ -72,5 +72,18 @@ describe("AuthGuard", () => {
     renderGuard();
     expect(screen.getByText("protected content")).toBeInTheDocument();
     expect(notifications.show).not.toHaveBeenCalled();
+    // A valid session retires a leftover "Session ended" notice after signing back in.
+    expect(notifications.hide).toHaveBeenCalledWith(
+      SESSION_ENDED_NOTIFICATION_ID,
+    );
+  });
+
+  it("keeps the notice while the session is still ended", () => {
+    mockMe({
+      data: { username: "alice" } as ReturnType<typeof useMe>["data"],
+      error: new ApiError(401, "Not authenticated"),
+    });
+    renderGuard();
+    expect(notifications.hide).not.toHaveBeenCalled();
   });
 });

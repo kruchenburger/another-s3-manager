@@ -118,3 +118,9 @@ def test_invalid_inherited_lifetime_fails(monkeypatch):
     monkeypatch.setenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "10081")
     with pytest.raises(ValueError):
         access.validate_lifetime_minutes()
+
+
+def test_empty_inherited_lifetime_means_default(monkeypatch):
+    # compose "${VAR:-}" passes an empty string; it counts as unset, like constants.py.
+    monkeypatch.setenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "")
+    assert access.validate_lifetime_minutes() == 180

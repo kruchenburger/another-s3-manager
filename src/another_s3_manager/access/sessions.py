@@ -54,7 +54,8 @@ def decode_session_payload(token: str) -> Optional[Dict[str, Any]]:
 def validate_lifetime_minutes(value=None):
     """None inherits the configured local TTL; invalid values never fall back."""
     if value is None:
-        raw = os.environ.get("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "180")
+        # Empty counts as unset, like constants.py: compose "${VAR:-}" yields "".
+        raw = os.environ.get("JWT_ACCESS_TOKEN_EXPIRE_MINUTES") or "180"
         try:
             value = int(raw)
         except (ValueError, TypeError):

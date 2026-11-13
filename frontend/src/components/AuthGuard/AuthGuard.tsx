@@ -41,6 +41,13 @@ export function AuthGuard() {
   const location = useLocation();
   const { data, isLoading, error } = useMe();
 
+  // A valid session again (after signing back in) retires the "Session ended" notice,
+  // which otherwise stays until dismissed.
+  const sessionValid = data !== undefined && !error;
+  useEffect(() => {
+    if (sessionValid) notifications.hide(SESSION_ENDED_NOTIFICATION_ID);
+  }, [sessionValid]);
+
   if (isLoading) {
     return <DelayedLoader />;
   }

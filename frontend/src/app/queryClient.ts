@@ -23,7 +23,11 @@ export function invalidateSessionOnAuthError(
     error.isAuthError() &&
     !isMeQuery(queryKey)
   ) {
-    void client.invalidateQueries({ queryKey: meQueryKey });
+    // cancelRefetch: false — several panels failing together share one /api/me request.
+    void client.invalidateQueries(
+      { queryKey: meQueryKey },
+      { cancelRefetch: false },
+    );
   }
 }
 

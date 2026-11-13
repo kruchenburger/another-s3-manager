@@ -19,7 +19,10 @@ describe("invalidateSessionOnAuthError", () => {
       new ApiError(401, "Not authenticated"),
       ["files", "role", "bucket"],
     );
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: meQueryKey });
+    expect(invalidate).toHaveBeenCalledWith(
+      { queryKey: meQueryKey },
+      { cancelRefetch: false },
+    );
   });
 
   it("ignores the /api/me query's own 401 to avoid a refetch loop", () => {
