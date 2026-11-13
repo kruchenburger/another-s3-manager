@@ -70,6 +70,9 @@ export async function updateUser(
   // Backend uses FastAPI Form(...) fields (multipart). See main.py
   // `@app.put("/api/admin/users/{username}")` update_user handler.
   const body = new FormData();
+  if (payload.is_disabled !== undefined) {
+    body.append("is_disabled", String(payload.is_disabled));
+  }
   if (payload.is_admin !== undefined) {
     body.append("is_admin", String(payload.is_admin));
   }

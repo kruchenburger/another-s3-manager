@@ -7,6 +7,7 @@ interface ConfirmDeleteModalProps {
   /** Names of items to delete. If 1, shown inline. If many, shown as list. */
   items: string[];
   loading?: boolean;
+  extraWarning?: string;
 }
 
 export function ConfirmDeleteModal({
@@ -15,6 +16,7 @@ export function ConfirmDeleteModal({
   onConfirm,
   items,
   loading,
+  extraWarning,
 }: ConfirmDeleteModalProps) {
   const single = items.length === 1;
 
@@ -40,6 +42,7 @@ export function ConfirmDeleteModal({
             </List>
           </>
         )}
+        {extraWarning && <Text size="sm" c="yellow">{extraWarning}</Text>}
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose} disabled={loading}>
             Cancel

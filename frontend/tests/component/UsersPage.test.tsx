@@ -61,6 +61,8 @@ function mockMe(username: string) {
   vi.mocked(useMe).mockReturnValue({
     data: {
       username,
+      auth_source: "local" as const,
+      is_disabled: false,
       is_admin: true,
       csrf_token: "x",
       theme: "auto",
@@ -93,6 +95,8 @@ const TWO_USERS = {
     {
       id: 1,
       username: "admin",
+      auth_source: "local" as const,
+      is_disabled: false,
       is_admin: true,
       allowed_roles: [],
       missing_roles: [],
@@ -100,6 +104,8 @@ const TWO_USERS = {
     {
       id: 2,
       username: "alice",
+      auth_source: "local" as const,
+      is_disabled: false,
       is_admin: false,
       allowed_roles: ["dev", "ops"],
       missing_roles: [],
@@ -150,6 +156,29 @@ describe("UsersPage", () => {
     // Alice has both role badges
     expect(within(aliceRow).getByText("dev")).toBeInTheDocument();
     expect(within(aliceRow).getByText("ops")).toBeInTheDocument();
+  });
+
+  it("disables accounts through the shared update hook without sending grants", async () => {
+    vi.mocked(listUsers).mockResolvedValue(TWO_USERS);
+    vi.mocked(updateUser).mockResolvedValue(undefined);
+    renderPage();
+    const row = await findUserRow("alice");
+    fireEvent.click(within(row).getByRole("button", { name: "Disable" }));
+    await waitFor(() => expect(updateUser).toHaveBeenCalledWith("alice", { is_disabled: true }));
+    const self = await findUserRow("admin");
+    expect(within(self).getByRole("button", { name: "Disable" })).toBeDisabled();
+  });
+
+  it("shows disabled SSO source and explains recreation before delete", async () => {
+    vi.mocked(listUsers).mockResolvedValue({ ...TWO_USERS, users: TWO_USERS.users.map(u =>
+      u.username === "alice" ? { ...u, auth_source: "oidc" as const, is_disabled: true } : u) });
+    renderPage();
+    const row = await findUserRow("alice");
+    expect(within(row).getByText("SSO")).toBeInTheDocument();
+    expect(within(row).getByText("Disabled")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Enable" })).toBeEnabled();
+    fireEvent.click(within(row).getByRole("button", { name: "Delete alice" }));
+    expect(await screen.findByText(/They will be re-created on their next SSO sign-in/)).toBeInTheDocument();
   });
 
   it("shows missing role badges with an explanation", async () => {
@@ -289,4 +318,34 @@ describe("UsersPage", () => {
     );
     expect(screen.getByText(/boom/i)).toBeInTheDocument();
   });
+});
+
+
+it.each(["local", "oidc"] as const)("uses the shared delete dialog and blocks Cancel while deleting %s users", async (source) => {
+  mockMe("admin");
+  vi.mocked(listUsers).mockResolvedValue({ ...TWO_USERS, users: TWO_USERS.users.map(u => u.username === "alice" ? { ...u, auth_source: source } : u) });
+  let finish!: () => void;
+  vi.mocked(deleteUser).mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Delete alice" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(dialog).toHaveTextContent("This cannot be undone.");
+  if (source === "oidc") expect(dialog).toHaveTextContent("They will be re-created on their next SSO sign-in");
+  else expect(dialog).not.toHaveTextContent("They will be re-created");
+  fireEvent.click(within(dialog).getByRole("button", { name: /^Delete$/ }));
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled());
+  finish();
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+});
+
+it("saves grants from the drawer without adding untouched disabled state", async () => {
+  mockMe("admin");
+  vi.mocked(listUsers).mockResolvedValue(TWO_USERS);
+  vi.mocked(updateUser).mockReset();
+  vi.mocked(updateUser).mockResolvedValue(undefined);
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit alice" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(updateUser).toHaveBeenCalledWith("alice", { is_admin: false, allowed_roles: ["dev", "ops"] }));
+  expect(vi.mocked(updateUser).mock.calls[0][1]).not.toHaveProperty("is_disabled");
 });

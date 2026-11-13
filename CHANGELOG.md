@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Admins can disable and re-enable an account. A disabled account cannot sign in
+  and its web sessions and MCP tokens stop working at once; re-enabling brings
+  back its unrevoked MCP tokens but not its old web sessions.
+
+### Changed
+
+- Everyone signs in once after upgrading: sessions now carry the account's
+  generation and session version, and older cookies are refused.
+- Every password change (own, admin reset, `reset_admin_password`, the
+  `ADMIN_PASSWORD` startup sync) ends the account's other web sessions.
+- An account deleted and re-created under the same name never inherits the old
+  account's sessions, MCP tokens or running moves, even with the same id.
+- Signing in to a disabled account answers exactly like a wrong password.
+
+### Upgrade notes
+
+- The database migration `c131a001` cannot be undone by going back to the
+  previous image: the old image does not start on the new schema. Back up the
+  SQLite database first (online backup API or with the app stopped). To roll
+  back, restore that backup; changes made after the upgrade are lost.
+
 ### Fixed
 
 - Plain copies stop if storage settings change or access is revoked during a retry, preventing writes to a different storage target.

@@ -43,8 +43,8 @@ export function ChangePasswordPage() {
     runWithToasts(
       mutation,
       { current_password: values.current, new_password: values.next },
-      "Password changed successfully",
-      () => navigate("/"),
+      "Password changed. Sign in again with your new password.",
+      () => navigate("/login", { replace: true }),
     );
   };
 

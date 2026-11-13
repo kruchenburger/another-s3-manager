@@ -37,15 +37,13 @@ describe("useChangeMyPassword", () => {
     expect((result.current.error as ApiError).status).toBe(401);
   });
 
-  it("invalidates the me query on success so RequireFreshPassword sees fresh data", async () => {
-    // Regression test for the infinite redirect loop: without invalidation
-    // /api/me returned `must_change_password: true` from cache for up to 60s
-    // (staleTime), bouncing the user back to /change-password after they had
-    // just successfully changed the password.
+  it("clears authenticated cache without refetching a revoked session", async () => {
+    // A successful password change revokes this cookie. No protected refetch.
     vi.mocked(changeMyPassword).mockResolvedValueOnce(undefined);
     const qc = new QueryClient({
       defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
     });
+    const fetchSpy = vi.spyOn(qc, "invalidateQueries");
     // Seed the me cache with a stale value.
     qc.setQueryData(["auth", "me"], {
       username: "u",
@@ -61,8 +59,9 @@ describe("useChangeMyPassword", () => {
     });
     result.current.mutate({ current_password: "old", new_password: "new12345" });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    // Verify the me query is now marked invalid (will refetch on next observer).
+    // All server data from the revoked session must be gone.
     const state = qc.getQueryState(["auth", "me"]);
-    expect(state?.isInvalidated).toBe(true);
+    expect(state).toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

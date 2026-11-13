@@ -43,15 +43,42 @@ _WEB_AUTH_ERRORS = {
         "invalid_password": (401, None, "invalid_password"),
     },
     "download": {"refused": (401, "Authentication required", None)},
+    "account": {
+        "password_policy": (422, lambda error: {"error": error.message, **error.details}, None),
+        "LAST_LOCAL_ADMIN": (409, lambda error: {"code": error.code, "message": error.message}, None),
+        "self_delete": (400, None, None),
+        "self_demote": (400, None, None),
+        "self_disable": (400, None, None),
+        "admin_required": (403, None, None),
+        "account_not_found": (404, None, None),
+        "incorrect_current_password": (401, None, None),
+        "same_password": (400, None, None),
+        "user_not_found": (401, "User not found", None),
+    },
 }
+
+for _door in ("cookie", "login", "account"):
+    _WEB_AUTH_ERRORS[_door].update(
+        {
+            code: (
+                401,
+                "Incorrect username or password" if _door == "login" else "Invalid authentication credentials",
+                "invalid_password" if _door == "login" else None,
+            )
+            for code in access.CURRENT_ACCOUNT_DENIALS
+        }
+    )
+_WEB_AUTH_ERRORS["cookie"]["incorrect_current_password"] = (401, "Current password is incorrect", None)
 
 
 def map_web_auth_error(
-    door: Literal["cookie", "login", "download"], error: access.AuthenticationError | None = None
-) -> tuple[int, str, str | None]:
+    door: Literal["cookie", "login", "download", "account"], error: access.AccessDenied | None = None
+) -> tuple[int, Any, str | None]:
     """Preserve each web door's legacy status, detail and metric reason."""
     code = error.code if error is not None else "missing_credentials"
     status_code, detail, reason = _WEB_AUTH_ERRORS[door]["refused" if door == "download" else code]
+    if callable(detail):
+        detail = detail(error)
     return status_code, detail if detail is not None else error.message, reason
 
 

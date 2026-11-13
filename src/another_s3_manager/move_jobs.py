@@ -72,6 +72,7 @@ class MoveRequest(BaseModel):
 
 
 _ACCESS_ERROR_CODES = {
+    **{code: "ACCESS_DENIED" for code in access_service.CURRENT_ACCOUNT_DENIALS},
     "role_required": "ACCESS_DENIED",
     "role_not_allowed": "ACCESS_DENIED",
     "role_not_found": "ROLE_NOT_FOUND",
@@ -342,7 +343,7 @@ def owner_identity(user):
 @dataclass
 class Job:
     id: str
-    owner: tuple[int, str, str | None]
+    owner: tuple[int, str]
     role: str
     bucket: str
     operation_id: str
@@ -447,6 +448,7 @@ def run_job(job):
                 batch = job.plan.entries[index : index + 100]
                 futures = {pool.submit(copy_job_entry, job, entry): entry for entry in batch}
                 failed = False
+                access_failed = False
                 for future in as_completed(futures):
                     entry = futures[future]
                     try:
@@ -457,9 +459,13 @@ def run_job(job):
                             job.bytes_done += entry.size
                     except Exception as error:
                         failed = True
+                        if isinstance(error, MoveError) and error.code == "ACCESS_DENIED":
+                            access_failed = True
+                            error.key = entry.source
+                            error.phase = "copy"
                         job.fail(error, "copy", entry.source)
                 if failed:
-                    job.state = "failed_copy"
+                    job.state = "cancelled_access" if access_failed else "failed_copy"
                     return
         recheck(job)
         job.phase = "verify"
@@ -523,7 +529,7 @@ class MoveRegistry:
     def __init__(self):
         self.lock = threading.RLock()
         self.jobs: dict[str, Job] = {}
-        self.preflights: dict[tuple[int, str, str | None], deque] = {}
+        self.preflights: dict[tuple[int, str], deque] = {}
 
     def _run(self, job):
         run_job(job)
@@ -670,6 +676,9 @@ class MoveRegistry:
                         if access_denied and not removed:
                             raise
                         if len(failures) < 1000:
+                            if isinstance(error, MoveError) and error.code == "ACCESS_DENIED":
+                                error.key = key
+                                error.phase = "cleanup"
                             failures.append(safe_move_error(error, "cleanup", key).detail())
                         if access_denied:
                             stopped_reason = error.code

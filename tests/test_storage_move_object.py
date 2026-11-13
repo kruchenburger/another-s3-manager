@@ -868,3 +868,56 @@ def test_move_keeps_original_storage_target(source, monkeypatch, phase):
         assert len(deletes) == (1 if phase == "delete_retry" else 0)
         assert body(source, "move-dest", "copy") == b"old"
     assert body(source, "move-source", "file") == b"old"
+
+
+@pytest.mark.parametrize(
+    "code", ["ACCOUNT_DISABLED", "ACCOUNT_REPLACED", "SESSION_EPOCH_MISMATCH", "SSO_AUTHZ_EXPIRED"]
+)
+@pytest.mark.parametrize("phase", ["after_copy", "delete_attempt", "before_sign"])
+def test_current_account_refusal_after_copy_preserves_result(source, monkeypatch, code, phase):
+    from another_s3_manager import access
+
+    original_principal = access.principal_for
+    refused = False
+
+    def principal(*args, **kwargs):
+        if refused:
+            raise access.AuthenticationError(code, "Invalid authentication credentials")
+        return original_principal(*args, **kwargs)
+
+    monkeypatch.setattr(access, "principal_for", principal)
+    if phase == "after_copy":
+        original_copy = source.copy_object
+
+        def copy(**kwargs):
+            nonlocal refused
+            result = original_copy(**kwargs)
+            refused = True
+            return result
+
+        monkeypatch.setattr(source, "copy_object", copy)
+    elif phase == "before_sign":
+        original_http_delete = source.delete_object
+
+        def http_delete(**kwargs):
+            nonlocal refused
+            # Revoke after the helper's checks, before the SDK signs its attempt.
+            refused = True
+            return original_http_delete(**kwargs)
+
+        monkeypatch.setattr(source, "delete_object", http_delete)
+    else:
+        original_delete = s3_client._delete_exact_key
+
+        def delete(*args, **kwargs):
+            nonlocal refused
+            refused = True
+            return original_delete(*args, **kwargs)
+
+        monkeypatch.setattr(s3_client, "_delete_exact_key", delete)
+    result = move()
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == code
+    assert body(source, "move-source", "file") == b"old"
+    assert body(source, "move-dest", "copy") == b"old"

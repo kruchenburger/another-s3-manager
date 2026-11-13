@@ -91,6 +91,7 @@ export function UsersPage() {
         username,
         payload: {
           is_admin: payload.is_admin,
+          ...(payload.is_disabled === undefined ? {} : { is_disabled: payload.is_disabled }),
           allowed_roles: payload.allowed_roles,
         },
       },
@@ -144,6 +145,7 @@ export function UsersPage() {
           <Table.Tr>
             <Table.Th>Username</Table.Th>
             <Table.Th w={100}>Admin</Table.Th>
+            <Table.Th>Source / status</Table.Th>
             <Table.Th>Roles</Table.Th>
             <Table.Th w={200}>Actions</Table.Th>
           </Table.Tr>
@@ -156,6 +158,10 @@ export function UsersPage() {
                 <Table.Td>{u.username}</Table.Td>
                 <Table.Td>
                   {u.is_admin && <Badge color="mutedSlateBlue">admin</Badge>}
+                </Table.Td>
+                <Table.Td>
+                  <Badge variant="light">{u.auth_source === "oidc" ? "SSO" : "Local"}</Badge>
+                  {u.is_disabled && <Badge color="red">Disabled</Badge>}
                 </Table.Td>
                 <Table.Td>
                   <Group gap={4}>
@@ -175,6 +181,12 @@ export function UsersPage() {
                 </Table.Td>
                 <Table.Td>
                   <Group gap={4} className={classes.actions}>
+                    <Button size="compact-xs" variant="subtle" disabled={isSelf || updateUser.isPending}
+                      onClick={() => runWithToasts(updateUser, {
+                        username: u.username, payload: { is_disabled: !u.is_disabled },
+                      }, `User ${u.username} ${u.is_disabled ? "enabled" : "disabled"}`)}>
+                      {u.is_disabled ? "Enable" : "Disable"}
+                    </Button>
                     <Tooltip label="Edit">
                       <ActionIcon
                         variant="subtle"
@@ -261,6 +273,9 @@ export function UsersPage() {
         onClose={() => setDeleteTarget(undefined)}
         onConfirm={onConfirmDelete}
         items={deleteTarget ? [deleteTarget.username] : []}
+        extraWarning={deleteTarget?.auth_source === "oidc"
+          ? "They will be re-created on their next SSO sign-in unless the IdP denies them. Disable the user to block access."
+          : undefined}
         loading={deleteUser.isPending}
       />
     </Stack>

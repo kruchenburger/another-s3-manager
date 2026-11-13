@@ -49,8 +49,9 @@ def copy(user):
         ("destination", "bucket_not_allowed"),
         ("source", "bucket_not_allowed"),
         ("grant", "role_not_allowed"),
-        ("account", "role_not_allowed"),
-        ("missing", "role_not_allowed"),
+        # A replaced or vanished account is a current-account refusal since ASM-131 PR 2.
+        ("account", "ACCESS_DENIED"),
+        ("missing", "ACCESS_DENIED"),
         ("client", "ROLE_CHANGED"),
         ("unrelated", None),
     ],
@@ -83,7 +84,8 @@ def test_plain_copy_sdk_retry_rechecks_target_and_access(monkeypatch, change, co
                 if change == "grant":
                     current.update(is_admin=False, allowed_roles=[])
                 else:
-                    current["created_at"] = "2000-01-01T00:00:00+00:00"
+                    # Identity is (id, auth_generation); a new generation means a replaced account.
+                    current["auth_generation"] = "replaced-generation"
                 monkeypatch.setattr(users, "get_user_by_id", lambda uid: None if change == "missing" else current)
             elif change == "client":
                 client._asm_storage_fingerprint = "different-target"

@@ -1,5 +1,6 @@
 """ORM models for users, user_roles, and bans."""
 
+import secrets
 from datetime import UTC, datetime
 
 from sqlalchemy import (
@@ -17,6 +18,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
+def new_auth_generation() -> str:
+    return secrets.token_urlsafe(32)
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -27,6 +32,14 @@ class Base(DeclarativeBase):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (CheckConstraint("mapping_mode_applied IN ('sync', 'initial')", name="ck_users_mapping_mode"),)
+
+    auth_source: Mapped[str] = mapped_column(String, nullable=False, default="local", server_default="local")
+    is_disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    auth_generation: Mapped[str | None] = mapped_column(String, nullable=True, default=new_auth_generation)
+    session_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    sso_authz_valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    mapping_mode_applied: Mapped[str | None] = mapped_column(String, nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
@@ -116,3 +129,27 @@ class ApiToken(Base):
     max_read_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=1048576, server_default="1048576")
 
     user: Mapped["User"] = relationship(back_populates="api_tokens")
+
+
+class UserIdentity(Base):
+    __tablename__ = "user_identities"
+    __table_args__ = (
+        UniqueConstraint("issuer", "subject", name="uq_identity_issuer_subject"),
+        UniqueConstraint("user_id", "issuer", name="uq_identity_user_issuer"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    issuer: Mapped[str] = mapped_column(String, nullable=False)
+    subject: Mapped[str] = mapped_column(String, nullable=False)
+    email_at_link: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OidcLoginTransaction(Base):
+    __tablename__ = "oidc_login_transactions"
+
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

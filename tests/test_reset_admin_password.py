@@ -318,7 +318,6 @@ def test_cli_no_such_table_gets_friendly_message(monkeypatch, capsys):
     "start the app once" advice, because it is actually the right advice here."""
     from sqlalchemy.exc import OperationalError
 
-    from another_s3_manager import users as users_module
     from another_s3_manager.auth import verify_password
     from another_s3_manager.reset_admin_password import main
 
@@ -327,7 +326,7 @@ def test_cli_no_such_table_gets_friendly_message(monkeypatch, capsys):
     def _raise(*_args, **_kwargs):
         raise OperationalError("statement", {}, Exception("no such table: users"))
 
-    monkeypatch.setattr(users_module, "reset_admin_password", _raise)
+    monkeypatch.setattr("another_s3_manager.access.reset_admin_password", _raise)
 
     with pytest.raises(SystemExit) as exc:
         main(["NewPassword1", "--yes"])
@@ -343,7 +342,6 @@ def test_cli_other_operational_errors_pass_through(monkeypatch, capsys):
     problem. Every OperationalError other than "no such table" must surface its real message."""
     from sqlalchemy.exc import OperationalError
 
-    from another_s3_manager import users as users_module
     from another_s3_manager.auth import verify_password
     from another_s3_manager.reset_admin_password import main
 
@@ -352,7 +350,7 @@ def test_cli_other_operational_errors_pass_through(monkeypatch, capsys):
     def _raise(*_args, **_kwargs):
         raise OperationalError("statement", {}, Exception("database is locked"))
 
-    monkeypatch.setattr(users_module, "reset_admin_password", _raise)
+    monkeypatch.setattr("another_s3_manager.access.reset_admin_password", _raise)
 
     with pytest.raises(SystemExit) as exc:
         main(["NewPassword1", "--yes"])
@@ -370,7 +368,6 @@ def test_cli_database_error_gets_clean_message_not_traceback(monkeypatch, capsys
     a raw Python traceback at the operator instead of a clean "database error: ..." line."""
     from sqlalchemy.exc import DatabaseError
 
-    from another_s3_manager import users as users_module
     from another_s3_manager.auth import verify_password
     from another_s3_manager.reset_admin_password import main
 
@@ -379,7 +376,7 @@ def test_cli_database_error_gets_clean_message_not_traceback(monkeypatch, capsys
     def _raise(*_args, **_kwargs):
         raise DatabaseError("statement", {}, Exception("database disk image is malformed"))
 
-    monkeypatch.setattr(users_module, "reset_admin_password", _raise)
+    monkeypatch.setattr("another_s3_manager.access.reset_admin_password", _raise)
 
     with pytest.raises(SystemExit) as exc:
         main(["NewPassword1", "--yes"])
@@ -395,7 +392,6 @@ def test_cli_integrity_error_gets_clean_message_not_traceback(monkeypatch, capsy
     """IntegrityError is also not an OperationalError and used to escape as a raw traceback too."""
     from sqlalchemy.exc import IntegrityError
 
-    from another_s3_manager import users as users_module
     from another_s3_manager.auth import verify_password
     from another_s3_manager.reset_admin_password import main
 
@@ -404,7 +400,7 @@ def test_cli_integrity_error_gets_clean_message_not_traceback(monkeypatch, capsy
     def _raise(*_args, **_kwargs):
         raise IntegrityError("statement", {}, Exception("UNIQUE constraint failed: users.username"))
 
-    monkeypatch.setattr(users_module, "reset_admin_password", _raise)
+    monkeypatch.setattr("another_s3_manager.access.reset_admin_password", _raise)
 
     with pytest.raises(SystemExit) as exc:
         main(["NewPassword1", "--yes"])
@@ -422,7 +418,6 @@ def test_cli_database_error_message_omits_sql_and_bound_parameters(monkeypatch, 
     never the full exception string, so that hash never reaches a tee'd/CI log."""
     from sqlalchemy.exc import OperationalError
 
-    from another_s3_manager import users as users_module
     from another_s3_manager.reset_admin_password import main
 
     def _raise(*_args, **_kwargs):
@@ -432,7 +427,7 @@ def test_cli_database_error_message_omits_sql_and_bound_parameters(monkeypatch, 
             Exception("database is locked"),
         )
 
-    monkeypatch.setattr(users_module, "reset_admin_password", _raise)
+    monkeypatch.setattr("another_s3_manager.access.reset_admin_password", _raise)
 
     with pytest.raises(SystemExit) as exc:
         main(["NewPassword1", "--yes"])
@@ -453,7 +448,6 @@ def test_cli_database_error_fallback_omits_sql_and_parameters_when_orig_is_none(
     password's bcrypt HASH. The fallback must never interpolate that string."""
     from sqlalchemy.exc import OperationalError
 
-    from another_s3_manager import users as users_module
     from another_s3_manager.reset_admin_password import main
 
     def _raise(*_args, **_kwargs):
@@ -463,7 +457,7 @@ def test_cli_database_error_fallback_omits_sql_and_parameters_when_orig_is_none(
             None,  # falsy .orig -- the exact shape that used to leak
         )
 
-    monkeypatch.setattr(users_module, "reset_admin_password", _raise)
+    monkeypatch.setattr("another_s3_manager.access.reset_admin_password", _raise)
 
     with pytest.raises(SystemExit) as exc:
         main(["NewPassword1", "--yes"])

@@ -75,6 +75,12 @@ call it and translate its error.
   storage module and no web/MCP framework, and code outside `access` imports only its
   package root (`from another_s3_manager import access`), never `access.service` /
   `access.policies` / `access.errors`.
+- Access also owns current-account validation, account lifecycle and atomic password/session-epoch
+  mutations. `principal_for` is the shared status entry point; its private snapshot seam accepts only
+  trusted transaction or freshly loaded per-attempt state. `account_identity` is the single
+  `(id, auth_generation)` rule used by sessions, PAT authentication, Storage and move jobs.
+  `access/oidc/identities.py` and `transactions.py` provide persistence only; OIDC networking and
+  mapping are not implemented yet.
 - Test layout: each policy once at the service level in `tests/access/`, plus a thin
   mapping test per adapter.
 
@@ -82,7 +88,11 @@ call it and translate its error.
 
 - SQLAlchemy 2.0 (sync) + Alembic for migrations
 - SQLite at `<DATA_DIR>/another_s3_manager.db`
-- Tables: `users`, `user_roles` (junction), `bans` (FK → users with CASCADE), `api_tokens` (FK CASCADE → users; stores SHA-256 hash of plaintext token, `is_read_only`, `max_read_bytes`, `revoked_at`)
+- Tables: `users`, `user_roles` (junction), `bans` (FK → users with CASCADE), `api_tokens` (FK CASCADE → users; stores SHA-256 hash of plaintext token, `is_read_only`, `max_read_bytes`, `revoked_at`), `user_identities`, `oidc_login_transactions`
+- Users additionally store `auth_source`, `is_disabled`, `auth_generation`, `session_epoch`, nullable `sso_authz_valid_until` and nullable `mapping_mode_applied` (`sync`/`initial`). Freshness enforcement and applied-mode transitions arrive with OIDC login.
+- Generation storage stays nullable for N-1-shaped inserts. New users get a random generation; a legacy NULL is materialized atomically before a Principal is returned.
+- Identity links have unique issuer/subject and user/issuer constraints with user-delete cascade. The login ledger stores only SHA-256 state hashes and timestamps, is consumed atomically once, and purges at most 100 expired rows per operation.
+- Migration `c131a001` follows `35173f08b83b`. Downgrade is test/dev-only and loses the new security fields, identities and ledger. A previous image cannot start on this revision; production recovery is a forward fix or restoring a consistent pre-release backup, losing later changes.
 - Module: `database.py` (engine + `session_scope()`), `models.py` (ORM)
 - Auto-migration from `users.json` / `bans.json` on first startup (legacy files renamed to `*.migrated.bak`)
 - WAL journal mode + `busy_timeout=5000` set on every connection (readers no longer block on writers — matters with the ~40 concurrent boto3 worker threads); escape hatch `SQLITE_JOURNAL_MODE=delete` for network-mounted `DATA_DIR`. Backing up the DB file requires either `sqlite3 .backup` / the online backup API, or stopping the app first — copying `another_s3_manager.db` alone while the app is running can produce a torn snapshot (the `-wal` file holds uncommitted-to-main-file pages). No such backup tooling exists in this repo yet.
@@ -270,6 +280,10 @@ Version is derived from git tag via `APP_VERSION` env var. In local development 
 - Multiple AWS account support (assume_role, profiles, direct credentials)
 - S3-compatible services (MinIO, R2, Wasabi)
 - JWT authentication via `httpOnly + Secure + SameSite=Strict` cookie + CSRF protection (`X-CSRF-Token` from `/api/me`)
+- Web sessions are HS256-only JWTs with required account-generation and session-epoch claims; pre-1.3.1 cookies need one re-login. The cookie and every download-token source use the same Access validator.
+- Admins can disable/enable accounts. Access serializes actor revalidation, self-protection, the last-enabled-local-admin guard and the mutation. Disable bumps the session epoch; Enable restores unrevoked MCP tokens but never old web sessions.
+- Every real password-hash change (UI, admin reset, CLI, env sync, repository compatibility writers) atomically bumps the session epoch; no-op and provenance-only writes do not. A successful own-password change clears browser auth state and returns to sign-in.
+- Logout always clears the ASM cookie. It does not revoke copied cookies, bump the epoch or sign out of the IdP.
 - Automatic refresh of expired credentials
 - Granular per-role, per-bucket access control
 - Role-level delete permission: a role with `"allow_delete": false` in `config.json` blocks deleting (file, folder, move, move cleanup, MCP `delete_file` / `copy_object(delete_source)`) for everyone using it, admins included; before every destructive S3 HTTP attempt (including SDK retries), Storage reloads config and the current user by id and rechecks role grants, bucket access and the deletion gate through Access. Absent = allowed; any non-boolean value = denied. Overwriting a key by upload/copy is not covered. `POST /api/config` keeps the flag when the body omits it

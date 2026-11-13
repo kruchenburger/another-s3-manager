@@ -143,6 +143,9 @@ source_modules = [
 ]
 forbidden_modules = [
     "another_s3_manager.access.errors",
+    "another_s3_manager.access.oidc",
+    "another_s3_manager.access.oidc.identities",
+    "another_s3_manager.access.oidc.transactions",
     "another_s3_manager.access.passwords",
     "another_s3_manager.access.policies",
     "another_s3_manager.access.principal",

@@ -179,7 +179,7 @@ def test_get_current_user_success(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "secret")
     auth = reload_auth()
     ensure_user(username="user", password="password", is_admin=False)
-    token = auth.create_access_token({"sub": "user"})
+    token = _current_token("user")
     request = _make_request_with_cookie(token)
     user = auth.get_current_user(request)
     assert user["username"] == "user"
@@ -199,7 +199,7 @@ def test_verify_csrf_token_success(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "secret")
     auth = reload_auth()
     ensure_user(username="user", password="password", is_admin=False)
-    token = auth.create_access_token({"sub": "user"})
+    token = _current_token("user")
     auth_request = _make_request_with_cookie(token)
     current_user = auth.get_current_user(auth_request)
     csrf_token = current_user["csrf_token"]
@@ -218,7 +218,7 @@ def test_verify_csrf_token_invalid(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "secret")
     auth = reload_auth()
     ensure_user(username="user", password="password", is_admin=False)
-    token = auth.create_access_token({"sub": "user"})
+    token = _current_token("user")
     auth_request = _make_request_with_cookie(token)
     current_user = auth.get_current_user(auth_request)
 
@@ -372,7 +372,7 @@ def test_get_current_user_theme_always_present(monkeypatch):
     auth = reload_auth()
     ensure_user(username="noteheme", password="password", is_admin=False)
 
-    token = auth.create_access_token({"sub": "noteheme"})
+    token = _current_token("noteheme")
     request = _make_request_with_cookie(token)
     user = auth.get_current_user(request)
     assert user["theme"] == "auto"
@@ -388,7 +388,7 @@ def test_get_current_user_user_not_found(monkeypatch):
     auth = reload_auth()
     ensure_user(username="ghost", password="password", is_admin=False)
 
-    token = auth.create_access_token({"sub": "ghost"})
+    token = _current_token("ghost")
 
     import another_s3_manager.users as users
 
@@ -459,7 +459,7 @@ def test_record_login_attempt_logs(caplog):
 def test_get_current_user_reads_from_cookie(monkeypatch, valid_jwt_token, valid_user_dict):
     """get_current_user pulls the token from request.cookies['access_token']."""
     auth = reload_auth()
-    monkeypatch.setattr("another_s3_manager.access.users.get_user_by_username", lambda username: dict(valid_user_dict))
+    monkeypatch.setattr("another_s3_manager.access.users.get_user_by_id", lambda user_id: dict(valid_user_dict))
 
     request = _make_request_with_cookie(valid_jwt_token)
     user = auth.get_current_user(request)
@@ -568,7 +568,7 @@ def test_get_current_user_never_calls_load_users(monkeypatch):
 
     monkeypatch.setattr("another_s3_manager.access.users.load_users", _boom)
 
-    token = auth.create_access_token({"sub": "carol"})
+    token = _current_token("carol")
     request = _make_request_with_cookie(token)
     user = auth.get_current_user(request)
     assert user["username"] == "carol"
@@ -589,4 +589,12 @@ def test_verify_password_warn_logs_when_hash_is_corrupt(caplog):
     assert result is False
     assert any(record.levelno == logging.WARNING and "verify" in record.message.lower() for record in caplog.records), (
         "Expected a WARNING log when both hash schemes fail"
+    )
+
+
+def _current_token(username):
+    from another_s3_manager import access, users
+
+    return access.issue_session(
+        access.Principal(users.get_user_by_username(username)), method="pwd", lifetime_minutes=180
     )

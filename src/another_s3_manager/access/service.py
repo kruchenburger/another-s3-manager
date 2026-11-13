@@ -176,28 +176,42 @@ def record_login_attempt(username: str, success: bool) -> None:
 
 
 def authenticate_session(token: str, *, require_subject: bool = False) -> Principal:
-    payload = sessions.decode_session_payload(token)
-    if payload is None or payload.get("sub") is None or (require_subject and not payload.get("sub")):
+    payload = sessions.required_session_payload(token)
+    if payload is None:
         raise AuthenticationError("invalid_session", "Invalid authentication credentials")
-    user = users.get_user_by_username(payload["sub"])
-    if user is None:
-        raise AuthenticationError("user_not_found", "User not found")
-    user["csrf_token"] = payload.get("csrf_token")
-    return Principal(user)
+    principal = principal_for(payload["uid"], expected_identity=(payload["uid"], payload["ugen"]))
+    if principal.username != payload["sub"]:
+        raise AuthenticationError("ACCOUNT_REPLACED", "Invalid authentication credentials")
+    if principal.user["session_epoch"] != payload["sv"]:
+        raise AuthenticationError("SESSION_EPOCH_MISMATCH", "Invalid authentication credentials")
+    return Principal(
+        {**principal.user, "csrf_token": payload["csrf_token"], "amr": payload["amr"], "sid": payload["sid"]}
+    )
 
 
 def session_token_is_wellformed(token: str) -> bool:
-    """Signature/expiry/sub prefilter only; never an account authorization."""
-    payload = sessions.decode_session_payload(token)
-    return payload is not None and payload.get("sub") is not None
+    """DB-free, nonauthoritative upload prefilter."""
+    return sessions.required_session_payload(token) is not None
 
 
-def principal_for(user_id: int, *, expected_identity=None) -> Principal:
-    user = users.get_user_by_id(user_id)
+_NO_SNAPSHOT = object()
+
+
+def principal_for(user_id: int, *, expected_identity=None, _snapshot=_NO_SNAPSHOT) -> Principal:
+    """Resolve status once, optionally within an existing trusted fresh snapshot.
+
+    The private seam is only for serialized Access transactions and Storage's
+    freshly loaded per-attempt state. It must never receive request-cached data.
+    An explicit missing snapshot stays missing; it cannot adopt a replacement.
+    """
+    user = users.get_user_by_id(user_id) if _snapshot is _NO_SNAPSHOT else _snapshot
     if user is None:
         raise AuthenticationError("user_not_found", "User not found")
     if expected_identity is not None and account_identity(user) != expected_identity:
-        raise AuthenticationError("account_replaced", "User not found")
+        raise AuthenticationError("ACCOUNT_REPLACED", "Invalid authentication credentials")
+    if user.get("is_disabled"):
+        raise AuthenticationError("ACCOUNT_DISABLED", "Invalid authentication credentials")
+    # Applied-sync freshness is introduced by PR 3, not inferred from NULL here.
     return Principal(user)
 
 
@@ -207,16 +221,15 @@ def authenticate_bearer(authorization: str, config_loader: Callable[[], dict]) -
     plaintext = authorization[len("Bearer ") :]
     if not plaintext.startswith("as3m_"):
         raise AuthenticationError("wrong_token_prefix", "Token does not start with as3m_")
-    token = tokens.find_active_token_by_hash(hashlib.sha256(plaintext.encode()).hexdigest())
-    if token is None:
+    result = tokens.find_active_token_with_owner(hashlib.sha256(plaintext.encode()).hexdigest())
+    if result is None:
         raise AuthenticationError("invalid_token", "Invalid or revoked token")
-    # Keep the existing separate token and owner reads; generation binding is PR 2.
-    user = users.get_user_by_id(token.user_id)
+    token, user = result
     if user is None:
         raise AuthenticationError("orphan_token", "Token's user no longer exists")
-    principal = Principal(user)
+    principal = principal_for(user["id"], expected_identity=account_identity(user))
     config = config_loader()
-    projected_roles = allowed_roles(user, config)
+    projected_roles = allowed_roles(principal.to_user_dict(), config)
     tokens.touch_last_used(token.id)
     return BearerAuthentication(token, principal, projected_roles)
 
@@ -230,8 +243,105 @@ def authenticate_local(username: str, password: str, config: dict) -> Principal:
     if user is None and users.count_users() == 0:
         users.load_users()
         user = users.get_user_by_username(username)
-    if user is None or not passwords.verify_password(password, user.get("password_hash", "")):
+    try:
+        if user is None:
+            raise AuthenticationError("invalid_password", "Incorrect username or password")
+        principal_for(user["id"], expected_identity=account_identity(user))
+        if user["auth_source"] != "local" or not passwords.verify_password(password, user.get("password_hash", "")):
+            raise AuthenticationError("invalid_password", "Incorrect username or password")
+        principal = _confirm_password_snapshot(user)
+    except AuthenticationError:
+        # The login door must not reveal account status or a concurrent revocation.
         record_login_attempt(username, False)
-        raise AuthenticationError("invalid_password", "Incorrect username or password")
+        raise AuthenticationError("invalid_password", "Incorrect username or password") from None
     record_login_attempt(username, True)
-    return Principal(user)
+    return principal
+
+
+def _password_snapshot(user):
+    return (*account_identity(user), user["session_epoch"], user["password_hash"])
+
+
+def _confirm_password_snapshot(snapshot, *, new_hash=None):
+    """A proof of one hash never acquires a later generation or epoch."""
+    from sqlalchemy import select
+
+    from another_s3_manager.models import User
+
+    with users.write_scope() as session:
+        row = session.execute(select(User).where(User.id == snapshot["id"])).scalar_one_or_none()
+        if row is None:
+            raise AuthenticationError("ACCOUNT_REPLACED", "Invalid authentication credentials")
+        current = users._user_to_dict(users.materialize_generation(session, row))
+        principal = principal_for(row.id, expected_identity=account_identity(snapshot), _snapshot=current)
+        if current["auth_source"] != "local" or _password_snapshot(current) != _password_snapshot(snapshot):
+            raise AuthenticationError("SESSION_EPOCH_MISMATCH", "Invalid authentication credentials")
+        if new_hash is not None:
+            users.write_password(row, new_hash, "ui")
+            row.must_change_password = False
+        return principal
+
+
+def change_own_password(actor, current_password, new_password, *, policy=None):
+    principal = principal_for(actor["id"], expected_identity=account_identity(actor))
+    snapshot = principal.user
+    if not passwords.verify_password(current_password, snapshot["password_hash"]):
+        raise AuthenticationError("incorrect_current_password", "Current password is incorrect")
+    if current_password == new_password:
+        raise AccessDenied("same_password", "New password must differ from the current one")
+    from another_s3_manager.utils import validate_password
+
+    failures = validate_password(new_password, policy or {})
+    if failures:
+        raise AccessDenied("password_policy", "Password does not meet policy", {"failed_requirements": failures})
+    _confirm_password_snapshot(snapshot, new_hash=passwords.hash_password(new_password))
+
+
+def _lifecycle(actor, username, changes, *, deleting=False):
+    from sqlalchemy import func, select
+
+    from another_s3_manager.models import User
+
+    with users.write_scope() as session:
+        acting = session.execute(select(User).where(User.id == actor["id"])).scalar_one_or_none()
+        if acting is None:
+            raise AuthenticationError("ACCOUNT_REPLACED", "Invalid authentication credentials")
+        current_actor = users._user_to_dict(users.materialize_generation(session, acting))
+        principal_for(acting.id, expected_identity=account_identity(actor), _snapshot=current_actor)
+        if current_actor["session_epoch"] != actor["session_epoch"]:
+            raise AuthenticationError("SESSION_EPOCH_MISMATCH", "Invalid authentication credentials")
+        if not acting.is_admin:
+            raise AccessDenied("admin_required", "Admin privileges required")
+        row = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
+        if row is None:
+            if deleting:
+                return None
+            raise AccessDenied("account_not_found", "User not found")
+        if row.id == acting.id:
+            if deleting:
+                raise AccessDenied("self_delete", "Cannot delete yourself")
+            if changes.get("is_admin") is False:
+                raise AccessDenied("self_demote", "You can't remove your own admin rights.")
+            if changes.get("is_disabled") is True:
+                raise AccessDenied("self_disable", "Cannot disable yourself")
+        removes_admin = deleting or changes.get("is_admin") is False or changes.get("is_disabled") is True
+        if removes_admin and row.is_admin and not row.is_disabled and row.auth_source == "local":
+            count = session.scalar(
+                select(func.count())
+                .select_from(User)
+                .where(User.is_admin.is_(True), User.is_disabled.is_(False), User.auth_source == "local")
+            )
+            if count <= 1:
+                raise AccessDenied("LAST_LOCAL_ADMIN", "Cannot remove the last enabled local administrator")
+        if deleting:
+            session.delete(row)
+            return None
+        return users.update_user(username, _session=session, **changes)
+
+
+def update_account(actor, username, changes):
+    return _lifecycle(actor, username, changes)
+
+
+def delete_account(actor, username):
+    return _lifecycle(actor, username, {}, deleting=True)

@@ -10,9 +10,10 @@ import os
 import threading
 import time
 from collections.abc import Collection
+from contextlib import contextmanager, nullcontext
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import joinedload, selectinload
 
 from another_s3_manager.access.policies import effective_allowed_roles as effective_allowed_roles
@@ -24,12 +25,41 @@ from another_s3_manager.constants import (
     PASSWORD_SET_VIA_UNKNOWN,
 )
 from another_s3_manager.database import session_scope
-from another_s3_manager.models import Ban, User, UserRole
+from another_s3_manager.models import Ban, User, UserRole, new_auth_generation
 
 logger = logging.getLogger(__name__)
 
 # Serialize config publication and grant writes in the single application process.
 role_grants_lock = threading.RLock()
+
+
+@contextmanager
+def write_scope():
+    """Lock grants before serializing SQLite writers, including other processes."""
+    with role_grants_lock, session_scope() as session:
+        session.execute(text("BEGIN IMMEDIATE"))
+        yield session
+
+
+def materialize_generation(session, user):
+    """Compare-and-set legacy NULL storage; never rotate a populated value."""
+    if user.auth_generation is None:
+        session.execute(
+            update(User)
+            .where(User.id == user.id, User.auth_generation.is_(None))
+            .values(auth_generation=new_auth_generation()),
+            execution_options={"synchronize_session": False},
+        )
+        session.refresh(user)
+    return user
+
+
+def write_password(user, new_hash, provenance):
+    """Every password writer uses this inside its serialized transaction."""
+    if user.password_hash != new_hash:
+        user.password_hash = new_hash
+        user.session_epoch += 1
+        user.password_set_via = provenance
 
 
 def _user_to_dict(user: User) -> Dict[str, Any]:
@@ -39,6 +69,12 @@ def _user_to_dict(user: User) -> Dict[str, Any]:
         "username": user.username,
         "password_hash": user.password_hash,
         "is_admin": user.is_admin,
+        "auth_source": user.auth_source,
+        "is_disabled": user.is_disabled,
+        "auth_generation": user.auth_generation,
+        "session_epoch": user.session_epoch,
+        "sso_authz_valid_until": user.sso_authz_valid_until,
+        "mapping_mode_applied": user.mapping_mode_applied,
         "allowed_roles": [r.role_name for r in user.roles],
         "theme": user.theme,
         "default_role": user.default_role,
@@ -181,7 +217,7 @@ def sync_admin_password_from_env() -> bool:
         )
         force = False
 
-    with session_scope() as session:
+    with write_scope() as session:
         admin = session.execute(select(User).where(User.username == "admin")).scalar_one_or_none()
         if admin is None:
             return False
@@ -198,7 +234,7 @@ def sync_admin_password_from_env() -> bool:
                 )
                 return False
             previous = admin.password_set_via
-            admin.password_hash = hash_password(env_password)
+            write_password(admin, hash_password(env_password), PASSWORD_SET_VIA_ENV)
             admin.must_change_password = False
             admin.password_set_via = PASSWORD_SET_VIA_ENV
             logger.warning(
@@ -264,7 +300,7 @@ def sync_admin_password_from_env() -> bool:
         if already_synced or verify_password(env_password, admin.password_hash):
             return False  # env value unchanged since it was last applied
 
-        admin.password_hash = hash_password(env_password)
+        write_password(admin, hash_password(env_password), PASSWORD_SET_VIA_ENV)
         admin.must_change_password = False
         # Security-relevant event: say WHAT happened, never the password itself.
         logger.warning(
@@ -292,7 +328,7 @@ def reset_admin_password(new_password_hash: str) -> str:
 
     Returns "updated" or "created".
     """
-    with session_scope() as session:
+    with write_scope() as session:
         admin = session.execute(select(User).where(User.username == "admin")).scalar_one_or_none()
         if admin is None:
             session.add(
@@ -306,7 +342,7 @@ def reset_admin_password(new_password_hash: str) -> str:
                 )
             )
             return "created"
-        admin.password_hash = new_password_hash
+        write_password(admin, new_password_hash, PASSWORD_SET_VIA_CLI)
         admin.must_change_password = False
         admin.password_set_via = PASSWORD_SET_VIA_CLI
         return "updated"
@@ -413,7 +449,7 @@ def save_users(users_data: Dict[str, Any]) -> None:
     incoming: List[Dict[str, Any]] = users_data.get("users", [])
     incoming_by_username = {u["username"]: u for u in incoming}
 
-    with session_scope() as session:
+    with write_scope() as session:
         existing_users = session.execute(select(User).options(selectinload(User.roles))).scalars().all()
         existing_by_username = {u.username: u for u in existing_users}
 
@@ -442,7 +478,7 @@ def save_users(users_data: Dict[str, Any]) -> None:
                     existing.password_set_via = PASSWORD_SET_VIA_UI
                 elif "password_set_via" in user_dict:
                     existing.password_set_via = user_dict["password_set_via"]
-                existing.password_hash = new_hash
+                write_password(existing, new_hash, PASSWORD_SET_VIA_UI)
                 existing.is_admin = user_dict.get("is_admin", False)
                 existing.theme = user_dict.get("theme", "auto")
                 if "must_change_password" in user_dict:
@@ -487,22 +523,22 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     loading, _user_to_dict()'s access to user.roles would trigger a second,
     lazy SELECT on every call.
     """
-    with session_scope() as session:
+    with write_scope() as session:
         user = (
             session.execute(select(User).options(joinedload(User.roles)).where(User.username == username))
             .unique()
             .scalar_one_or_none()
         )
-        return _user_to_dict(user) if user else None
+        return _user_to_dict(materialize_generation(session, user)) if user else None
 
 
 def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     """Look up a job owner by immutable database identity."""
-    with session_scope() as session:
+    with write_scope() as session:
         user = session.execute(
             select(User).options(selectinload(User.roles)).where(User.id == user_id)
         ).scalar_one_or_none()
-        return _user_to_dict(user) if user else None
+        return _user_to_dict(materialize_generation(session, user)) if user else None
 
 
 def get_all_users() -> List[Dict[str, Any]]:
@@ -521,6 +557,8 @@ def get_users_for_admin() -> List[Dict[str, Any]]:
                 "id": u.id,
                 "username": u.username,
                 "is_admin": u.is_admin,
+                "auth_source": u.auth_source,
+                "is_disabled": u.is_disabled,
                 "created_at": u.created_at.isoformat() if u.created_at else None,
                 "allowed_roles": [r.role_name for r in u.roles],
             }
@@ -548,7 +586,7 @@ def create_user(
     the UserDrawer checkbox or by passing False explicitly. The seed admin
     bootstrap path (_seed_default_admin_if_empty) bypasses this with False.
     """
-    with session_scope() as session:
+    with write_scope() as session:
         existing = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
         if existing:
             raise ValueError(f"User {username} already exists")
@@ -581,7 +619,7 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
         default is no longer in the new set, reset to the first of the new
         set (or NULL if the new set is empty)
     """
-    with session_scope() as session:
+    with nullcontext(kwargs.pop("_session")) if "_session" in kwargs else write_scope() as session:
         user = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
         if not user:
             raise ValueError(f"User {username} not found")
@@ -609,7 +647,11 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
                 # If Task 3/5 need to set provenance without touching the hash, they should
                 # write it directly (or extend this call explicitly, not resurrect this elif).
                 user.password_set_via = kwargs.get("password_set_via", PASSWORD_SET_VIA_UI)
-            user.password_hash = new_hash
+            write_password(user, new_hash, kwargs.get("password_set_via", PASSWORD_SET_VIA_UI))
+        if "is_disabled" in kwargs:
+            if kwargs["is_disabled"] and not user.is_disabled:
+                user.session_epoch += 1
+            user.is_disabled = kwargs["is_disabled"]
         if "is_admin" in kwargs:
             user.is_admin = kwargs["is_admin"]
         if "theme" in kwargs:
@@ -638,7 +680,7 @@ def update_user(username: str, **kwargs: Any) -> Dict[str, Any]:
 
 def delete_user(username: str) -> None:
     """Delete a user (no-op if missing). Cascades to roles and bans."""
-    with session_scope() as session:
+    with write_scope() as session:
         user = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
         if user:
             session.delete(user)

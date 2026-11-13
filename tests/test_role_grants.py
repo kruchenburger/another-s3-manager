@@ -342,12 +342,16 @@ def test_report_failure_is_nonfatal(app_client, monkeypatch, main_log):
 @pytest.mark.parametrize("method", ["post", "put"])
 def test_grant_validation_and_write_hold_same_lock(app_client, monkeypatch, method):
     from another_s3_manager import main
+    from another_s3_manager.access import users as access_users
 
     _, headers = login(app_client)
     member(("Default",), "target")
     lock = users.role_grants_lock
     original_load = main.load_config
-    original_write = users.create_user if method == "post" else users.update_user
+    # Creation goes through the users shim; an update runs inside the Access lifecycle,
+    # which writes through the Access repository.
+    write_owner = users if method == "post" else access_users
+    original_write = write_owner.create_user if method == "post" else write_owner.update_user
     calls = []
 
     def load(*args, **kwargs):
@@ -362,7 +366,7 @@ def test_grant_validation_and_write_hold_same_lock(app_client, monkeypatch, meth
         return original_write(*args, **kwargs)
 
     monkeypatch.setattr(main, "load_config", load)
-    monkeypatch.setattr(users, "create_user" if method == "post" else "update_user", write)
+    monkeypatch.setattr(write_owner, "create_user" if method == "post" else "update_user", write)
     url = "/api/admin/users" + ("/target" if method == "put" else "")
     response = getattr(app_client, method)(
         url, data={"username": "new", "password": "GoodPassword123", "allowed_roles": "Default"}, headers=headers

@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { ChangePasswordPage } from "@/pages/ChangePasswordPage";
 
 vi.mock("@/features/auth/api/authApi", async (importOriginal) => {
@@ -40,6 +40,8 @@ beforeEach(() => {
   vi.mocked(changeMyPassword).mockClear();
 });
 
+function LocationProbe() { return <div data-testid="location">{useLocation().pathname}</div>; }
+
 function renderPage() {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -50,6 +52,7 @@ function renderPage() {
         <Notifications />
         <MemoryRouter>
           <ChangePasswordPage />
+          <LocationProbe />
         </MemoryRouter>
       </MantineProvider>
     </QueryClientProvider>,
@@ -73,6 +76,7 @@ describe("ChangePasswordPage", () => {
         new_password: "NewPass456",
       }),
     );
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/login"));
   });
 
   it("blocks submit when confirm does not match", async () => {

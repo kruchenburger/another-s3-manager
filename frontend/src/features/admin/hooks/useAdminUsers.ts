@@ -22,6 +22,7 @@ export function useCreateUser() {
   });
 }
 
+// Lifecycle and grant edits share the same mutation and cache refresh.
 export function useUpdateUser() {
   const qc = useQueryClient();
   return useMutation({

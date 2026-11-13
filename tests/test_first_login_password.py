@@ -144,6 +144,9 @@ def test_self_password_change_clears_must_change_password(app_client):
     )
     assert response.status_code == 200, response.text
 
+    # The epoch bump invalidates the old cookie; re-login exposes the cleared flag.
+    assert app_client.get("/api/me").status_code == 401
+    assert app_client.post("/api/login", data={"username": "resetter", "password": "fresh-pass-1A!"}).status_code == 200
     # /api/me now shows False.
     me = app_client.get("/api/me").json()
     assert me["must_change_password"] is False, me

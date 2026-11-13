@@ -153,8 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     _confirm_or_abort(args.yes)
 
     # App imports are deferred so `--help` and usage errors stay instant and DB-free.
-    from another_s3_manager.auth import hash_password
-    from another_s3_manager.users import reset_admin_password
+    from another_s3_manager.access import hash_password, reset_admin_password
 
     try:
         outcome = reset_admin_password(hash_password(password))
