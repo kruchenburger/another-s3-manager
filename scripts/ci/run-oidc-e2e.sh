@@ -31,7 +31,8 @@ cat > "$S3_FILE_MANAGER_CONFIG" <<'JSON'
 {"roles": [], "auth": {"oidc": {"role_mapping": {"rules": [{"claim": "groups", "value": "data-team", "admin": true}]}}}}
 JSON
 if ! uv run pytest -o addopts= tests/test_oidc_login_integration.py tests/access/test_access_oidc_tokens.py >"$private_dir/python.log" 2>&1; then
-  printf 'OIDC independent-key integration failed; raw diagnostics withheld.\n'
+  printf 'OIDC independent-key integration failed; sanitized tail:\n'
+  python3 scripts/ci/oidc_sanitize.py "$private_dir/python.log" 60 || true
   exit 1
 fi
 uv run python -m tests.oidc.fake_op >"$private_dir/op.log" 2>&1 &
@@ -47,7 +48,9 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 if [[ "$ready" != true ]]; then
-  printf 'OIDC readiness failed; raw logs withheld.\n'
+  printf 'OIDC readiness failed; sanitized tails:\n'
+  python3 scripts/ci/oidc_sanitize.py "$private_dir/op.log" 30 || true
+  python3 scripts/ci/oidc_sanitize.py "$private_dir/asm.log" 40 || true
   exit 1
 fi
 result=0
@@ -63,7 +66,9 @@ if printf '%s' "$summary" | grep -Eq 'oidc-ci-session-secret-canary|FixturePassw
   exit 1
 fi
 if [[ "$result" != 0 ]]; then
-  printf 'OIDC browser checks failed; raw diagnostics withheld.\n'
+  printf 'OIDC browser checks failed; sanitized tails:\n'
+  python3 scripts/ci/oidc_sanitize.py "$private_dir/browser.log" 80 || true
+  python3 scripts/ci/oidc_sanitize.py "$private_dir/asm.log" 30 || true
   exit "$result"
 fi
 printf '%s\n' "$summary"
