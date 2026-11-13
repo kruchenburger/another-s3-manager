@@ -35,10 +35,17 @@ def test_cookie_delegates_and_projects(monkeypatch):
 
     def authenticate(token, *, require_subject=False):
         seen.append(token)
-        return access.Principal({"username": "alice", "csrf_token": "csrf"})
+        return access.Principal(
+            {"id": 1, "auth_generation": "test-generation", "username": "alice", "csrf_token": "csrf"}
+        )
 
     monkeypatch.setattr(access, "authenticate_session", authenticate)
-    assert auth.get_current_user(_request(cookie="cookie")) == {"username": "alice", "csrf_token": "csrf"}
+    assert auth.get_current_user(_request(cookie="cookie")) == {
+        "id": 1,
+        "auth_generation": "test-generation",
+        "username": "alice",
+        "csrf_token": "csrf",
+    }
     assert seen == ["cookie"]
 
 
@@ -55,11 +62,13 @@ def test_download_source_order_and_delegation(monkeypatch, winner, expected):
         seen.append(token)
         if token != winner:
             raise access.AuthenticationError("invalid_session", "Invalid authentication credentials")
-        return access.Principal({"username": "alice", "csrf_token": "csrf"})
+        return access.Principal(
+            {"id": 1, "auth_generation": "test-generation", "username": "alice", "csrf_token": "csrf"}
+        )
 
     monkeypatch.setattr(access, "authenticate_session", authenticate)
     user = get_user_for_download(token="query", request=_request(cookie="cookie", bearer="Bearer header"))
-    assert user == {"username": "alice", "csrf_token": "csrf"}
+    assert user == {"id": 1, "auth_generation": "test-generation", "username": "alice", "csrf_token": "csrf"}
     assert seen == expected
 
 
@@ -68,7 +77,9 @@ def test_invalid_query_with_real_valid_cookie():
     from another_s3_manager.main import get_user_for_download
 
     users.create_user("alice", "hash")
-    token = access.create_access_token({"sub": "alice"})
+    token = access.issue_session(
+        access.principal_for(users.get_user_by_username("alice")["id"]), method="pwd", lifetime_minutes=180
+    )
     assert get_user_for_download(token="invalid", request=_request(cookie=token))["username"] == "alice"
 
 
@@ -102,3 +113,50 @@ def test_local_login_maps_service_refusal_and_metric(app_client, monkeypatch, co
     assert response.status_code == status
     assert response.json() == {"detail": message}
     assert counter._value.get() == before + 1
+
+
+@pytest.mark.parametrize(
+    "code", ["ACCOUNT_DISABLED", "ACCOUNT_REPLACED", "SESSION_EPOCH_MISMATCH", "SSO_AUTHZ_EXPIRED"]
+)
+@pytest.mark.parametrize("door", ["cookie", "query", "bearer", "download_cookie"])
+def test_current_account_denial_mapping(monkeypatch, code, door):
+    from another_s3_manager.main import get_user_for_download
+
+    def refuse(*args, **kwargs):
+        raise access.AuthenticationError(code, "private diagnostic")
+
+    monkeypatch.setattr(access, "authenticate_session", refuse)
+    with pytest.raises(HTTPException) as error:
+        if door == "cookie":
+            auth.get_current_user(_request(cookie="token"))
+        else:
+            get_user_for_download(
+                token="token" if door == "query" else None,
+                request=_request(
+                    cookie="token" if door == "download_cookie" else None,
+                    bearer="Bearer token" if door == "bearer" else "",
+                ),
+            )
+    assert error.value.status_code == 401
+    assert error.value.detail == (
+        "Invalid authentication credentials" if door == "cookie" else "Authentication required"
+    )
+
+
+@pytest.mark.parametrize("source", ["query", "bearer", "cookie"])
+@pytest.mark.parametrize("change", ["disable", "epoch"])
+def test_download_all_sources_reject_disabled_or_epoch_mismatch(source, change):
+    from another_s3_manager import users
+    from another_s3_manager.main import get_user_for_download
+
+    user = users.create_user("alice", "hash")
+    token = access.issue_session(access.Principal(user), method="pwd", lifetime_minutes=180)
+    users.update_user("alice", **({"is_disabled": True} if change == "disable" else {"password_hash": "new"}))
+    with pytest.raises(HTTPException) as error:
+        get_user_for_download(
+            token=token if source == "query" else None,
+            request=_request(
+                cookie=token if source == "cookie" else None, bearer="Bearer " + token if source == "bearer" else ""
+            ),
+        )
+    assert error.value.status_code == 401

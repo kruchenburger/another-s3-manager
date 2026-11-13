@@ -1,17 +1,15 @@
 """Current account data and compatibility identity normalization."""
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 
 def account_identity(user: dict) -> tuple:
-    """Normalize account generation consistently with SQLite's naive UTC reads."""
-    created_at = user.get("created_at")
-    if created_at is not None:
-        timestamp = datetime.fromisoformat(created_at)
-        created_at = timestamp.replace(tzinfo=timestamp.tzinfo or UTC).astimezone(UTC).isoformat()
-    return (user.get("id"), user.get("username"), created_at)
+    """The single account identity rule shared by all authentication and jobs."""
+    generation = user.get("auth_generation")
+    if not isinstance(generation, str) or not generation:
+        raise ValueError("Account generation is required")
+    return (user["id"], generation)
 
 
 @dataclass(frozen=True)
@@ -19,6 +17,9 @@ class Principal:
     """Keep stored grants; role expansion belongs to the application service."""
 
     user: dict[str, Any]
+
+    def __post_init__(self):
+        account_identity(self.user)
 
     @property
     def id(self) -> int:

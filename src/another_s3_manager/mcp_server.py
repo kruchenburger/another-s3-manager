@@ -161,6 +161,9 @@ def _access_error(error: AccessDenied, tool: str, *, context: str = "gate") -> M
     """Translate Access once, preserving each adapter call site's public contract."""
     code, message, reason = {
         **_WRITE_DENIALS,
+        **{
+            code: ("INVALID_TOKEN", "Invalid or revoked token", None) for code in access_service.CURRENT_ACCOUNT_DENIALS
+        },
         "bucket_not_allowed": ("BUCKET_NOT_ALLOWED", error.message, None),
         "role_required": ("ROLE_NOT_ALLOWED", error.message, None),
         "role_not_allowed": ("ROLE_NOT_ALLOWED", error.message, None),
@@ -237,6 +240,11 @@ _BEARER_AUTH_ERRORS = {
     "wrong_token_prefix": ("INVALID_TOKEN", "Token does not start with as3m_", "malformed"),
     "invalid_token": ("INVALID_TOKEN", "Invalid or revoked token", "invalid_token"),
     "orphan_token": ("INVALID_TOKEN", "Token's user no longer exists", "invalid_token"),
+    **{
+        code: ("INVALID_TOKEN", "Invalid or revoked token", "invalid_token")
+        for code in access_service.CURRENT_ACCOUNT_DENIALS
+    },
+    "user_not_found": ("INVALID_TOKEN", "Invalid or revoked token", "invalid_token"),
 }
 
 
@@ -254,6 +262,8 @@ async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
     return result.token, {
         "id": user["id"],
         "created_at": user["created_at"],
+        "auth_generation": user["auth_generation"],
+        "session_epoch": user["session_epoch"],
         "username": user["username"],
         "is_admin": user["is_admin"],
         "allowed_roles": result.projected_roles,

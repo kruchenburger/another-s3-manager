@@ -146,6 +146,8 @@ export interface Ban {
 }
 
 export interface AdminUser {
+  auth_source: "local" | "oidc";
+  is_disabled: boolean;
   id: number;
   username: string;
   is_admin: boolean;
@@ -171,6 +173,7 @@ export interface CreateUserPayload {
 }
 
 export interface UpdateUserPayload {
+  is_disabled?: boolean;
   is_admin?: boolean;
   allowed_roles?: string[];
 }

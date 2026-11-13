@@ -304,6 +304,8 @@ async def test_authentication_delegates_to_access(monkeypatch):
             access.Principal(
                 {
                     "id": 7,
+                    "auth_generation": "test-generation",
+                    "session_epoch": 0,
                     "username": "alice",
                     "is_admin": False,
                     "created_at": "2026-11-13T00:00:00",
@@ -318,6 +320,8 @@ async def test_authentication_delegates_to_access(monkeypatch):
     assert result is token
     assert user == {
         "id": 7,
+        "auth_generation": "test-generation",
+        "session_epoch": 0,
         "username": "alice",
         "is_admin": False,
         "created_at": "2026-11-13T00:00:00",
@@ -345,3 +349,19 @@ async def test_revoked_token_with_broken_config_preserves_failure_reason(alice_u
     assert error.value.code == "INVALID_TOKEN"
     assert error.value.message == "Invalid or revoked token"
     assert counter._value.get() == before + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code", ["ACCOUNT_DISABLED", "ACCOUNT_REPLACED", "SESSION_EPOCH_MISMATCH", "SSO_AUTHZ_EXPIRED"]
+)
+async def test_current_account_denials_keep_per_tool_auth_mapping(monkeypatch, code):
+    from another_s3_manager import access
+
+    def refuse(*args):
+        raise access.AuthenticationError(code, "private diagnostic")
+
+    monkeypatch.setattr(access, "authenticate_bearer", refuse)
+    with pytest.raises(McpError) as error:
+        await authenticate_mcp_request(_FakeRequest({"authorization": "Bearer as3m_x"}))
+    assert (error.value.code, error.value.message) == ("INVALID_TOKEN", "Invalid or revoked token")

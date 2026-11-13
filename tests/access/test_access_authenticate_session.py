@@ -1,93 +1,120 @@
-from datetime import UTC, datetime, timedelta
-
 import pytest
 from jose import jwt
 
-from another_s3_manager import access
+from another_s3_manager import access, users
+
+
+def issued():
+    user = users.create_user("alice", "hash", allowed_roles=["raw"])
+    token = access.issue_session(access.Principal(user), method="pwd", lifetime_minutes=180)
+    return user, token
+
+
+def resign(payload, algorithm="HS256"):
+    return jwt.encode(payload, "test-secret-key", algorithm=algorithm)
+
+
+@pytest.mark.parametrize("claim", ["sub", "csrf_token", "exp", "iat", "uid", "ugen", "sv", "amr", "sid"])
+def test_required_claims(claim):
+    _, token = issued()
+    payload = access.decode_session_payload(token)
+    del payload[claim]
+    with pytest.raises(access.AuthenticationError):
+        access.authenticate_session(resign(payload))
 
 
 @pytest.mark.parametrize(
-    "payload,key",
+    "claim,value",
     [
-        ({"sub": "alice", "exp": 1}, "test-secret-key"),
-        ({"sub": "alice"}, "wrong"),
-        ({}, "test-secret-key"),
-        ({"sub": 123}, "test-secret-key"),
+        ("uid", True),
+        ("uid", "1"),
+        ("sv", False),
+        ("sv", -1),
+        ("iat", "1"),
+        ("exp", True),
+        ("exp", None),
+        ("exp", {}),
+        ("exp", []),
+        ("iat", None),
+        ("iat", {}),
+        ("ugen", ""),
+        ("sid", None),
+        ("sub", ""),
+        ("amr", "other"),
+        ("csrf_token", 1),
     ],
 )
-def test_invalid_session_is_rejected(payload, key):
-    token = jwt.encode(payload, key, algorithm="HS256")
-    with pytest.raises(access.AuthenticationError) as error:
-        access.authenticate_session(token)
-    assert error.value.code == "invalid_session"
-    assert not access.session_token_is_wellformed(token)
+def test_required_claim_types(claim, value):
+    _, token = issued()
+    payload = access.decode_session_payload(token)
+    payload[claim] = value
+    with pytest.raises(access.AuthenticationError):
+        access.authenticate_session(resign(payload))
 
 
 def test_session_looks_up_current_user_and_preserves_csrf():
-    from another_s3_manager import users
-
-    users.create_user("alice", "hash", allowed_roles=["raw"])
-    token = access.create_access_token({"sub": "alice", "csrf_token": "csrf"})
+    user, token = issued()
     principal = access.authenticate_session(token)
     assert principal.username == "alice"
     assert principal.granted_roles == ["raw"]
-    assert principal.to_user_dict()["csrf_token"] == "csrf"
+    assert principal.user["csrf_token"] == access.decode_session_payload(token)["csrf_token"]
     users.delete_user("alice")
     assert access.session_token_is_wellformed(token)
-    with pytest.raises(access.AuthenticationError) as error:
+    with pytest.raises(access.AuthenticationError, match="User not found"):
         access.authenticate_session(token)
-    assert error.value.code == "user_not_found"
 
 
 def test_prefilter_is_db_free(monkeypatch):
-    from another_s3_manager.access import users
+    _, token = issued()
 
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise AssertionError("DB access")
 
-    monkeypatch.setattr(users, "get_user_by_username", fail)
-    token = access.create_access_token({"sub": "gone"})
+    monkeypatch.setattr(access, "principal_for", fail)
+    from another_s3_manager.access import users as repository
+
+    monkeypatch.setattr(repository, "get_user_by_id", fail)
     assert access.session_token_is_wellformed(token)
     assert not access.session_token_is_wellformed("")
 
 
 def test_session_signing_defaults_and_hs256_only():
-    before = datetime.now(UTC)
-    payload = jwt.decode(access.create_access_token({"sub": "alice"}), "test-secret-key", algorithms=["HS256"])
-    assert 10798 <= payload["exp"] - before.timestamp() <= 10801
-    assert set(payload) == {"sub", "csrf_token", "exp"}
-    bad = jwt.encode(
-        {"sub": "alice", "exp": datetime.now(UTC) + timedelta(minutes=1)}, "test-secret-key", algorithm="HS384"
-    )
-    assert not access.session_token_is_wellformed(bad)
+    _, token = issued()
+    payload = access.decode_session_payload(token)
+    assert set(payload) == {"sub", "csrf_token", "exp", "iat", "uid", "ugen", "sv", "amr", "sid"}
+    assert payload["exp"] - payload["iat"] == 10800
+    assert len(payload["sid"]) == 22
+    assert payload["amr"] == "pwd"
+    assert not access.session_token_is_wellformed(resign(payload, "HS384"))
+    assert not access.session_token_is_wellformed(access.create_access_token({"sub": "alice"}))
 
 
-def test_principal_identity_normalizes_sqlite_utc():
-    user = {"id": 3, "username": "alice", "created_at": "2026-11-13T12:00:00"}
-    assert access.account_identity(user) == (3, "alice", "2026-11-13T12:00:00+00:00")
-
-
-def test_principal_for_checks_expected_identity():
-    from another_s3_manager import users
-
-    user = users.create_user("alice", "hash")
-    principal = access.principal_for(user["id"], expected_identity=access.account_identity(user))
-    assert principal.username == "alice"
-    with pytest.raises(access.AuthenticationError):
-        access.principal_for(user["id"], expected_identity=(0, "different", None))
-
-
-def test_download_empty_subject_skips_lookup_but_cookie_keeps_lookup(monkeypatch):
-    from another_s3_manager.access import users
-
-    def fail(username):
-        assert username == ""
-        raise RuntimeError("lookup reached")
-
-    monkeypatch.setattr(users, "get_user_by_username", fail)
-    token = access.create_access_token({"sub": ""})
+@pytest.mark.parametrize(
+    "change,code",
+    [
+        ({"uid": 999}, "user_not_found"),
+        ({"ugen": "other"}, "ACCOUNT_REPLACED"),
+        ({"sub": "bob"}, "ACCOUNT_REPLACED"),
+        ({"sv": 1}, "SESSION_EPOCH_MISMATCH"),
+        ({"exp": 1}, "invalid_session"),
+    ],
+)
+def test_wrong_binding_and_expiry(change, code):
+    _, token = issued()
+    payload = access.decode_session_payload(token)
+    payload.update(change)
     with pytest.raises(access.AuthenticationError) as error:
-        access.authenticate_session(token, require_subject=True)
-    assert error.value.code == "invalid_session"
-    with pytest.raises(RuntimeError, match="lookup reached"):
-        access.authenticate_session(token)
+        access.authenticate_session(resign(payload))
+    assert error.value.code == code
+
+
+@pytest.mark.parametrize("value", [0, 10081, True, "180", 1.5])
+def test_invalid_session_lifetime(value):
+    with pytest.raises(ValueError):
+        access.validate_lifetime_minutes(value)
+
+
+def test_invalid_inherited_lifetime_fails(monkeypatch):
+    monkeypatch.setenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "10081")
+    with pytest.raises(ValueError):
+        access.validate_lifetime_minutes()

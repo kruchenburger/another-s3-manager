@@ -225,22 +225,18 @@ def mock_boto3_client(mocker, fake_s3_client):
 @pytest.fixture
 def valid_user_dict():
     """Plain user dict suitable for stubbing load_users in auth tests."""
+    from another_s3_manager import users
     from another_s3_manager.auth import hash_password
 
-    return {
-        "username": "testuser",
-        "password_hash": hash_password("testpass"),
-        "is_admin": False,
-        "theme": "auto",
-    }
+    return users.create_user("testuser", hash_password("testpass"), must_change_password=False)
 
 
 @pytest.fixture
 def valid_jwt_token(valid_user_dict):
     """Signed JWT for the valid_user_dict identity, with a CSRF claim."""
-    from another_s3_manager.auth import create_access_token, generate_csrf_token
+    from another_s3_manager import access
 
-    return create_access_token(data={"sub": valid_user_dict["username"], "csrf_token": generate_csrf_token()})
+    return access.issue_session(access.Principal(valid_user_dict), method="pwd", lifetime_minutes=180)
 
 
 @pytest.fixture

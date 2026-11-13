@@ -2607,31 +2607,26 @@ def test_get_user_for_download_does_not_swallow_db_errors(monkeypatch):
     """A non-JWT exception (e.g. SQLite OperationalError) during user lookup
     must NOT be silently swallowed and turned into 401 — it should propagate."""
     # Create a valid JWT for "alice".
-    from datetime import datetime, timedelta, timezone
 
-    from jose import jwt
     from sqlalchemy.exc import OperationalError
 
-    from another_s3_manager.auth import get_jwt_secret_key
-    from another_s3_manager.constants import JWT_ALGORITHM
+    from another_s3_manager import access, users
     from another_s3_manager.main import get_user_for_download
 
-    payload = {
-        "sub": "alice",
-        "csrf_token": "csrf-x",
-        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
-    }
-    token = jwt.encode(payload, get_jwt_secret_key(), algorithm=JWT_ALGORITHM)
+    if users.get_user_by_username("alice") is None:
+        users.create_user("alice", "hash")
+    token = access.issue_session(
+        access.Principal(users.get_user_by_username("alice")), method="pwd", lifetime_minutes=60
+    )
 
-    # Patch get_user_by_username to raise OperationalError (transient DB
-    # error). The function imports it INSIDE its body, so patch the source
-    # module.
+    # Patch the Access repository uid lookup: valid claims must reach the DB
+    # and propagate infrastructure errors instead of becoming authentication denial.
     import another_s3_manager.access.users as users_module
 
     def _boom(username):
         raise OperationalError("statement", "params", Exception("db down"))
 
-    monkeypatch.setattr(users_module, "get_user_by_username", _boom)
+    monkeypatch.setattr(users_module, "get_user_by_id", _boom)
 
     # Old behaviour: silent catch → returns 401.
     # New behaviour: re-raise OperationalError (transient infra → caller sees real error).
@@ -2643,23 +2638,17 @@ def test_get_user_for_download_never_calls_load_users(monkeypatch):
     """get_user_for_download runs on every download request. It must use the
     targeted get_user_by_username() lookup, not load_users() (which would
     load every user row plus a roles join just to find the one downloading)."""
-    from datetime import datetime, timedelta, timezone
 
-    from jose import jwt
-
-    from another_s3_manager.auth import get_jwt_secret_key
-    from another_s3_manager.constants import JWT_ALGORITHM
     from another_s3_manager.main import get_user_for_download
     from another_s3_manager.users import create_user
 
     create_user(username="bob", password_hash="x")
 
-    payload = {
-        "sub": "bob",
-        "csrf_token": "csrf-x",
-        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
-    }
-    token = jwt.encode(payload, get_jwt_secret_key(), algorithm=JWT_ALGORITHM)
+    from another_s3_manager import access, users
+
+    if users.get_user_by_username("bob") is None:
+        users.create_user("bob", "hash")
+    token = access.issue_session(access.Principal(users.get_user_by_username("bob")), method="pwd", lifetime_minutes=60)
 
     import another_s3_manager.access.users as users_module
 

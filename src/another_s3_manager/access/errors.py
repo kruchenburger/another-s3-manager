@@ -13,3 +13,13 @@ class AccessDenied(PermissionError):
 
 class AuthenticationError(AccessDenied):
     """A credential refusal, translated by the calling transport adapter."""
+
+
+CURRENT_ACCOUNT_DENIALS = frozenset(
+    {
+        "ACCOUNT_DISABLED",
+        "ACCOUNT_REPLACED",
+        "SESSION_EPOCH_MISMATCH",
+        "SSO_AUTHZ_EXPIRED",
+    }
+)

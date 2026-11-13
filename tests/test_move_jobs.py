@@ -910,3 +910,76 @@ def test_recheck_loads_one_snapshot(storage, monkeypatch):
     moves.recheck(job)
     get_user.assert_called_once_with(user["id"])
     get_config.assert_called_once_with(force_reload=True)
+
+
+@pytest.mark.parametrize(
+    "code", ["ACCOUNT_DISABLED", "ACCOUNT_REPLACED", "SESSION_EPOCH_MISMATCH", "SSO_AUTHZ_EXPIRED"]
+)
+@pytest.mark.parametrize("partial", [False, True])
+def test_principal_denial_stops_move_and_cleanup_with_partial_counts(storage, monkeypatch, code, partial):
+    from unittest.mock import Mock
+
+    from another_s3_manager import access, s3_client
+
+    client, user = storage
+    # One successful batch followed by a denied recheck must retain progress.
+    entries = tuple(moves.Entry(f"source/{i}", f"dest/{i}", "etag", 1, None) for i in range(101))
+    job = moves.Job(
+        "denied-job",
+        moves.owner_identity(user),
+        "Default",
+        "move-bucket",
+        "op",
+        "hash",
+        plan=moves.Plan(entries, (("source/", "dest/", "folder"),), ()),
+    )
+    original = access.principal_for
+
+    def principal(*args, **kwargs):
+        if not partial or job.done >= 100:
+            raise access.AuthenticationError(code, "private")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(access, "principal_for", principal)
+    monkeypatch.setattr(moves, "copy_entry", lambda *args: "etag")
+    moves.run_job(job)
+    assert job.state == "cancelled_access"
+    assert (job.done, job.bytes_done, job.removed) == ((100, 100, 0) if partial else (0, 0, 0))
+    assert len(job.copied) == (100 if partial else 0)
+    assert job.failures[0]["code"] == "ACCESS_DENIED"
+    assert job.snapshot()["result"] == {"moved": 0, "source_kept": 101}
+    # Cleanup denial after one actual delete preserves every remaining copy.
+    cleanup = moves.Job("denied-cleanup", moves.owner_identity(user), "Default", "move-bucket", "op2", "hash")
+    cleanup.state = "failed_copy"
+    cleanup.copied = {"dest/first": '"etag"', "dest/second": '"etag"'}
+    registry = moves.MoveRegistry()
+    registry.jobs[cleanup.id] = cleanup
+    deleted = []
+
+    def cleanup_principal(*args, **kwargs):
+        if (partial and deleted) or not partial:
+            raise access.AuthenticationError(code, "private")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(access, "principal_for", cleanup_principal)
+    fake = Mock(_asm_storage_fingerprint=client._asm_storage_fingerprint)
+    fake.head_object.return_value = {"ETag": '"etag"'}
+
+    def delete(**kwargs):
+        deleted.extend(kwargs["Delete"]["Objects"])
+        return {"Deleted": kwargs["Delete"]["Objects"]}
+
+    fake.delete_objects.side_effect = delete
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: fake)
+    if not partial:
+        with pytest.raises(MoveError) as error:
+            registry.cleanup(cleanup.id, user)
+        assert (error.value.code, error.value.http_status) == ("ACCESS_DENIED", 403)
+        assert len(cleanup.copied) == 2
+        fake.delete_objects.assert_not_called()
+    else:
+        result = registry.cleanup(cleanup.id, user)
+        assert (result["removed"], result["remaining"], result["stopped_reason"]) == (1, 1, "ACCESS_DENIED")
+        assert result["failures"][0]["code"] == "ACCESS_DENIED"
+        assert result["failures"][0]["key"] == "dest/second"
+        fake.delete_objects.assert_called_once()

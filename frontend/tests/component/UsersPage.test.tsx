@@ -61,6 +61,8 @@ function mockMe(username: string) {
   vi.mocked(useMe).mockReturnValue({
     data: {
       username,
+      auth_source: "local" as const,
+      is_disabled: false,
       is_admin: true,
       csrf_token: "x",
       theme: "auto",
@@ -93,6 +95,8 @@ const TWO_USERS = {
     {
       id: 1,
       username: "admin",
+      auth_source: "local" as const,
+      is_disabled: false,
       is_admin: true,
       allowed_roles: [],
       missing_roles: [],
@@ -100,6 +104,8 @@ const TWO_USERS = {
     {
       id: 2,
       username: "alice",
+      auth_source: "local" as const,
+      is_disabled: false,
       is_admin: false,
       allowed_roles: ["dev", "ops"],
       missing_roles: [],
@@ -152,6 +158,29 @@ describe("UsersPage", () => {
     expect(within(aliceRow).getByText("ops")).toBeInTheDocument();
   });
 
+  it("disables accounts through the shared update hook without sending grants", async () => {
+    vi.mocked(listUsers).mockResolvedValue(TWO_USERS);
+    vi.mocked(updateUser).mockResolvedValue(undefined);
+    renderPage();
+    const row = await findUserRow("alice");
+    fireEvent.click(within(row).getByRole("button", { name: "Disable" }));
+    await waitFor(() => expect(updateUser).toHaveBeenCalledWith("alice", { is_disabled: true }));
+    const self = await findUserRow("admin");
+    expect(within(self).getByRole("button", { name: "Disable" })).toBeDisabled();
+  });
+
+  it("shows disabled SSO source and explains recreation before delete", async () => {
+    vi.mocked(listUsers).mockResolvedValue({ ...TWO_USERS, users: TWO_USERS.users.map(u =>
+      u.username === "alice" ? { ...u, auth_source: "oidc" as const, is_disabled: true } : u) });
+    renderPage();
+    const row = await findUserRow("alice");
+    expect(within(row).getByText("SSO")).toBeInTheDocument();
+    expect(within(row).getByText("Disabled")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Enable" })).toBeEnabled();
+    fireEvent.click(within(row).getByRole("button", { name: "Delete alice" }));
+    expect(await screen.findByText(/They will be re-created on their next SSO sign-in/)).toBeInTheDocument();
+  });
+
   it("shows missing role badges with an explanation", async () => {
     vi.mocked(listUsers).mockResolvedValue({
       ...TWO_USERS,
@@ -176,7 +205,7 @@ describe("UsersPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Edit alice" }));
     expect(await screen.findByText("Removed from configuration, will be dropped on save: retired")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(updateUser).toHaveBeenCalledWith("alice", { is_admin: false, allowed_roles: ["dev", "ops"] }));
+    await waitFor(() => expect(updateUser).toHaveBeenCalledWith("alice", { is_admin: false, allowed_roles: ["dev", "ops"], is_disabled: false }));
   });
 
   it("disables Delete and Reset buttons for the current user's row (self-protect)", async () => {

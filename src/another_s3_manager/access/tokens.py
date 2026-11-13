@@ -241,3 +241,34 @@ def count_active_tokens() -> int:
     """Global count of non-revoked tokens. Used by the as3m_mcp_active_tokens gauge."""
     with session_scope() as session:
         return session.execute(select(func.count(ApiToken.id)).where(ApiToken.revoked_at.is_(None))).scalar_one()
+
+
+def find_active_token_with_owner(token_hash):
+    """Bind the PAT and owner generation in one serialized joined snapshot.
+
+    BEGIN IMMEDIATE also makes lazy NULL generation materialization part of the
+    same lookup. No detached numeric owner id may be rebound to a later account.
+    """
+    from sqlalchemy.orm import joinedload
+
+    from another_s3_manager.access import users
+
+    with users.write_scope() as session:
+        row = (
+            session.execute(
+                select(ApiToken, User)
+                .join(User, ApiToken.user_id == User.id)
+                .options(joinedload(User.roles))
+                .where(ApiToken.token_hash == token_hash, ApiToken.revoked_at.is_(None))
+            )
+            .unique()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        token, owner = row
+        if owner is not None:
+            users.materialize_generation(session, owner)
+        snapshot = users._user_to_dict(owner) if owner is not None else None
+        session.expunge(token)
+        return token, snapshot

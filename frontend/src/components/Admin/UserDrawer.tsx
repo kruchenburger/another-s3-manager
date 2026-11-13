@@ -35,6 +35,7 @@ export interface UserDrawerCreatePayload {
 }
 
 export interface UserDrawerEditPayload {
+  is_disabled: boolean;
   mode: "edit";
   username: string;
   is_admin: boolean;
@@ -80,6 +81,7 @@ export function UserDrawer({
       is_admin: false,
       allowed_roles: [] as string[],
       must_change_password: true,
+      is_disabled: false,
     },
     validate: {
       username: (v) =>
@@ -97,6 +99,7 @@ export function UserDrawer({
   useEffect(() => {
     if (mode === "edit" && initialUser) {
       form.setValues({
+        is_disabled: initialUser.is_disabled ?? false,
         username: initialUser.username,
         password: "",
         is_admin: initialUser.is_admin,
@@ -148,6 +151,7 @@ export function UserDrawer({
           } else {
             onSubmit({
               mode: "edit",
+              is_disabled: values.is_disabled,
               username: values.username,
               is_admin: values.is_admin,
               allowed_roles: values.allowed_roles,
@@ -193,6 +197,13 @@ export function UserDrawer({
                 })}
               />
             </Stack>
+          )}
+          {mode === "edit" && (
+            <>
+              <Text size="sm">Sign-in source: {initialUser?.auth_source === "oidc" ? "SSO" : "Local"}</Text>
+              <Switch label="Disabled" description="Blocks sign-in and MCP tokens. Enabling restores active MCP tokens, but requires a new web sign-in."
+                disabled={isSelf} {...form.getInputProps("is_disabled", { type: "checkbox" })} />
+            </>
           )}
           <Tooltip
             label="You can't remove your own admin rights."

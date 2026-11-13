@@ -60,7 +60,7 @@ def test_downgrade_recreating_users_preserves_child_rows(tmp_path, monkeypatch):
     db_url = f"sqlite:///{db_path}"
     cfg = _alembic_cfg(db_url)
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "35173f08b83b")
 
     engine = create_engine(db_url)
     with engine.begin() as conn:
@@ -96,7 +96,7 @@ def test_downgrade_recreating_users_preserves_child_rows(tmp_path, monkeypatch):
 
     # Downgrade one step: 35173f08b83b's downgrade() drops password_set_via,
     # forcing SQLite's batch-recreate path on the `users` table.
-    command.downgrade(cfg, "-1")
+    command.downgrade(cfg, "63c8a9adb455")
 
     with engine.connect() as conn:
         after_users = conn.execute(text("SELECT COUNT(*) FROM users")).scalar_one()

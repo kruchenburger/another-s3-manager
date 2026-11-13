@@ -45,6 +45,15 @@ _WEB_AUTH_ERRORS = {
     "download": {"refused": (401, "Authentication required", None)},
 }
 
+for _door in ("cookie", "login"):
+    _WEB_AUTH_ERRORS[_door].update(
+        {
+            code: (401, "Invalid authentication credentials", "invalid_password" if _door == "login" else None)
+            for code in access.CURRENT_ACCOUNT_DENIALS
+        }
+    )
+_WEB_AUTH_ERRORS["cookie"]["incorrect_current_password"] = (401, "Current password is incorrect", None)
+
 
 def map_web_auth_error(
     door: Literal["cookie", "login", "download"], error: access.AuthenticationError | None = None

@@ -52,8 +52,6 @@ from another_s3_manager import move_jobs
 from another_s3_manager import users as users_module
 from another_s3_manager.api_tokens import count_active_tokens
 from another_s3_manager.auth import (
-    create_access_token,
-    generate_csrf_token,
     get_current_admin_user,
     get_current_user,
     get_jwt_secret_key,
@@ -61,11 +59,9 @@ from another_s3_manager.auth import (
     hash_password,
     map_web_auth_error,
     verify_csrf_token,
-    verify_password,
 )
 from another_s3_manager.config import load_config, resolve_max_file_size, resolve_presigned_ttls, save_config
 from another_s3_manager.constants import (
-    ACCESS_TOKEN_EXPIRE_MINUTES,
     APP_DESCRIPTION,
     APP_NAME,
     APP_VERSION,
@@ -792,8 +788,8 @@ async def login(
         # The JWT itself is delivered as an httpOnly cookie so JS cannot read it;
         # the CSRF token is exposed via /api/me for the client to echo back in
         # the X-CSRF-Token header on mutating requests.
-        csrf_token = generate_csrf_token()
-        access_token = create_access_token(data={"sub": username, "csrf_token": csrf_token})
+        lifetime = access_service.validate_lifetime_minutes()
+        access_token = access_service.issue_session(principal, method="pwd", lifetime_minutes=lifetime)
 
         response.set_cookie(
             key="access_token",
@@ -801,7 +797,7 @@ async def login(
             httponly=True,
             secure=COOKIE_SECURE,
             samesite="strict",
-            max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            max_age=lifetime * 60,
             path="/",
         )
 
@@ -990,20 +986,18 @@ async def update_user_password(
     # Hash password using auth module
     hashed_password = hash_password(payload.password)
 
-    # Targeted single-row update — this only touches the one user being reset,
-    # not the whole table (load_users()/save_users() would load and rewrite
-    # every user just to change one password).
-    from another_s3_manager.users import update_user as users_update_user
-
     try:
-        users_update_user(
+        access_service.update_account(
+            current_user,
             username,
-            password_hash=hashed_password,
-            must_change_password=payload.must_change_password,
-            password_set_via=PASSWORD_SET_VIA_UI,
+            {
+                "password_hash": hashed_password,
+                "must_change_password": payload.must_change_password,
+                "password_set_via": PASSWORD_SET_VIA_UI,
+            },
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail="User not found") from exc
+    except access_service.AccessDenied as error:
+        raise _account_error(error) from None
 
     return AdminResetPasswordResponse(message=f"Password updated successfully for user {username}")
 
@@ -1056,38 +1050,15 @@ async def change_my_password(
     token, so an attacker who steals the cookie still cannot lock the user out
     without also knowing the current password.
     """
-    # Re-fetch the password hash from storage — current_user dict from the JWT
-    # path doesn't carry it (and shouldn't).
-    username = current_user.get("username")
-    user = get_user_by_username(username)
-    if not user:
-        # Defensive: should be unreachable since get_current_user already resolved the user.
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-
-    if not verify_password(payload.current_password, user.get("password_hash", "")):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Current password is incorrect",
+    try:
+        access_service.change_own_password(
+            current_user,
+            payload.current_password,
+            payload.new_password,
+            policy=config_module.load_config(force_reload=False),
         )
-
-    if payload.current_password == payload.new_password:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="New password must differ from the current one",
-        )
-
-    _enforce_password_policy(payload.new_password)
-
-    # Local import to avoid the top-level name collision with the admin
-    # update_user endpoint defined below.
-    from another_s3_manager.users import update_user as users_update_user
-
-    users_update_user(
-        username,
-        password_hash=hash_password(payload.new_password),
-        must_change_password=False,
-        password_set_via=PASSWORD_SET_VIA_UI,
-    )
+    except access_service.AccessDenied as error:
+        raise _account_error(error) from None
     return {"ok": True}
 
 
@@ -1444,15 +1415,6 @@ async def update_user(
     if is_admin_raw is not None and str(is_admin_raw) != "":
         is_admin = str(is_admin_raw).lower() == "true"
 
-    # Self-demote guard: an admin cannot remove their own admin rights through this
-    # endpoint. Frontend disables the toggle on the current-user row, but enforce
-    # server-side too (defence in depth, e.g. against a hand-crafted curl request).
-    if username == current_user.get("username") and is_admin is False:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You can't remove your own admin rights.",
-        )
-
     update_kwargs: Dict[str, Any] = {}
     if is_admin is not None:
         update_kwargs["is_admin"] = is_admin
@@ -1464,19 +1426,19 @@ async def update_user(
         roles_list = [r.strip() for r in raw.split(",") if r.strip()]
         update_kwargs["allowed_roles"] = roles_list
 
+    if "is_disabled" in form:
+        value = form["is_disabled"]
+        if value not in ("true", "false"):
+            raise HTTPException(status_code=422, detail="is_disabled must be true or false")
+        update_kwargs["is_disabled"] = value == "true"
     if update_kwargs:
-        # Targeted single-row update — this only touches the one user being
-        # edited, not the whole table (load_users()/save_users() would load
-        # and rewrite every user just to change one).
-        from another_s3_manager.users import update_user as users_update_user
-
         with users_module.role_grants_lock:
             if "allowed_roles" in update_kwargs:
                 _validate_role_grants(update_kwargs["allowed_roles"])
             try:
-                users_update_user(username, **update_kwargs)
-            except ValueError as exc:
-                raise HTTPException(status_code=404, detail="User not found") from exc
+                access_service.update_account(current_user, username, update_kwargs)
+            except access_service.AccessDenied as error:
+                raise _account_error(error) from None
 
     return {"message": f"User {username} updated successfully"}
 
@@ -1518,16 +1480,10 @@ async def delete_user(
     csrf_verified: bool = Depends(verify_csrf_token),
 ):
     """Delete a user (admin only)"""
-    if username == current_user.get("username"):
-        raise HTTPException(status_code=400, detail="Cannot delete yourself")
-
-    # Targeted single-row delete (no-op if already missing) — this only
-    # touches the one user being removed, not the whole table
-    # (load_users()/save_users() would load and rewrite every remaining user
-    # just to delete one).
-    from another_s3_manager.users import delete_user as users_delete_user
-
-    users_delete_user(username)
+    try:
+        access_service.delete_account(current_user, username)
+    except access_service.AccessDenied as error:
+        raise _account_error(error) from None
 
     return {"message": f"User {username} deleted successfully"}
 
@@ -3025,6 +2981,26 @@ async def serve_spa(full_path: str):
         raise HTTPException(status_code=404, detail="React SPA not built yet")
     with open(index_file, "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
+
+
+_ACCOUNT_ERRORS = {
+    "password_policy": (422, lambda error: {"error": error.message, **error.details}),
+    "LAST_LOCAL_ADMIN": (409, lambda error: {"code": error.code, "message": error.message}),
+    "self_delete": (400, None),
+    "self_demote": (400, None),
+    "self_disable": (400, None),
+    "admin_required": (403, None),
+    "account_not_found": (404, None),
+    "incorrect_current_password": (401, None),
+    "same_password": (400, None),
+    "user_not_found": (401, "User not found"),
+    **{code: (401, "Invalid authentication credentials") for code in access_service.CURRENT_ACCOUNT_DENIALS},
+}
+
+
+def _account_error(error):
+    status_code, detail = _ACCOUNT_ERRORS[error.code]
+    return HTTPException(status_code=status_code, detail=detail(error) if callable(detail) else detail or error.message)
 
 
 if __name__ == "__main__":  # pragma: no cover

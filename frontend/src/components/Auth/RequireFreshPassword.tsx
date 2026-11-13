@@ -7,6 +7,7 @@ import { useMe } from "@/features/auth/hooks/useMe";
  * with the "Require password change" checkbox (default) or resets their
  * password with the same checkbox. Cleared by PUT /api/me/password.
  *
+ * Successful changes revoke the session and return to sign-in.
  * Sits inside AuthGuard so unauthenticated users are still bounced to /login
  * first. Wraps both the regular shell and the admin shell.
  */

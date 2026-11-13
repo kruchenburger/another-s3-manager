@@ -21,7 +21,7 @@ class Raw:
 
 
 @pytest.mark.parametrize("path", ["exact", "conditional", "single", "directory", "job", "cleanup"])
-@pytest.mark.parametrize("revoke", [False, True])
+@pytest.mark.parametrize("revoke", [False, True, "disabled", "replacement"])
 def test_sdk_retry_refreshes_access(monkeypatch, path, revoke):
     user = users.load_users()["users"][0]
     client = boto3.client(
@@ -50,7 +50,16 @@ def test_sdk_retry_refreshes_access(monkeypatch, path, revoke):
 
     def on_retry(attempts, **kwargs):
         retries.append(attempts)
-        if attempts == 1 and revoke:
+        if attempts == 1 and revoke == "disabled":
+            users.update_user(user["username"], is_disabled=True)
+        elif attempts == 1 and revoke == "replacement":
+            from another_s3_manager.database import session_scope
+            from another_s3_manager.models import User
+
+            users.delete_user(user["username"])
+            with session_scope() as session:
+                session.add(User(id=user["id"], username=user["username"], password_hash="new"))
+        elif attempts == 1 and revoke is True:
             cfg = config.load_config()
             cfg["roles"][0]["allow_delete"] = False
             config.save_config(cfg)
@@ -83,9 +92,11 @@ def test_sdk_retry_refreshes_access(monkeypatch, path, revoke):
         )
 
     if revoke:
-        with pytest.raises(MoveError if path in {"job", "cleanup"} else access.AccessDenied) as caught:
+        with pytest.raises(
+            MoveError if path in {"job", "cleanup"} or isinstance(revoke, str) else access.AccessDenied
+        ) as caught:
             delete()
-        assert caught.value.code == "DELETION_DISABLED_FOR_ROLE"
+        assert caught.value.code == ("ACCESS_DENIED" if isinstance(revoke, str) else "DELETION_DISABLED_FOR_ROLE")
         assert len(sent) == 1
         assert retries == [1]
     else:

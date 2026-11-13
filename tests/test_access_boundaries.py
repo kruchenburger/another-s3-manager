@@ -59,3 +59,15 @@ def test_existing_contracts_are_retained_without_new_broad_ignores():
     contracts = {c["id"]: c for c in config["tool"]["importlinter"]["contracts"]}
     assert {"adapters-independent", "access-no-adapters", "storage-no-adapters"} <= contracts.keys()
     assert not _contract().get("ignore_imports")
+
+
+def test_oidc_repositories_are_covered_and_exposed_through_public_api():
+    from another_s3_manager import access
+
+    assert {
+        "another_s3_manager.access.oidc",
+        "another_s3_manager.access.oidc.identities",
+        "another_s3_manager.access.oidc.transactions",
+    } <= set(_contract()["forbidden_modules"])
+    for name in ("find_identity", "insert_identity", "register_login_transaction", "consume_login_transaction"):
+        assert callable(getattr(access, name)) and name in access.__all__
