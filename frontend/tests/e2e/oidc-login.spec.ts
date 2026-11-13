@@ -70,7 +70,14 @@ for (const order of [
     const releases: Array<() => void> = [];
     const owners = new WeakMap<import("@playwright/test").Request, number>();
     let stopping = false;
-    const callback = (url: URL) => url.pathname === "/api/auth/oidc/callback";
+    // Playwright does not route requests that arrive through a redirect, and the
+    // ASM callback is reached by the OP's 302. Gate the OP consent submission that
+    // answers with that 302 instead: releasing it lets exactly one tab proceed to
+    // its callback, so the release order is the callback-response order.
+    const callback = (url: URL) =>
+      url.hostname === "op.identity.test" &&
+      url.pathname === "/authorize" &&
+      url.searchParams.has("fixture_subject");
     pages.forEach((page, index) => {
       // Request events identify the tab even when a navigation has no frame yet.
       page.on("request", (request) => owners.set(request, index));
@@ -98,10 +105,7 @@ for (const order of [
       await new Promise<void>((resolve) => {
         releases[index] = resolve;
       });
-      // route.fetch also updates the shared cookie jar. Gate before that fetch,
-      // not only before fulfill, so the selected order controls both responses.
-      const response = await route.fetch({ maxRedirects: 0 });
-      await route.fulfill({ response });
+      await route.continue();
     };
     await context.route(callback, handler);
     const pending = pages.map((page, index) =>
@@ -115,7 +119,7 @@ for (const order of [
         .poll(() => releases.filter(Boolean).length, {
           timeout: 15_000,
           message:
-            "Both OIDC callback navigations must reach the release barrier",
+            "Both OIDC consent submissions must reach the release barrier",
         })
         .toBe(2);
       releases[order[0]]();
