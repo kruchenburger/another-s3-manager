@@ -1,7 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { fetchMe } from "@/features/auth/api/authApi";
-import { clearCsrfToken, setCsrfToken } from "@/utils/csrf";
+import { clearCsrfToken, getCsrfToken, setCsrfToken } from "@/utils/csrf";
 import type { MeResponse } from "@/types/api";
 
 const key = ["auth", "me"] as const;
@@ -16,6 +16,31 @@ export class SessionIdentity {
   private listeners = new Set<Listener>();
   private pending: Promise<void> | undefined;
   private rerun = false;
+  private actions = new AbortController();
+
+  private invalidateActions() {
+    ++this.generation;
+    this.actions.abort();
+    this.actions = new AbortController();
+    return this.generation;
+  }
+
+  beginAction() {
+    if (this.blocked || !this.identity || !getCsrfToken())
+      throw new DOMException("Session unavailable", "AbortError");
+    const generation = this.generation;
+    const signal = this.actions.signal;
+    const isCurrent = () =>
+      !signal.aborted && !this.blocked && generation === this.generation;
+    return {
+      signal,
+      isCurrent,
+      assertCurrent: () => {
+        if (!isCurrent())
+          throw new DOMException("Session changed", "AbortError");
+      },
+    };
+  }
   constructor(private client: QueryClient) {
     const generations = new WeakMap<object, number>();
     const wrapped = new WeakSet<object>();
@@ -59,7 +84,7 @@ export class SessionIdentity {
       this.identity !== me.session_identity
     ) {
       ownsBlock = !this.blocked;
-      generation = ++this.generation;
+      generation = this.invalidateActions();
       this.blocked = true;
       clearCsrfToken();
       this.notify();
@@ -105,7 +130,7 @@ export class SessionIdentity {
     }
     if (this.pending) {
       this.rerun = true;
-      ++this.generation;
+      this.invalidateActions();
       clearCsrfToken();
       return this.pending;
     }
@@ -116,7 +141,7 @@ export class SessionIdentity {
       try {
         do {
           this.rerun = false;
-          ++this.generation;
+          this.invalidateActions();
           await this.client.cancelQueries();
           for (const mutation of this.client.getMutationCache().getAll()) {
             if (mutation.options.meta?.authentication === true) continue;
@@ -160,7 +185,7 @@ export class SessionIdentity {
   };
 
   logout() {
-    ++this.generation;
+    this.invalidateActions();
     this.identity = undefined;
     clearCsrfToken();
     this.client.clear();

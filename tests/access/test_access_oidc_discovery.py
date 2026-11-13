@@ -14,7 +14,7 @@ def test_peer_is_checked_before_request_bytes(monkeypatch):
         closed = False
 
         def settimeout(self, value):
-            assert value == 5
+            assert 0 < value <= 5
 
         def connect(self, address):
             assert address == ("93.184.216.34", 443)
@@ -144,3 +144,81 @@ def test_compressed_response_cannot_bypass_stream_cap(monkeypatch):
     outbound = Outbound(access.oidc_settings({}), httpx.MockTransport(lambda request: response))
     with pytest.raises(OidcUnavailable):
         outbound.json("GET", "https://127.0.0.1")
+
+
+def test_slow_headers_obey_overall_deadline_and_close_connection(monkeypatch):
+    from another_s3_manager.access.oidc import discovery
+
+    clock = [0.0]
+
+    class DrippingServerSocket:
+        closed = False
+        timeout = 5
+        # The server sends a header byte every second, faster than the idle timeout.
+        chunks = iter([b"HTTP/1.1 200 OK\r\nX-Slow: "] + [b"a"] * 8 + [b"\r\nContent-Length: 2\r\n\r\n{}"])
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+
+        def connect(self, address):
+            pass
+
+        def getpeername(self):
+            return ("127.0.0.1", 80)
+
+        def send(self, data):
+            return len(data)
+
+        def recv(self, size):
+            clock[0] += min(1, self.timeout)
+            return next(self.chunks)
+
+        def close(self):
+            self.closed = True
+
+    sock = DrippingServerSocket()
+    monkeypatch.setattr(discovery.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(socket, "socket", lambda *args: sock)
+    monkeypatch.setenv("OIDC_ALLOW_INSECURE_HTTP", "true")
+    monkeypatch.setenv("OIDC_ALLOWED_PRIVATE_ORIGINS", "http://127.0.0.1")
+    with pytest.raises(OidcUnavailable):
+        Outbound(access.oidc_settings({})).json("GET", "http://127.0.0.1")
+    assert clock[0] <= 5
+    assert sock.closed
+
+
+def test_discovery_lock_is_available_during_network_wait(monkeypatch):
+    import threading
+
+    from another_s3_manager.access.oidc.discovery import Discovery
+
+    client = Discovery(access.oidc_settings({}))
+    entered, finish = threading.Event(), threading.Event()
+
+    def wait(*args, **kwargs):
+        entered.set()
+        assert finish.wait(2)
+        raise OidcUnavailable()
+
+    monkeypatch.setattr(client.outbound, "json", wait)
+    errors = []
+
+    def refresh():
+        try:
+            client.refresh()
+        except OidcUnavailable:
+            errors.append("unavailable")
+
+    worker = threading.Thread(target=refresh)
+    worker.start()
+    try:
+        assert entered.wait(2)
+        acquired = client.lock.acquire(blocking=False)
+        if acquired:
+            client.lock.release()
+        assert acquired
+    finally:
+        finish.set()
+        worker.join(2)
+    assert errors == ["unavailable"]
+    assert client.snapshot is None

@@ -30,18 +30,34 @@ HANDLER_NAME = "another_s3_manager.console"
 _SENSITIVE = r"code|state|token|id_token|access_token|id_token_hint|client_secret|code_verifier|refresh_token|cookie|cookies|authorization|body|headers|password|password_hash|oidc_tx_[a-zA-Z0-9_-]+"
 
 
-def redact_auth_material(value):
-    if not isinstance(value, str):
-        return value
-    # Decode escaped keys before matching, including repeatedly encoded query keys.
+def _decoded_name(value):
+    # Decode names only: encoded separators inside values are still secret data.
     for _ in range(4):
         decoded = unquote(value)
         if decoded == value:
             break
         value = decoded
-    value = re.sub(
-        r"(?i)\b(?:" + _SENSITIVE + r"\b)[\"']?\s*[=:]\s*(?:\"[^\"]*\"|'[^']*'|[^\s&,;]+)", "auth=[redacted]", value
-    )
+    return value
+
+
+def redact_auth_material(value):
+    if not isinstance(value, str):
+        return value
+
+    def query_parameter(match):
+        if re.fullmatch(_SENSITIVE, _decoded_name(match[2]), re.IGNORECASE):
+            return match[1] + "auth=[redacted]"
+        return match[0]
+
+    # Split on raw query delimiters before inspecting encoded parameter names.
+    value = re.sub(r"([?&])([^=&\s\"'<>]+)=([^&\s]*)", query_parameter, value)
+
+    def field(match):
+        if re.fullmatch(_SENSITIVE, _decoded_name(match[1]), re.IGNORECASE):
+            return "auth=[redacted]"
+        return match[0]
+
+    value = re.sub(r"([\w%.-]+)[\"']?\s*[=:]\s*(?:\"[^\"]*\"|'[^']*'|[^\s&,;]+)", field, value)
     value = re.sub(r"https?://[^\s\"<>]+\?[^\s\"<>]*", "[authentication URL redacted]", value)
     for name in ("OIDC_CLIENT_SECRET", "JWT_SECRET_KEY"):
         secret = os.environ.get(name)
@@ -56,7 +72,7 @@ def _redact_value(value):
     if isinstance(value, dict):
         return {
             key: "[redacted]"
-            if isinstance(key, str) and re.fullmatch(_SENSITIVE, unquote(key), re.IGNORECASE)
+            if isinstance(key, str) and re.fullmatch(_SENSITIVE, _decoded_name(key), re.IGNORECASE)
             else _redact_value(item)
             for key, item in value.items()
         }
@@ -71,6 +87,9 @@ class _AuthRedactionFilter(logging.Filter):
     def filter(self, record):
         if record.name.startswith(("httpx", "httpcore")):
             record.msg, record.args = "OIDC HTTP transport event", ()
+        elif record.name == "uvicorn.access" and isinstance(record.args, tuple) and len(record.args) == 5:
+            # AccessFormatter unpacks these five positional fields itself.
+            record.args = _redact_value(record.args)
         else:
             if not isinstance(record.msg, str):
                 record.msg = _redact_value(record.msg)

@@ -1,9 +1,83 @@
-import { it, expect, vi } from "vitest";
+import { it, expect, vi, afterEach } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { SessionIdentity } from "@/features/auth/hooks/useSessionIdentity";
 import { fetchMe } from "@/features/auth/api/authApi";
 import { getCsrfToken, setCsrfToken } from "@/utils/csrf";
 import type { MeResponse } from "@/types/api";
+import { deleteFile } from "@/features/files/api/filesApi";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.mocked(fetchMe).mockReset();
+});
+
+const account = (name: string) =>
+  ({
+    username: name,
+    session_identity: `opaque-${name}`,
+    csrf_token: `csrf-${name}`,
+  }) as MeResponse;
+
+it("test_batch_stops_after_session_change", async () => {
+  const client = new QueryClient();
+  const coordinator = new SessionIdentity(client);
+  await coordinator.accept(account("a"), coordinator.generation);
+  const fetch = vi.fn(async () => {
+    await coordinator.accept(account("b"), coordinator.generation);
+    return new Response(null, { status: 204 });
+  });
+  vi.stubGlobal("fetch", fetch);
+  const batch = coordinator.beginAction();
+  const run = async () => {
+    for (const path of ["a.txt", "b.txt"]) {
+      batch.assertCurrent();
+      await deleteFile("bucket", "role", path, batch.signal);
+      batch.assertCurrent();
+    }
+  };
+  await expect(run()).rejects.toThrow();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(batch.signal.aborted).toBe(true);
+  expect(getCsrfToken()).toBe("csrf-b");
+  client.clear();
+});
+
+it("test_session_change_aborts_inflight_request", async () => {
+  const client = new QueryClient();
+  const coordinator = new SessionIdentity(client);
+  await coordinator.accept(account("a"), coordinator.generation);
+  const batch = coordinator.beginAction();
+  const fetch = vi.fn(
+    (_url: string, options: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        options.signal!.addEventListener("abort", () =>
+          reject(new DOMException("Aborted", "AbortError")),
+        );
+      }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  const outcome = deleteFile("bucket", "role", "a.txt", batch.signal).catch(
+    (e) => e,
+  );
+  vi.mocked(fetchMe).mockResolvedValueOnce(account("b"));
+  const refreshing = coordinator.refresh();
+  expect(() => coordinator.beginAction()).toThrow();
+  expect(batch.signal.aborted).toBe(true);
+  expect(await outcome).toMatchObject({ name: "AbortError" });
+  await refreshing;
+  expect(coordinator.beginAction().signal.aborted).toBe(false);
+  client.clear();
+});
+
+it("test_blocked_session_cannot_start_batch", async () => {
+  const coordinator = new SessionIdentity(new QueryClient());
+  expect(() => coordinator.beginAction()).toThrow();
+  await coordinator.accept(account("a"), coordinator.generation);
+  const batch = coordinator.beginAction();
+  coordinator.logout();
+  expect(batch.signal.aborted).toBe(true);
+  expect(() => coordinator.beginAction()).toThrow();
+});
 
 vi.mock("@/features/auth/api/authApi", () => ({ fetchMe: vi.fn() }));
 

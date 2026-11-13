@@ -133,7 +133,14 @@ def test_oidc_origin_secret_precedence_and_secure_cookie_validation(monkeypatch,
         monkeypatch.setenv("PUBLIC_URL", public)
         with pytest.raises(ValueError):
             access.oidc_settings({})
-    monkeypatch.setenv("PUBLIC_URL", "https://asm.example")
-    monkeypatch.setenv("COOKIE_SECURE", "false")
-    with pytest.raises(ValueError):
-        access.oidc_settings({})
+    for scheme in ("https", "HTTPS", "HtTpS"):
+        monkeypatch.setenv("PUBLIC_URL", f"{scheme}://asm.example")
+        monkeypatch.setenv("OIDC_ISSUER", f"{scheme}://identity.example/realm")
+        monkeypatch.setenv("OIDC_ALLOWED_PRIVATE_ORIGINS", f"{scheme}://Identity.Example:443")
+        monkeypatch.setenv("COOKIE_SECURE", "true")
+        settings = access.oidc_settings({})
+        assert settings.private_origins == frozenset({"https://identity.example:443"})
+        assert settings.issuer == f"{scheme}://identity.example/realm"
+        monkeypatch.setenv("COOKIE_SECURE", "false")
+        with pytest.raises(ValueError, match="secure cookies"):
+            access.oidc_settings({})

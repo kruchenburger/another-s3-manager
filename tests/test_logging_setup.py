@@ -19,6 +19,17 @@ def test_oidc_canaries_absent_from_final_text_and_json_logs(monkeypatch, capsys,
     configure_logging()
     install_access_log_filter()
     logger = logging.getLogger("another_s3_manager.oidc")
+    for name in ("code", "%63ode", "%2563ode"):
+        for value in (
+            "prefix%26CANARY",
+            "prefix%3DCANARY",
+            "prefix%20CANARY",
+            "prefix+CANARY",
+            "prefix%2526CANARY",
+            "prefix'CANARY",
+            'prefix"CANARY',
+        ):
+            logger.warning("callback /api/auth/oidc/callback?%s=%s&safe=ok", name, value)
     for key in ("code", "state", "token", "id_token_hint", "client_secret", "code_verifier", "refresh_token", "cookie"):
         logger.warning("request https://op.example/callback?%s=canary-%s&%%63ode=encoded-canary", key, key)
     logging.getLogger("uvicorn.access").warning(
@@ -42,6 +53,44 @@ def test_oidc_canaries_absent_from_final_text_and_json_logs(monkeypatch, capsys,
     output = capsys.readouterr().out
     assert "OIDC failed" in output
     assert "canary" not in output
+    assert "CANARY" not in output
+
+
+@pytest.mark.parametrize("status", [200, 401, 403, 500])
+@pytest.mark.parametrize("format", ["text", "json"])
+def test_access_formatter_preserves_args_and_redacts_query(monkeypatch, status, format):
+    import json
+
+    from pythonjsonlogger.json import JsonFormatter
+    from uvicorn.logging import AccessFormatter
+
+    from another_s3_manager.logging_setup import _AuthRedactionFilter
+
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        "",
+        0,
+        '%s - "%s %s HTTP/%s" %s',
+        ("127.0.0.1:1234", "GET", "/api/auth/oidc/callback?code=prefix%26CANARY&safe=ok", "1.1", status),
+        None,
+    )
+    redact = _AuthRedactionFilter()
+    assert redact.filter(record)
+    assert redact.filter(record)
+    assert len(record.args) == 5
+    assert record.args[4] == status
+    formatter = (
+        AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False)
+        if format == "text"
+        else JsonFormatter("%(message)s")
+    )
+    output = formatter.format(record)
+    assert "CANARY" not in output
+    assert "/api/auth/oidc/callback" in output
+    assert str(status) in output
+    if format == "json":
+        assert "GET" in json.loads(output)["message"]
 
 
 @pytest.fixture(autouse=True)

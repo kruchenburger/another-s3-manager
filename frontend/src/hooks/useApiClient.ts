@@ -7,15 +7,24 @@ interface RequestOptions {
   method?: Method;
   body?: BodyInit | null;
   headers?: Record<string, string>;
+  signal?: AbortSignal;
 }
 
-const MUTATING: ReadonlySet<Method> = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const MUTATING: ReadonlySet<Method> = new Set([
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+]);
 
 // Thin fetch wrapper:
 //   - credentials: "include" so the auth cookie rides along
 //   - X-CSRF-Token attached on mutating methods (cookie-jar CSRF defence)
 //   - throws ApiError on non-2xx with the parsed body for upstream handling
-export async function apiRequest<T = unknown>(url: string, options: RequestOptions = {}): Promise<T> {
+export async function apiRequest<T = unknown>(
+  url: string,
+  options: RequestOptions = {},
+): Promise<T> {
   const method: Method = options.method ?? "GET";
 
   const headers: Record<string, string> = {
@@ -33,6 +42,7 @@ export async function apiRequest<T = unknown>(url: string, options: RequestOptio
     credentials: "include",
     headers,
     body: options.body ?? null,
+    signal: options.signal,
   });
 
   if (!response.ok) {
@@ -42,7 +52,11 @@ export async function apiRequest<T = unknown>(url: string, options: RequestOptio
     } catch {
       // non-JSON error body — keep null
     }
-    throw new ApiError(response.status, response.statusText || `HTTP ${response.status}`, body);
+    throw new ApiError(
+      response.status,
+      response.statusText || `HTTP ${response.status}`,
+      body,
+    );
   }
 
   // 204 No Content

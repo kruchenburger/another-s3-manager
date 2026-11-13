@@ -68,33 +68,85 @@ for (const order of [
       `subject-b-${order.join("")}`,
     ];
     const releases: Array<() => void> = [];
-    await context.route("**/api/auth/oidc/callback?**", async (route) => {
-      const response = await route.fetch({ maxRedirects: 0 });
-      const index = pages.indexOf(route.request().frame().page());
+    const owners = new WeakMap<import("@playwright/test").Request, number>();
+    let stopping = false;
+    const callback = (url: URL) => url.pathname === "/api/auth/oidc/callback";
+    pages.forEach((page, index) => {
+      // Request events identify the tab even when a navigation has no frame yet.
+      page.on("request", (request) => owners.set(request, index));
+    });
+    const handler = async (route: import("@playwright/test").Route) => {
+      if (stopping) {
+        await route.abort();
+        return;
+      }
+      const request = route.request();
+      let index = owners.get(request);
+      if (index === undefined) {
+        try {
+          index = pages.indexOf(request.frame().page());
+        } catch {
+          // The request event remains the primary navigation ownership seam.
+        }
+      }
+      if (index === undefined || index < 0) {
+        await route.abort();
+        throw new Error(
+          "OIDC callback could not be associated with a test tab",
+        );
+      }
       await new Promise<void>((resolve) => {
         releases[index] = resolve;
       });
+      // route.fetch also updates the shared cookie jar. Gate before that fetch,
+      // not only before fulfill, so the selected order controls both responses.
+      const response = await route.fetch({ maxRedirects: 0 });
       await route.fulfill({ response });
-    });
-    const pending = pages.map((page, index) => start(page, subjects[index]));
-    await expect.poll(() => releases.filter(Boolean).length).toBe(2);
-    releases[order[0]]();
-    await pending[order[0]];
-    releases[order[1]]();
-    await pending[order[1]];
-    for (const page of pages) {
-      await page.bringToFront();
-      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    };
+    await context.route(callback, handler);
+    const pending = pages.map((page, index) =>
+      start(page, subjects[index]).then(
+        () => true,
+        () => false,
+      ),
+    );
+    try {
       await expect
-        .poll(
-          async () =>
-            (await (await page.request.get("/api/me")).json()).username ===
-            subjects[order[1]],
-        )
-        .toBe(true);
-      await expect(
-        page.getByText(subjects[order[0]], { exact: true }),
-      ).toHaveCount(0);
+        .poll(() => releases.filter(Boolean).length, {
+          timeout: 15_000,
+          message:
+            "Both OIDC callback navigations must reach the release barrier",
+        })
+        .toBe(2);
+      releases[order[0]]();
+      expect(
+        await pending[order[0]],
+        "First released OIDC navigation completes",
+      ).toBe(true);
+      releases[order[1]]();
+      expect(
+        await pending[order[1]],
+        "Last released OIDC navigation completes",
+      ).toBe(true);
+      for (const page of pages) {
+        await page.bringToFront();
+        await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+        await expect
+          .poll(
+            async () =>
+              (await (await page.request.get("/api/me")).json()).username ===
+              subjects[order[1]],
+          )
+          .toBe(true);
+        await expect(
+          page.getByText(subjects[order[0]], { exact: true }),
+        ).toHaveCount(0);
+      }
+    } finally {
+      stopping = true;
+      releases.forEach((release) => release());
+      await context.unroute(callback, handler);
+      await Promise.all(pending);
     }
   });
 }

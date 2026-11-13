@@ -28,14 +28,15 @@ def origin(url, *, allow_http=False, origin_only=False):
     ):
         raise ValueError("Invalid OIDC URL")
     parsed = urlsplit(url)
+    scheme = parsed.scheme.lower()
     try:
-        port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
+        port = parsed.port if parsed.port is not None else (443 if scheme == "https" else 80)
     except ValueError:
         raise ValueError("Invalid OIDC port") from None
     if (
         not 1 <= port <= 65535
         or parsed.netloc.endswith(":")
-        or parsed.scheme not in ({"https", "http"} if allow_http else {"https"})
+        or scheme not in ({"https", "http"} if allow_http else {"https"})
         or not parsed.hostname
         or parsed.username is not None
         or parsed.password is not None
@@ -47,7 +48,7 @@ def origin(url, *, allow_http=False, origin_only=False):
         raise ValueError("OIDC origin cannot contain a path or query")
     host = parsed.hostname.lower()
     host = f"[{host}]" if ":" in host else host
-    return f"{parsed.scheme}://{host}:{port}"
+    return f"{scheme}://{host}:{port}"
 
 
 @dataclass(frozen=True)
@@ -150,7 +151,7 @@ def oidc_settings(config):
         if urlsplit(issuer).query or "?" in issuer:
             raise ValueError("Issuer cannot contain a query")
         origin(public, allow_http=allow_http, origin_only=True)
-        if public.startswith("https://") and not secure:
+        if urlsplit(public).scheme.lower() == "https" and not secure:
             raise ValueError("HTTPS OIDC requires secure cookies")
         if "OIDC_CLIENT_SECRET_FILE" in os.environ:
             try:
