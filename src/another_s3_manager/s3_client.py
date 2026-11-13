@@ -10,7 +10,7 @@ import os
 import threading
 import time
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, BinaryIO, Callable, Dict, Iterator, Optional, Tuple, TypeVar
 from typing import Any as AnyType
 
@@ -36,12 +36,8 @@ from another_s3_manager.move_reservations import guarded_write
 
 
 def account_identity(user: dict) -> tuple:
-    """Normalize account generation consistently with SQLite's naive UTC reads."""
-    created_at = user.get("created_at")
-    if created_at is not None:
-        timestamp = datetime.fromisoformat(created_at)
-        created_at = timestamp.replace(tzinfo=timestamp.tzinfo or UTC).astimezone(UTC).isoformat()
-    return (user.get("id"), user.get("username"), created_at)
+    """Forward the compatibility identity rule to Access."""
+    return access_service.account_identity(user)
 
 
 def load_destructive_state(user_id: int | None) -> tuple[dict | None, dict]:

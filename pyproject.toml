@@ -120,23 +120,36 @@ forbidden_modules = [
 id = "access-api-only"
 name = "Everything outside Access uses its public API (the package root), never its internals"
 type = "forbidden"
+# Every top-level module except the users/api_tokens compatibility shims, which only re-export
+# Access internals (tests/test_access_boundaries.py keeps them import-only). The package root
+# __init__ is neutral: it cannot be a source without also covering Access itself.
 source_modules = [
-    "another_s3_manager.api_tokens",
     "another_s3_manager.auth",
     "another_s3_manager.config",
+    "another_s3_manager.constants",
+    "another_s3_manager.database",
+    "another_s3_manager.errors",
+    "another_s3_manager.logging_setup",
     "another_s3_manager.main",
     "another_s3_manager.mcp_server",
+    "another_s3_manager.metrics",
+    "another_s3_manager.migration",
+    "another_s3_manager.models",
     "another_s3_manager.move_jobs",
     "another_s3_manager.move_reservations",
     "another_s3_manager.reset_admin_password",
     "another_s3_manager.s3_client",
-    "another_s3_manager.users",
     "another_s3_manager.utils",
 ]
 forbidden_modules = [
     "another_s3_manager.access.errors",
+    "another_s3_manager.access.passwords",
     "another_s3_manager.access.policies",
+    "another_s3_manager.access.principal",
     "another_s3_manager.access.service",
+    "another_s3_manager.access.sessions",
+    "another_s3_manager.access.tokens",
+    "another_s3_manager.access.users",
 ]
 # Reaching the internals through the package root is the point of the public API.
 allow_indirect_imports = true

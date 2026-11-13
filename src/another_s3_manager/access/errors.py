@@ -9,3 +9,7 @@ class AccessDenied(PermissionError):
         self.message = message
         self.details = details if details is not None else {}
         super().__init__(message)
+
+
+class AuthenticationError(AccessDenied):
+    """A credential refusal, translated by the calling transport adapter."""

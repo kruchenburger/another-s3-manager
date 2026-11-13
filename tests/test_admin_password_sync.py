@@ -546,6 +546,7 @@ def _fresh_main(monkeypatch, tmp_path):
 
     importlib.reload(constants)
     importlib.reload(database)
+    # Reload only the compatibility exports; Access keeps the single grants lock.
     importlib.reload(users)
     database.reset_engine_for_tests()
     return importlib.reload(main)

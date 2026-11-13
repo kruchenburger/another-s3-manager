@@ -204,7 +204,7 @@ def test_validate_role_access_never_calls_load_users(monkeypatch, reload_main):
     def _boom():
         raise AssertionError("validate_role_access must not call load_users()")
 
-    monkeypatch.setattr(main, "load_users", _boom)
+    monkeypatch.setattr("another_s3_manager.access.users.load_users", _boom)
     # The role must exist in config too (ASM-42): grants to removed roles are ignored.
     monkeypatch.setattr(main, "load_config", lambda *a, **k: {"roles": [{"name": "RoleA", "type": "default"}]})
 
