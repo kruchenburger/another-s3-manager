@@ -31,15 +31,15 @@ another-s3-manager/
 ├── src/
 │   └── another_s3_manager/
 │       ├── __init__.py
-│       ├── access/          # Access context: the one home of access policies (see "Contexts")
+│       ├── access/          # Access context: authentication, repositories and access policies
 │       ├── main.py          # FastAPI app, API endpoints
-│       ├── auth.py           # JWT auth, CSRF, ban logic
+│       ├── auth.py           # Web auth dependencies and compatibility exports
 │       ├── config.py         # Config management (config.json)
 │       ├── constants.py      # App constants, paths
 │       ├── database.py       # SQLAlchemy engine + session_scope()
 │       ├── models.py         # ORM models (User, Role, Ban)
 │       ├── s3_client.py      # S3 client, role management
-│       ├── users.py          # User management (SQLite via SQLAlchemy)
+│       ├── users.py          # Import-only compatibility shim for access/users.py
 │       ├── utils.py          # Validation, sanitization
 │       └── static/app/       # React SPA build output (generated, not tracked)
 ├── migrations/               # Alembic migrations (env.py + versions/)
@@ -59,7 +59,13 @@ The code moves to bounded contexts one release at a time. Rule: every access pol
 exactly one home, and the web routes, MCP tools, move jobs and CLI are thin adapters that
 call it and translate its error.
 
-- `access/` — role grants, admin role expansion, bucket allow-lists, the MCP write gate and
+- `access/` — authentication and access policies. `principal.py` owns raw-grant
+  principals and account identity normalization; `passwords.py` owns hashing and
+  fallback; `sessions.py` owns HS256 JWT and CSRF generation; `users.py` and
+  `tokens.py` own persistence and the single role-grants lock. Top-level `users.py`
+  and `api_tokens.py` are import-only compatibility shims. Session, local-password
+  and bearer authentication use the public service facade; web/MCP adapters keep
+  their existing error mapping and dictionary projections. Authorization includes role grants, admin role expansion, bucket allow-lists, the MCP write gate and
   the deletion gate (instance-wide and per role: `deletion_allowed` / `require_delete`), composed by `require_destructive` (role grant, bucket allow-list, then deletion gate). `policies.py` holds pure rules over a passed-in config, `service.py`
   raises `AccessDenied(code, message)` (a `PermissionError` subclass), `__init__.py` is the
   public API. Adapters map `AccessDenied.code` to their own answer in one table each.

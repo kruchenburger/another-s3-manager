@@ -52,7 +52,6 @@ from another_s3_manager import move_jobs
 from another_s3_manager import users as users_module
 from another_s3_manager.api_tokens import count_active_tokens
 from another_s3_manager.auth import (
-    check_ban,
     create_access_token,
     generate_csrf_token,
     get_current_admin_user,
@@ -60,7 +59,6 @@ from another_s3_manager.auth import (
     get_jwt_secret_key,
     has_valid_session,
     hash_password,
-    record_login_attempt,
     verify_csrf_token,
     verify_password,
 )
@@ -117,7 +115,6 @@ from another_s3_manager.users import (
     get_user_by_username,
     get_users_for_admin,
     load_bans,
-    load_users,
     save_bans,
     sync_admin_password_from_env,
 )
@@ -772,6 +769,12 @@ def _enforce_password_policy(password: str) -> None:
 # ============================================================================
 
 
+_LOCAL_AUTH_ERRORS = {
+    "banned": (403, "banned"),
+    "invalid_password": (401, "invalid_password"),
+}
+
+
 @app.post("/api/login")
 async def login(
     request: Request,
@@ -781,52 +784,13 @@ async def login(
 ):
     """Login endpoint — issues an httpOnly cookie carrying the JWT."""
     try:
-        # Check if user is banned
-        if check_ban(username):
-            bans = load_bans()
-            ban_data = bans.get(username, {})
-            banned_until = ban_data.get("banned_until", 0)
-            import time
-
-            remaining = int((banned_until - time.time()) / 60)
-            auth_logins_total.labels(result="banned").inc()
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Account is banned. Try again in {remaining} minutes.",
-            )
-
-        user = get_user_by_username(username)
-        if user is None and count_users() == 0:
-            # Fresh deployment, empty users table: load_users() lazily seeds
-            # the default admin from ADMIN_PASSWORD on its first call — that
-            # bootstrap has to happen somewhere, and login is the only
-            # request a truly empty install can make before anyone exists to
-            # log in as. Gated on count_users() (a cheap COUNT query) so this
-            # full load only ever runs once, not on every wrong-username
-            # login attempt against a populated table.
-            load_users()
-            user = get_user_by_username(username)
-
-        if user is None:
-            record_login_attempt(username, False)
-            # Same label as a wrong password — metrics must not enumerate usernames.
-            auth_logins_total.labels(result="invalid_password").inc()
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect username or password",
-            )
-
-        # Verify password
-        if not verify_password(password, user.get("password_hash", "")):
-            record_login_attempt(username, False)
-            auth_logins_total.labels(result="invalid_password").inc()
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect username or password",
-            )
-
-        # Successful login
-        record_login_attempt(username, True)
+        try:
+            principal = access_service.authenticate_local(username, password, {})
+        except access_service.AuthenticationError as error:
+            status_code, reason = _LOCAL_AUTH_ERRORS[error.code]
+            auth_logins_total.labels(result=reason).inc()
+            raise HTTPException(status_code=status_code, detail=error.message) from None
+        user = principal.to_user_dict()
         auth_logins_total.labels(result="success").inc()
 
         # Generate CSRF token and embed in the signed JWT (defence-in-depth).
@@ -2541,56 +2505,24 @@ async def upload_file(
 
 
 def get_user_for_download(token: Optional[str] = Query(None), request: Request = None) -> Dict[str, Any]:
-    """Get user from token in URL or Bearer header for downloads"""
-    from jose import JWTError, jwt
-
-    from another_s3_manager.auth import get_jwt_secret_key
-    from another_s3_manager.constants import JWT_ALGORITHM
-    from another_s3_manager.users import get_user_by_username
-
-    # Try token from URL first (for direct link downloads without buffering)
-    if token:
-        try:
-            payload = jwt.decode(token, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
-            username = payload.get("sub")
-            if username:
-                # Targeted lookup — this runs on every download request, so a
-                # load_users() full-table scan would be an O(N) DB read per download.
-                user = get_user_by_username(username)
-                if user:
-                    user["csrf_token"] = payload.get("csrf_token")
-                    return user
-        except (JWTError, ValueError):
-            # Bad JWT or malformed user input — try the next candidate (or fall through to 401).
-            pass
-
-    # Fall back to Bearer header (legacy vanilla UI) or access_token cookie (cookie-auth UI)
+    """Try query, Bearer and cookie sessions, preserving legacy fallback."""
+    candidates = [token] if token else []
     if request:
-        candidates = []
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             candidates.append(auth_header[7:])
         cookie_token = request.cookies.get("access_token")
         if cookie_token:
             candidates.append(cookie_token)
-
-        for candidate in candidates:
-            try:
-                payload = jwt.decode(candidate, get_jwt_secret_key(), algorithms=[JWT_ALGORITHM])
-                username = payload.get("sub")
-                if username:
-                    user = get_user_by_username(username)
-                    if user:
-                        user["csrf_token"] = payload.get("csrf_token")
-                        return user
-            except (JWTError, ValueError):
-                # Bad JWT or malformed user input — try the next candidate (or fall through to 401).
-                pass
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication required",
-    )
+    for candidate in candidates:
+        try:
+            principal = access_service.authenticate_session(candidate)
+            # The download door historically requires a truthy username.
+            if principal.username:
+                return principal.to_user_dict()
+        except (access_service.AuthenticationError, ValueError):
+            continue
+    raise HTTPException(status_code=401, detail="Authentication required")
 
 
 @app.get("/api/buckets/{bucket_name}/download")

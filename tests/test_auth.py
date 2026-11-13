@@ -18,9 +18,15 @@ def _make_request_with_cookie(token_value):
 
 def reload_auth():
     import another_s3_manager.auth as auth
+    from another_s3_manager.access import passwords, sessions
 
+    importlib.reload(passwords)
+    importlib.reload(sessions)
+    importlib.reload(importlib.import_module("another_s3_manager.access"))
     importlib.reload(auth)
-    auth._login_attempts = {}
+    from another_s3_manager.access import service
+
+    service._login_attempts.clear()
     return auth
 
 
@@ -70,11 +76,17 @@ def test_cryptcontext_fallback_initialization(monkeypatch):
             return True
 
     monkeypatch.setattr(context, "CryptContext", FakeContext)
+    from another_s3_manager.access import passwords
+
+    importlib.reload(passwords)
+    importlib.reload(importlib.import_module("another_s3_manager.access"))
     module = importlib.reload(auth)
     try:
         assert calls["count"] == 2
         assert isinstance(module.pwd_context, FakeContext)
     finally:
+        importlib.reload(passwords)
+        importlib.reload(importlib.import_module("another_s3_manager.access"))
         importlib.reload(auth)
 
 
@@ -90,7 +102,7 @@ def test_verify_password_all_contexts_fail(monkeypatch):
         def verify(self, *args, **kwargs):
             raise RuntimeError("fallback broken")
 
-    monkeypatch.setattr("another_s3_manager.auth.CryptContext", lambda *a, **k: DummyContext())
+    monkeypatch.setattr("another_s3_manager.access.passwords.CryptContext", lambda *a, **k: DummyContext())
     assert auth.verify_password("password", "hash") is False
 
 
@@ -304,9 +316,13 @@ def test_record_login_attempt_success_resets(tmp_path):
     auth = reload_auth()
     auth.record_login_attempt("user", success=False)
     auth.record_login_attempt("user", success=False)
-    assert auth._login_attempts["user"]["failed_count"] == 2
+    from another_s3_manager.access import service
+
+    assert service._login_attempts["user"]["failed_count"] == 2
     auth.record_login_attempt("user", success=True)
-    assert auth._login_attempts["user"]["failed_count"] == 0
+    from another_s3_manager.access import service
+
+    assert service._login_attempts["user"]["failed_count"] == 0
 
 
 def test_verify_password_uses_fallback_context(monkeypatch):
@@ -316,7 +332,9 @@ def test_verify_password_uses_fallback_context(monkeypatch):
         raise RuntimeError("broken verify")
 
     monkeypatch.setattr(auth.pwd_context, "verify", boom)
-    fallback = auth.CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+    from another_s3_manager.access import passwords
+
+    fallback = passwords.CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
     hashed = fallback.hash("secret")
     assert auth.verify_password("secret", hashed) is True
 
@@ -394,8 +412,8 @@ def test_check_ban_removes_expired(monkeypatch):
     def fake_save_bans(data):
         saved["data"] = data
 
-    monkeypatch.setattr("another_s3_manager.users.load_bans", fake_load_bans)
-    monkeypatch.setattr("another_s3_manager.users.save_bans", fake_save_bans)
+    monkeypatch.setattr("another_s3_manager.access.users.load_bans", fake_load_bans)
+    monkeypatch.setattr("another_s3_manager.access.users.save_bans", fake_save_bans)
 
     assert auth.check_ban("user") is False
     assert saved["data"] == {}
@@ -441,7 +459,7 @@ def test_record_login_attempt_logs(caplog):
 def test_get_current_user_reads_from_cookie(monkeypatch, valid_jwt_token, valid_user_dict):
     """get_current_user pulls the token from request.cookies['access_token']."""
     auth = reload_auth()
-    monkeypatch.setattr("another_s3_manager.users.get_user_by_username", lambda username: dict(valid_user_dict))
+    monkeypatch.setattr("another_s3_manager.access.users.get_user_by_username", lambda username: dict(valid_user_dict))
 
     request = _make_request_with_cookie(valid_jwt_token)
     user = auth.get_current_user(request)
@@ -520,7 +538,7 @@ def test_has_valid_session_false_when_sub_missing(monkeypatch):
 def test_has_valid_session_never_touches_load_users(monkeypatch, valid_jwt_token):
     """The whole point of has_valid_session is to be DB-free — assert it never
     calls load_users()."""
-    import another_s3_manager.users as users_module
+    import another_s3_manager.access.users as users_module
 
     def _boom():
         raise AssertionError("has_valid_session must not call load_users()")

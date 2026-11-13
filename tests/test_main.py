@@ -63,7 +63,9 @@ def test_reset_auth_state_adds_admin():
     users_module = reload_users_module()
     users_module.save_users({"users": []})
     auth_module = reload_auth_module()
-    auth_module._login_attempts = {}
+    from another_s3_manager.access import service
+
+    service._login_attempts.clear()
     users_module.save_bans({})
     ensure_admin_exists(auth_module, users_module)
     data = users_module.load_users()
@@ -105,15 +107,19 @@ def test_main_exits_when_secret_missing(monkeypatch):
 @pytest.fixture(autouse=True)
 def reset_auth_state():
     auth_module = reload_auth_module()
-    auth_module._login_attempts = {}
+    from another_s3_manager.access import service
+
+    service._login_attempts.clear()
     users_module = reload_users_module()
     users_module.save_bans({})
     ensure_admin_exists(auth_module, users_module)
 
 
 def login(client, username="admin", password="admin123"):
-    auth_module = reload_auth_module()
-    auth_module._login_attempts = {}
+    reload_auth_module()
+    from another_s3_manager.access import service
+
+    service._login_attempts.clear()
     users_module = reload_users_module()
     users_module.save_bans({})
     response = client.post(
@@ -956,7 +962,7 @@ def test_login_user_not_found(app_client):
 
 
 def test_login_handles_unexpected_error(app_client, mocker):
-    mocker.patch("another_s3_manager.main.get_user_by_username", side_effect=RuntimeError("boom"))
+    mocker.patch("another_s3_manager.access.users.get_user_by_username", side_effect=RuntimeError("boom"))
     response = app_client.post(
         "/api/login",
         data={"username": "admin", "password": "admin123"},
@@ -968,7 +974,9 @@ def test_login_does_not_call_load_users_once_a_user_exists(app_client, mocker):
     """login() must use the targeted get_user_by_username() lookup once the
     users table is populated — load_users() is only a fallback for the
     genuinely-empty-table bootstrap case (see login()'s count_users() guard)."""
-    load_users_spy = mocker.patch("another_s3_manager.main.load_users", side_effect=AssertionError("must not run"))
+    load_users_spy = mocker.patch(
+        "another_s3_manager.access.users.load_users", side_effect=AssertionError("must not run")
+    )
     response = app_client.post(
         "/api/login",
         data={"username": "admin", "password": "admin123"},
@@ -2618,7 +2626,7 @@ def test_get_user_for_download_does_not_swallow_db_errors(monkeypatch):
     # Patch get_user_by_username to raise OperationalError (transient DB
     # error). The function imports it INSIDE its body, so patch the source
     # module.
-    import another_s3_manager.users as users_module
+    import another_s3_manager.access.users as users_module
 
     def _boom(username):
         raise OperationalError("statement", "params", Exception("db down"))
@@ -2653,7 +2661,7 @@ def test_get_user_for_download_never_calls_load_users(monkeypatch):
     }
     token = jwt.encode(payload, get_jwt_secret_key(), algorithm=JWT_ALGORITHM)
 
-    import another_s3_manager.users as users_module
+    import another_s3_manager.access.users as users_module
 
     def _boom():
         raise AssertionError("get_user_for_download must not call load_users()")

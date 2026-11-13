@@ -1,5 +1,7 @@
 import importlib
 import json
+import logging
+import logging.config
 import os
 from typing import Any, Dict
 
@@ -31,6 +33,33 @@ def isolated_environment(monkeypatch, tmp_path):
     - Environment variables required by the app
     - Reset module-level caches
     """
+    # Alembic's fileConfig disables existing loggers, including the moved Access
+    # owners, and replaces pytest capture handlers. Keep this process-wide state
+    # isolated while still running the real migration and all log assertions.
+    original_file_config = logging.config.fileConfig
+
+    def isolated_file_config(*args, **kwargs):
+        root_logger = logging.getLogger()
+        handlers = list(root_logger.handlers)
+        level = root_logger.level
+        states = [
+            (logger, logger.disabled, logger.level, logger.propagate, list(logger.handlers))
+            for logger in logging.Logger.manager.loggerDict.values()
+            if isinstance(logger, logging.Logger)
+        ]
+        try:
+            return original_file_config(*args, **kwargs)
+        finally:
+            root_logger.handlers = handlers
+            root_logger.setLevel(level)
+            for logger, disabled, logger_level, propagate, logger_handlers in states:
+                logger.disabled = disabled
+                logger.setLevel(logger_level)
+                logger.propagate = propagate
+                logger.handlers = logger_handlers
+
+    monkeypatch.setattr(logging.config, "fileConfig", isolated_file_config)
+
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(_default_config()))
 
@@ -57,6 +86,11 @@ def isolated_environment(monkeypatch, tmp_path):
     importlib.reload(constants)
     importlib.reload(database_module)
     importlib.reload(config_module)
+    # Repositories resolve the database through its stable module globals. Do not
+    # reload Access users: config/main may retain the one role_grants_lock.
+    from another_s3_manager.access import service
+
+    service._login_attempts.clear()
     importlib.reload(users_module)
     importlib.reload(s3_client_module)
 

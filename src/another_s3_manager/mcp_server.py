@@ -6,7 +6,6 @@ All permission decisions delegate to s3_client.py — single source of truth.
 
 import base64
 import binascii
-import hashlib
 import json
 import logging
 import time
@@ -23,7 +22,6 @@ from starlette.requests import Request
 
 import another_s3_manager.config as _config_module
 from another_s3_manager import access as access_service
-from another_s3_manager import api_tokens as token_svc
 from another_s3_manager import s3_client as _s3_client
 from another_s3_manager.access import AccessDenied
 from another_s3_manager.errors import (
@@ -234,61 +232,31 @@ def assert_write_allowed(token: Any, tool_name: str, config: dict, role: str | N
 # ---------------------------------------------------------------------------
 
 
+_BEARER_AUTH_ERRORS = {
+    "malformed_bearer": ("INVALID_TOKEN", "Missing or malformed Bearer token", "malformed"),
+    "wrong_token_prefix": ("INVALID_TOKEN", "Token does not start with as3m_", "malformed"),
+    "invalid_token": ("INVALID_TOKEN", "Invalid or revoked token", "invalid_token"),
+    "orphan_token": ("INVALID_TOKEN", "Token's user no longer exists", "invalid_token"),
+}
+
+
 async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
-    """Parse Bearer token, look up hash in DB, return (token_orm, user_dict).
-
-    Raises McpError on any authentication failure, incrementing the
-    mcp_auth_failures_total Prometheus counter with an appropriate reason label.
-    """
-    auth_header = request.headers.get("authorization", "")
-    if not auth_header.startswith("Bearer "):
-        mcp_auth_failures_total.labels(reason="malformed").inc()
-        raise McpError("INVALID_TOKEN", "Missing or malformed Bearer token")
-
-    plaintext = auth_header[len("Bearer ") :]
-    if not plaintext.startswith("as3m_"):
-        mcp_auth_failures_total.labels(reason="malformed").inc()
-        raise McpError("INVALID_TOKEN", "Token does not start with as3m_")
-
-    digest = hashlib.sha256(plaintext.encode()).hexdigest()
-    token = token_svc.find_active_token_by_hash(digest)
-    if token is None:
-        mcp_auth_failures_total.labels(reason="invalid_token").inc()
-        raise McpError("INVALID_TOKEN", "Invalid or revoked token")
-
-    # Resolve the owning user inside a single session scope.
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
-
-    from another_s3_manager.database import session_scope
-    from another_s3_manager.models import User as UserModel
-
-    with session_scope() as session:
-        u = session.execute(
-            select(UserModel).where(UserModel.id == token.user_id).options(selectinload(UserModel.roles))
-        ).scalar_one_or_none()
-        if u is None:
-            mcp_auth_failures_total.labels(reason="invalid_token").inc()
-            raise McpError("INVALID_TOKEN", "Token's user no longer exists")
-        # Admins implicitly have access to every role in config — same expansion
-        # the web UI does in GET /api/me. Without this, an admin-issued MCP
-        # token returns 0 roles via list_roles because the admin user's
-        # allowed_roles column is empty (admins manage roles, they don't get
-        # explicit assignments).
-        cfg = _config_module.load_config()
-        allowed_roles = access_service.allowed_roles(
-            {"is_admin": u.is_admin, "allowed_roles": [r.role_name for r in u.roles]}, cfg
-        )
-        user_dict = {
-            "id": u.id,
-            "created_at": u.created_at.isoformat() if u.created_at else None,
-            "username": u.username,
-            "is_admin": u.is_admin,
-            "allowed_roles": allowed_roles,
-        }
-
-    token_svc.touch_last_used(token.id)
-    return token, user_dict
+    """Authenticate inside each tool and preserve its legacy MCP answer."""
+    cfg = _config_module.load_config()
+    try:
+        result = access_service.authenticate_bearer(request.headers.get("authorization", ""), cfg)
+    except access_service.AuthenticationError as error:
+        code, message, reason = _BEARER_AUTH_ERRORS[error.code]
+        mcp_auth_failures_total.labels(reason=reason).inc()
+        raise McpError(code, message) from None
+    user = result.principal.to_user_dict()
+    return result.token, {
+        "id": user["id"],
+        "created_at": user["created_at"],
+        "username": user["username"],
+        "is_admin": user["is_admin"],
+        "allowed_roles": access_service.allowed_roles(user, cfg),
+    }
 
 
 # ---------------------------------------------------------------------------
