@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Plain copies stop if storage settings change or access is revoked during a retry, preventing writes to a different storage target.
+
 - Deleting, moving and cleaning up partial moves now check the current
   permissions right before every request to S3, including requests the S3
   library retries on its own. The check reads the current user from the

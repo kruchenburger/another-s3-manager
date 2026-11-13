@@ -1622,7 +1622,7 @@ async def copy_object(
         raise
     except MoveError as e:
         error_code = e.code
-        raise McpError(e.code, str(e), {"http_status": e.http_status}) from None
+        raise _storage_error_to_mcp(e) from None
     except S3AccessDeniedError as e:
         error_code = "S3_ACCESS_DENIED"
         logger.warning("mcp.copy_object.access_denied", extra={"boto_code": e.code})

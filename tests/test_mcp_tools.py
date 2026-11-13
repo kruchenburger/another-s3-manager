@@ -1759,3 +1759,34 @@ async def test_mcp_move_target_change_after_copy_keeps_source(alice_user, tool_r
     assert result["source_kept_reason"] == "ROLE_CHANGED"
     for key in ("source", "dest"):
         assert moto_s3.get_object(Bucket="target-change", Key=key)["Body"].read() == b"keep"
+
+
+@pytest.mark.asyncio
+async def test_plain_copy_role_changed_uses_storage_mapping(alice_user, tool_registry, monkeypatch):
+    from another_s3_manager import mcp_server
+    from another_s3_manager.errors import MoveError
+
+    _, plaintext = alice_user
+    original = mcp_server._STORAGE_ERROR_MAPPINGS[MoveError]
+    mapped = []
+
+    def mapper(error):
+        mapped.append(error.code)
+        return original(error)
+
+    monkeypatch.setitem(mcp_server._STORAGE_ERROR_MAPPINGS, MoveError, mapper)
+    with patch("another_s3_manager.s3_client.copy_object_for_role", side_effect=MoveError("ROLE_CHANGED", 409)):
+        with pytest.raises(McpError) as caught:
+            await _call(
+                tool_registry,
+                "copy_object",
+                _fake_request(plaintext),
+                role="Default",
+                source_bucket="b",
+                source_path="src",
+                dest_bucket="b",
+                dest_path="dst",
+                delete_source=False,
+            )
+    assert caught.value.code == "ROLE_CHANGED"
+    assert mapped == ["ROLE_CHANGED"]

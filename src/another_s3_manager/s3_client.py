@@ -58,11 +58,19 @@ def require_current_destructive(
     user: dict, role: str, bucket: str, *, snapshot: tuple[dict | None, dict] | None = None
 ) -> dict:
     """Check the caller's generation and destructive access against fresh state."""
+    current, cfg = require_current_account(user, role, snapshot=snapshot)
+    access_service.require_destructive(current, role, bucket, cfg)
+    return cfg
+
+
+def require_current_account(
+    user: dict, role: str, *, snapshot: tuple[dict | None, dict] | None = None
+) -> tuple[dict, dict]:
+    """Return the caller's fresh record and config; a missing or re-created account is denied."""
     current, cfg = snapshot if snapshot is not None else load_destructive_state(user.get("id"))
     if current is None or account_identity(current) != account_identity(user):
         raise AccessDenied("role_not_allowed", f"Access denied: You don't have permission to use role '{role}'")
-    access_service.require_destructive(current, role, bucket, cfg)
-    return cfg
+    return current, cfg
 
 
 def storage_target_fingerprint(role: dict) -> str:
@@ -2308,14 +2316,16 @@ def _copy_object(
     _validate_bucket_access(role, dest_bucket, user_dict)
     validated_role = validate_role_access(role, user_dict)
 
+    is_move = storage_fingerprint is not None
+
     def do_copy(client):
         def check_target():
-            if storage_fingerprint is not None:
-                # A move: both ends are re-checked against one fresh snapshot on every attempt.
-                current, cfg = snapshot = load_destructive_state(user_dict.get("id"))
-                cfg = require_current_destructive(user_dict, role, source_bucket, snapshot=snapshot)
-                access_service.require_bucket(role, dest_bucket, current, cfg)
-                require_storage_target(role, storage_fingerprint, cfg, client)
+            nonlocal storage_fingerprint
+            current, cfg = snapshot = require_current_account(user_dict, role)
+            if is_move:
+                require_current_destructive(user_dict, role, source_bucket, snapshot=snapshot)
+            access_service.require_transfer(current, role, source_bucket, dest_bucket, cfg)
+            storage_fingerprint = require_storage_target(role, storage_fingerprint, cfg, client)
 
         copy_source = {"Bucket": source_bucket, "Key": source_path}
         if version_id is not None:
