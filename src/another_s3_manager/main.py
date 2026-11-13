@@ -2983,24 +2983,9 @@ async def serve_spa(full_path: str):
         return HTMLResponse(content=f.read())
 
 
-_ACCOUNT_ERRORS = {
-    "password_policy": (422, lambda error: {"error": error.message, **error.details}),
-    "LAST_LOCAL_ADMIN": (409, lambda error: {"code": error.code, "message": error.message}),
-    "self_delete": (400, None),
-    "self_demote": (400, None),
-    "self_disable": (400, None),
-    "admin_required": (403, None),
-    "account_not_found": (404, None),
-    "incorrect_current_password": (401, None),
-    "same_password": (400, None),
-    "user_not_found": (401, "User not found"),
-    **{code: (401, "Invalid authentication credentials") for code in access_service.CURRENT_ACCOUNT_DENIALS},
-}
-
-
 def _account_error(error):
-    status_code, detail = _ACCOUNT_ERRORS[error.code]
-    return HTTPException(status_code=status_code, detail=detail(error) if callable(detail) else detail or error.message)
+    status_code, detail, _ = map_web_auth_error("account", error)
+    return HTTPException(status_code=status_code, detail=detail)
 
 
 if __name__ == "__main__":  # pragma: no cover

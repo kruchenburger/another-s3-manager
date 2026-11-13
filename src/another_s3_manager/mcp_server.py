@@ -148,27 +148,37 @@ class McpError(Exception):
 WRITE_TOOLS = {"upload_file", "delete_file", "copy_object"}
 
 
-_WRITE_DENIALS = {
-    "DELETION_DISABLED": ("DELETION_DISABLED", "Deletion is disabled in server config", "deletion_disabled"),
-    "DELETION_DISABLED_FOR_ROLE": ("DELETION_DISABLED_FOR_ROLE", "", "role_deletion_disabled"),
-    "writes_disabled": ("READ_ONLY_SERVER", "Server config disables MCP writes", "writes_disabled"),
-    "read_only_token": ("READ_ONLY_TOKEN", "This token is read-only", "read_only_token"),
-    "deletion_disabled": ("DELETION_DISABLED", "Deletion is disabled in server config", "deletion_disabled"),
+_MCP_ACCESS_ERRORS = {
+    "gate": {
+        "DELETION_DISABLED": ("DELETION_DISABLED", "Deletion is disabled in server config", "deletion_disabled"),
+        "DELETION_DISABLED_FOR_ROLE": ("DELETION_DISABLED_FOR_ROLE", None, "role_deletion_disabled"),
+        "writes_disabled": ("READ_ONLY_SERVER", "Server config disables MCP writes", "writes_disabled"),
+        "read_only_token": ("READ_ONLY_TOKEN", "This token is read-only", "read_only_token"),
+        "deletion_disabled": ("DELETION_DISABLED", "Deletion is disabled in server config", "deletion_disabled"),
+        **{
+            code: ("INVALID_TOKEN", "Invalid or revoked token", None) for code in access_service.CURRENT_ACCOUNT_DENIALS
+        },
+        "bucket_not_allowed": ("BUCKET_NOT_ALLOWED", None, None),
+        "role_required": ("ROLE_NOT_ALLOWED", None, None),
+        "role_not_allowed": ("ROLE_NOT_ALLOWED", None, None),
+        "role_not_found": ("ROLE_NOT_ALLOWED", None, None),
+    },
+    "authentication": {
+        "malformed_bearer": ("INVALID_TOKEN", "Missing or malformed Bearer token", "malformed"),
+        "wrong_token_prefix": ("INVALID_TOKEN", "Token does not start with as3m_", "malformed"),
+        "invalid_token": ("INVALID_TOKEN", "Invalid or revoked token", "invalid_token"),
+        "orphan_token": ("INVALID_TOKEN", "Token's user no longer exists", "invalid_token"),
+        "user_not_found": ("INVALID_TOKEN", "Invalid or revoked token", "invalid_token"),
+    },
 }
+for _code in access_service.CURRENT_ACCOUNT_DENIALS:
+    _MCP_ACCESS_ERRORS["authentication"][_code] = (*_MCP_ACCESS_ERRORS["gate"][_code][:2], "invalid_token")
 
 
 def _access_error(error: AccessDenied, tool: str, *, context: str = "gate") -> McpError:
     """Translate Access once, preserving each adapter call site's public contract."""
-    code, message, reason = {
-        **_WRITE_DENIALS,
-        **{
-            code: ("INVALID_TOKEN", "Invalid or revoked token", None) for code in access_service.CURRENT_ACCOUNT_DENIALS
-        },
-        "bucket_not_allowed": ("BUCKET_NOT_ALLOWED", error.message, None),
-        "role_required": ("ROLE_NOT_ALLOWED", error.message, None),
-        "role_not_allowed": ("ROLE_NOT_ALLOWED", error.message, None),
-        "role_not_found": ("ROLE_NOT_ALLOWED", error.message, None),
-    }.get(error.code, (error.code, error.message, None))
+    code, message, reason = _MCP_ACCESS_ERRORS["gate"].get(error.code, (error.code, None, None))
+    message = error.message if message is None else message
     if reason is not None:
         mcp_writes_denied_total.labels(tool=tool, reason=reason).inc()
     if code == "DELETION_DISABLED_FOR_ROLE":
@@ -194,7 +204,12 @@ def _access_error(error: AccessDenied, tool: str, *, context: str = "gate") -> M
 
 
 _STORAGE_ERROR_MAPPINGS = {
-    MoveError: lambda error: McpError(error.code, str(error), {"http_status": error.http_status}),
+    MoveError: lambda error: McpError(
+        error.code,
+        str(error)
+        + (f" {error.objects} object(s) were deleted before the change." if error.objects is not None else ""),
+        {"http_status": error.http_status, **({"count": error.objects} if error.objects is not None else {})},
+    ),
     S3AccessDeniedError: lambda error: McpError("S3_ACCESS_DENIED", str(error), {"boto_code": error.code}),
     S3NotFoundError: lambda error: McpError("S3_NOT_FOUND", str(error), {"boto_code": error.code}),
     CredentialsExpiredError: lambda error: McpError("CREDENTIALS_EXPIRED", str(error), {"boto_code": error.code}),
@@ -235,19 +250,6 @@ def assert_write_allowed(token: Any, tool_name: str, config: dict, role: str | N
 # ---------------------------------------------------------------------------
 
 
-_BEARER_AUTH_ERRORS = {
-    "malformed_bearer": ("INVALID_TOKEN", "Missing or malformed Bearer token", "malformed"),
-    "wrong_token_prefix": ("INVALID_TOKEN", "Token does not start with as3m_", "malformed"),
-    "invalid_token": ("INVALID_TOKEN", "Invalid or revoked token", "invalid_token"),
-    "orphan_token": ("INVALID_TOKEN", "Token's user no longer exists", "invalid_token"),
-    **{
-        code: ("INVALID_TOKEN", "Invalid or revoked token", "invalid_token")
-        for code in access_service.CURRENT_ACCOUNT_DENIALS
-    },
-    "user_not_found": ("INVALID_TOKEN", "Invalid or revoked token", "invalid_token"),
-}
-
-
 async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
     """Authenticate inside each tool and preserve its legacy MCP answer."""
     try:
@@ -255,7 +257,7 @@ async def authenticate_mcp_request(request: Any) -> tuple[Any, dict]:
             request.headers.get("authorization", ""), _config_module.load_config
         )
     except access_service.AuthenticationError as error:
-        code, message, reason = _BEARER_AUTH_ERRORS[error.code]
+        code, message, reason = _MCP_ACCESS_ERRORS["authentication"][error.code]
         mcp_auth_failures_total.labels(reason=reason).inc()
         raise McpError(code, message) from None
     user = result.principal.to_user_dict()

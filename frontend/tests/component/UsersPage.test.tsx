@@ -205,7 +205,7 @@ describe("UsersPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Edit alice" }));
     expect(await screen.findByText("Removed from configuration, will be dropped on save: retired")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(updateUser).toHaveBeenCalledWith("alice", { is_admin: false, allowed_roles: ["dev", "ops"], is_disabled: false }));
+    await waitFor(() => expect(updateUser).toHaveBeenCalledWith("alice", { is_admin: false, allowed_roles: ["dev", "ops"] }));
   });
 
   it("disables Delete and Reset buttons for the current user's row (self-protect)", async () => {
@@ -318,4 +318,34 @@ describe("UsersPage", () => {
     );
     expect(screen.getByText(/boom/i)).toBeInTheDocument();
   });
+});
+
+
+it.each(["local", "oidc"] as const)("uses the shared delete dialog and blocks Cancel while deleting %s users", async (source) => {
+  mockMe("admin");
+  vi.mocked(listUsers).mockResolvedValue({ ...TWO_USERS, users: TWO_USERS.users.map(u => u.username === "alice" ? { ...u, auth_source: source } : u) });
+  let finish!: () => void;
+  vi.mocked(deleteUser).mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Delete alice" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(dialog).toHaveTextContent("This cannot be undone.");
+  if (source === "oidc") expect(dialog).toHaveTextContent("They will be re-created on their next SSO sign-in");
+  else expect(dialog).not.toHaveTextContent("They will be re-created");
+  fireEvent.click(within(dialog).getByRole("button", { name: /^Delete$/ }));
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled());
+  finish();
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+});
+
+it("saves grants from the drawer without adding untouched disabled state", async () => {
+  mockMe("admin");
+  vi.mocked(listUsers).mockResolvedValue(TWO_USERS);
+  vi.mocked(updateUser).mockReset();
+  vi.mocked(updateUser).mockResolvedValue(undefined);
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit alice" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(updateUser).toHaveBeenCalledWith("alice", { is_admin: false, allowed_roles: ["dev", "ops"] }));
+  expect(vi.mocked(updateUser).mock.calls[0][1]).not.toHaveProperty("is_disabled");
 });

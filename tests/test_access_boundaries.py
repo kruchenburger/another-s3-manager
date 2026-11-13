@@ -69,5 +69,7 @@ def test_oidc_repositories_are_covered_and_exposed_through_public_api():
         "another_s3_manager.access.oidc.identities",
         "another_s3_manager.access.oidc.transactions",
     } <= set(_contract()["forbidden_modules"])
-    for name in ("find_identity", "insert_identity", "register_login_transaction", "consume_login_transaction"):
+    for name in ("find_identity", "register_login_transaction", "consume_login_transaction"):
         assert callable(getattr(access, name)) and name in access.__all__
+    # Transaction control stays in Access: the identity insert is an internal repository step.
+    assert not hasattr(access, "insert_identity") and "insert_identity" not in access.__all__

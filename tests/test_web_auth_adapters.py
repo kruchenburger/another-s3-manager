@@ -160,3 +160,21 @@ def test_download_all_sources_reject_disabled_or_epoch_mismatch(source, change):
             ),
         )
     assert error.value.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "code", ["ACCOUNT_DISABLED", "ACCOUNT_REPLACED", "SESSION_EPOCH_MISMATCH", "SSO_AUTHZ_EXPIRED"]
+)
+def test_login_current_account_refusal_has_wrong_password_answer(app_client, monkeypatch, code):
+    from another_s3_manager.metrics import auth_logins_total
+
+    def refused(*args, **kwargs):
+        raise access.AuthenticationError(code, "private diagnostic")
+
+    counter = auth_logins_total.labels(result="invalid_password")
+    before = counter._value.get()
+    monkeypatch.setattr(access, "authenticate_local", refused)
+    response = app_client.post("/api/login", data={"username": "alice", "password": "correct"})
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Incorrect username or password"}
+    assert counter._value.get() == before + 1

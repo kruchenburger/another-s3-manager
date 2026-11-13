@@ -70,7 +70,7 @@ def require_current_account(
         ).to_user_dict()
     except AccessDenied as error:
         if error.code in access_service.CURRENT_ACCOUNT_DENIALS or error.code == "user_not_found":
-            raise MoveError("ACCESS_DENIED", 403) from None
+            raise MoveError("ACCESS_DENIED", 403) from error
         raise
     return current, cfg
 
@@ -2573,10 +2573,11 @@ def move_object_for_role(
             storage_fingerprint=storage_fingerprint,
         )
     except MoveError as error:
-        if not copied or error.code != "ROLE_CHANGED":
+        refusal = next((cause for cause in _iter_error_chain(error) if isinstance(cause, AccessDenied)), None)
+        if not copied or (error.code not in {"ROLE_CHANGED", "ACCESS_DENIED"} and refusal is None):
             raise
-        reason = error.code
-        denial_message = str(error)
+        reason = refusal.code if refusal is not None else error.code
+        denial_message = refusal.message if refusal is not None else str(error)
     except _SourceChanged:
         reason = "SOURCE_CHANGED"
     except AccessDenied as error:

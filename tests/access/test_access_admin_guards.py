@@ -70,3 +70,52 @@ def test_actor_rechecked_inside_transaction(stale):
     with pytest.raises(access.AccessDenied):
         access.update_account(actor, "target", {"is_disabled": True})
     assert users.get_user_by_id(target["id"])["is_disabled"] is False
+
+
+@pytest.mark.parametrize("action", ["password", "roles", "admin", "disable", "enable", "delete"])
+def test_revoked_actor_session_cannot_finish_mutation(monkeypatch, action):
+    from contextlib import contextmanager
+    from threading import current_thread, main_thread
+
+    from another_s3_manager.access import service
+
+    actor = users.create_user("admin", "old-hash", is_admin=True)
+    target = users.create_user("target", "target-hash")
+    if action == "enable":
+        users.update_user("target", is_disabled=True)
+        target = users.get_user_by_id(target["id"])
+    target = users.get_user_by_id(target["id"])
+    token = access.issue_session(access.Principal(actor), method="pwd", lifetime_minutes=180)
+    authenticated = access.authenticate_session(token).to_user_dict()
+    ready, changed = Barrier(2), Barrier(2)
+    original_scope = service.users.write_scope
+
+    @contextmanager
+    def delayed_scope():
+        if current_thread() is not main_thread():
+            ready.wait(timeout=10)
+            changed.wait(timeout=10)
+        with original_scope() as session:
+            yield session
+
+    monkeypatch.setattr(service.users, "write_scope", delayed_scope)
+    changes = {
+        "password": {"password_hash": "reset"},
+        "roles": {"allowed_roles": ["Default"]},
+        "admin": {"is_admin": True},
+        "disable": {"is_disabled": True},
+        "enable": {"is_disabled": False},
+    }
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = (
+            pool.submit(access.delete_account, authenticated, "target")
+            if action == "delete"
+            else pool.submit(access.update_account, authenticated, "target", changes[action])
+        )
+        ready.wait(timeout=10)
+        users.update_user("admin", password_hash="new-hash")
+        changed.wait(timeout=10)
+        with pytest.raises(access.AuthenticationError) as error:
+            future.result(timeout=10)
+    assert error.value.code == "SESSION_EPOCH_MISMATCH"
+    assert users.get_user_by_id(target["id"]) == target

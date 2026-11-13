@@ -243,10 +243,17 @@ def authenticate_local(username: str, password: str, config: dict) -> Principal:
     if user is None and users.count_users() == 0:
         users.load_users()
         user = users.get_user_by_username(username)
-    if user is None or not passwords.verify_password(password, user.get("password_hash", "")):
+    try:
+        if user is None:
+            raise AuthenticationError("invalid_password", "Incorrect username or password")
+        principal_for(user["id"], expected_identity=account_identity(user))
+        if user["auth_source"] != "local" or not passwords.verify_password(password, user.get("password_hash", "")):
+            raise AuthenticationError("invalid_password", "Incorrect username or password")
+        principal = _confirm_password_snapshot(user)
+    except AuthenticationError:
+        # The login door must not reveal account status or a concurrent revocation.
         record_login_attempt(username, False)
-        raise AuthenticationError("invalid_password", "Incorrect username or password")
-    principal = _confirm_password_snapshot(user)
+        raise AuthenticationError("invalid_password", "Incorrect username or password") from None
     record_login_attempt(username, True)
     return principal
 
@@ -301,6 +308,8 @@ def _lifecycle(actor, username, changes, *, deleting=False):
             raise AuthenticationError("ACCOUNT_REPLACED", "Invalid authentication credentials")
         current_actor = users._user_to_dict(users.materialize_generation(session, acting))
         principal_for(acting.id, expected_identity=account_identity(actor), _snapshot=current_actor)
+        if current_actor["session_epoch"] != actor["session_epoch"]:
+            raise AuthenticationError("SESSION_EPOCH_MISMATCH", "Invalid authentication credentials")
         if not acting.is_admin:
             raise AccessDenied("admin_required", "Admin privileges required")
         row = session.execute(select(User).where(User.username == username)).scalar_one_or_none()

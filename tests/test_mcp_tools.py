@@ -1790,3 +1790,79 @@ async def test_plain_copy_role_changed_uses_storage_mapping(alice_user, tool_reg
             )
     assert caught.value.code == "ROLE_CHANGED"
     assert mapped == ["ROLE_CHANGED"]
+
+
+@pytest.mark.asyncio
+async def test_folder_delete_refusal_after_batch_reaches_mcp(alice_user, tool_registry, monkeypatch):
+    from another_s3_manager import users
+
+    uid, plaintext = alice_user
+    keys = [f"dir/{i:04}" for i in range(1001)]
+    client = Mock()
+    client._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", config.load_config())
+    client.get_paginator.return_value.paginate.return_value = [{"Contents": [{"Key": key} for key in keys]}]
+
+    def first_batch(**kwargs):
+        assert len(kwargs["Delete"]["Objects"]) == 1000
+        users.update_user("alice_tools", is_disabled=True)
+        return {"Deleted": kwargs["Delete"]["Objects"]}
+
+    client.delete_objects.side_effect = first_batch
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: client)
+    with pytest.raises(McpError) as caught:
+        await _call(
+            tool_registry, "delete_file", _fake_request(plaintext), role="Default", bucket="batch-bucket", path="dir/"
+        )
+    assert caught.value.code == "ACCESS_DENIED"
+    assert caught.value.details["count"] == 1000
+    assert "1000 object(s) were deleted before the change." in str(caught.value)
+    assert client.delete_objects.call_count == 1
+    assert users.get_user_by_id(uid)["is_disabled"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code", ["ACCOUNT_DISABLED", "ACCOUNT_REPLACED", "SESSION_EPOCH_MISMATCH", "SSO_AUTHZ_EXPIRED"]
+)
+async def test_mcp_current_account_refusal_keeps_confirmed_copy(alice_user, tool_registry, monkeypatch, moto_s3, code):
+    from another_s3_manager import access
+
+    _, plaintext = alice_user
+    original = access.principal_for
+    original_copy = moto_s3.copy_object
+    copied = False
+    moto_s3.create_bucket(Bucket="refused-move")
+    moto_s3.put_object(Bucket="refused-move", Key="f", Body=b"keep")
+    s3_client._register_delete_handlers(moto_s3)
+
+    def principal(*args, **kwargs):
+        if copied:
+            raise access.AuthenticationError(code, "Invalid authentication credentials")
+        return original(*args, **kwargs)
+
+    def copy(**kwargs):
+        nonlocal copied
+        result = original_copy(**kwargs)
+        copied = True
+        return result
+
+    monkeypatch.setattr(access, "principal_for", principal)
+    monkeypatch.setattr(s3_client, "get_s3_client", lambda role: moto_s3)
+    monkeypatch.setattr(moto_s3, "copy_object", copy)
+    result = await _call(
+        tool_registry,
+        "copy_object",
+        _fake_request(plaintext),
+        role="Default",
+        source_bucket="refused-move",
+        source_path="f",
+        dest_bucket="refused-move",
+        dest_path="g",
+        delete_source=True,
+    )
+    assert result["copied"] is True
+    assert result["moved"] is False
+    assert result["source_kept_reason"] == "INVALID_TOKEN"
+    assert result["message"] == "Copied, source kept. Invalid or revoked token"
+    for key in ("f", "g"):
+        assert moto_s3.get_object(Bucket="refused-move", Key=key)["Body"].read() == b"keep"

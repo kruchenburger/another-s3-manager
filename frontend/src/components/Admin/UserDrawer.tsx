@@ -35,7 +35,7 @@ export interface UserDrawerCreatePayload {
 }
 
 export interface UserDrawerEditPayload {
-  is_disabled: boolean;
+  is_disabled?: boolean;
   mode: "edit";
   username: string;
   is_admin: boolean;
@@ -98,13 +98,16 @@ export function UserDrawer({
 
   useEffect(() => {
     if (mode === "edit" && initialUser) {
-      form.setValues({
+      const values = {
+        ...form.getValues(),
         is_disabled: initialUser.is_disabled ?? false,
         username: initialUser.username,
         password: "",
         is_admin: initialUser.is_admin,
         allowed_roles: initialUser.allowed_roles,
-      });
+      };
+      form.setValues(values);
+      form.resetDirty(values);
     } else if (mode === "create") {
       form.reset();
     }
@@ -151,7 +154,7 @@ export function UserDrawer({
           } else {
             onSubmit({
               mode: "edit",
-              is_disabled: values.is_disabled,
+              ...(form.isDirty("is_disabled") ? { is_disabled: values.is_disabled } : {}),
               username: values.username,
               is_admin: values.is_admin,
               allowed_roles: values.allowed_roles,

@@ -9,7 +9,6 @@ from another_s3_manager.access.errors import (
 from another_s3_manager.access.oidc import (
     consume_login_transaction,
     find_identity,
-    insert_identity,
     register_login_transaction,
 )
 from another_s3_manager.access.passwords import (
@@ -98,7 +97,7 @@ __all__ = [
     "record_login_attempt",
 ]
 
-__all__ += ["find_identity", "insert_identity", "register_login_transaction", "consume_login_transaction"]
+__all__ += ["find_identity", "register_login_transaction", "consume_login_transaction"]
 
 __all__ += ["CURRENT_ACCOUNT_DENIALS"]
 

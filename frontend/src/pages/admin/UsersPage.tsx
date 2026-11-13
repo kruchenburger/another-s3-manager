@@ -6,8 +6,6 @@ import {
   Stack,
   Table,
   Title,
-  Text,
-  Modal,
   Tooltip,
 } from "@mantine/core";
 import { KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
@@ -93,7 +91,7 @@ export function UsersPage() {
         username,
         payload: {
           is_admin: payload.is_admin,
-          is_disabled: payload.is_disabled,
+          ...(payload.is_disabled === undefined ? {} : { is_disabled: payload.is_disabled }),
           allowed_roles: payload.allowed_roles,
         },
       },
@@ -270,20 +268,14 @@ export function UsersPage() {
         loading={resetPwd.isPending}
       />
 
-      <Modal opened={deleteTarget?.auth_source === "oidc"} onClose={() => setDeleteTarget(undefined)} title="Confirm deletion" centered>
-        <Stack>
-          <Text>Delete {deleteTarget?.username}? They will be re-created on their next SSO sign-in unless the IdP denies them. Disable the user to block access.</Text>
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setDeleteTarget(undefined)}>Cancel</Button>
-            <Button color="red" loading={deleteUser.isPending} onClick={onConfirmDelete}>Delete</Button>
-          </Group>
-        </Stack>
-      </Modal>
       <ConfirmDeleteModal
-        opened={deleteTarget !== undefined && deleteTarget.auth_source !== "oidc"}
+        opened={deleteTarget !== undefined}
         onClose={() => setDeleteTarget(undefined)}
         onConfirm={onConfirmDelete}
         items={deleteTarget ? [deleteTarget.username] : []}
+        extraWarning={deleteTarget?.auth_source === "oidc"
+          ? "They will be re-created on their next SSO sign-in unless the IdP denies them. Disable the user to block access."
+          : undefined}
         loading={deleteUser.isPending}
       />
     </Stack>

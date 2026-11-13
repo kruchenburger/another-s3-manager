@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from another_s3_manager import access
+from another_s3_manager.access.oidc.identities import insert_identity
 from another_s3_manager.database import get_engine
 
 
@@ -158,10 +159,10 @@ def test_mapping_mode_constraint_and_identity_uniqueness():
     with pytest.raises(IntegrityError), session_scope() as session:
         session.get(User, owner["id"]).mapping_mode_applied = "invalid"
     with session_scope() as session:
-        access.insert_identity(session, user_id=owner["id"], issuer="issuer", subject="subject")
+        insert_identity(session, user_id=owner["id"], issuer="issuer", subject="subject")
     for subject in ("subject", "different"):
         with pytest.raises(IntegrityError), session_scope() as session:
-            access.insert_identity(session, user_id=owner["id"], issuer="issuer", subject=subject)
+            insert_identity(session, user_id=owner["id"], issuer="issuer", subject=subject)
     assert access.find_identity("issuer", "subject")["user_id"] == owner["id"]
     users.delete_user("alice")
     assert access.find_identity("issuer", "subject") is None

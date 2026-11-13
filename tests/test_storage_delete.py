@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from another_s3_manager import access, config, s3_client, users
-from another_s3_manager.errors import S3OperationError
+from another_s3_manager.errors import MoveError, S3OperationError
 
 
 def test_batch_errors_win_and_missing_results_fail():
@@ -27,7 +27,7 @@ def test_batch_errors_win_and_missing_results_fail():
     [
         ("grant", "role_not_allowed"),
         ("demote", "role_not_allowed"),
-        ("delete", "role_not_allowed"),
+        ("delete", "ACCESS_DENIED"),
         ("bucket", "bucket_not_allowed"),
     ],
 )
@@ -45,9 +45,11 @@ def test_current_access_ignores_stale_identity(change, code):
         cfg = config.load_config()
         cfg["roles"][0]["allowed_buckets"] = ["other"]
         config.save_config(cfg)
-    with pytest.raises(access.AccessDenied) as caught:
+    with pytest.raises(MoveError if change == "delete" else access.AccessDenied) as caught:
         s3_client.require_current_destructive(user, "Default", "bucket")
     assert caught.value.code == code
+    if change == "delete":
+        assert caught.value.http_status == 403
 
 
 def test_directory_partial_delete_continues_and_counts(moto_s3, monkeypatch):
@@ -198,9 +200,9 @@ def test_recreated_account_cannot_resume_delete():
     replacement = users.create_user("reused", "password123", allowed_roles=["Default"])
     assert replacement["id"] == original["id"]
     assert replacement["created_at"] != original["created_at"]
-    with pytest.raises(access.AccessDenied) as caught:
+    with pytest.raises(MoveError) as caught:
         s3_client.require_current_destructive(original, "Default", "bucket")
-    assert caught.value.code == "role_not_allowed"
+    assert (caught.value.code, caught.value.http_status) == ("ACCESS_DENIED", 403)
 
 
 def test_current_identity_normalizes_sqlite_timestamp():
