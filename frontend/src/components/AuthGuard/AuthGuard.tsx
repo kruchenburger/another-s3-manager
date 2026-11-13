@@ -1,11 +1,38 @@
+import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
+import { notifications } from "@mantine/notifications";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { ApiError } from "@/utils/apiError";
 import { DelayedLoader } from "@/components/DelayedLoader/DelayedLoader";
 
+export const SESSION_ENDED_NOTIFICATION_ID = "session-ended";
+
+// Redirects to sign-in. When the user was signed in a moment ago (the /api/me data is
+// still cached), the session expired or was ended on the server, so say so instead of
+// silently swapping the page for the login form.
+function SignInRedirect({
+  from,
+  sessionEnded,
+}: {
+  from: string;
+  sessionEnded: boolean;
+}) {
+  useEffect(() => {
+    if (!sessionEnded) return;
+    notifications.show({
+      id: SESSION_ENDED_NOTIFICATION_ID,
+      color: "yellow",
+      title: "Session ended",
+      message: "Your session expired or was ended. Sign in again to continue.",
+    });
+  }, [sessionEnded]);
+
+  return <Navigate to="/login" replace state={{ from }} />;
+}
+
 // Gates protected routes. Behavior:
 //   - loading → DelayedLoader (Mantine spinner after 500ms)
-//   - 401     → redirect to /login
+//   - 401     → redirect to /login (with a "Session ended" notice if the user was signed in)
 //   - other error → bubble to ErrorBoundary
 //   - success → render children via <Outlet />
 export function AuthGuard() {
@@ -19,7 +46,10 @@ export function AuthGuard() {
   if (error) {
     if (error instanceof ApiError && error.isAuthError()) {
       return (
-        <Navigate to="/login" replace state={{ from: location.pathname }} />
+        <SignInRedirect
+          from={location.pathname}
+          sessionEnded={data !== undefined}
+        />
       );
     }
     throw error;
