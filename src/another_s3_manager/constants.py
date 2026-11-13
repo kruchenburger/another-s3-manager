@@ -153,18 +153,14 @@ JWT_ALGORITHM = "HS256"
 # JWT token expiration - can be overridden by JWT_ACCESS_TOKEN_EXPIRE_MINUTES env var
 DEFAULT_JWT_EXPIRE_MINUTES = 60 * 3  # 3 hours default
 _env_jwt_expire = os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
+# An invalid value falls back silently here: main.py validates the lifetime at startup
+# and refuses to start with the reason, so a "using default" warning would contradict it.
 if _env_jwt_expire:
     try:
         ACCESS_TOKEN_EXPIRE_MINUTES = int(_env_jwt_expire)
         if ACCESS_TOKEN_EXPIRE_MINUTES < 1:
-            print(
-                f"WARNING: JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be at least 1 minute. Using default: {DEFAULT_JWT_EXPIRE_MINUTES}"
-            )
             ACCESS_TOKEN_EXPIRE_MINUTES = DEFAULT_JWT_EXPIRE_MINUTES
     except ValueError:
-        print(
-            f"WARNING: Invalid JWT_ACCESS_TOKEN_EXPIRE_MINUTES value '{_env_jwt_expire}'. Using default: {DEFAULT_JWT_EXPIRE_MINUTES}"
-        )
         ACCESS_TOKEN_EXPIRE_MINUTES = DEFAULT_JWT_EXPIRE_MINUTES
 else:
     ACCESS_TOKEN_EXPIRE_MINUTES = DEFAULT_JWT_EXPIRE_MINUTES
