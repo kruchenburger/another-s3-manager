@@ -1,10 +1,14 @@
 """Application API for access policies, independent of transports."""
 
+import asyncio
 import hashlib
 import logging
+import os
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any, Dict
+from urllib.parse import urlsplit
 
 from another_s3_manager.access import passwords, policies, sessions, tokens, users
 from another_s3_manager.access.errors import AccessDenied, AuthenticationError
@@ -211,7 +215,12 @@ def principal_for(user_id: int, *, expected_identity=None, _snapshot=_NO_SNAPSHO
         raise AuthenticationError("ACCOUNT_REPLACED", "Invalid authentication credentials")
     if user.get("is_disabled"):
         raise AuthenticationError("ACCOUNT_DISABLED", "Invalid authentication credentials")
-    # Applied-sync freshness is introduced by PR 3, not inferred from NULL here.
+    if user.get("auth_source") == "oidc" and user.get("mapping_mode_applied") == "sync":
+        deadline = user.get("sso_authz_valid_until")
+        if isinstance(deadline, datetime) and deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if deadline is None or datetime.now(UTC) >= deadline:
+            raise AuthenticationError("SSO_AUTHZ_EXPIRED", "Invalid authentication credentials")
     return Principal(user)
 
 
@@ -235,6 +244,11 @@ def authenticate_bearer(authorization: str, config_loader: Callable[[], dict]) -
 
 
 def authenticate_local(username: str, password: str, config: dict) -> Principal:
+    from .oidc.settings import oidc_settings
+
+    policy = oidc_settings(config).local_login
+    if policy == "off":
+        raise AuthenticationError("LOCAL_LOGIN_DISABLED", "Local sign-in is disabled")
     if check_ban(username):
         ban_data = users.load_bans().get(username, {})
         remaining = int((ban_data.get("banned_until", 0) - time.time()) / 60)
@@ -245,6 +259,8 @@ def authenticate_local(username: str, password: str, config: dict) -> Principal:
         user = users.get_user_by_username(username)
     try:
         if user is None:
+            raise AuthenticationError("invalid_password", "Incorrect username or password")
+        if not local_login_allowed(user, policy):
             raise AuthenticationError("invalid_password", "Incorrect username or password")
         principal_for(user["id"], expected_identity=account_identity(user))
         if user["auth_source"] != "local" or not passwords.verify_password(password, user.get("password_hash", "")):
@@ -285,6 +301,8 @@ def _confirm_password_snapshot(snapshot, *, new_hash=None):
 def change_own_password(actor, current_password, new_password, *, policy=None):
     principal = principal_for(actor["id"], expected_identity=account_identity(actor))
     snapshot = principal.user
+    if snapshot["auth_source"] != "local":
+        raise AccessDenied("NO_LOCAL_PASSWORD", "This account has no local password")
     if not passwords.verify_password(current_password, snapshot["password_hash"]):
         raise AuthenticationError("incorrect_current_password", "Current password is incorrect")
     if current_password == new_password:
@@ -317,6 +335,11 @@ def _lifecycle(actor, username, changes, *, deleting=False):
             if deleting:
                 return None
             raise AccessDenied("account_not_found", "User not found")
+        if not deleting and row.auth_source == "oidc":
+            if any(key in changes for key in ("password_hash", "password", "must_change_password")):
+                raise AccessDenied("NO_LOCAL_PASSWORD", "This account has no local password")
+            if row.mapping_mode_applied == "sync" and any(key in changes for key in ("is_admin", "allowed_roles")):
+                raise AccessDenied("MANAGED_BY_SSO", "Access is managed by SSO")
         if row.id == acting.id:
             if deleting:
                 raise AccessDenied("self_delete", "Cannot delete yourself")
@@ -345,3 +368,205 @@ def update_account(actor, username, changes):
 
 def delete_account(actor, username):
     return _lifecycle(actor, username, {}, deleting=True)
+
+
+def local_login_allowed(user, policy):
+    return (
+        policy != "off"
+        and user.get("auth_source", "local") == "local"
+        and not user.get("is_disabled")
+        and (policy == "all" or user.get("is_admin") is True)
+    )
+
+
+def managed_by_sso(user):
+    return user.get("auth_source") == "oidc" and user.get("mapping_mode_applied") == "sync"
+
+
+def session_identity(user):
+    import hmac
+
+    return hmac.new(
+        sessions.get_jwt_secret_key().encode(),
+        ("asm-session-identity\0" + str(user["id"]) + "\0" + user["auth_generation"] + "\0" + user["sid"]).encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def oidc_runtime(config, *, public=False):
+    from .oidc.discovery import discovery_for
+    from .oidc.settings import oidc_settings
+
+    settings = oidc_settings(config)
+    snapshot = discovery_for(settings).snapshot if settings.enabled else None
+    available = bool(
+        snapshot is not None
+        and time.monotonic() - snapshot.metadata_at < 86400
+        and time.monotonic() - snapshot.keys_at < 3600
+    )
+    if public:
+        return {
+            "oidc_enabled": settings.enabled,
+            "oidc_available": available,
+            "oidc_display_name": settings.display_name,
+            "local_login": settings.local_login,
+        }
+    return {
+        "issuer": settings.issuer,
+        "client_id": settings.client_id,
+        "oidc_enabled": settings.enabled,
+        "oidc_available": available,
+        "effective_local_login": settings.local_login,
+        "mapping_mode": settings.mode,
+    }
+
+
+def start_oidc_login(return_to: str, transaction_cookies):
+    from another_s3_manager.config import load_config
+
+    from .oidc.discovery import OidcUnavailable, discovery_for
+    from .oidc.settings import oidc_settings
+    from .oidc.transactions import OidcStart, new_transaction
+
+    settings = oidc_settings(load_config())
+    if not settings.enabled:
+        return OidcStart("/login", code="OIDC_DISABLED")
+    try:
+        snapshot = discovery_for(settings).current()
+        return new_transaction(return_to, transaction_cookies, settings, snapshot.metadata)
+    except OidcUnavailable:
+        return OidcStart("/login", code="OIDC_UNAVAILABLE")
+
+
+async def complete_oidc_login(query, transaction_cookies):
+    # All blocking networking/SQLite is confined to a worker, outside the event loop.
+
+    from .oidc.transactions import CookieOperation, OidcCompletion
+
+    try:
+        return await asyncio.to_thread(_complete_oidc_login, dict(query), dict(transaction_cookies))
+    except Exception:
+        state = query.get("state", "")
+        operations = (
+            (CookieOperation("oidc_tx_" + state[:8]),)
+            if isinstance(state, str) and state and all(c.isascii() and (c.isalnum() or c in "-_") for c in state)
+            else ()
+        )
+        logger.warning("OIDC outcome=refused category=internal_failure")
+        return OidcCompletion("/login?sso_error=other", operations, code="other")
+
+
+def _complete_oidc_login(query, cookies):
+    from another_s3_manager.config import load_config, security_snapshot
+    from another_s3_manager.metrics import auth_logins_total
+
+    from .oidc.client import InvalidIdToken, exchange_code
+    from .oidc.discovery import OidcUnavailable, discovery_for
+    from .oidc.identities import commit_login, login_snapshot
+    from .oidc.settings import oidc_settings
+    from .oidc.transactions import OidcCompletion, consume_transaction, safe_return_to
+
+    tx, operations = consume_transaction(query, cookies)
+    sub_hash, matched_rules = "unknown", 0
+
+    def refusal(code, category):
+        auth_logins_total.labels(method="oidc", result=category).inc()
+        logger.info(
+            "OIDC outcome=refused category=%s sub_hash=%s issuer_host=%s matched_rules=%s",
+            category,
+            sub_hash,
+            urlsplit(settings.issuer).hostname,
+            matched_rules,
+        )
+        return OidcCompletion("/login?sso_error=" + code, operations, code=code)
+
+    settings = oidc_settings(load_config())
+    if not settings.enabled:
+        return refusal("OIDC_DISABLED", "oidc_state")
+    if tx is None:
+        return refusal("expired", "oidc_state")
+    if "error" in query:
+        return refusal(
+            query["error"] if query["error"] in {"access_denied", "login_required"} else "other", "oidc_state"
+        )
+    code = query.get("code")
+    if not isinstance(code, str) or not code or len(code) > 8192:
+        return refusal("expired", "oidc_state")
+    try:
+        discovery = discovery_for(settings)
+        claims = exchange_code(discovery, discovery.current(), settings, code, tx)
+    except OidcUnavailable:
+        return refusal("idp_unavailable", "idp_unavailable")
+    except InvalidIdToken:
+        return refusal("invalid_token", "oidc_token")
+    sub_hash = hashlib.sha256(claims["sub"].encode()).hexdigest()
+    expected = login_snapshot(claims["iss"], claims["sub"])
+    seed_hash = passwords.hash_password(os.environ.get("ADMIN_PASSWORD", "change_me_pls")) if expected is None else None
+    with security_snapshot() as config:
+        current = oidc_settings(config)
+        if current.issuer != settings.issuer or current.client_id != settings.client_id:
+            return refusal("expired", "oidc_state")
+        try:
+            token, error, mapped = commit_login(claims, config, current, expected, seed_hash)
+        except AuthenticationError:
+            return refusal("username_conflict", "oidc_conflict")
+    matched_rules = mapped.matched_rules
+    if error:
+        return refusal(error, "disabled" if error == "disabled" else "oidc_no_access")
+    logger.info(
+        "OIDC outcome=success sub_hash=%s issuer_host=%s matched_rules=%s",
+        hashlib.sha256(claims["sub"].encode()).hexdigest(),
+        urlsplit(settings.issuer).hostname,
+        mapped.matched_rules,
+    )
+    auth_logins_total.labels(method="oidc", result="success").inc()
+    return OidcCompletion(
+        safe_return_to(tx["rt"]), operations, session=token, lifetime_minutes=current.lifetime_minutes
+    )
+
+
+def recover_local_account(username, *, password=None, enable=False, expected_identity=None):
+    from sqlalchemy import select
+
+    from another_s3_manager.models import User
+    from another_s3_manager.utils import validate_password
+
+    snapshot = users.get_user_by_username(username)
+    if snapshot is None:
+        raise AccessDenied("account_not_found", "User not found")
+    expected_identity = expected_identity or account_identity(snapshot)
+    new_hash = None
+    if not enable:
+        from another_s3_manager.config import load_config
+
+        try:
+            policy = load_config(force_reload=True)
+        except (ValueError, OSError):
+            policy = {
+                "password_min_length": 8,
+                "password_min_uppercase": 1,
+                "password_min_lowercase": 1,
+                "password_min_digits": 1,
+                "password_min_special": 0,
+            }
+        if (
+            not isinstance(password, str)
+            or not password.strip()
+            or password == "!"
+            or validate_password(password, policy)
+        ):
+            raise AccessDenied("password_policy", "Password does not meet policy")
+        new_hash = passwords.hash_password(password)
+    with users.write_scope() as session:
+        row = session.scalar(select(User).where(User.username == username))
+        if row is None or account_identity(users._user_to_dict(row)) != expected_identity:
+            raise AuthenticationError("ACCOUNT_REPLACED", "Account changed")
+        if enable:
+            row.is_disabled = False
+        else:
+            users.write_password(row, new_hash, "cli")
+            row.auth_source = "local"
+            row.must_change_password = False
+            row.mapping_mode_applied = None
+            row.sso_authz_valid_until = None
+    logger.warning("Console recovery action=%s target=%s outcome=success", "enable" if enable else "local", username)

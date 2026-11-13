@@ -877,8 +877,8 @@
             {
               "refId": "Q",
               "datasource": "${DS}",
-              "expr": "round(sum by (result) (increase(as3m_auth_logins_total{job=\"$job\", instance=~\"$instance\"}[$__interval])))",
-              "legendFormat": "{{result}}"
+              "expr": "round(sum by (method, result) (increase(as3m_auth_logins_total{job=\"$job\", instance=~\"$instance\"}[$__interval])))",
+              "legendFormat": "{{method}} {{result}}"
             }
           ],
           "interval": "1m"

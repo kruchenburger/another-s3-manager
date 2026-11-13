@@ -12,6 +12,38 @@ from another_s3_manager.logging_setup import (
 )
 
 
+@pytest.mark.parametrize("format", ["text", "json"])
+def test_oidc_canaries_absent_from_final_text_and_json_logs(monkeypatch, capsys, format):
+    monkeypatch.setenv("LOG_FORMAT", format)
+    monkeypatch.setenv("ACCESS_LOG_EXCLUDE_PATHS", "")
+    configure_logging()
+    install_access_log_filter()
+    logger = logging.getLogger("another_s3_manager.oidc")
+    for key in ("code", "state", "token", "id_token_hint", "client_secret", "code_verifier", "refresh_token", "cookie"):
+        logger.warning("request https://op.example/callback?%s=canary-%s&%%63ode=encoded-canary", key, key)
+    logging.getLogger("uvicorn.access").warning(
+        '%s - "%s %s HTTP/%s" %s',
+        "client",
+        "GET",
+        "/api/auth/oidc/callback?code=access-canary&state=state-canary",
+        "1.1",
+        500,
+    )
+    try:
+        raise ValueError("exception-body-canary")
+    except ValueError:
+        logger.exception("OIDC failed")
+    logging.getLogger("httpx").warning("raw-upstream-canary")
+    logger.warning("structured %s", {"client_secret": "mapping-canary"})
+    logger.warning(
+        "extra",
+        extra={"payload": {"body": "body-canary", "code": "code-canary", "cookies": {"access_token": "cookie-canary"}}},
+    )
+    output = capsys.readouterr().out
+    assert "OIDC failed" in output
+    assert "canary" not in output
+
+
 @pytest.fixture(autouse=True)
 def _reset_logging():
     """Snapshot root logger state before each test, restore after."""

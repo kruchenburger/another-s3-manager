@@ -39,12 +39,15 @@ _WEB_AUTH_ERRORS = {
         "user_not_found": (401, "User not found", None),
     },
     "login": {
+        "LOCAL_LOGIN_DISABLED": (403, lambda error: {"code": error.code, "message": error.message}, "invalid_password"),
         "banned": (403, None, "banned"),
         "invalid_password": (401, None, "invalid_password"),
     },
     "download": {"refused": (401, "Authentication required", None)},
     "account": {
         "password_policy": (422, lambda error: {"error": error.message, **error.details}, None),
+        "MANAGED_BY_SSO": (409, lambda error: {"code": error.code, "message": error.message}, None),
+        "NO_LOCAL_PASSWORD": (409, lambda error: {"code": error.code, "message": error.message}, None),
         "LAST_LOCAL_ADMIN": (409, lambda error: {"code": error.code, "message": error.message}, None),
         "self_delete": (400, None, None),
         "self_demote": (400, None, None),

@@ -1,3 +1,6 @@
+vi.mock("@/features/auth/hooks/useSessionIdentity", () => ({
+  useSessionIdentity: () => ({ blocked: false }),
+}));
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
@@ -44,6 +47,41 @@ describe("LoginPage parity additions", () => {
       isError: false,
     });
     useAppInfoMock.mockReturnValue({ data: undefined });
+  });
+
+  it.each(["all", "admins", "off"])(
+    "renders only app-info-authorized local controls (%s)",
+    (policy) => {
+      useAppInfoMock.mockReturnValue({
+        data: {
+          app_name: "ASM",
+          auth: {
+            oidc_enabled: true,
+            oidc_available: false,
+            oidc_display_name: "Company SSO",
+            local_login: policy,
+          },
+        },
+      });
+      renderLogin();
+      expect(screen.getByText(/SSO is unavailable/)).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Sign in with Company SSO" }),
+      ).not.toHaveAttribute("href");
+      if (policy === "all")
+        expect(screen.getByLabelText("Username")).toBeInTheDocument();
+      else expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
+      if (policy === "admins")
+        expect(
+          screen.getByRole("button", { name: "Local administrator sign-in" }),
+        ).toHaveAttribute("aria-expanded", "false");
+    },
+  );
+
+  it("does not expose a local form before effective policy arrives", () => {
+    renderLogin();
+    expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
+    expect(screen.getByText("Loading sign-in options…")).toBeInTheDocument();
   });
 
   it("renders the GitHub link in the footer band", () => {
@@ -112,7 +150,9 @@ describe("LoginPage parity additions", () => {
   function renderWithRoutes() {
     return render(
       <MantineProvider>
-        <MemoryRouter initialEntries={[{ pathname: "/login", state: { from: "/r/foo" } }]}>
+        <MemoryRouter
+          initialEntries={[{ pathname: "/login", state: { from: "/r/foo" } }]}
+        >
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/r/foo" element={<div>APP PAGE</div>} />
@@ -127,11 +167,25 @@ describe("LoginPage parity additions", () => {
     useMeMock.mockReturnValue({ data: { username: "admin" }, isSuccess: true });
     renderWithRoutes();
     // Valid session → navigate to state.from (/r/foo); login form gone.
-    await waitFor(() => expect(screen.getByText("APP PAGE")).toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText("APP PAGE")).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Sign in" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does NOT redirect when a stale me lingers but the session errored (no loop)", async () => {
+    useAppInfoMock.mockReturnValue({
+      data: {
+        auth: {
+          local_login: "all",
+          oidc_enabled: false,
+          oidc_available: false,
+          oidc_display_name: "Company SSO",
+        },
+      },
+    });
     // Expired session: /api/me keeps last-good data while the refetch 401s.
     // isSuccess=false must keep us on /login instead of bouncing back into the
     // app (which would ping-pong AuthGuard <-> LoginPage forever).

@@ -1,6 +1,7 @@
 """Transport-independent HS256 session signing and decoding."""
 
 import os
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, Optional
@@ -57,6 +58,8 @@ def validate_lifetime_minutes(value=None):
         # Empty counts as unset, like constants.py: compose "${VAR:-}" yields "".
         raw = os.environ.get("JWT_ACCESS_TOKEN_EXPIRE_MINUTES") or "180"
         try:
+            if not re.fullmatch(r"[0-9]+", raw):
+                raise ValueError("Invalid decimal lifetime")
             value = int(raw)
         except (ValueError, TypeError):
             raise ValueError("Invalid session lifetime") from None

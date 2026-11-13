@@ -7,7 +7,9 @@ dropped — which is why `docker compose logs` only shows uvicorn lines.
 
 import logging
 import os
+import re
 import sys
+from urllib.parse import unquote
 
 from pythonjsonlogger.json import JsonFormatter
 
@@ -24,6 +26,67 @@ _QUIET_LOGGERS = ("boto3", "botocore", "urllib3", "s3transfer")
 # something else has directly manipulated root.handlers between calls (e.g. a test
 # fixture's snapshot/restore of the handler list).
 HANDLER_NAME = "another_s3_manager.console"
+
+_SENSITIVE = r"code|state|token|id_token|access_token|id_token_hint|client_secret|code_verifier|refresh_token|cookie|cookies|authorization|body|headers|password|password_hash|oidc_tx_[a-zA-Z0-9_-]+"
+
+
+def redact_auth_material(value):
+    if not isinstance(value, str):
+        return value
+    # Decode escaped keys before matching, including repeatedly encoded query keys.
+    for _ in range(4):
+        decoded = unquote(value)
+        if decoded == value:
+            break
+        value = decoded
+    value = re.sub(
+        r"(?i)\b(?:" + _SENSITIVE + r"\b)[\"']?\s*[=:]\s*(?:\"[^\"]*\"|'[^']*'|[^\s&,;]+)", "auth=[redacted]", value
+    )
+    value = re.sub(r"https?://[^\s\"<>]+\?[^\s\"<>]*", "[authentication URL redacted]", value)
+    for name in ("OIDC_CLIENT_SECRET", "JWT_SECRET_KEY"):
+        secret = os.environ.get(name)
+        if secret:
+            value = value.replace(secret, "[redacted]")
+    return value
+
+
+def _redact_value(value):
+    if isinstance(value, BaseException):
+        return "[exception details redacted]"
+    if isinstance(value, dict):
+        return {
+            key: "[redacted]"
+            if isinstance(key, str) and re.fullmatch(_SENSITIVE, unquote(key), re.IGNORECASE)
+            else _redact_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, tuple):
+        return tuple(_redact_value(item) for item in value)
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    return redact_auth_material(value)
+
+
+class _AuthRedactionFilter(logging.Filter):
+    def filter(self, record):
+        if record.name.startswith(("httpx", "httpcore")):
+            record.msg, record.args = "OIDC HTTP transport event", ()
+        else:
+            if not isinstance(record.msg, str):
+                record.msg = _redact_value(record.msg)
+            record.args = _redact_value(record.args)
+            record.msg = redact_auth_material(record.getMessage())
+            record.args = ()
+        for name, value in list(record.__dict__.items()):
+            if re.fullmatch(_SENSITIVE, name, re.IGNORECASE):
+                setattr(record, name, "[redacted]")
+            elif name not in {"exc_info", "args"}:
+                setattr(record, name, _redact_value(value))
+        if record.exc_info:
+            # Exception messages/locals may contain upstream bodies or credentials.
+            record.exc_info = None
+            record.exc_text = "[exception details redacted]"
+        return True
 
 
 def configure_logging() -> None:
@@ -55,6 +118,7 @@ def configure_logging() -> None:
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
+    handler.addFilter(_AuthRedactionFilter())
     handler.name = HANDLER_NAME
 
     root = logging.getLogger()
@@ -118,6 +182,10 @@ def install_access_log_filter() -> None:
     exclude = {p.strip() for p in raw.split(",") if p.strip()}
 
     access_logger = logging.getLogger("uvicorn.access")
-    access_logger.filters = [f for f in access_logger.filters if not isinstance(f, _AccessLogPathFilter)]
+    access_logger.filters = [
+        f for f in access_logger.filters if not isinstance(f, (_AccessLogPathFilter, _AuthRedactionFilter))
+    ]
     if exclude:
         access_logger.addFilter(_AccessLogPathFilter(exclude))
+
+    access_logger.addFilter(_AuthRedactionFilter())

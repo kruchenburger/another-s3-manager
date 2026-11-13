@@ -144,7 +144,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "-y", "--yes", action="store_true", help="skip the confirmation prompt (required in non-TTY sessions)"
     )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--enable", action="append", metavar="USER")
+    group.add_argument("--local", action="append", metavar="USER")
     args = parser.parse_args(argv)
+    targets = args.enable or args.local
+    if targets:
+        if len(targets) != 1 or (args.enable and args.password is not None):
+            parser.error("target flags cannot repeat; --enable cannot accept a password")
+        target = targets[0]
+        from another_s3_manager import access
+        from another_s3_manager.users import get_user_by_username
+
+        snapshot = get_user_by_username(target)
+        if snapshot is None:
+            _fail("target user does not exist")
+        if not args.yes:
+            if not sys.stdin.isatty():
+                _fail("non-interactive recovery requires --yes", EXIT_USAGE)
+            action = "Enable" if args.enable else "Recover local password for"
+            if input(f"{action} user '{target}'? [y/N]: ").strip().lower() not in ("y", "yes"):
+                _fail("aborted by operator")
+        password = None if args.enable else _resolve_password(args.password)
+        try:
+            access.recover_local_account(
+                target, password=password, enable=bool(args.enable), expected_identity=access.account_identity(snapshot)
+            )
+        except access.AccessDenied as error:
+            _fail(error.message)
+        except SQLAlchemyError:
+            _fail("database recovery failed")
+        print(f"Recovery completed for user '{target}'.")
+        return EXIT_OK
 
     password = _resolve_password(args.password)
     if not password.strip():
@@ -153,10 +184,13 @@ def main(argv: list[str] | None = None) -> int:
     _confirm_or_abort(args.yes)
 
     # App imports are deferred so `--help` and usage errors stay instant and DB-free.
+    from another_s3_manager import access
     from another_s3_manager.access import hash_password, reset_admin_password
 
     try:
         outcome = reset_admin_password(hash_password(password))
+    except access.AccessDenied as error:
+        _fail(error.message)
     except SQLAlchemyError as exc:
         # SQLAlchemyError is the outer net: a corrupt database file raises DatabaseError (e.g.
         # "database disk image is malformed"), a constraint violation raises IntegrityError — neither

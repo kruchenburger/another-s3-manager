@@ -11,6 +11,26 @@ def authenticate(client, user):
     return {"X-CSRF-Token": access.decode_session_payload(token)["csrf_token"]}
 
 
+@pytest.mark.parametrize("mode", ["sync", "initial"])
+def test_oidc_password_and_applied_sync_management_conflicts(app_client, mode):
+    actor = users.create_user("local-admin", "hash", is_admin=True)
+    target = users.create_user("sso", "!", allowed_roles=["Default"])
+    with session_scope() as session:
+        row = session.get(User, target["id"])
+        row.auth_source = "oidc"
+        row.mapping_mode_applied = mode
+    headers = authenticate(app_client, actor)
+    response = app_client.put("/api/admin/users/sso", data={"is_admin": "true"}, headers=headers)
+    assert response.status_code == (409 if mode == "sync" else 200)
+    if mode == "sync":
+        assert response.json()["detail"]["code"] == "MANAGED_BY_SSO"
+    before = users.get_user_by_id(target["id"])
+    response = app_client.put("/api/admin/users/sso/password", json={"password": "NewPassword1"}, headers=headers)
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "NO_LOCAL_PASSWORD"
+    assert users.get_user_by_id(target["id"])["password_hash"] == before["password_hash"]
+
+
 def test_lifecycle_boolean_omission_csrf_and_listing(app_client):
     actor = users.create_user("admin", "hash", is_admin=True)
     target = users.create_user("alice", "hash")
