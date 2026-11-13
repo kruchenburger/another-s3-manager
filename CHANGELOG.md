@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-13
+
 ### Added
 
 - Admins can disable and re-enable an account. A disabled account cannot sign in
@@ -22,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An account deleted and re-created under the same name never inherits the old
   account's sessions, MCP tokens or running moves, even with the same id.
 - Signing in to a disabled account answers exactly like a wrong password.
+- An invalid `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` (not a whole number from 1 to 10080) stops startup with the reason. Before, the server started and every
+  sign-in failed with a 500. An empty value means the default 180.
 
 ### Upgrade notes
 
@@ -32,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- When a session expires or is ended on the server, the next action opens the
+  sign-in screen with a "Session ended" notice. Before, every panel showed
+  "Not authenticated" and the user stayed on the page.
 - Plain copies stop if storage settings change or access is revoked during a retry, preventing writes to a different storage target.
 
 - Deleting, moving and cleaning up partial moves now check the current
@@ -891,7 +898,8 @@ in _s3_clients_cache` before indexing into it — two separate,
 - CSRF protection
 - Login attempt rate limiting
 
-[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/kruchenburger/another-s3-manager/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/kruchenburger/another-s3-manager/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/kruchenburger/another-s3-manager/compare/v1.2.0...v1.2.1
