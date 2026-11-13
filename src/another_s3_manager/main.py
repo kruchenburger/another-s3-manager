@@ -133,6 +133,15 @@ except ValueError as e:
     print("Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(32))'")
     sys.exit(1)
 
+# The session lifetime is validated here once, so an invalid value stops startup with its
+# reason instead of turning every later login into a generic 500.
+try:
+    access_service.validate_lifetime_minutes()
+except ValueError as e:
+    print(f"ERROR: JWT_ACCESS_TOKEN_EXPIRE_MINUTES={os.environ.get('JWT_ACCESS_TOKEN_EXPIRE_MINUTES')!r}: {e}")
+    print("Set it to a whole number of minutes from 1 to 10080, or unset it for the default 180.")
+    sys.exit(1)
+
 # Set up logging
 logger = logging.getLogger(__name__)
 

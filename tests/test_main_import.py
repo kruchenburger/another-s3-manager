@@ -68,3 +68,36 @@ def test_main_import_load_dotenv_without_path(monkeypatch):
 
     assert calls.get("args") == ()
     assert calls.get("kwargs") == {}
+
+
+@pytest.mark.parametrize("value", ["0", "10081", "abc", "1.5"])
+def test_main_import_refuses_invalid_session_lifetime(monkeypatch, value, capsys):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key")
+    monkeypatch.setenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", value)
+
+    def fake_exit(code):
+        raise SystemExit(code)
+
+    monkeypatch.setattr(sys, "exit", fake_exit)
+    import another_s3_manager.main as main
+
+    with pytest.raises(SystemExit) as caught:
+        importlib.reload(main)
+    assert caught.value.code == 1
+    out = capsys.readouterr().out
+    assert "JWT_ACCESS_TOKEN_EXPIRE_MINUTES" in out and "1 to 10080" in out
+
+    monkeypatch.delenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
+    importlib.reload(main)
+
+
+@pytest.mark.parametrize("value", ["1", "10080"])
+def test_main_import_accepts_session_lifetime_bounds(monkeypatch, value):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key")
+    monkeypatch.setenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", value)
+    import another_s3_manager.main as main
+
+    importlib.reload(main)
+    assert main.access_service.validate_lifetime_minutes() == int(value)
+    monkeypatch.delenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
+    importlib.reload(main)
