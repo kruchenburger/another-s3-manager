@@ -24,6 +24,8 @@ function SignInRedirect({
       color: "yellow",
       title: "Session ended",
       message: "Your session expired or was ended. Sign in again to continue.",
+      // Stays until dismissed: the redirect already moved the user, a 4 s corner toast is easy to miss.
+      autoClose: false,
     });
   }, [sessionEnded]);
 
