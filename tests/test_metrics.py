@@ -100,8 +100,8 @@ def test_auth_banned_login_metric_and_active_bans_gauge(app_client):
 
 
 def test_ban_increments_the_counter(monkeypatch):
+    import another_s3_manager.access.users as users
     import another_s3_manager.auth as auth
-    import another_s3_manager.users as users
 
     before = _sample("as3m_auth_bans_total", {})
 
@@ -119,8 +119,8 @@ def test_ban_increments_the_counter(monkeypatch):
 
 def test_admin_is_never_banned_and_never_counted(monkeypatch):
     """Admins are exempt by design (DoS protection on the predictable name)."""
+    import another_s3_manager.access.users as users
     import another_s3_manager.auth as auth
-    import another_s3_manager.users as users
 
     before = _sample("as3m_auth_bans_total", {})
     monkeypatch.setattr(users, "load_bans", lambda: {})

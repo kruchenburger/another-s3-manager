@@ -566,7 +566,7 @@ def test_get_current_user_never_calls_load_users(monkeypatch):
     def _boom():
         raise AssertionError("get_current_user must not call load_users()")
 
-    monkeypatch.setattr(users_module, "load_users", _boom)
+    monkeypatch.setattr("another_s3_manager.access.users.load_users", _boom)
 
     token = auth.create_access_token({"sub": "carol"})
     request = _make_request_with_cookie(token)

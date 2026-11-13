@@ -148,7 +148,7 @@ def test_prune_counts_and_resets_only_named_roles(app_client):
 
 
 def test_empty_prune_does_not_open_transaction(monkeypatch):
-    monkeypatch.setattr(users, "session_scope", lambda: pytest.fail("No transaction"))
+    monkeypatch.setattr("another_s3_manager.access.users.session_scope", lambda: pytest.fail("No transaction"))
     assert users.prune_role_grants(set()) == {}
 
 
