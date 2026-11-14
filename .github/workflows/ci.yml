@@ -239,6 +239,8 @@ jobs:
           path: |
             frontend/playwright-report/
             frontend/test-results/
+            !frontend/oidc-private/**
+            !frontend/test-results/oidc-*/**
           retention-days: 14
 
   e2e-ministack:
@@ -363,6 +365,8 @@ jobs:
           path: |
             frontend/playwright-report/
             frontend/test-results/
+            !frontend/oidc-private/**
+            !frontend/test-results/oidc-*/**
           retention-days: 14
 
   build-check:
@@ -419,8 +423,41 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  oidc-fake:
+    name: OIDC fake-provider security and browser flow
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen --all-extras
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Distinct-site loopback aliases
+        run: echo '127.0.0.1 asm.oidc.test op.identity.test' | sudo tee -a /etc/hosts >/dev/null
+      - name: Isolated OIDC flow with no raw artifacts
+        run: bash scripts/ci/run-oidc-e2e.sh
+
   notify:
-    needs: [hadolint, test-backend, test-frontend, e2e, e2e-ministack, build-check, build]
+    needs:
+      [
+        hadolint,
+        test-backend,
+        test-frontend,
+        e2e,
+        e2e-ministack,
+        oidc-fake,
+        build-check,
+        build,
+      ]
     if: always()
     runs-on: ubuntu-latest
     steps:

@@ -5,17 +5,22 @@ Configuration management module
 import json
 import logging
 import os
+import tempfile
 import threading
+from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from another_s3_manager import access
 from another_s3_manager.constants import CONFIG_FILE
 
 logger = logging.getLogger(__name__)
 
 # Global cache for configuration
 _config_cache: Dict[str, Any] = {}
-_config_mtime: float = 0
+_config_mtime: int = 0
+_config_size: int = -1
 _migrating: bool = False  # Flag to prevent recursive migration
 
 # Serializes save and reload (file I/O + cache/mtime publication) across threads.
@@ -36,36 +41,49 @@ def load_config(force_reload: bool = False) -> Dict[str, Any]:
     reads/writes of config.json. The published cache itself is swapped with a
     single `_config_cache = new_config` assignment — atomic under the GIL —
     only AFTER the freshly-loaded dict has been fully migrated. A concurrent
-    reader hitting the `return _config_cache` fast path therefore only ever
+    reader hitting the `return deepcopy(_config_cache)` fast path therefore only ever
     observes the OLD fully-migrated dict or the NEW fully-migrated dict, never
     a dict rebound to the raw JSON before migration filled in missing keys.
     """
-    global _config_cache, _config_mtime
+    global _config_cache, _config_mtime, _config_size
 
     if not CONFIG_FILE.exists():
+        if _config_cache and _config_mtime:
+            raise ValueError("Configuration file is unavailable")
         # Default config if file doesn't exist
         default_config = _get_default_config()
+        access.oidc_settings(default_config)
         if not _config_cache:
             _config_cache = default_config
-        return _config_cache
+        return deepcopy(_config_cache)
 
-    current_mtime = CONFIG_FILE.stat().st_mtime
-    if not (force_reload or current_mtime > _config_mtime or not _config_cache):
-        return _config_cache
+    current_mtime = CONFIG_FILE.stat().st_mtime_ns
+    if not (
+        force_reload
+        or (current_mtime != _config_mtime or CONFIG_FILE.stat().st_size != _config_size)
+        or not _config_cache
+    ):
+        return deepcopy(_config_cache)
 
-    with _config_lock:
+    with access.role_grants_lock, _config_lock:
         # Double-checked locking: another thread may have completed the
         # reload (and the migration + persist that comes with it) while this
         # thread was waiting for the lock — re-check before doing it again.
-        current_mtime = CONFIG_FILE.stat().st_mtime if CONFIG_FILE.exists() else current_mtime
-        if not (force_reload or current_mtime > _config_mtime or not _config_cache):
-            return _config_cache
+        current_mtime = CONFIG_FILE.stat().st_mtime_ns if CONFIG_FILE.exists() else current_mtime
+        if not (
+            force_reload
+            or (current_mtime != _config_mtime or CONFIG_FILE.stat().st_size != _config_size)
+            or not _config_cache
+        ):
+            return deepcopy(_config_cache)
 
         # Load main config file into a LOCAL variable — NOT the module cache —
         # so migration completes before anything becomes visible to readers.
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             new_config = json.load(f)
 
+        new_config = _preserve_auth_fields(new_config, _config_cache)
+        access.oidc_settings(new_config)
         for role in new_config.get("roles", []):
             if "allow_delete" in role and type(role["allow_delete"]) is not bool:
                 logger.warning("Non-boolean allow_delete for role '%s'; deletion denied", role.get("name"))
@@ -84,7 +102,7 @@ def load_config(force_reload: bool = False) -> Dict[str, Any]:
                         # _save_config_internal already performs the atomic
                         # rebind of _config_cache/_config_mtime — nothing left
                         # to do here.
-                        return _config_cache
+                        return deepcopy(_config_cache)
                     except PermissionError:
                         # Config file is read-only, migration applied in memory only.
                         pass
@@ -97,7 +115,8 @@ def load_config(force_reload: bool = False) -> Dict[str, Any]:
         # one — there is no half-built state for them to observe.
         _config_cache = new_config
         _config_mtime = current_mtime
-        return _config_cache
+        _config_size = CONFIG_FILE.stat().st_size
+        return deepcopy(_config_cache)
 
 
 def resolve_max_file_size(config: Optional[Dict[str, Any]] = None) -> int:
@@ -411,18 +430,33 @@ def _save_config_internal(config: Dict[str, Any], skip_migration: bool = False) 
     """
     Internal save_config implementation (used to avoid recursion when wrapped).
     """
-    global _config_cache, _config_mtime
+    global _config_cache, _config_mtime, _config_size
 
-    with _config_lock:
+    with access.role_grants_lock, _config_lock:
+        config = _preserve_auth_fields(config, _config_cache)
+        access.oidc_settings(config)
+        config = deepcopy(config)
         # Check if config is writable before attempting to save
         if not is_config_writable():
             raise PermissionError("Configuration file is read-only. Cannot save changes.")
 
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=CONFIG_FILE.parent, prefix=".config-", suffix=".tmp", delete=False
+            ) as f:
+                temporary = Path(f.name)
+                json.dump(config, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, CONFIG_FILE)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
         _config_cache = config
         if CONFIG_FILE.exists():
-            _config_mtime = CONFIG_FILE.stat().st_mtime
+            _config_mtime = CONFIG_FILE.stat().st_mtime_ns
+            _config_size = CONFIG_FILE.stat().st_size
 
 
 def save_config(config: Dict[str, Any], skip_migration: bool = False) -> None:
@@ -478,3 +512,66 @@ def _can_write_test_file(test_file: Path) -> bool:
         return True
     except (OSError, PermissionError):
         return False
+
+
+@contextmanager
+def security_snapshot():
+    """Order config publication and callback commits under one immutable attempt."""
+    with access.role_grants_lock, _config_lock:
+        yield deepcopy(load_config(force_reload=True))
+
+
+class _ConfigUpdate(dict):
+    removed_mapping_rules = ()
+
+
+def _preserve_auth_fields(new, old):
+    """Shared omission semantics for every publication entrance."""
+
+    def merge(candidate, previous):
+        result = deepcopy(previous)
+        for key, value in candidate.items():
+            if key in {"auth", "oidc", "role_mapping"}:
+                if type(value) is not dict:
+                    raise ValueError("Security settings must be objects")
+                result[key] = merge(value, previous.get(key, {}))
+            else:
+                result[key] = deepcopy(value)
+        return result
+
+    if not isinstance(new, dict):
+        raise ValueError("Configuration must be an object")
+    result = _ConfigUpdate(deepcopy(new))
+    result.pop("auth_runtime", None)
+    for key in ("auth", "mcp_oauth"):
+        if key not in result and key in old:
+            result[key] = deepcopy(old[key])
+    if "auth" in result:
+        if type(result["auth"]) is not dict:
+            raise ValueError("auth must be an object")
+        result["auth"] = merge(result["auth"], old.get("auth", {}))
+    return result
+
+
+def merge_and_validate_update(new, old):
+    """Validate updates and clean mappings without writing effective defaults."""
+    result = _preserve_auth_fields(new, old)
+    if "roles" not in result:
+        result["roles"] = deepcopy(old.get("roles", []))
+    merge_role_security_fields(result["roles"], old.get("roles", []))
+    access.oidc_settings(result)
+    removed = {r.get("name") for r in old.get("roles", [])} - {r.get("name") for r in result["roles"]}
+    mapping = result.get("auth", {}).get("oidc", {}).get("role_mapping", {})
+    diagnostics = []
+    if "rules" in mapping and removed:
+        kept = []
+        for index, rule in enumerate(mapping["rules"]):
+            rule["roles"] = [name for name in rule.get("roles", []) if name not in removed]
+            if rule.get("admin") or rule["roles"]:
+                kept.append(rule)
+            else:
+                diagnostics.append(index)
+        mapping["rules"] = kept
+    access.oidc_settings(result)
+    result.removed_mapping_rules = tuple(diagnostics)
+    return result

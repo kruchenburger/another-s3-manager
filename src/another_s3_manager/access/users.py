@@ -219,7 +219,7 @@ def sync_admin_password_from_env() -> bool:
 
     with write_scope() as session:
         admin = session.execute(select(User).where(User.username == "admin")).scalar_one_or_none()
-        if admin is None:
+        if admin is None or admin.auth_source != "local":
             return False
 
         if force:
@@ -342,6 +342,10 @@ def reset_admin_password(new_password_hash: str) -> str:
                 )
             )
             return "created"
+        if admin.auth_source != "local":
+            from .errors import AccessDenied
+
+            raise AccessDenied("NO_LOCAL_PASSWORD", "Use --local for an OIDC account")
         write_password(admin, new_password_hash, PASSWORD_SET_VIA_CLI)
         admin.must_change_password = False
         admin.password_set_via = PASSWORD_SET_VIA_CLI
@@ -559,6 +563,7 @@ def get_users_for_admin() -> List[Dict[str, Any]]:
                 "is_admin": u.is_admin,
                 "auth_source": u.auth_source,
                 "is_disabled": u.is_disabled,
+                "mapping_mode_applied": u.mapping_mode_applied,
                 "created_at": u.created_at.isoformat() if u.created_at else None,
                 "allowed_roles": [r.role_name for r in u.roles],
             }

@@ -12,6 +12,87 @@ from another_s3_manager.logging_setup import (
 )
 
 
+@pytest.mark.parametrize("format", ["text", "json"])
+def test_oidc_canaries_absent_from_final_text_and_json_logs(monkeypatch, capsys, format):
+    monkeypatch.setenv("LOG_FORMAT", format)
+    monkeypatch.setenv("ACCESS_LOG_EXCLUDE_PATHS", "")
+    configure_logging()
+    install_access_log_filter()
+    logger = logging.getLogger("another_s3_manager.oidc")
+    for name in ("code", "%63ode", "%2563ode"):
+        for value in (
+            "prefix%26CANARY",
+            "prefix%3DCANARY",
+            "prefix%20CANARY",
+            "prefix+CANARY",
+            "prefix%2526CANARY",
+            "prefix'CANARY",
+            'prefix"CANARY',
+        ):
+            logger.warning("callback /api/auth/oidc/callback?%s=%s&safe=ok", name, value)
+    for key in ("code", "state", "token", "id_token_hint", "client_secret", "code_verifier", "refresh_token", "cookie"):
+        logger.warning("request https://op.example/callback?%s=canary-%s&%%63ode=encoded-canary", key, key)
+    logging.getLogger("uvicorn.access").warning(
+        '%s - "%s %s HTTP/%s" %s',
+        "client",
+        "GET",
+        "/api/auth/oidc/callback?code=access-canary&state=state-canary",
+        "1.1",
+        500,
+    )
+    try:
+        raise ValueError("exception-body-canary")
+    except ValueError:
+        logger.exception("OIDC failed")
+    logging.getLogger("httpx").warning("raw-upstream-canary")
+    logger.warning("structured %s", {"client_secret": "mapping-canary"})
+    logger.warning(
+        "extra",
+        extra={"payload": {"body": "body-canary", "code": "code-canary", "cookies": {"access_token": "cookie-canary"}}},
+    )
+    output = capsys.readouterr().out
+    assert "OIDC failed" in output
+    assert "canary" not in output
+    assert "CANARY" not in output
+
+
+@pytest.mark.parametrize("status", [200, 401, 403, 500])
+@pytest.mark.parametrize("format", ["text", "json"])
+def test_access_formatter_preserves_args_and_redacts_query(monkeypatch, status, format):
+    import json
+
+    from pythonjsonlogger.json import JsonFormatter
+    from uvicorn.logging import AccessFormatter
+
+    from another_s3_manager.logging_setup import _AuthRedactionFilter
+
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        "",
+        0,
+        '%s - "%s %s HTTP/%s" %s',
+        ("127.0.0.1:1234", "GET", "/api/auth/oidc/callback?code=prefix%26CANARY&safe=ok", "1.1", status),
+        None,
+    )
+    redact = _AuthRedactionFilter()
+    assert redact.filter(record)
+    assert redact.filter(record)
+    assert len(record.args) == 5
+    assert record.args[4] == status
+    formatter = (
+        AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False)
+        if format == "text"
+        else JsonFormatter("%(message)s")
+    )
+    output = formatter.format(record)
+    assert "CANARY" not in output
+    assert "/api/auth/oidc/callback" in output
+    assert str(status) in output
+    if format == "json":
+        assert "GET" in json.loads(output)["message"]
+
+
 @pytest.fixture(autouse=True)
 def _reset_logging():
     """Snapshot root logger state before each test, restore after."""
@@ -240,3 +321,37 @@ def test_install_access_filter_idempotent(monkeypatch, _clean_access_logger):
     install_access_log_filter()
     installed = [f for f in _clean_access_logger.filters if isinstance(f, _AccessLogPathFilter)]
     assert len(installed) == 1
+
+
+@pytest.mark.parametrize("format", ["text", "json"])
+def test_ordinary_exception_keeps_message_level_and_safe_traceback(monkeypatch, capsys, format):
+    from another_s3_manager.logging_setup import _AuthRedactionFilter
+
+    monkeypatch.setenv("LOG_FORMAT", format)
+    configure_logging()
+    try:
+        raise RuntimeError("upstream-exception-canary")
+    except RuntimeError:
+        import sys
+
+        record = logging.LogRecord(
+            "another_s3_manager.main",
+            logging.ERROR,
+            __file__,
+            0,
+            "Unexpected error in %s",
+            ("list_files",),
+            sys.exc_info(),
+        )
+    redact = _AuthRedactionFilter()
+    assert redact.filter(record)
+    assert redact.filter(record)
+    assert record.getMessage() == "Unexpected error in list_files"
+    assert record.levelno == logging.ERROR
+    assert record.exc_info is not None
+    logging.getLogger(record.name).handle(record)
+    output = capsys.readouterr().out
+    assert "Unexpected error in list_files" in output
+    assert "Traceback" in output
+    assert "test_ordinary_exception_keeps_message_level_and_safe_traceback" in output
+    assert "upstream-exception-canary" not in output

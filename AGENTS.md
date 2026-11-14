@@ -13,6 +13,58 @@ from the workspace root when shared tooling is required.
 
 # Another S3 Manager
 
+## OIDC login (1.3.2)
+
+- Access owns OIDC settings, networking, strict ID-token validation, transactions,
+  identity provisioning and literal claim mapping. Web/MCP/CLI/Storage use only
+  the Access package root. No migration is added by this feature; PR 2 supplies
+  identities, the transaction ledger and applied-mode storage.
+- Enable only with `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `PUBLIC_URL` (canonical origin).
+  `OIDC_CLIENT_SECRET_FILE` wins over `OIDC_CLIENT_SECRET`; unreadable files fail.
+  No secret enters config, export or logs. HTTPS requires Secure cookies.
+  `OIDC_ALLOW_INSECURE_HTTP=true` is development-only and does not permit private IPs.
+- `OIDC_ALLOWED_PRIVATE_ORIGINS` grants exact scheme/host/effective-port origins.
+  All DNS answers and the pinned connected peer are checked before request bytes;
+  verified TLS/SNI, no redirects/proxy environment, 5s timeout and 1 MiB streamed
+  cap apply to initial discovery, refresh, JWKS and token exchange.
+- `LOCAL_LOGIN` overrides `auth.local_login` (`all`, `admins`, `off`; default all).
+  Discovery outages never change that policy. Off without OIDC is a startup error.
+  Stored `auth.oidc` supports display_name, scopes, username_claim, groups_claim,
+  session_max_minutes and role_mapping (`mode`, `require_match`, `rules`).
+  Lifetime is integer 1–10080, effective default 180; null inherits validated
+  JWT_ACCESS_TOKEN_EXPIRE_MINUTES. require_match=false and authz_max_days are rejected.
+- Sync and initial both check eligibility on each login; only accepted SSO login
+  changes mapping_mode_applied. Applied-sync sessions/PATs/download/destructive
+  retries deny at the stored deadline (exactly seven days); NULL fails closed.
+  Initial denial preserves manual grants, bumps epoch and does not renew freshness.
+  Disabled callbacks and callbacks after console local recovery mutate nothing.
+- All config publishers and callback commits use lock order role_grants_lock →
+  config lock → BEGIN IMMEDIATE. No network/hash work under publication locks.
+  Invalid runtime reload refuses its triggering operation and retains last-good
+  config. Returned snapshots cannot mutate the shared cache. Partial nested saves
+  preserve security settings; runtime auth fields never belong in save payloads.
+- Console recovery grammar: legacy `[PASSWORD] [--yes]` resets/recreates built-in
+  local admin; an OIDC admin requires explicit `--local`. `--enable USER [--yes]`
+  only clears disabled, accepts no password and never renews freshness/epoch.
+  `--local USER [PASSWORD] [--yes]` atomically writes a usable policy-validated
+  local password/source/provenance, clears applied mode/deadline and increments
+  epoch, preserving disabled and grants. Both target flags together or repeated
+  target flags are usage errors. Named targets must exist; no implicit creation.
+  Missing confirmation/password in non-TTY exits 2; missing target, abort, mismatch
+  or failed validation exits 1. Unreadable recovery config uses minimum 8, one
+  uppercase/lowercase/digit, zero required special characters. Enable is separate.
+- Browser cookie jars have one active account; last callback Set-Cookie wins.
+  session_identity is opaque, never a JWT; cross-tab signals contain no identity
+  or credential. Account actions wait for authoritative me/CSRF after invalidation.
+- Logout clears ASM's cookie only: it neither ends the IdP session nor revokes a
+  copied cookie. Disable prevents JIT recreation; Delete does not. No linking,
+  UserInfo, RP logout, MCP OAuth or background IdP sync is implemented here.
+- Reverse proxies must redact code/state/token/id_token_hint/client_secret/
+  code_verifier/refresh_token and cookies. Application redaction does not sanitize
+  browser traces. OIDC browser CI is remote-only with distinct sites, no traces,
+  videos/screenshots/HTML reports/raw logs uploaded, including failure/retry.
+  Full suites/builds and image-size measurement remain remote CI obligations.
+
 Lightweight web UI for managing files in S3 and S3-compatible storage.
 
 > **This is a public repository.** Never commit, push, or include in PR descriptions / commit messages / issue bodies any absolute paths from a developer's local filesystem (e.g. `D:\...`, `/Users/...`, `C:\...`, `/home/...`). Specs and plans for this project live out-of-repo per the shared workspace specs-and-plans contract — when referencing them in a PR description, use only the **relative tail** (e.g. `specs/2026-05-02-foo-design.md (out-of-repo)`), never the full absolute path. Personal directory structure leaking into a public repo is a privacy issue and looks unprofessional.
@@ -79,8 +131,8 @@ call it and translate its error.
   mutations. `principal_for` is the shared status entry point; its private snapshot seam accepts only
   trusted transaction or freshly loaded per-attempt state. `account_identity` is the single
   `(id, auth_generation)` rule used by sessions, PAT authentication, Storage and move jobs.
-  `access/oidc/identities.py` and `transactions.py` provide persistence only; OIDC networking and
-  mapping are not implemented yet.
+  `access/oidc/` owns strict settings, bounded discovery/JWKS/token transport,
+  PKCE transactions, literal mapping and atomic identity/JIT persistence.
 - Test layout: each policy once at the service level in `tests/access/`, plus a thin
   mapping test per adapter.
 
@@ -89,7 +141,7 @@ call it and translate its error.
 - SQLAlchemy 2.0 (sync) + Alembic for migrations
 - SQLite at `<DATA_DIR>/another_s3_manager.db`
 - Tables: `users`, `user_roles` (junction), `bans` (FK → users with CASCADE), `api_tokens` (FK CASCADE → users; stores SHA-256 hash of plaintext token, `is_read_only`, `max_read_bytes`, `revoked_at`), `user_identities`, `oidc_login_transactions`
-- Users additionally store `auth_source`, `is_disabled`, `auth_generation`, `session_epoch`, nullable `sso_authz_valid_until` and nullable `mapping_mode_applied` (`sync`/`initial`). Freshness enforcement and applied-mode transitions arrive with OIDC login.
+- Users additionally store `auth_source`, `is_disabled`, `auth_generation`, `session_epoch`, nullable `sso_authz_valid_until` and nullable `mapping_mode_applied` (`sync`/`initial`). Applied-sync freshness and login-applied mode transitions are enforced by Access.
 - Generation storage stays nullable for N-1-shaped inserts. New users get a random generation; a legacy NULL is materialized atomically before a Principal is returned.
 - Identity links have unique issuer/subject and user/issuer constraints with user-delete cascade. The login ledger stores only SHA-256 state hashes and timestamps, is consumed atomically once, and purges at most 100 expired rows per operation.
 - Migration `c131a001` follows `35173f08b83b`. Downgrade is test/dev-only and loses the new security fields, identities and ledger. A previous image cannot start on this revision; production recovery is a forward fix or restoring a consistent pre-release backup, losing later changes.
@@ -122,6 +174,33 @@ column drop/add used to wipe `user_roles`/`bans`/`api_tokens`). Runtime FK enfor
 safe to run against a populated database.
 
 ## Development Commands
+
+### Isolated real-IdP smoke (1.3.2)
+
+See `docs/sso.md` (Keycloak first, then Authentik). The SSO overlay defines its
+own image-based ASM; combine only `docker/docker-compose.minio.yml` and
+`docker/docker-compose.sso.yml`, with `--project-directory .` and profile
+`sso-smoke`. Never include ordinary `docker-compose.yml` or mount ordinary
+`./data`. `ASM_SMOKE_IMAGE` must identify a tested remote-built OIDC image;
+source mode uses native ASM + Vite without image/frontend builds. Both IdPs
+remain running; provider selection recreates app only, with distinct ASM data.
+
+Selected local offline checks, sequentially (never start the stack as a check):
+
+```bash
+uv run pytest -o addopts= tests/test_sso_smoke_fixtures.py
+docker compose --project-directory . --env-file docker/sso/.env.example -f docker/docker-compose.minio.yml -f docker/docker-compose.sso.yml --profile sso-smoke config --quiet
+uv run python scripts/smoke/check-sso.py --check-compose-bindings
+```
+
+Require Compose >=2.24.4 for MinIO `ports: !override`; the checker validates
+fully merged JSON in memory without printing env/secrets. If manager-supplied
+`docker/sso/.env.example` is absent, skip env-dependent checks explicitly and
+report them pending. Fixture pytest does not prove running IdPs. Only the owner
+starts the complete stand and accepts both-provider release flows; full suites,
+builds and fake-OP browser validation remain remote CI obligations.
+
+### Native development
 
 ```bash
 # Install dependencies

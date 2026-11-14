@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Single sign-on through any OpenID Connect provider (authorization code with
+  PKCE S256). Set `PUBLIC_URL`, `OIDC_ISSUER`, `OIDC_CLIENT_ID` and a client
+  secret (env or `OIDC_CLIENT_SECRET_FILE`) to show a «Sign in with …» button on
+  the sign-in page. Every login state is single-use, recorded in the database
+  before the code is exchanged.
+- Accounts are created on the first SSO login, keyed by issuer and subject;
+  an SSO login never links to an existing local account by name or email.
+- Roles come from ID-token claims through `auth.oidc.role_mapping`: exact,
+  case-sensitive values (`/team/sub` and `data-team` are both literal), `sync`
+  (default, re-applied at every login) or `initial` (applied once at creation).
+  A login that matches no rule is refused.
+- `auth.local_login` / `LOCAL_LOGIN`: `all` (default), `admins` or `off`.
+- `reset_admin_password --enable USER` and `--local USER` recover access from
+  the console without the identity provider.
+- The admin settings show the SSO configuration read-only; secrets are never
+  returned or saved.
+
+### Changed
+
+- Access managed by `sync` mapping, including MCP tokens, expires seven days
+  after the account's last successful SSO login; signing in again renews it.
+- SSO accounts have no local password: password change and reset are refused,
+  and the `ADMIN_PASSWORD` sync skips them.
+- Signing in as another account in one browser replaces the session in every
+  open tab.
+- Sign-in metrics carry `method="local"` or `method="oidc"`.
+
+### Security
+
+- Outbound calls to the identity provider refuse redirects, private and
+  loopback addresses (unless listed exactly in `OIDC_ALLOWED_PRIVATE_ORIGINS`),
+  oversized responses and unverified TLS. Authorization codes, state and tokens
+  are redacted from logs.
+
+### Upgrade notes
+
+- Nothing changes until `OIDC_ISSUER` is set. Signing out of ASM does not sign
+  you out of the identity provider.
+
 ## [1.3.1] - 2026-11-13
 
 ### Added

@@ -101,7 +101,7 @@ def test_download_retains_its_error_text():
 def test_local_login_maps_service_refusal_and_metric(app_client, monkeypatch, code, message, status, reason):
     from another_s3_manager.metrics import auth_logins_total
 
-    counter = auth_logins_total.labels(result=reason)
+    counter = auth_logins_total.labels(method="local", result=reason)
     before = counter._value.get()
 
     def refuse(username, password, config):
@@ -171,7 +171,7 @@ def test_login_current_account_refusal_has_wrong_password_answer(app_client, mon
     def refused(*args, **kwargs):
         raise access.AuthenticationError(code, "private diagnostic")
 
-    counter = auth_logins_total.labels(result="invalid_password")
+    counter = auth_logins_total.labels(method="local", result="invalid_password")
     before = counter._value.get()
     monkeypatch.setattr(access, "authenticate_local", refused)
     response = app_client.post("/api/login", data={"username": "alice", "password": "correct"})

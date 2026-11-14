@@ -310,7 +310,11 @@ export function SettingsPage() {
           </Tabs.Panel>
 
           <Tabs.Panel value="security">
-            <SettingsSecurityTab form={form} readOnly={readOnly} />
+            <SettingsSecurityTab
+              form={form}
+              readOnly={readOnly}
+              runtime={config?.auth_runtime}
+            />
           </Tabs.Panel>
 
           <Tabs.Panel value="mcp">

@@ -155,6 +155,68 @@ supported up to `max_file_size` (S3's per-object maximum is 5 TB). The MCP
 | `ACCESS_LOG_EXCLUDE_PATHS`        | Comma-separated paths whose successful (status < 400) access logs are dropped — silences health-check / uptime-monitor / Prometheus-scrape noise. Empty logs all | `/,/health,/metrics` |
 | `METRICS_PASSWORD`                | Basic-auth password for `/metrics` (endpoint is open if unset)                                                                                                   | —                    |
 
+### Optional OpenID Connect configuration
+
+See [SSO setup and smoke stand](docs/sso.md) for Keycloak-first setup,
+Authentik, recovery and the isolated no-build release smoke profile.
+
+OIDC is opt-in: set `OIDC_ISSUER`, `OIDC_CLIENT_ID` and the canonical origin
+`PUBLIC_URL` (no path, query or fragment). The callback is
+`PUBLIC_URL/api/auth/oidc/callback`; request Host/forwarded headers are never used.
+`OIDC_CLIENT_SECRET_FILE` takes precedence over `OIDC_CLIENT_SECRET`, and an
+unreadable secret file fails validation. Secrets belong only in environment/files.
+HTTPS requires `COOKIE_SECURE=true`. Development HTTP requires the explicit
+`OIDC_ALLOW_INSECURE_HTTP=true` flag.
+
+`OIDC_ALLOWED_PRIVATE_ORIGINS` is an optional comma-separated list of exact
+scheme/host/effective-port origins, without paths, userinfo or wildcards. Private
+IdPs need this permission even in HTTP development mode. Discovery, JWKS and
+code exchange use verified TLS, no redirects/proxy environment, validated DNS
+and pinned connections, a 5-second timeout and a 1 MiB streamed response cap.
+
+Policy is stored in `config.json` under `auth`. Omitted nested fields are
+preserved on update; invalid startup/reload/save candidates are refused.
+The admin UI displays SSO settings read-only and never exports environment secrets.
+
+```json
+{
+  "auth": {
+    "local_login": "all",
+    "oidc": {
+      "display_name": "Company SSO",
+      "scopes": ["openid", "profile", "email"],
+      "username_claim": "preferred_username",
+      "groups_claim": "groups",
+      "session_max_minutes": null,
+      "role_mapping": {
+        "mode": "sync",
+        "require_match": true,
+        "rules": [
+          {
+            "claim": "groups",
+            "value": "/team/data",
+            "roles": ["existing-s3-role"]
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+`LOCAL_LOGIN=all|admins|off` overrides `auth.local_login` (default `all`). An IdP
+outage never re-enables local login; `off` without configured OIDC is invalid.
+Session lifetime is a strict integer 1–10080 minutes, default effective 180;
+`null` inherits `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` within the same bounds.
+Mapping matches literal ID-token claims; `/team/data` is different from `data`.
+Use the actual dotted claim path in rules when changing `groups_claim`.
+No effective mapping match denies login in both modes. `sync` replaces grants at
+accepted login; `initial` preserves existing manual grants but still checks
+eligibility. A mode switch applies per account at its next accepted SSO login.
+Applied-sync access, including MCP tokens, expires exactly seven days after that
+login; config changes, PAT use and Enable do not renew it. There is no freshness
+override or background IdP synchronization. UserInfo and RP logout are unsupported.
+
 ## Authentication
 
 Login issues an `httpOnly + Secure + SameSite=Strict` cookie carrying a JWT.

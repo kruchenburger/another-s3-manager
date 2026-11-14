@@ -18,7 +18,11 @@ export function RequireFreshPassword() {
   // While me is loading, render the outlet — AuthGuard already ensures we
   // have a session; flickering a redirect to /change-password before me
   // arrives would be wrong. The guard only acts on confirmed data.
-  if (me?.must_change_password && location.pathname !== "/change-password") {
+  if (
+    me?.auth_source !== "oidc" &&
+    me?.must_change_password &&
+    location.pathname !== "/change-password"
+  ) {
     return <Navigate to="/change-password" replace />;
   }
 

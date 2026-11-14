@@ -38,13 +38,12 @@ export interface UserDrawerEditPayload {
   is_disabled?: boolean;
   mode: "edit";
   username: string;
-  is_admin: boolean;
-  allowed_roles: string[];
+  is_admin?: boolean;
+  allowed_roles?: string[];
 }
 
 export type UserDrawerSubmitPayload =
-  | UserDrawerCreatePayload
-  | UserDrawerEditPayload;
+  UserDrawerCreatePayload | UserDrawerEditPayload;
 
 interface UserDrawerProps {
   opened: boolean;
@@ -140,7 +139,12 @@ export function UserDrawer({
       }}
     >
       <form
-        style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          minHeight: 0,
+        }}
         onSubmit={form.onSubmit((values) => {
           if (mode === "create") {
             onSubmit({
@@ -154,10 +158,16 @@ export function UserDrawer({
           } else {
             onSubmit({
               mode: "edit",
-              ...(form.isDirty("is_disabled") ? { is_disabled: values.is_disabled } : {}),
+              ...(form.isDirty("is_disabled")
+                ? { is_disabled: values.is_disabled }
+                : {}),
               username: values.username,
-              is_admin: values.is_admin,
-              allowed_roles: values.allowed_roles,
+              ...(initialUser?.managed_by_sso
+                ? {}
+                : {
+                    is_admin: values.is_admin,
+                    allowed_roles: values.allowed_roles,
+                  }),
             });
           }
         })}
@@ -188,7 +198,8 @@ export function UserDrawer({
                   variant="light"
                   icon={<AlertTriangle size={16} />}
                 >
-                  Couldn't load password policy — the server will validate the new password on save.
+                  Couldn't load password policy — the server will validate the
+                  new password on save.
                 </Alert>
               )}
               <Checkbox
@@ -203,9 +214,16 @@ export function UserDrawer({
           )}
           {mode === "edit" && (
             <>
-              <Text size="sm">Sign-in source: {initialUser?.auth_source === "oidc" ? "SSO" : "Local"}</Text>
-              <Switch label="Disabled" description="Blocks sign-in and MCP tokens. Enabling restores active MCP tokens, but requires a new web sign-in."
-                disabled={isSelf} {...form.getInputProps("is_disabled", { type: "checkbox" })} />
+              <Text size="sm">
+                Sign-in source:{" "}
+                {initialUser?.auth_source === "oidc" ? "SSO" : "Local"}
+              </Text>
+              <Switch
+                label="Disabled"
+                description="Blocks sign-in and MCP tokens. Enabling restores active MCP tokens, but requires a new web sign-in."
+                disabled={isSelf}
+                {...form.getInputProps("is_disabled", { type: "checkbox" })}
+              />
             </>
           )}
           <Tooltip
@@ -214,13 +232,18 @@ export function UserDrawer({
             position="left"
           >
             <Switch
-              label="Administrator"
-              disabled={isSelf}
+              label={
+                initialUser?.managed_by_sso
+                  ? "Administrator · managed by SSO"
+                  : "Administrator"
+              }
+              disabled={isSelf || initialUser?.managed_by_sso}
               {...form.getInputProps("is_admin", { type: "checkbox" })}
             />
           </Tooltip>
           <TagsInput
             label="Allowed roles"
+            disabled={initialUser?.managed_by_sso}
             description="Roles this user can access. Empty = no roles."
             data={availableRoles}
             // Dropdown opens downward via portal so it isn't clipped by the
@@ -239,7 +262,8 @@ export function UserDrawer({
           />
           {mode === "edit" && (initialUser?.missing_roles?.length ?? 0) > 0 && (
             <Text size="xs" c="dimmed">
-              Removed from configuration, will be dropped on save: {initialUser?.missing_roles.join(", ")}
+              Removed from configuration, will be dropped on save:{" "}
+              {initialUser?.missing_roles.join(", ")}
             </Text>
           )}
           {mode === "edit" && initialUser && (

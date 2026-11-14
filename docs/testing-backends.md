@@ -6,7 +6,23 @@ API. Two backends are exercised automatically:
 | Backend       | Role type                                          | What it proves                                                                                                                                                                |
 | ------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **MinIO**     | `s3_compatible`                                    | Generic S3-compatible path (the default `e2e` job).                                                                                                                           |
-| **ministack** | `assume_role`, `credentials`, `profile`, `default` | AWS-native path: STS `assume_role` (temporary credentials), direct access-key credentials, named AWS profile, and default credential chain — none of which MinIO can emulate. |
+| **ministack** | `assume_role`, `credentials`, `profile`, `default` | AWS-native path: STS `assume_role` (temporary credentials), direct access-key credentials, named AWS profile, and default credential chain - none of which MinIO can emulate. |
+
+## Real-IdP release smoke
+
+The [SSO guide](sso.md) describes a separate complete ASM + MinIO + Keycloak +
+Authentik stand, including a source-only ASM/Vite mode. Compose it from the
+MinIO overlay and `docker/docker-compose.sso.yml` with `--project-directory .`;
+never include ordinary `docker-compose.yml`. Both IdPs stay running while one
+ASM issuer and its isolated data volume are selected. No local builds are needed.
+
+`tests/test_sso_smoke_fixtures.py` is hermetic structural validation, not an IdP
+integration test. Compose `config --quiet` proves syntax; `check-sso.py
+--check-compose-bindings` proves every effective publication is loopback after
+merging (Compose >=2.24.4). Missing manager-supplied fixture env is an explicit
+skip, not a pass. Full-stand readiness and owner-accepted flows are separate
+runtime gates. The owner performs Keycloak/Authentik release smoke only after
+all ASM 1.3.2 PRs; CI continues to use the fake OP, with no real-IdP CI job.
 
 ## ministack (AWS S3 + IAM + STS emulator)
 

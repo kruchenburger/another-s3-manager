@@ -8,7 +8,7 @@ import {
 } from "@mantine/core";
 import { AlertTriangle, Info } from "lucide-react";
 import { useForm } from "@mantine/form";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { useChangeMyPassword } from "@/features/auth/hooks/useChangeMyPassword";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { usePasswordPolicy } from "@/features/auth/hooks/usePasswordPolicy";
@@ -38,6 +38,8 @@ export function ChangePasswordPage() {
         value === values.next ? null : "Does not match new password",
     },
   });
+
+  if (me?.auth_source === "oidc") return <Navigate to="/" replace />;
 
   const handleSubmit = (values: typeof form.values): void => {
     runWithToasts(
