@@ -60,6 +60,18 @@ _WEB_AUTH_ERRORS = {
     },
 }
 
+_WEB_OIDC_ERRORS = {
+    "start": {"OIDC_DISABLED": 404, "default": 503},
+    "callback": {"OIDC_DISABLED": 404, "default": None},
+}
+
+
+def map_web_oidc_error(door: Literal["start", "callback"], code: str | None) -> int | None:
+    """Map OIDC refusals; None keeps the callback's normal redirect/session path."""
+    mapping = _WEB_OIDC_ERRORS[door]
+    return mapping.get(code, mapping["default"])
+
+
 for _door in ("cookie", "login", "account"):
     _WEB_AUTH_ERRORS[_door].update(
         {

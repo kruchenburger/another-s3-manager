@@ -222,3 +222,55 @@ def test_discovery_lock_is_available_during_network_wait(monkeypatch):
         worker.join(2)
     assert errors == ["unavailable"]
     assert client.snapshot is None
+
+
+@pytest.mark.parametrize(
+    "metadata_age,keys_age,state",
+    [
+        (0, 3599.999, "available"),
+        (0, 3600, "stale"),
+        (0, 3600.001, "stale"),
+        (86399.999, 0, "available"),
+        (86400, 0, "expired"),
+        (86400.001, 0, "expired"),
+    ],
+)
+def test_snapshot_state_shared_by_runtime_and_current(monkeypatch, metadata_age, keys_age, state):
+    from another_s3_manager.access.oidc.discovery import Snapshot
+
+    monkeypatch.setenv("OIDC_ISSUER", "https://op.example")
+    monkeypatch.setenv("OIDC_CLIENT_ID", "client")
+    monkeypatch.setenv("PUBLIC_URL", "https://asm.example")
+    monkeypatch.setenv("COOKIE_SECURE", "true")
+    client = access.discovery_for(access.oidc_settings({}))
+    monkeypatch.setattr("another_s3_manager.access.oidc.discovery.time.monotonic", lambda: 100000.0)
+    snapshot = Snapshot("{}", '{"keys": []}', 100000 - metadata_age, 100000 - keys_age)
+    client.snapshot = snapshot
+    calls = []
+
+    def refresh(*, keys_only=False):
+        calls.append(keys_only)
+        return snapshot
+
+    monkeypatch.setattr(client, "refresh", refresh)
+    assert client.evaluate_snapshot(snapshot) == state
+    assert access.oidc_runtime({})["oidc_available"] is (state == "available")
+    assert access.oidc_runtime({}, public=True)["oidc_available"] is (state == "available")
+    assert calls == []
+    if state == "expired":
+        with pytest.raises(OidcUnavailable, match="metadata_unavailable"):
+            client.current()
+        assert calls == []
+    else:
+        assert client.current() is snapshot
+        assert calls == ([True] if state == "stale" else [])
+
+
+def test_absent_snapshot_is_unavailable_without_refresh(monkeypatch):
+    from another_s3_manager.access.oidc.discovery import Discovery
+
+    client = Discovery(access.oidc_settings({}))
+    assert client.evaluate_snapshot(None) == "expired"
+    with pytest.raises(OidcUnavailable, match="metadata_unavailable"):
+        client.current()
+    assert access.oidc_runtime({})["oidc_available"] is False

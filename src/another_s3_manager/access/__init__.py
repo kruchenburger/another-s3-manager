@@ -40,6 +40,7 @@ from another_s3_manager.access.service import (
     principal_for,
     record_login_attempt,
     recover_local_account,
+    recovery_target_identity,
     require_bucket,
     require_destructive,
     require_not_deletion_disabled,
@@ -124,6 +125,7 @@ __all__ += [
     "managed_by_sso",
     "local_login_allowed",
     "recover_local_account",
+    "recovery_target_identity",
     "session_identity",
     "discovery_for",
 ]

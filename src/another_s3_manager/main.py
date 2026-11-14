@@ -58,6 +58,7 @@ from another_s3_manager.auth import (
     has_valid_session,
     hash_password,
     map_web_auth_error,
+    map_web_oidc_error,
     verify_csrf_token,
 )
 from another_s3_manager.config import load_config, resolve_max_file_size, resolve_presigned_ttls, save_config
@@ -827,7 +828,7 @@ def oidc_login(request: Request, return_to: str = "/"):
     if result.code:
         response = JSONResponse(
             {"detail": {"code": result.code}},
-            status_code=404 if result.code == "OIDC_DISABLED" else 503,
+            status_code=map_web_oidc_error("start", result.code),
             headers=_OIDC_HEADERS,
         )
     else:
@@ -839,8 +840,9 @@ def oidc_login(request: Request, return_to: str = "/"):
 @app.get("/api/auth/oidc/callback")
 async def oidc_callback(request: Request):
     result = await access_service.complete_oidc_login(request.query_params, request.cookies)
-    if result.code == "OIDC_DISABLED":
-        response = JSONResponse({"detail": {"code": result.code}}, status_code=404, headers=_OIDC_HEADERS)
+    status_code = map_web_oidc_error("callback", result.code)
+    if status_code is not None:
+        response = JSONResponse({"detail": {"code": result.code}}, status_code=status_code, headers=_OIDC_HEADERS)
     elif result.session:
         from html import escape
 

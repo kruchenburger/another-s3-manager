@@ -403,12 +403,11 @@ def oidc_runtime(config, *, public=False):
     from .oidc.settings import oidc_settings
 
     settings = oidc_settings(config)
-    snapshot = discovery_for(settings).snapshot if settings.enabled else None
-    available = bool(
-        snapshot is not None
-        and time.monotonic() - snapshot.metadata_at < 86400
-        and time.monotonic() - snapshot.keys_at < 3600
-    )
+    available = False
+    if settings.enabled:
+        discovery = discovery_for(settings)
+        with discovery.lock:
+            available = discovery.evaluate_snapshot(discovery.snapshot) == "available"
     if public:
         return {
             "oidc_enabled": settings.enabled,
@@ -528,6 +527,12 @@ def _complete_oidc_login(query, cookies):
     return OidcCompletion(
         safe_return_to(tx["rt"]), operations, session=token, lifetime_minutes=current.lifetime_minutes
     )
+
+
+def recovery_target_identity(username):
+    """Resolve the console recovery target without exposing account credentials."""
+    snapshot = users.get_user_by_username(username)
+    return account_identity(snapshot) if snapshot is not None else None
 
 
 def recover_local_account(username, *, password=None, enable=False, expected_identity=None):

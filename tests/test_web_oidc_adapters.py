@@ -1,5 +1,7 @@
 from urllib.parse import urlencode
 
+import pytest
+
 from another_s3_manager import access
 from tests.test_oidc_login_integration import begin
 
@@ -51,3 +53,39 @@ def test_http_full_flow_interstitial_to_me(app_client, oidc):
         response = app_client.get("/api/auth/oidc/callback?" + urlencode(query), follow_redirects=False)
     assert response.status_code == 200
     assert app_client.get("/api/me").json()["username"] == "reader"
+
+
+@pytest.mark.parametrize(
+    "door,code,status",
+    [
+        ("login", "OIDC_DISABLED", 404),
+        ("login", "OIDC_UNAVAILABLE", 503),
+        ("login", "OTHER_FAILURE", 503),
+        ("callback", "OIDC_DISABLED", 404),
+        ("callback", "OIDC_UNAVAILABLE", 302),
+        ("callback", "OTHER_FAILURE", 302),
+    ],
+)
+def test_oidc_error_response_contract(app_client, monkeypatch, door, code, status):
+    from unittest.mock import AsyncMock
+
+    operations = (access.CookieOperation("oidc_tx_fixture"),)
+    if door == "login":
+        monkeypatch.setattr(access, "start_oidc_login", lambda *args: access.OidcStart("/login", operations, code))
+    else:
+        monkeypatch.setattr(
+            access, "complete_oidc_login", AsyncMock(return_value=access.OidcCompletion("/login", operations, code))
+        )
+    response = app_client.get("/api/auth/oidc/" + door, follow_redirects=False)
+    assert response.status_code == status
+    if status == 302:
+        assert response.headers["location"] == "/login"
+        assert response.content == b""
+    else:
+        assert response.json() == {"detail": {"code": code}}
+        assert "location" not in response.headers
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert 'oidc_tx_fixture=""' in response.headers["set-cookie"]
+    assert "Max-Age=0" in response.headers["set-cookie"]
+    assert "Path=/api/auth/oidc/" in response.headers["set-cookie"]

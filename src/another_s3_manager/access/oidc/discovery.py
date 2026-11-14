@@ -263,12 +263,21 @@ class Discovery:
         finally:
             self.refresh_lock.release()
 
+    def evaluate_snapshot(self, snapshot):
+        """Check freshness without refreshing; callers capture the snapshot under lock."""
+        now = time.monotonic()
+        if snapshot is None or now - snapshot.metadata_at >= 86400:
+            return "expired"
+        if now - snapshot.keys_at >= 3600:
+            return "stale"
+        return "available"
+
     def current(self):
         with self.lock:
-            now = time.monotonic()
-            if self.snapshot is None or now - self.snapshot.metadata_at >= 86400:
+            state = self.evaluate_snapshot(self.snapshot)
+            if state == "expired":
                 raise OidcUnavailable("metadata_unavailable")
-            if now - self.snapshot.keys_at < 3600:
+            if state == "available":
                 return self.snapshot
         return self.refresh(keys_only=True)
 

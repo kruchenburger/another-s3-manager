@@ -154,10 +154,9 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("target flags cannot repeat; --enable cannot accept a password")
         target = targets[0]
         from another_s3_manager import access
-        from another_s3_manager.users import get_user_by_username
 
-        snapshot = get_user_by_username(target)
-        if snapshot is None:
+        identity = access.recovery_target_identity(target)
+        if identity is None:
             _fail("target user does not exist")
         if not args.yes:
             if not sys.stdin.isatty():
@@ -168,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         password = None if args.enable else _resolve_password(args.password)
         try:
             access.recover_local_account(
-                target, password=password, enable=bool(args.enable), expected_identity=access.account_identity(snapshot)
+                target, password=password, enable=bool(args.enable), expected_identity=identity
             )
         except access.AccessDenied as error:
             _fail(error.message)
