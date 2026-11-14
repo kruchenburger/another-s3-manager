@@ -1,0 +1,187 @@
+# Local-only release smoke. Compose >=2.24.4; combine with the MinIO overlay ONLY.
+# Official version references and operator commands: docs/sso.md.
+name: asm-sso-smoke
+
+x-authentik-env: &authentik-env
+  AUTHENTIK_POSTGRESQL__HOST: authentik-db
+  AUTHENTIK_POSTGRESQL__NAME: authentik
+  AUTHENTIK_POSTGRESQL__USER: authentik
+  AUTHENTIK_POSTGRESQL__PASSWORD: ${SSO_DB_PASSWORD:?local fixture database password required}
+  AUTHENTIK_SECRET_KEY: ${SSO_AUTHENTIK_SECRET:?local fixture secret required}
+  AUTHENTIK_LISTEN__HTTP: '["0.0.0.0:9002"]'
+  AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+  AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+
+x-tool-env: &tool-env
+  SSO_FIXTURE_MARKER: ${SSO_FIXTURE_MARKER:-asm-local-smoke-v1}
+  SSO_RUNTIME_CONFIRMED: ${SSO_RUNTIME_CONFIRMED:-no}
+  SSO_PROVIDER: ${SSO_PROVIDER:-keycloak}
+  SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:?local fixture client secret required}
+  SSO_DEMO_PASSWORD: ${SSO_DEMO_PASSWORD:?local-only demo user password required}
+  SSO_KEYCLOAK_ADMIN_PASSWORD: ${SSO_KEYCLOAK_ADMIN_PASSWORD:?local fixture admin password required}
+  SSO_AUTHENTIK_TOKEN: ${SSO_AUTHENTIK_TOKEN:?local fixture bootstrap token required}
+  PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+  OIDC_ISSUER: ${OIDC_ISSUER:-http://keycloak.sso.test:8180/realms/asm-smoke}
+
+services:
+  minio:
+    container_name: asm-sso-smoke-minio
+    ports: !override
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+
+  keycloak:
+    profiles: [sso-smoke]
+    image: quay.io/keycloak/keycloak:26.8.2
+    command: [start-dev, --import-realm, --http-port=8180, --hostname=http://keycloak.sso.test:8180]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: smoke-bootstrap
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${SSO_KEYCLOAK_ADMIN_PASSWORD:?local fixture admin password required}
+      KC_HEALTH_ENABLED: "true"
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:?local fixture client secret required}
+      SSO_DEMO_PASSWORD: ${SSO_DEMO_PASSWORD:?local-only demo user password required}
+    ports:
+      - "127.0.0.1:8180:8180"
+    networks:
+      default:
+        aliases: [keycloak.sso.test]
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      - ./docker/sso/keycloak/realm.json:/opt/keycloak/data/import/asm-smoke-realm.json:ro
+    healthcheck:
+      test: [CMD-SHELL, "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/9000; printf \"GET /health/ready HTTP/1.0\\r\\n\\r\\n\" >&3; grep -q \"200 OK\" <&3'"]
+      interval: 10s
+      timeout: 5s
+      start_period: 120s
+      retries: 18
+
+  authentik-db:
+    profiles: [sso-smoke]
+    image: postgres:16.16-alpine3.23
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD: ${SSO_DB_PASSWORD:?local fixture database password required}
+    volumes:
+      - authentik-db:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -d authentik -U authentik"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+
+  authentik:
+    profiles: [sso-smoke]
+    image: ghcr.io/goauthentik/server:2026.8.5
+    command: server
+    shm_size: 512mb
+    environment: *authentik-env
+    ports:
+      - "127.0.0.1:9002:9002"
+    networks:
+      default:
+        aliases: [authentik.sso.test]
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+    volumes:
+      - authentik-data:/data
+    healthcheck:
+      test: [CMD, ak, healthcheck]
+      interval: 10s
+      timeout: 5s
+      start_period: 120s
+      retries: 18
+
+  authentik-worker:
+    profiles: [sso-smoke]
+    image: ghcr.io/goauthentik/server:2026.8.5
+    command: worker
+    shm_size: 512mb
+    environment:
+      <<: *authentik-env
+      AUTHENTIK_BOOTSTRAP_EMAIL: smoke-bootstrap@example.test
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${SSO_DEMO_PASSWORD:?local-only demo user password required}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${SSO_AUTHENTIK_TOKEN:?local fixture bootstrap token required}
+    depends_on:
+      authentik-db:
+        condition: service_healthy
+    volumes:
+      - authentik-data:/data
+    healthcheck:
+      test: [CMD, ak, healthcheck]
+      interval: 10s
+      timeout: 5s
+      start_period: 120s
+      retries: 18
+
+  sso-seed:
+    profiles: [sso-smoke]
+    image: ${ASM_SMOKE_IMAGE:?manager must supply a tested OIDC image; no local builds}
+    entrypoint: [python, /smoke/scripts/smoke/seed-sso.py, --confirm-local-smoke]
+    environment: *tool-env
+    volumes:
+      - ./scripts/smoke:/smoke/scripts/smoke:ro
+      - ./docker/sso/authentik/blueprint.yaml:/smoke/docker/sso/authentik/blueprint.yaml:ro
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      authentik:
+        condition: service_healthy
+      authentik-worker:
+        condition: service_healthy
+    restart: "no"
+
+  sso-init-data:
+    profiles: [sso-smoke]
+    image: ${ASM_SMOKE_IMAGE:?manager must supply a tested OIDC image; no local builds}
+    user: "0:0"
+    entrypoint: [python, -c, "import os; os.chown('/app/data', 1001, 1001)"]
+    volumes:
+      - asm-data:/app/data
+    restart: "no"
+
+  app:
+    profiles: [sso-smoke]
+    image: ${ASM_SMOKE_IMAGE:?manager must supply a tested OIDC image; no local builds}
+    environment:
+      JWT_SECRET_KEY: ${SSO_JWT_SECRET:?local fixture JWT secret required}
+      ADMIN_PASSWORD: ${SSO_DEMO_PASSWORD:?local-only demo user password required}
+      DATA_DIR: /app/data
+      S3_FILE_MANAGER_CONFIG: /fixture/config.json
+      COOKIE_SECURE: "false"
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://keycloak.sso.test:8180/realms/asm-smoke}
+      OIDC_CLIENT_ID: asm
+      OIDC_CLIENT_SECRET: ${SSO_CLIENT_SECRET:?local fixture client secret required}
+      OIDC_ALLOW_INSECURE_HTTP: "true"
+      OIDC_ALLOWED_PRIVATE_ORIGINS: http://keycloak.sso.test:8180,http://authentik.sso.test:9002
+      LOCAL_LOGIN: ${LOCAL_LOGIN:-all}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - asm-data:/app/data
+      - ./docker/sso/asm/config.json:/fixture/config.json:ro
+    depends_on:
+      sso-init-data:
+        condition: service_completed_successfully
+      sso-seed:
+        condition: service_completed_successfully
+      minio-seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      start_period: 30s
+      retries: 12
+
+volumes:
+  asm-data:
+    name: asm-sso-smoke-${SSO_PROVIDER:-keycloak}-data
+  keycloak-data:
+  authentik-db:
+  authentik-data:
+  minio-data:
