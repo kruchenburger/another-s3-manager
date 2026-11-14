@@ -29,6 +29,8 @@
       "enabled": true,
       "email": "sso-admin@example.test",
       "emailVerified": false,
+      "firstName": "SSO",
+      "lastName": "Admin",
       "groups": [
         "/s3-admins"
       ],
@@ -45,6 +47,8 @@
       "enabled": true,
       "email": "sso-reader@example.test",
       "emailVerified": false,
+      "firstName": "SSO",
+      "lastName": "Reader",
       "groups": [
         "/data-team",
         "/team/sub"
