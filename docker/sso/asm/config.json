@@ -1,0 +1,83 @@
+{
+  "roles": [
+    {
+      "name": "reader",
+      "type": "s3_compatible",
+      "access_key_id": "minioadmin",
+      "secret_access_key": "minioadmin",
+      "endpoint_url": "http://minio:9000",
+      "addressing_style": "path",
+      "region": "us-east-1",
+      "allowed_buckets": [
+        "e2e-test"
+      ],
+      "allow_delete": false,
+      "description": "LOCAL ONLY; MinIO demo credentials; reader"
+    },
+    {
+      "name": "admin",
+      "type": "s3_compatible",
+      "access_key_id": "minioadmin",
+      "secret_access_key": "minioadmin",
+      "endpoint_url": "http://minio:9000",
+      "addressing_style": "path",
+      "region": "us-east-1",
+      "allowed_buckets": [
+        "e2e-test"
+      ],
+      "allow_delete": true,
+      "description": "LOCAL ONLY; MinIO demo credentials; admin"
+    }
+  ],
+  "auth": {
+    "local_login": "all",
+    "oidc": {
+      "display_name": "Local smoke SSO",
+      "scopes": [
+        "openid",
+        "profile",
+        "groups"
+      ],
+      "username_claim": "preferred_username",
+      "groups_claim": "groups",
+      "session_max_minutes": 180,
+      "role_mapping": {
+        "mode": "sync",
+        "require_match": true,
+        "rules": [
+          {
+            "claim": "groups",
+            "value": "/s3-admins",
+            "admin": true
+          },
+          {
+            "claim": "groups",
+            "value": "s3-admins",
+            "admin": true
+          },
+          {
+            "claim": "groups",
+            "value": "/team/sub",
+            "roles": [
+              "reader"
+            ]
+          },
+          {
+            "claim": "groups",
+            "value": "data-team",
+            "roles": [
+              "reader"
+            ]
+          },
+          {
+            "claim": "groups_flat",
+            "value": "data-team",
+            "roles": [
+              "reader"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

@@ -40,6 +40,8 @@ wheels/
 
 # Configuration (may contain sensitive credentials)
 config.json
+# Public smoke fixture with no credentials
+!docker/sso/asm/config.json
 
 # User data and bans
 users.json

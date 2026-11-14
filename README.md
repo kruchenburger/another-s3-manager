@@ -157,6 +157,9 @@ supported up to `max_file_size` (S3's per-object maximum is 5 TB). The MCP
 
 ### Optional OpenID Connect configuration
 
+See [SSO setup and smoke stand](docs/sso.md) for Keycloak-first setup,
+Authentik, recovery and the isolated no-build release smoke profile.
+
 OIDC is opt-in: set `OIDC_ISSUER`, `OIDC_CLIENT_ID` and the canonical origin
 `PUBLIC_URL` (no path, query or fragment). The callback is
 `PUBLIC_URL/api/auth/oidc/callback`; request Host/forwarded headers are never used.

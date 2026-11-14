@@ -175,6 +175,33 @@ safe to run against a populated database.
 
 ## Development Commands
 
+### Isolated real-IdP smoke (1.3.2)
+
+See `docs/sso.md` (Keycloak first, then Authentik). The SSO overlay defines its
+own image-based ASM; combine only `docker/docker-compose.minio.yml` and
+`docker/docker-compose.sso.yml`, with `--project-directory .` and profile
+`sso-smoke`. Never include ordinary `docker-compose.yml` or mount ordinary
+`./data`. `ASM_SMOKE_IMAGE` must identify a tested remote-built OIDC image;
+source mode uses native ASM + Vite without image/frontend builds. Both IdPs
+remain running; provider selection recreates app only, with distinct ASM data.
+
+Selected local offline checks, sequentially (never start the stack as a check):
+
+```bash
+uv run pytest -o addopts= tests/test_sso_smoke_fixtures.py
+docker compose --project-directory . --env-file docker/sso/.env.example -f docker/docker-compose.minio.yml -f docker/docker-compose.sso.yml --profile sso-smoke config --quiet
+uv run python scripts/smoke/check-sso.py --check-compose-bindings
+```
+
+Require Compose >=2.24.4 for MinIO `ports: !override`; the checker validates
+fully merged JSON in memory without printing env/secrets. If manager-supplied
+`docker/sso/.env.example` is absent, skip env-dependent checks explicitly and
+report them pending. Fixture pytest does not prove running IdPs. Only the owner
+starts the complete stand and accepts both-provider release flows; full suites,
+builds and fake-OP browser validation remain remote CI obligations.
+
+### Native development
+
 ```bash
 # Install dependencies
 uv sync
