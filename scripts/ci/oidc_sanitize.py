@@ -1,8 +1,8 @@
 """Print the tail of a private CI log with OIDC auth material removed.
 
-Remote CI only. Query strings, sensitive key=value pairs, JWT-looking strings,
-bearer tokens and the fixture canaries are redacted; if a canary still survives,
-nothing is printed.
+Remote CI only. Query strings, sensitive key/value pairs (quoted or not),
+JWT-looking strings, bearer tokens and any long opaque token are redacted; if a
+fixture canary still survives, nothing is printed.
 """
 
 import re
@@ -10,17 +10,26 @@ import sys
 
 CANARIES = ("oidc-ci-session-secret-canary", "FixturePassword1")
 KEYS = (
-    r"(code|state|nonce|token|id_token|id_token_hint|access_token|refresh_token|"
+    r"(?:code|state|nonce|token|id_token|id_token_hint|access_token|refresh_token|"
     r"client_secret|code_verifier|password|secret|csrf_token)"
 )
+# key=value, key: value, 'key': 'value', "key": "value", key 'value'.
+KEY_VALUE = re.compile(r"""(["']?\b""" + KEYS + r"""["']?(?:\s*[=:]\s*|\s+)["']?)[^\s,;&"'}\])]+""", re.I)
+JWT = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_.-]+")
+BEARER = re.compile(r"(Bearer |as3m_)[A-Za-z0-9_.-]+")
+QUERY = re.compile(r"\?[^\s\"'<>]*")
+OPAQUE = re.compile(r"[A-Za-z0-9_-]{20,}")
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def sanitize(line: str) -> str:
-    line = re.sub(r"\x1b\[[0-9;]*m", "", line)
-    line = re.sub(r"\?[^\s\"'<>]*", "?<query>", line)
-    line = re.sub(KEYS + r"(\s*[=:]\s*)[^\s,;&\"']+", r"\1\2<redacted>", line, flags=re.I)
-    line = re.sub(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_.-]+", "<jwt>", line)
-    line = re.sub(r"(Bearer |as3m_)[A-Za-z0-9_.-]+", r"\1<redacted>", line)
+    line = ANSI.sub("", line)
+    line = QUERY.sub("?<query>", line)
+    line = JWT.sub("<jwt>", line)
+    line = BEARER.sub(r"\1<redacted>", line)
+    line = KEY_VALUE.sub(r"\1<redacted>", line)
+    # Codes, verifiers, state and secrets that appear without a recognizable key.
+    line = OPAQUE.sub("<opaque>", line)
     return line[:300]
 
 
