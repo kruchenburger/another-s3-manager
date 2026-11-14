@@ -18,13 +18,13 @@ export function SettingsSecurityTab({
     <Stack gap="md" maw={520} mt="md">
       {runtime && (
         <Stack gap="xs">
-          <Text fw={600}>Single sign-on � read only</Text>
+          <Text fw={600}>Single sign-on · read only</Text>
           <Text size="sm">Issuer: {runtime.issuer || "Not configured"}</Text>
           <Text size="sm">
             Client ID: {runtime.client_id || "Not configured"}
           </Text>
           <Text size="sm">
-            Mapping: {runtime.mapping_mode} � Local login:{" "}
+            Mapping: {runtime.mapping_mode} · Local login:{" "}
             {runtime.effective_local_login}
           </Text>
         </Stack>

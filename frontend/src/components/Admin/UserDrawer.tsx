@@ -234,7 +234,7 @@ export function UserDrawer({
             <Switch
               label={
                 initialUser?.managed_by_sso
-                  ? "Administrator � managed by SSO"
+                  ? "Administrator · managed by SSO"
                   : "Administrator"
               }
               disabled={isSelf || initialUser?.managed_by_sso}
