@@ -64,7 +64,7 @@ upload_rejected_total = Counter(
 auth_logins_total = Counter(
     "as3m_auth_logins_total",
     "Login attempts by result",
-    ["result"],  # success | invalid_password | banned
+    ["method", "result"],  # success | invalid_password | banned
     registry=REGISTRY,
 )
 auth_bans_active = Gauge(
@@ -335,7 +335,7 @@ def _seed_zero_series() -> None:
 
     # auth_logins_total{result}: the three outcomes /api/login emits.
     for result in ("success", "invalid_password", "banned"):
-        auth_logins_total.labels(result=result)
+        auth_logins_total.labels(method="local", result=result)
 
     # s3_retries_total{reason}: only "credentials_expired" is ever emitted
     # (see the comment above the Counter -- botocore's own throttle retries
@@ -426,3 +426,8 @@ def _seed_zero_series() -> None:
     # s3_bytes_total, s3_objects_total, presigned_urls_total:
     #   all carry a `role` and/or `bucket` label -- see the module comment
     #   above this function for why those can't be safely pre-enumerated.
+
+
+oidc_discovery_errors_total = Counter(
+    "as3m_oidc_discovery_errors_total", "OIDC discovery refresh failures", registry=REGISTRY
+)

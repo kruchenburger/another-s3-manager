@@ -21,6 +21,7 @@ import {
 } from "@/features/files/api/filesApi";
 import { useRolePermissions } from "@/features/auth/hooks/useRolePermissions";
 import { useMe } from "@/features/auth/hooks/useMe";
+import { sessionCoordinator } from "@/features/auth/hooks/useSessionIdentity";
 import { useDisplayMode } from "@/hooks/useDisplayMode";
 import { useConfig } from "@/hooks/useConfig";
 import { joinPath, decodePath, encodePath } from "@/utils/pathUtils";
@@ -212,6 +213,7 @@ export function FileBrowser() {
   );
 
   const queryClient = useQueryClient();
+  const coordinator = sessionCoordinator(queryClient);
   const deleteMutation = useDelete();
   const uploadMutation = useUpload();
   const { mode, setMode } = useDisplayMode(roleId, bucket);
@@ -446,6 +448,12 @@ export function FileBrowser() {
     const names = pendingDelete.current;
     setConfirmOpen(false);
     if (names.length === 0) return;
+    let action: ReturnType<typeof coordinator.beginAction>;
+    try {
+      action = coordinator.beginAction();
+    } catch {
+      return;
+    }
 
     const showProgress = names.length > 1;
     let notifId: string | null = null;
@@ -504,7 +512,7 @@ export function FileBrowser() {
     let aborted = false;
 
     for (let i = 0; i < names.length; i++) {
-      if (cancelRef.cancelled) break;
+      if (cancelRef.cancelled || !action.isCurrent()) break;
       const name = names[i];
       renderProgress(i, itemName(decodeIdentity(name)));
       const item = decodeIdentity(name);
@@ -515,7 +523,9 @@ export function FileBrowser() {
         // state transitions through React — each one was triggering a full
         // FileBrowser rerender on the open folder's table. The final
         // invalidation below refetches the file list ONCE after the batch.
-        await deleteFile(bucket, roleId, fullPath);
+        action.assertCurrent();
+        await deleteFile(bucket, roleId, fullPath, action.signal);
+        if (!action.isCurrent()) break;
         success++;
         consecutiveFailures = 0;
         // Optimistic header counter: batched every 50 successes (a per-file
@@ -523,6 +533,7 @@ export function FileBrowser() {
         // useAnimatedNumber in BucketPageHeader glides between steps.
         if (success % 50 === 0) setBulkDeletedCount(success);
       } catch (e) {
+        if (!action.isCurrent()) break;
         failed++;
         consecutiveFailures++;
         if (!firstError) {
@@ -537,6 +548,10 @@ export function FileBrowser() {
 
     if (showProgress && notifId !== null) {
       notifications.hide(notifId);
+    }
+    if (!action.isCurrent()) {
+      setBulkDeletedCount(0);
+      return;
     }
     // Single invalidation after the batch. Runs for batches of one too —
     // earlier this was guarded by `if (showProgress)` (multi-file only),
@@ -553,6 +568,7 @@ export function FileBrowser() {
         queryKey: fileSearchFolderKey(bucket, roleId, pathFromUrl),
       }),
     ]);
+    if (!action.isCurrent()) return;
     setBulkDeletedCount(0);
 
     if (aborted) {
@@ -703,6 +719,12 @@ export function FileBrowser() {
 
   const handleUpload = useCallback(
     async (files: FileWithRelativePath[]) => {
+      let action: ReturnType<typeof coordinator.beginAction>;
+      try {
+        action = coordinator.beginAction();
+      } catch {
+        return;
+      }
       const maxFileSize = me.data?.max_file_size;
       const items: UploadProgressItem[] = files.map((f) => ({
         name: f.file.name,
@@ -713,6 +735,8 @@ export function FileBrowser() {
       // abort() which both stops the in-flight XHR (via signal) AND sets
       // signal.aborted=true so the loop bails before starting the next file.
       const controller = new AbortController();
+      const sessionChanged = () => controller.abort();
+      action.signal.addEventListener("abort", sessionChanged, { once: true });
       const cancel = () => controller.abort();
       // Hide the toast WITHOUT aborting — wired to the "X" once a file is
       // finalizing (body already on the server). Aborting then would only
@@ -726,6 +750,7 @@ export function FileBrowser() {
       const updated = [...items];
 
       const renderToast = () => {
+        if (!action.isCurrent()) return;
         notifications.update({
           id: notifId,
           message: (
@@ -748,150 +773,165 @@ export function FileBrowser() {
         withCloseButton: false,
       });
 
-      for (let i = 0; i < files.length; i++) {
-        // Cancel-aware loop guard. Once the user clicks cancel, mark every
-        // remaining file as "cancelled" so the summary tells them what was
-        // skipped, rather than leaving them as forever-"pending".
-        if (controller.signal.aborted) {
-          for (let j = i; j < files.length; j++) {
-            updated[j] = { ...updated[j], status: "cancelled" };
+      try {
+        for (let i = 0; i < files.length; i++) {
+          if (!action.isCurrent()) return;
+          // Cancel-aware loop guard. Once the user clicks cancel, mark every
+          // remaining file as "cancelled" so the summary tells them what was
+          // skipped, rather than leaving them as forever-"pending".
+          if (controller.signal.aborted) {
+            for (let j = i; j < files.length; j++) {
+              updated[j] = { ...updated[j], status: "cancelled" };
+            }
+            break;
           }
-          break;
-        }
 
-        const item = files[i];
+          const item = files[i];
 
-        // Pre-flight size check — skip the server round-trip for files we
-        // already know will be rejected. The backend enforces the same limit
-        // (streaming check in upload route), but doing it client-side first
-        // means the user sees "doc.zip is 419 MB, limit is 100 MB" instead of
-        // a generic 400 after the file has streamed up. Without this, batches
-        // with one oversize file in the middle just silently skip it and the
-        // user has no way to tell which file failed.
-        //
-        // Use formatBytes (binary KiB/MiB/GiB labeled as KB/MB/GB) so the size
-        // shown here matches what the file table elsewhere in the UI shows for
-        // the same file — consistency across the app beats decimal correctness.
-        if (maxFileSize !== undefined && item.file.size > maxFileSize) {
-          updated[i] = {
-            ...updated[i],
-            status: "error",
-            error: `File is ${formatBytes(item.file.size)}, limit is ${formatBytes(maxFileSize)}`,
-          };
+          // Pre-flight size check — skip the server round-trip for files we
+          // already know will be rejected. The backend enforces the same limit
+          // (streaming check in upload route), but doing it client-side first
+          // means the user sees "doc.zip is 419 MB, limit is 100 MB" instead of
+          // a generic 400 after the file has streamed up. Without this, batches
+          // with one oversize file in the middle just silently skip it and the
+          // user has no way to tell which file failed.
+          //
+          // Use formatBytes (binary KiB/MiB/GiB labeled as KB/MB/GB) so the size
+          // shown here matches what the file table elsewhere in the UI shows for
+          // the same file — consistency across the app beats decimal correctness.
+          if (maxFileSize !== undefined && item.file.size > maxFileSize) {
+            updated[i] = {
+              ...updated[i],
+              status: "error",
+              error: `File is ${formatBytes(item.file.size)}, limit is ${formatBytes(maxFileSize)}`,
+            };
+            renderToast();
+            continue;
+          }
+
+          updated[i] = { ...updated[i], status: "uploading", progress: 0 };
           renderToast();
-          continue;
+          try {
+            const key = pathFromUrl
+              ? `${pathFromUrl}/${item.relativePath}`
+              : item.relativePath;
+            await uploadMutation.mutateAsync({
+              bucket,
+              role: roleId,
+              key,
+              file: item.file,
+              currentPath: pathFromUrl,
+              // Suppress per-file query invalidation; we invalidate ONCE after
+              // the batch (see below). Without this, every successful file
+              // triggered a listFiles refetch, and `isFetching` flipped the
+              // FileBrowser into the loader between files — a flicker
+              // (loader → table → loader → table…) while uploads streamed in.
+              // Same fix as bulk-delete (commit b8543a1).
+              skipInvalidation: true,
+              signal: controller.signal,
+              onProgress: (percent) => {
+                if (!action.isCurrent()) return;
+                // Throttle by skipping no-op updates — every progress event would
+                // otherwise trigger a Mantine notifications re-render.
+                if (updated[i].progress === percent) return;
+                updated[i] = { ...updated[i], progress: percent };
+                renderToast();
+              },
+              onFinalizing: () => {
+                if (!action.isCurrent()) return;
+                // Body fully sent; the server is now spooling the body to a temp
+                // file and streaming it to S3 (managed multipart) before it
+                // replies. On a multi-GB file that's tens of seconds during which
+                // the bar would sit frozen at 100% — switch to a "Finalizing…"
+                // state so the user sees the server is still working, not hung.
+                updated[i] = {
+                  ...updated[i],
+                  status: "finalizing",
+                  progress: 100,
+                };
+                renderToast();
+              },
+            });
+            if (!action.isCurrent()) return;
+            updated[i] = { ...updated[i], status: "done", progress: 100 };
+          } catch (e) {
+            if (!action.isCurrent()) return;
+            // Abort isn't a real failure — it's a user action. Distinguish so
+            // the summary doesn't shout "ERROR" at the user who clicked cancel.
+            const isAbort =
+              e instanceof DOMException && e.name === "AbortError";
+            // Use getErrorMessage so the backend's `detail` field is surfaced
+            // (e.g. "File size exceeds maximum allowed size of 400MB") instead
+            // of the generic `xhr.statusText` ("Internal Server Error" /
+            // "Bad Request") that ApiError.message defaults to. The structured
+            // `{detail: {code, message}}` shape from Phase 6a error-handling is
+            // handled by the same helper.
+            updated[i] = {
+              ...updated[i],
+              status: isAbort ? "cancelled" : "error",
+              error: isAbort ? undefined : getErrorMessage(e),
+            };
+          }
+          renderToast();
         }
 
-        updated[i] = { ...updated[i], status: "uploading", progress: 0 };
-        renderToast();
-        try {
-          const key = pathFromUrl
-            ? `${pathFromUrl}/${item.relativePath}`
-            : item.relativePath;
-          await uploadMutation.mutateAsync({
-            bucket,
-            role: roleId,
-            key,
-            file: item.file,
-            currentPath: pathFromUrl,
-            // Suppress per-file query invalidation; we invalidate ONCE after
-            // the batch (see below). Without this, every successful file
-            // triggered a listFiles refetch, and `isFetching` flipped the
-            // FileBrowser into the loader between files — a flicker
-            // (loader → table → loader → table…) while uploads streamed in.
-            // Same fix as bulk-delete (commit b8543a1).
-            skipInvalidation: true,
-            signal: controller.signal,
-            onProgress: (percent) => {
-              // Throttle by skipping no-op updates — every progress event would
-              // otherwise trigger a Mantine notifications re-render.
-              if (updated[i].progress === percent) return;
-              updated[i] = { ...updated[i], progress: percent };
-              renderToast();
-            },
-            onFinalizing: () => {
-              // Body fully sent; the server is now spooling the body to a temp
-              // file and streaming it to S3 (managed multipart) before it
-              // replies. On a multi-GB file that's tens of seconds during which
-              // the bar would sit frozen at 100% — switch to a "Finalizing…"
-              // state so the user sees the server is still working, not hung.
-              updated[i] = {
-                ...updated[i],
-                status: "finalizing",
-                progress: 100,
-              };
-              renderToast();
-            },
-          });
-          updated[i] = { ...updated[i], status: "done", progress: 100 };
-        } catch (e) {
-          // Abort isn't a real failure — it's a user action. Distinguish so
-          // the summary doesn't shout "ERROR" at the user who clicked cancel.
-          const isAbort = e instanceof DOMException && e.name === "AbortError";
-          // Use getErrorMessage so the backend's `detail` field is surfaced
-          // (e.g. "File size exceeds maximum allowed size of 400MB") instead
-          // of the generic `xhr.statusText` ("Internal Server Error" /
-          // "Bad Request") that ApiError.message defaults to. The structured
-          // `{detail: {code, message}}` shape from Phase 6a error-handling is
-          // handled by the same helper.
-          updated[i] = {
-            ...updated[i],
-            status: isAbort ? "cancelled" : "error",
-            error: isAbort ? undefined : getErrorMessage(e),
-          };
+        // Single invalidation after the batch — useUpload.skipInvalidation was
+        // true inside the loop, so the open-folder file list only refetches
+        // ONCE here instead of once per uploaded file. Skip the refetch
+        // entirely if no file actually landed (every upload failed, or the
+        // user cancelled before the first one succeeded) — nothing changed
+        // server-side, so the GET would just return the same list.
+        if (!action.isCurrent()) return;
+        const anyUploaded = updated.some((u) => u.status === "done");
+        if (anyUploaded) {
+          await Promise.all([
+            queryClient.invalidateQueries({
+              queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
+            }),
+            queryClient.invalidateQueries({
+              queryKey: fileSearchFolderKey(bucket, roleId, pathFromUrl),
+            }),
+          ]);
+          if (!action.isCurrent()) return;
         }
-        renderToast();
-      }
 
-      // Single invalidation after the batch — useUpload.skipInvalidation was
-      // true inside the loop, so the open-folder file list only refetches
-      // ONCE here instead of once per uploaded file. Skip the refetch
-      // entirely if no file actually landed (every upload failed, or the
-      // user cancelled before the first one succeeded) — nothing changed
-      // server-side, so the GET would just return the same list.
-      const anyUploaded = updated.some((u) => u.status === "done");
-      if (anyUploaded) {
-        queryClient.invalidateQueries({
-          queryKey: filesQueryKey(bucket, roleId, pathFromUrl),
+        // Final summary toast — `UploadSummary` surfaces failed filenames + their
+        // error messages so a 223/224 batch tells the user WHICH file failed.
+        // Successful batches dismiss quickly (the file table updates on success,
+        // which is the real confirmation); failed / cancelled batches stay
+        // longer so the user has time to read the failed list.
+        const allDone = updated.every((u) => u.status === "done");
+        const hasErrors = updated.some((u) => u.status === "error");
+        const wasCancelled = updated.some((u) => u.status === "cancelled");
+        const autoCloseMs = allDone
+          ? TOAST_DURATIONS.success
+          : TOAST_DURATIONS.error;
+        notifications.update({
+          id: notifId,
+          message: <UploadSummary items={updated} autoCloseMs={autoCloseMs} />,
+          color: allDone
+            ? "green"
+            : wasCancelled && !hasErrors
+              ? "gray"
+              : "yellow",
+          autoClose: autoCloseMs,
+          withCloseButton: true,
+          // Override Mantine's baked-in body clipping. Without these, the
+          // notification root's `align-items: center` + `overflow: hidden` on
+          // the description body would cut the headline off the top and the
+          // last list row off the bottom of a tall failed-files summary. We
+          // want the message to render in full and let the inner scroll-area
+          // (UploadSummary's maxHeight container) be the only clipping point.
+          styles: {
+            root: { alignItems: "stretch" },
+            body: { overflow: "visible" },
+            description: { overflow: "visible", textOverflow: "clip" },
+          },
         });
-        queryClient.invalidateQueries({
-          queryKey: fileSearchFolderKey(bucket, roleId, pathFromUrl),
-        });
+      } finally {
+        action.signal.removeEventListener("abort", sessionChanged);
+        if (!action.isCurrent()) notifications.hide(notifId);
       }
-
-      // Final summary toast — `UploadSummary` surfaces failed filenames + their
-      // error messages so a 223/224 batch tells the user WHICH file failed.
-      // Successful batches dismiss quickly (the file table updates on success,
-      // which is the real confirmation); failed / cancelled batches stay
-      // longer so the user has time to read the failed list.
-      const allDone = updated.every((u) => u.status === "done");
-      const hasErrors = updated.some((u) => u.status === "error");
-      const wasCancelled = updated.some((u) => u.status === "cancelled");
-      const autoCloseMs = allDone
-        ? TOAST_DURATIONS.success
-        : TOAST_DURATIONS.error;
-      notifications.update({
-        id: notifId,
-        message: <UploadSummary items={updated} autoCloseMs={autoCloseMs} />,
-        color: allDone
-          ? "green"
-          : wasCancelled && !hasErrors
-            ? "gray"
-            : "yellow",
-        autoClose: autoCloseMs,
-        withCloseButton: true,
-        // Override Mantine's baked-in body clipping. Without these, the
-        // notification root's `align-items: center` + `overflow: hidden` on
-        // the description body would cut the headline off the top and the
-        // last list row off the bottom of a tall failed-files summary. We
-        // want the message to render in full and let the inner scroll-area
-        // (UploadSummary's maxHeight container) be the only clipping point.
-        styles: {
-          root: { alignItems: "stretch" },
-          body: { overflow: "visible" },
-          description: { overflow: "visible", textOverflow: "clip" },
-        },
-      });
     },
     [
       bucket,
@@ -899,6 +939,7 @@ export function FileBrowser() {
       pathFromUrl,
       uploadMutation,
       queryClient,
+      coordinator,
       me.data?.max_file_size,
     ],
   );

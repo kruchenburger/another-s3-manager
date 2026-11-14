@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
+  Collapse,
   Anchor,
   Button,
   Card,
@@ -22,16 +23,44 @@ import { GITHUB_URL } from "@/constants/links";
 import { getErrorMessage } from "@/utils/apiError";
 import classes from "./LoginPage.module.css";
 
+import { safeReturnTo } from "@/features/auth/utils/safeReturnTo";
+import { oidcStartUrl } from "@/features/auth/api/authApi";
+import { useSessionIdentity } from "@/features/auth/hooks/useSessionIdentity";
+
 interface LocationState {
   from?: string;
 }
+
+const SSO_ERRORS: Record<string, string> = {
+  expired: "This sign-in expired or was already used. Start a new sign-in.",
+  no_access:
+    "Your identity provider account has no matching ASM access. Contact your administrator.",
+  disabled: "This ASM account is disabled. Contact your administrator.",
+  idp_unavailable:
+    "Your identity provider is unavailable. Start a new sign-in when it recovers.",
+  invalid_token:
+    "ASM could not verify this sign-in. Try again or contact your administrator.",
+  username_conflict:
+    "ASM could not create an account for this sign-in. Contact your administrator.",
+  access_denied:
+    "Your identity provider declined this sign-in. Start again if this was unexpected.",
+  login_required: "Your identity provider requires a new sign-in. Try again.",
+};
 
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { data: me, isSuccess: meIsValid } = useMe();
-  const { data: appInfo } = useAppInfo();
+  const { data: appInfo, isError: appInfoFailed } = useAppInfo();
   const login = useLogin();
+  const [localOpen, setLocalOpen] = useState(false);
+  const { blocked } = useSessionIdentity();
+  const auth = appInfo?.auth;
+  const returnTo = safeReturnTo(
+    new URLSearchParams(location.search).get("return_to") ??
+      (location.state as LocationState | null)?.from,
+  );
+  const ssoError = new URLSearchParams(location.search).get("sso_error");
 
   const appName = appInfo?.app_name ?? "Another S3 Manager";
 
@@ -54,16 +83,16 @@ export function LoginPage() {
   // the address bar and freezes the page. isSuccess is false while the query is
   // in that errored state, so we stay on /login and let the user re-auth.
   useEffect(() => {
-    if (me && meIsValid) {
-      const from = (location.state as LocationState | null)?.from ?? "/";
+    if (me && meIsValid && !blocked) {
+      const from = returnTo;
       navigate(from, { replace: true });
     }
-  }, [me, meIsValid, location.state, navigate]);
+  }, [me, meIsValid, returnTo, blocked, navigate]);
 
   const handleSubmit = form.onSubmit((values) => {
     login.mutate(values, {
       onSuccess: () => {
-        const from = (location.state as LocationState | null)?.from ?? "/";
+        const from = returnTo;
         navigate(from, { replace: true });
       },
     });
@@ -76,39 +105,90 @@ export function LoginPage() {
           <CubeLogo size={96} mode="static" />
           <Title order={2}>{appName}</Title>
         </div>
-        <form onSubmit={handleSubmit}>
-          <Stack gap="sm">
-            {login.isError && (
-              <Alert color="red" icon={<AlertCircle size={16} />}>
-                {getErrorMessage(login.error)}
+        {!auth && (
+          <Text size="sm" c="dimmed">
+            {appInfoFailed
+              ? "Sign-in options are unavailable. Reload this page to try again."
+              : "Loading sign-in options…"}
+          </Text>
+        )}
+        {auth?.oidc_enabled && (
+          <Stack gap="sm" mb="md">
+            <Button
+              component="a"
+              role="button"
+              href={auth.oidc_available ? oidcStartUrl(returnTo) : undefined}
+              aria-disabled={!auth.oidc_available}
+              tabIndex={auth.oidc_available ? 0 : -1}
+              disabled={!auth.oidc_available}
+              fullWidth
+            >
+              Sign in with {auth.oidc_display_name}
+            </Button>
+            {!auth.oidc_available && (
+              <Alert color="yellow">
+                SSO is unavailable. Try again shortly or contact your
+                administrator.
               </Alert>
             )}
-            <TextInput
-              label="Username"
-              autoComplete="username"
-              autoFocus
-              {...form.getInputProps("username")}
-            />
-            <PasswordInput
-              label="Password"
-              autoComplete="current-password"
-              {...form.getInputProps("password")}
-            />
-            {/* Subtle variant matches the mockup — the login card already
+            {ssoError && !(me && meIsValid) && (
+              <Alert color="red">
+                {SSO_ERRORS[ssoError] ??
+                  "Sign-in could not be completed. Start a new sign-in or contact your administrator."}
+              </Alert>
+            )}
+          </Stack>
+        )}
+        {auth?.local_login === "admins" && (
+          <Button
+            variant="subtle"
+            fullWidth
+            onClick={() => setLocalOpen(!localOpen)}
+            aria-expanded={localOpen}
+          >
+            Local administrator sign-in
+          </Button>
+        )}
+        {(auth?.local_login === "all" || auth?.local_login === "admins") && (
+          <Collapse
+            keepMounted={false}
+            expanded={auth.local_login === "all" || localOpen}
+          >
+            <form onSubmit={handleSubmit}>
+              <Stack gap="sm">
+                {login.isError && (
+                  <Alert color="red" icon={<AlertCircle size={16} />}>
+                    {getErrorMessage(login.error)}
+                  </Alert>
+                )}
+                <TextInput
+                  label="Username"
+                  autoComplete="username"
+                  autoFocus
+                  {...form.getInputProps("username")}
+                />
+                <PasswordInput
+                  label="Password"
+                  autoComplete="current-password"
+                  {...form.getInputProps("password")}
+                />
+                {/* Subtle variant matches the mockup — the login card already
                 has plenty of weight from the brand stack at the top, so a
                 solid-blue CTA fights for attention. `subtle` reads as the
                 primary affordance without becoming the focal point. */}
-            <Button
-              type="submit"
-              fullWidth
-              loading={login.isPending}
-              variant="subtle"
-              mt="xs"
-            >
-              Sign in
-            </Button>
-          </Stack>
-        </form>
+                <Button
+                  type="submit"
+                  fullWidth
+                  loading={login.isPending}
+                  variant="subtle"
+                  mt="xs"
+                >
+                  Sign in
+                </Button>
+              </Stack>
+            </form>
+          </Collapse>
+        )}
       </Card>
       <Group justify="center" gap="xs" mt="md" className={classes.footer}>
         {appInfo?.app_version && (

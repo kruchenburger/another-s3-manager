@@ -30,7 +30,13 @@ vi.mock("@tanstack/react-virtual", () => ({
   }),
 }));
 vi.mock("@/features/auth/hooks/useMe", () => ({
-  useMe: () => ({ data: { username: "alice", disable_deletion: false, role_permissions: { r: { delete: true } } } }),
+  useMe: () => ({
+    data: {
+      username: "alice",
+      disable_deletion: false,
+      role_permissions: { r: { delete: true } },
+    },
+  }),
   meQueryKey: ["auth", "me"],
 }));
 vi.mock("@/hooks/useConfig", () => ({
@@ -58,6 +64,8 @@ import {
   validateName,
 } from "@/features/files/utils/folderOperations";
 import { ApiError } from "@/utils/apiError";
+import { sessionCoordinator } from "@/features/auth/hooks/useSessionIdentity";
+import type { MeResponse } from "@/types/api";
 import { useShiftSelect } from "@/components/FileBrowser/useShiftSelect";
 describe("exact object identity and move rules", () => {
   function browser() {
@@ -338,6 +346,16 @@ describe("exact object identity and move rules", () => {
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
+    // Bulk delete runs only inside an established browser session.
+    const coordinator = sessionCoordinator(qc);
+    await coordinator.accept(
+      {
+        username: "u",
+        session_identity: "s",
+        csrf_token: "csrf",
+      } as MeResponse,
+      coordinator.generation,
+    );
     render(
       <QueryClientProvider client={qc}>
         <MantineProvider>
@@ -394,8 +412,15 @@ describe("exact object identity and move rules", () => {
         name: "Delete",
       }),
     );
-    await waitFor(() => expect(remove).toHaveBeenCalledWith("b", "r", "a/x/"));
-    expect(remove).not.toHaveBeenCalledWith("b", "r", "a/x");
+    await waitFor(() =>
+      expect(remove).toHaveBeenCalledWith(
+        "b",
+        "r",
+        "a/x/",
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(remove).not.toHaveBeenCalledWith("b", "r", "a/x", expect.anything());
   });
   it("wires selected table drags to folder targets and breadcrumb confirmation", async () => {
     vi.spyOn(window, "matchMedia").mockReturnValue({

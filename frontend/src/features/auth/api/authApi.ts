@@ -1,7 +1,22 @@
 import { apiRequest } from "@/hooks/useApiClient";
-import type { ChangeMyPasswordPayload, LoginResponse, MeResponse } from "@/types/api";
+import type {
+  ChangeMyPasswordPayload,
+  LoginResponse,
+  MeResponse,
+} from "@/types/api";
+import { safeReturnTo } from "@/features/auth/utils/safeReturnTo";
 
-export async function login(username: string, password: string): Promise<LoginResponse> {
+export function oidcStartUrl(returnTo: unknown): string {
+  return (
+    "/api/auth/oidc/login?" +
+    new URLSearchParams({ return_to: safeReturnTo(returnTo) })
+  );
+}
+
+export async function login(
+  username: string,
+  password: string,
+): Promise<LoginResponse> {
   const body = new FormData();
   body.append("username", username);
   body.append("password", password);
@@ -17,7 +32,9 @@ export async function fetchMe(): Promise<MeResponse> {
   return apiRequest<MeResponse>("/api/me");
 }
 
-export async function changeMyPassword(payload: ChangeMyPasswordPayload): Promise<void> {
+export async function changeMyPassword(
+  payload: ChangeMyPasswordPayload,
+): Promise<void> {
   await apiRequest<void>("/api/me/password", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },

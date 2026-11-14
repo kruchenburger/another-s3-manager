@@ -21,7 +21,7 @@ class Raw:
 
 
 @pytest.mark.parametrize("path", ["exact", "conditional", "single", "directory", "job", "cleanup"])
-@pytest.mark.parametrize("revoke", [False, True, "disabled", "replacement"])
+@pytest.mark.parametrize("revoke", [False, True, "disabled", "replacement", "freshness"])
 def test_sdk_retry_refreshes_access(monkeypatch, path, revoke):
     user = users.load_users()["users"][0]
     client = boto3.client(
@@ -50,7 +50,18 @@ def test_sdk_retry_refreshes_access(monkeypatch, path, revoke):
 
     def on_retry(attempts, **kwargs):
         retries.append(attempts)
-        if attempts == 1 and revoke == "disabled":
+        if attempts == 1 and revoke == "freshness":
+            from datetime import UTC, datetime, timedelta
+
+            from another_s3_manager.database import session_scope
+            from another_s3_manager.models import User
+
+            with session_scope() as session:
+                row = session.get(User, user["id"])
+                row.auth_source = "oidc"
+                row.mapping_mode_applied = "sync"
+                row.sso_authz_valid_until = datetime.now(UTC) - timedelta(seconds=1)
+        elif attempts == 1 and revoke == "disabled":
             users.update_user(user["username"], is_disabled=True)
         elif attempts == 1 and revoke == "replacement":
             from another_s3_manager.database import session_scope
@@ -110,6 +121,11 @@ def test_sdk_retry_refreshes_access(monkeypatch, path, revoke):
     client.delete_object(Bucket="bucket", Key="independent")
     assert len(sent) == before + 1
     client.close()
+
+
+@pytest.mark.parametrize("path", ["exact", "conditional", "single", "directory", "job", "cleanup"])
+def test_freshness_expiry_between_destructive_attempts_stops_retry(monkeypatch, path):
+    test_sdk_retry_refreshes_access(monkeypatch, path, "freshness")
 
 
 def test_guard_unregisters_on_exception(monkeypatch):
