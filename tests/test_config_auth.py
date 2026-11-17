@@ -341,3 +341,30 @@ def test_any_cookie_secure_value_starts_an_install_without_oidc(monkeypatch, raw
     settings = access.oidc_settings({})
     assert settings.enabled is False
     access.oidc_startup({})
+
+
+def test_invalid_config_file_answers_with_its_reason_not_a_generic_500(app_client):
+    import json
+
+    from another_s3_manager import users
+    from tests.test_web_user_lifecycle import authenticate
+
+    authenticate(app_client, users.create_user("local-admin", "hash", is_admin=True))
+    previous = config.load_config()
+    bad = {
+        **previous,
+        "auth": {
+            "oidc": {
+                "role_mapping": {"rules": [{"claim": "preferred_username", "value": "boss", "roles": ["Default"]}]}
+            }
+        },
+    }
+    config.CONFIG_FILE.write_text(json.dumps(bad))
+    response = app_client.get("/api/config")
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail.startswith("config.json is invalid, the last valid configuration is still in use: ")
+    assert "Rules on preferred_username are not allowed" in detail
+    assert config._config_cache == previous
+    config.CONFIG_FILE.write_text(json.dumps(previous))
+    assert app_client.get("/api/config").status_code == 200

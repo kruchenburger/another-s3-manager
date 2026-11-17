@@ -204,3 +204,33 @@ def test_startup_warns_only_for_insecure_cookies(monkeypatch, caplog, secure):
     caplog.clear()
     auth.log_cookie_mode()
     assert ("COOKIE_SECURE=false" in caplog.text) is (not secure)
+
+
+@pytest.mark.parametrize(
+    "accept,status,location",
+    [
+        ("text/html,application/xhtml+xml,*/*;q=0.8", 302, "/login?sso_error=idp_unavailable"),
+        ("application/json", 503, None),
+        ("*/*", 503, None),
+    ],
+)
+def test_unavailable_start_sends_a_browser_back_to_the_sign_in_page(app_client, monkeypatch, accept, status, location):
+    operations = (access.CookieOperation("oidc_tx_fixture"),)
+    monkeypatch.setattr(
+        access, "start_oidc_login", lambda *args: access.OidcStart("/login", operations, "OIDC_UNAVAILABLE")
+    )
+    response = app_client.get("/api/auth/oidc/login", headers={"Accept": accept}, follow_redirects=False)
+    assert response.status_code == status
+    if location:
+        # A person following the button sees the sign-in page's reason, not a JSON body.
+        assert response.headers["location"] == location
+    else:
+        assert response.json() == {"detail": {"code": "OIDC_UNAVAILABLE"}}
+    assert response.headers["cache-control"] == "no-store"
+    assert "Max-Age=0" in response.headers["set-cookie"]
+
+
+def test_disabled_start_stays_a_json_404_for_browsers(app_client, monkeypatch):
+    monkeypatch.setattr(access, "start_oidc_login", lambda *args: access.OidcStart("/login", (), "OIDC_DISABLED"))
+    response = app_client.get("/api/auth/oidc/login", headers={"Accept": "text/html"}, follow_redirects=False)
+    assert response.status_code == 404

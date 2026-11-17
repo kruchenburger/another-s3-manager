@@ -17,6 +17,11 @@ from another_s3_manager.constants import CONFIG_FILE
 
 logger = logging.getLogger(__name__)
 
+
+class ConfigInvalid(ValueError):
+    """The config file was refused on (re)load; the last valid snapshot stays in use."""
+
+
 # Global cache for configuration
 _config_cache: Dict[str, Any] = {}
 _config_mtime: int = 0
@@ -79,15 +84,17 @@ def load_config(force_reload: bool = False) -> Dict[str, Any]:
 
         # Load main config file into a LOCAL variable — NOT the module cache —
         # so migration completes before anything becomes visible to readers.
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            new_config = json.load(f)
-
         # The file is authoritative on reload: no omission-preserving merge, so a key
         # deleted from the file (rules, the auth block, mode) takes effect exactly as
-        # on restart. Invalid content raises and the last-good snapshot stays.
-        if not isinstance(new_config, dict):
-            raise ValueError("Configuration must be an object")
-        access.oidc_settings(new_config)
+        # on restart. Invalid content raises ConfigInvalid and the last-good snapshot stays.
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                new_config = json.load(f)
+            if not isinstance(new_config, dict):
+                raise ValueError("Configuration must be an object")
+            access.oidc_settings(new_config)
+        except ValueError as error:
+            raise ConfigInvalid(str(error)) from None
         for role in new_config.get("roles", []):
             if "allow_delete" in role and type(role["allow_delete"]) is not bool:
                 logger.warning("Non-boolean allow_delete for role '%s'; deletion denied", role.get("name"))

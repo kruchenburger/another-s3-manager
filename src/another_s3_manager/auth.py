@@ -73,6 +73,19 @@ def map_web_oidc_error(door: Literal["start", "callback"], code: str | None) -> 
     return mapping.get(code, mapping["default"])
 
 
+# A browser that follows the login button must land on the sign-in page with a
+# readable reason, not on a JSON body. API clients keep the JSON status.
+_WEB_OIDC_START_PAGE_ERRORS = {"OIDC_UNAVAILABLE": "idp_unavailable"}
+
+
+def oidc_start_error_page(code: str | None, accept: str | None) -> str | None:
+    """The sign-in page URL for a refused start reached by browser navigation."""
+    reason = _WEB_OIDC_START_PAGE_ERRORS.get(code or "")
+    if reason and "text/html" in (accept or ""):
+        return "/login?sso_error=" + reason
+    return None
+
+
 for _door in ("cookie", "login", "account"):
     _WEB_AUTH_ERRORS[_door].update(
         {

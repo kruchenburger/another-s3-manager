@@ -62,6 +62,7 @@ from another_s3_manager.auth import (
     log_cookie_mode,
     map_web_auth_error,
     map_web_oidc_error,
+    oidc_start_error_page,
     oidc_transaction_cookies,
     session_cookie,
     set_session_cookie,
@@ -577,6 +578,15 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
+@app.exception_handler(config_module.ConfigInvalid)
+async def config_invalid_handler(request: Request, exc: config_module.ConfigInvalid):
+    # The edited config file was refused; the last valid configuration stays in use.
+    return JSONResponse(
+        status_code=503,
+        content={"detail": f"config.json is invalid, the last valid configuration is still in use: {exc}"},
+    )
+
+
 class _MoveBodyGuard:
     """Bound actual ASGI body bytes before JSON decoding, including chunked bodies."""
 
@@ -813,7 +823,10 @@ _OIDC_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 @app.get("/api/auth/oidc/login")
 def oidc_login(request: Request, return_to: str = "/"):
     result = access_service.start_oidc_login(return_to, oidc_transaction_cookies(request))
-    if result.code:
+    error_page = oidc_start_error_page(result.code, request.headers.get("accept"))
+    if error_page:
+        response = RedirectResponse(error_page, status_code=302, headers=_OIDC_HEADERS)
+    elif result.code:
         response = JSONResponse(
             {"detail": {"code": result.code}},
             status_code=map_web_oidc_error("start", result.code),
