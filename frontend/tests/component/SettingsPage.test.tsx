@@ -312,11 +312,15 @@ describe("SettingsPage", () => {
     } as never);
     renderPage();
     await waitFor(() =>
-      expect(
-        screen.getByText("Single sign-on · read only"),
-      ).toBeInTheDocument(),
+      expect(screen.getByText("Single sign-on")).toBeInTheDocument(),
     );
-    const sso = screen.getByText("Single sign-on · read only");
+    const sso = screen.getByText("Single sign-on");
+    expect(screen.getByText("Read only")).toBeInTheDocument();
+    expect(screen.getByText("Available")).toBeInTheDocument();
+    expect(screen.getByText("Sync at every sign-in")).toBeInTheDocument();
+    expect(
+      screen.getByText("https://idp.example/realms/team"),
+    ).toBeInTheDocument();
     const policy = screen.getByText("Password policy");
     const description = screen.getByText(/Enforced when a user changes/);
     // The policy text follows its own heading, not the SSO block.
