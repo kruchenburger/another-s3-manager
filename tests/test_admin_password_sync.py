@@ -673,3 +673,28 @@ def test_startup_survives_sync_failure(monkeypatch, tmp_path, caplog, mocker):
         main.run_startup_tasks()  # returning normally means startup completed
 
     assert any("sync failed" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("mode", ["sync", "initial"])
+@pytest.mark.parametrize("force", [False, True])
+def test_env_force_skips_both_oidc_modes(monkeypatch, mode, force):
+    from another_s3_manager import users
+    from another_s3_manager.database import session_scope
+    from another_s3_manager.models import User
+
+    user = users.create_user("admin", "!", is_admin=True)
+    with session_scope() as session:
+        row = session.get(User, user["id"])
+        row.auth_source = "oidc"
+        row.mapping_mode_applied = mode
+    before = users.get_user_by_id(user["id"])
+    monkeypatch.setenv("ADMIN_PASSWORD", "NewEnvPassword1")
+    if force:
+        monkeypatch.setenv("ADMIN_PASSWORD_FORCE", "true")
+    assert users.sync_admin_password_from_env() is False
+    after = users.get_user_by_id(user["id"])
+    assert (after["password_hash"], after["auth_source"], after["session_epoch"]) == (
+        "!",
+        "oidc",
+        before["session_epoch"],
+    )

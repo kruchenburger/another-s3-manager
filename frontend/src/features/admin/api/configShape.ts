@@ -15,6 +15,8 @@ import type { AppConfig } from "@/types/api";
 export function toWritableConfig(config: AppConfig): AppConfig {
   return {
     roles: config.roles,
+    ...(config.auth !== undefined ? { auth: config.auth } : {}),
+    ...(config.mcp_oauth !== undefined ? { mcp_oauth: config.mcp_oauth } : {}),
     enable_lazy_loading: config.enable_lazy_loading,
     max_file_size: config.max_file_size,
     max_client_load: config.max_client_load,

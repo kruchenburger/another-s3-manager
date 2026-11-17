@@ -91,7 +91,9 @@ export function UsersPage() {
         username,
         payload: {
           is_admin: payload.is_admin,
-          ...(payload.is_disabled === undefined ? {} : { is_disabled: payload.is_disabled }),
+          ...(payload.is_disabled === undefined
+            ? {}
+            : { is_disabled: payload.is_disabled }),
           allowed_roles: payload.allowed_roles,
         },
       },
@@ -160,7 +162,9 @@ export function UsersPage() {
                   {u.is_admin && <Badge color="mutedSlateBlue">admin</Badge>}
                 </Table.Td>
                 <Table.Td>
-                  <Badge variant="light">{u.auth_source === "oidc" ? "SSO" : "Local"}</Badge>
+                  <Badge variant="light">
+                    {u.auth_source === "oidc" ? "SSO" : "Local"}
+                  </Badge>
                   {u.is_disabled && <Badge color="red">Disabled</Badge>}
                 </Table.Td>
                 <Table.Td>
@@ -172,7 +176,12 @@ export function UsersPage() {
                     ))}
                     {u.missing_roles.map((r) => (
                       <Tooltip key={r} label="Role no longer exists">
-                        <Badge color="red" variant="outline" size="sm" td="line-through">
+                        <Badge
+                          color="red"
+                          variant="outline"
+                          size="sm"
+                          td="line-through"
+                        >
                           {r}
                         </Badge>
                       </Tooltip>
@@ -181,10 +190,21 @@ export function UsersPage() {
                 </Table.Td>
                 <Table.Td>
                   <Group gap={4} className={classes.actions}>
-                    <Button size="compact-xs" variant="subtle" disabled={isSelf || updateUser.isPending}
-                      onClick={() => runWithToasts(updateUser, {
-                        username: u.username, payload: { is_disabled: !u.is_disabled },
-                      }, `User ${u.username} ${u.is_disabled ? "enabled" : "disabled"}`)}>
+                    <Button
+                      size="compact-xs"
+                      variant="subtle"
+                      disabled={isSelf || updateUser.isPending}
+                      onClick={() =>
+                        runWithToasts(
+                          updateUser,
+                          {
+                            username: u.username,
+                            payload: { is_disabled: !u.is_disabled },
+                          },
+                          `User ${u.username} ${u.is_disabled ? "enabled" : "disabled"}`,
+                        )
+                      }
+                    >
                       {u.is_disabled ? "Enable" : "Disable"}
                     </Button>
                     <Tooltip label="Edit">
@@ -199,24 +219,26 @@ export function UsersPage() {
                         <Pencil size={16} />
                       </ActionIcon>
                     </Tooltip>
-                    <Tooltip
-                      label={
-                        isSelf
-                          ? "Use 'Change password' in the user menu"
-                          : "Reset password"
-                      }
-                    >
-                      <span>
-                        <ActionIcon
-                          variant="subtle"
-                          aria-label={`Reset password for ${u.username}`}
-                          disabled={isSelf}
-                          onClick={() => setResetTarget(u)}
-                        >
-                          <KeyRound size={16} />
-                        </ActionIcon>
-                      </span>
-                    </Tooltip>
+                    {u.auth_source !== "oidc" && (
+                      <Tooltip
+                        label={
+                          isSelf
+                            ? "Use 'Change password' in the user menu"
+                            : "Reset password"
+                        }
+                      >
+                        <span>
+                          <ActionIcon
+                            variant="subtle"
+                            aria-label={`Reset password for ${u.username}`}
+                            disabled={isSelf}
+                            onClick={() => setResetTarget(u)}
+                          >
+                            <KeyRound size={16} />
+                          </ActionIcon>
+                        </span>
+                      </Tooltip>
+                    )}
                     <Tooltip
                       label={isSelf ? "You can't delete yourself" : "Delete"}
                     >
@@ -273,9 +295,11 @@ export function UsersPage() {
         onClose={() => setDeleteTarget(undefined)}
         onConfirm={onConfirmDelete}
         items={deleteTarget ? [deleteTarget.username] : []}
-        extraWarning={deleteTarget?.auth_source === "oidc"
-          ? "They will be re-created on their next SSO sign-in unless the IdP denies them. Disable the user to block access."
-          : undefined}
+        extraWarning={
+          deleteTarget?.auth_source === "oidc"
+            ? "They will be re-created on their next SSO sign-in unless the IdP denies them. Disable the user to block access."
+            : undefined
+        }
         loading={deleteUser.isPending}
       />
     </Stack>

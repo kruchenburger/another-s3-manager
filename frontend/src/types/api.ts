@@ -64,6 +64,9 @@ export interface User {
 }
 
 export interface MeResponse {
+  auth_source?: "local" | "oidc";
+  managed_by_sso?: boolean;
+  session_identity?: string;
   username: string;
   is_admin: boolean;
   csrf_token: string;
@@ -97,6 +100,12 @@ export interface MeResponse {
 }
 
 export interface AppInfo {
+  auth?: {
+    oidc_enabled: boolean;
+    oidc_available: boolean;
+    oidc_display_name: string;
+    local_login: "all" | "admins" | "off";
+  };
   app_name: string;
   app_description: string;
   app_version: string;
@@ -146,6 +155,7 @@ export interface Ban {
 }
 
 export interface AdminUser {
+  managed_by_sso?: boolean;
   auth_source: "local" | "oidc";
   is_disabled: boolean;
   id: number;
@@ -205,6 +215,16 @@ export interface PasswordPolicy {
 }
 
 export interface AppConfig {
+  auth?: Record<string, unknown>;
+  mcp_oauth?: unknown;
+  auth_runtime?: {
+    issuer: string;
+    client_id: string;
+    oidc_enabled: boolean;
+    oidc_available: boolean;
+    effective_local_login: string;
+    mapping_mode: string;
+  };
   roles: AppRole[];
   default_role?: string;
   enable_lazy_loading: boolean;

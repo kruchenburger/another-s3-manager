@@ -186,7 +186,21 @@ BAN_DURATION_MINUTES = 60  # 1 hour
 
 # Cookie security — Set-Cookie Secure flag.
 # Default true (production-safe). MUST be set to false on localhost (HTTP) or browser will silently drop the cookie.
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() == "true"
+
+
+def parse_cookie_secure(raw):
+    """The one parsing rule for COOKIE_SECURE, unchanged since v1.3.1.
+
+    Unset means true. Otherwise only a case-insensitive ``true`` enables Secure
+    cookies; any other value disables them and never stops startup, so an
+    existing install keeps the behaviour it had.
+    """
+    if raw is None:
+        return True
+    return raw.strip().lower() == "true"
+
+
+COOKIE_SECURE = parse_cookie_secure(os.getenv("COOKIE_SECURE"))
 
 # File upload settings
 DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB

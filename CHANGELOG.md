@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Single sign-on through any OpenID Connect provider (authorization code with
+  PKCE S256). Set `PUBLIC_URL`, `OIDC_ISSUER`, `OIDC_CLIENT_ID` and a client
+  secret (env or `OIDC_CLIENT_SECRET_FILE`) to show a «Sign in with …» button on
+  the sign-in page. Every login state is single-use, recorded in the database
+  before the code is exchanged.
+- Accounts are created on the first SSO login, keyed by issuer and subject;
+  an SSO login never links to an existing local account by name or email.
+- Roles come from ID-token claims through `auth.oidc.role_mapping`: exact,
+  case-sensitive values (`/team/sub` and `data-team` are both literal), `sync`
+  (default, re-applied at every login) or `initial` (applied once at creation).
+  A login that matches no rule is refused.
+- `auth.local_login` / `LOCAL_LOGIN`: `all` (default), `admins` or `off`.
+- `reset_admin_password --enable USER` and `--local USER` recover access from
+  the console without the identity provider.
+- The admin settings show the SSO configuration read-only; secrets are never
+  returned or saved.
+
+### Changed
+
+- Access managed by `sync` mapping, including MCP tokens, expires seven days
+  after the account's last successful SSO login; signing in again renews it.
+- SSO accounts have no local password: password change and reset are refused,
+  and the `ADMIN_PASSWORD` sync skips them.
+- Signing in as another account in one browser replaces the session in every
+  open tab.
+- Sign-in metrics carry `method="local"` or `method="oidc"`.
+- **Breaking:** with Secure cookies (`COOKIE_SECURE=true`, the default) the
+  session cookie is now `__Host-access_token` and the SSO login cookies carry
+  the `__Host-` prefix too, so a sibling subdomain cannot plant them. The old
+  `access_token` cookie is not accepted: everyone signs in once after upgrading.
+  Plain-HTTP setups (`COOKIE_SECURE=false`) keep the old names, since browsers
+  refuse `__Host-` cookies without Secure, and log a startup warning.
+
+### Security
+
+- Outbound calls to the identity provider refuse redirects, private and
+  loopback addresses (unless listed exactly in `OIDC_ALLOWED_PRIVATE_ORIGINS`),
+  oversized responses and unverified TLS. Authorization codes, state and tokens
+  are redacted from logs, including bearer tokens, MCP tokens and JWTs.
+- A dual-stack or multi-address identity provider is reached through every
+  validated address in resolver order, not only the first one.
+- Rotating the client secret file takes effect at the next login without a
+  restart; an unreadable secret blocks SSO only, never local sign-in.
+- Plain `http://` identity provider origins must be listed in
+  `OIDC_ALLOWED_PRIVATE_ORIGINS`; `OIDC_ALLOW_INSECURE_HTTP` logs a warning.
+- Mapping rules on `email` need `email_verified: true` (as rules on `hd` do);
+  rules on `preferred_username` are rejected, use group or app-role claims.
+- SSO account names never become `.`, `..` or `admin` (they get `sso-user` or a
+  `-sso` suffix), and new SSO sign-ins pause while 10,000 are pending.
+- Editing `config.json` on disk now applies deletions on reload exactly as on
+  restart.
+
+### Upgrade notes
+
+- Nothing changes until `OIDC_ISSUER` is set, except the cookie rename above:
+  on HTTPS everyone signs in once more. Signing out of ASM does not sign you out
+  of the identity provider.
+
 ## [1.3.1] - 2026-11-13
 
 ### Added

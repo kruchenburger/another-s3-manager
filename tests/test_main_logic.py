@@ -1212,6 +1212,7 @@ async def test_me_role_permissions_are_computed_for_current_grants(monkeypatch, 
         {"r": {"delete": False}, "other": {"delete": True}} if admin else {"r": {"delete": False}}
     )
     assert result["disable_deletion"] is False
+    assert "session_identity" not in result
 
 
 @pytest.mark.asyncio

@@ -223,6 +223,7 @@ export async function deleteFile(
   bucket: string,
   role: string,
   path: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   // path can be a folder (ends with /) — backend handles recursive delete
   const params = new URLSearchParams({ role, path });
@@ -230,6 +231,7 @@ export async function deleteFile(
     `/api/buckets/${encodeURIComponent(bucket)}/files?${params}`,
     {
       method: "DELETE",
+      signal,
     },
   );
 }

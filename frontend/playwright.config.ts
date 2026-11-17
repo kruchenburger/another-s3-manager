@@ -1,5 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
 
+if (process.env.OIDC_E2E && !process.env.OIDC_PRIVATE_OUTPUT) {
+  throw new Error(
+    "OIDC browser checks require an isolated private output directory",
+  );
+}
+
 /**
  * E2E env contract:
  * - E2E_BASE_URL          Base URL of the app (default http://localhost:8080)
@@ -16,26 +22,58 @@ import { defineConfig, devices } from "@playwright/test";
  *   #  "addressing_style":"path","allowed_buckets":["e2e-test"]}
  *   cd frontend && npx playwright test
  */
+const ministackIgnore = process.env.E2E_IGNORE_MINISTACK
+  ? ["**/ministack.spec.ts"]
+  : [];
+
 export default defineConfig({
   testDir: "./tests/e2e",
   // The ministack spec needs the AWS emulator (S3+IAM+STS) on :4566, which only
   // the dedicated `e2e-ministack` CI job (or the local ministack compose overlay)
   // provides. The MinIO CI job sets E2E_IGNORE_MINISTACK=1 so those 4 tests
   // don't burn 3 retries × 30s each against a backend that can't serve them.
-  testIgnore: process.env.E2E_IGNORE_MINISTACK ? ["**/ministack.spec.ts"] : [],
+  testIgnore: [
+    ...ministackIgnore,
+    ...(!process.env.OIDC_E2E ? ["**/oidc-login.spec.ts"] : []),
+  ],
+  outputDir: process.env.OIDC_E2E
+    ? process.env.OIDC_PRIVATE_OUTPUT
+    : "test-results",
   fullyParallel: false, // tests share the same backend DB; run sequentially to avoid races
   retries: process.env.CI ? 2 : 0,
   workers: 1,
   // Explicit html reporter: CI uploads playwright-report/ as an artifact on
   // failure, and without "html" here that directory is never created (the
   // default CI reporter is dot-only), so the upload step finds nothing.
-  reporter: process.env.CI ? [["dot"], ["html", { open: "never" }]] : "list",
+  reporter: process.env.OIDC_E2E
+    ? "dot"
+    : process.env.CI
+      ? [["dot"], ["html", { open: "never" }]]
+      : "list",
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:8080",
     trace: "on-first-retry",
   },
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "chromium",
+      testIgnore: [...ministackIgnore, "**/oidc-login.spec.ts"],
+      use: { ...devices["Desktop Chrome"] },
+    },
+    ...(process.env.OIDC_E2E
+      ? [
+          {
+            name: "oidc",
+            testMatch: "**/oidc-login.spec.ts",
+            use: {
+              ...devices["Desktop Chrome"],
+              trace: "off" as const,
+              video: "off" as const,
+              screenshot: "off" as const,
+            },
+          },
+        ]
+      : []),
     // mobile project disabled for Phase 3b — re-enable in Phase 7 with mobile-specific specs
   ],
   // No webServer: backend must be started before Playwright runs.

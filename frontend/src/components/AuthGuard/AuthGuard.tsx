@@ -4,6 +4,8 @@ import { notifications } from "@mantine/notifications";
 import { useMe } from "@/features/auth/hooks/useMe";
 import { ApiError } from "@/utils/apiError";
 import { DelayedLoader } from "@/components/DelayedLoader/DelayedLoader";
+import { useSessionIdentity } from "@/features/auth/hooks/useSessionIdentity";
+import { safeReturnTo } from "@/features/auth/utils/safeReturnTo";
 
 export const SESSION_ENDED_NOTIFICATION_ID = "session-ended";
 
@@ -39,6 +41,7 @@ function SignInRedirect({
 //   - success → render children via <Outlet />
 export function AuthGuard() {
   const location = useLocation();
+  const { blocked } = useSessionIdentity();
   const { data, isLoading, error } = useMe();
 
   // A valid session again (after signing back in) retires the "Session ended" notice,
@@ -48,7 +51,7 @@ export function AuthGuard() {
     if (sessionValid) notifications.hide(SESSION_ENDED_NOTIFICATION_ID);
   }, [sessionValid]);
 
-  if (isLoading) {
+  if (isLoading || blocked) {
     return <DelayedLoader />;
   }
 
@@ -56,7 +59,7 @@ export function AuthGuard() {
     if (error instanceof ApiError && error.isAuthError()) {
       return (
         <SignInRedirect
-          from={location.pathname}
+          from={safeReturnTo(location.pathname + location.search)}
           sessionEnded={data !== undefined}
         />
       );

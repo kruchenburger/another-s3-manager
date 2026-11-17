@@ -64,25 +64,25 @@ def _sample(name: str, labels: dict) -> float:
 
 def test_auth_login_metrics_count_success_and_failure(app_client):
     """auth_logins_total must increment on both login outcomes (was defined but unwired)."""
-    ok_before = _sample("as3m_auth_logins_total", {"result": "success"})
-    bad_before = _sample("as3m_auth_logins_total", {"result": "invalid_password"})
+    ok_before = _sample("as3m_auth_logins_total", {"method": "local", "result": "success"})
+    bad_before = _sample("as3m_auth_logins_total", {"method": "local", "result": "invalid_password"})
 
     resp = app_client.post("/api/login", data={"username": "admin", "password": "nope"})
     assert resp.status_code == 401
     resp = app_client.post("/api/login", data={"username": "admin", "password": "admin123"})
     assert resp.status_code == 200
 
-    assert _sample("as3m_auth_logins_total", {"result": "success"}) == ok_before + 1
-    assert _sample("as3m_auth_logins_total", {"result": "invalid_password"}) == bad_before + 1
+    assert _sample("as3m_auth_logins_total", {"method": "local", "result": "success"}) == ok_before + 1
+    assert _sample("as3m_auth_logins_total", {"method": "local", "result": "invalid_password"}) == bad_before + 1
 
     body = app_client.get("/metrics").text
-    assert 'as3m_auth_logins_total{result="success"}' in body
+    assert 'as3m_auth_logins_total{method="local",result="success"}' in body
 
 
 def test_auth_banned_login_metric_and_active_bans_gauge(app_client):
     """A login attempt against a banned account counts as result=banned, and
     auth_bans_active reports the live number of active bans at scrape time."""
-    banned_before = _sample("as3m_auth_logins_total", {"result": "banned"})
+    banned_before = _sample("as3m_auth_logins_total", {"method": "local", "result": "banned"})
 
     _seed_user("metrics_bob", "Sup3rSecret1")
     for _ in range(3):
@@ -93,7 +93,7 @@ def test_auth_banned_login_metric_and_active_bans_gauge(app_client):
     resp = app_client.post("/api/login", data={"username": "metrics_bob", "password": "Sup3rSecret1"})
     assert resp.status_code == 403
 
-    assert _sample("as3m_auth_logins_total", {"result": "banned"}) == banned_before + 1
+    assert _sample("as3m_auth_logins_total", {"method": "local", "result": "banned"}) == banned_before + 1
 
     body = app_client.get("/metrics").text
     assert "as3m_auth_bans_active 1.0" in body  # fresh per-test DB → exactly one active ban
@@ -628,7 +628,7 @@ def test_seed_zero_series_pre_creates_fixed_enum_series(monkeypatch):
 
     scratch = CollectorRegistry()
     fresh_upload_rejected = Counter("as3m_upload_rejected_total", "t", ["reason"], registry=scratch)
-    fresh_auth_logins = Counter("as3m_auth_logins_total", "t", ["result"], registry=scratch)
+    fresh_auth_logins = Counter("as3m_auth_logins_total", "t", ["method", "result"], registry=scratch)
     fresh_db_errors = Counter("as3m_db_errors_total", "t", ["operation"], registry=scratch)
     fresh_s3_retries = Counter("as3m_s3_retries_total", "t", ["reason"], registry=scratch)
     fresh_mcp_tool_calls = Counter("as3m_mcp_tool_calls_total", "t", ["tool", "error_code"], registry=scratch)
@@ -644,7 +644,7 @@ def test_seed_zero_series_pre_creates_fixed_enum_series(monkeypatch):
     # `_seed_zero_series` didn't exist; after adding it as a no-op it still
     # failed here because these samples were still None.)
     assert scratch.get_sample_value("as3m_upload_rejected_total", {"reason": "size_limit"}) is None
-    assert scratch.get_sample_value("as3m_auth_logins_total", {"result": "success"}) is None
+    assert scratch.get_sample_value("as3m_auth_logins_total", {"method": "local", "result": "success"}) is None
     assert scratch.get_sample_value("as3m_db_errors_total", {"operation": "SELECT"}) is None
     assert scratch.get_sample_value("as3m_s3_retries_total", {"reason": "credentials_expired"}) is None
     assert scratch.get_sample_value("as3m_mcp_tool_calls_total", {"tool": "list_roles", "error_code": "none"}) is None
@@ -652,9 +652,9 @@ def test_seed_zero_series_pre_creates_fixed_enum_series(monkeypatch):
     metrics._seed_zero_series()
 
     assert scratch.get_sample_value("as3m_upload_rejected_total", {"reason": "size_limit"}) == 0.0
-    assert scratch.get_sample_value("as3m_auth_logins_total", {"result": "success"}) == 0.0
-    assert scratch.get_sample_value("as3m_auth_logins_total", {"result": "invalid_password"}) == 0.0
-    assert scratch.get_sample_value("as3m_auth_logins_total", {"result": "banned"}) == 0.0
+    assert scratch.get_sample_value("as3m_auth_logins_total", {"method": "local", "result": "success"}) == 0.0
+    assert scratch.get_sample_value("as3m_auth_logins_total", {"method": "local", "result": "invalid_password"}) == 0.0
+    assert scratch.get_sample_value("as3m_auth_logins_total", {"method": "local", "result": "banned"}) == 0.0
     assert scratch.get_sample_value("as3m_db_errors_total", {"operation": "SELECT"}) == 0.0
     assert scratch.get_sample_value("as3m_db_errors_total", {"operation": "OTHER"}) == 0.0
     assert scratch.get_sample_value("as3m_s3_retries_total", {"reason": "credentials_expired"}) == 0.0
