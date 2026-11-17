@@ -309,3 +309,35 @@ def test_no_insecure_http_warning_by_default(monkeypatch, caplog):
     caplog.clear()
     access.oidc_startup({})
     assert "OIDC_ALLOW_INSECURE_HTTP" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("raw", "secure"),
+    [
+        (None, True),
+        ("true", True),
+        ("TRUE", True),
+        (" True ", True),
+        ("false", False),
+        ("False", False),
+        ("0", False),
+        ("1", False),
+        ("no", False),
+        ("yes", False),
+        ("", False),
+    ],
+)
+def test_cookie_secure_keeps_the_v1_3_1_parsing_rule(raw, secure):
+    from another_s3_manager.constants import parse_cookie_secure
+
+    # Only a case-insensitive "true" means Secure, exactly as in v1.3.1; nothing raises.
+    assert parse_cookie_secure(raw) is secure
+
+
+@pytest.mark.parametrize("raw", ["False", "TRUE", "0", "1", "yes", "no"])
+def test_any_cookie_secure_value_starts_an_install_without_oidc(monkeypatch, raw):
+    monkeypatch.delenv("OIDC_ISSUER", raising=False)
+    monkeypatch.setenv("COOKIE_SECURE", raw)
+    settings = access.oidc_settings({})
+    assert settings.enabled is False
+    access.oidc_startup({})

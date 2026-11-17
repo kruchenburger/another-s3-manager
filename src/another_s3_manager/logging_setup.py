@@ -28,7 +28,7 @@ _QUIET_LOGGERS = ("boto3", "botocore", "urllib3", "s3transfer")
 # fixture's snapshot/restore of the handler list).
 HANDLER_NAME = "another_s3_manager.console"
 
-_SENSITIVE = r"code|state|token|id_token|access_token|id_token_hint|client_secret|code_verifier|refresh_token|cookie|cookies|authorization|body|headers|password|password_hash|oidc_tx_[a-zA-Z0-9_-]+"
+_SENSITIVE = r"__Host-access_token|__Host-oidc_tx_[a-zA-Z0-9_-]+|code|state|token|id_token|access_token|id_token_hint|client_secret|code_verifier|refresh_token|cookie|cookies|authorization|body|headers|password|password_hash|oidc_tx_[a-zA-Z0-9_-]+"
 
 
 def _decoded_name(value):

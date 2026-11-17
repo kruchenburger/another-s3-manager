@@ -389,3 +389,12 @@ def test_ordinary_exception_keeps_message_level_and_safe_traceback(monkeypatch, 
     assert "Traceback" in output
     assert "test_ordinary_exception_keeps_message_level_and_safe_traceback" in output
     assert "upstream-exception-canary" not in output
+
+
+def test_redaction_covers_host_prefixed_cookie_names():
+    from another_s3_manager.logging_setup import redact_auth_material
+
+    line = "Cookie: __Host-access_token=SESSIONCANARY; __Host-oidc_tx_abcd1234=TXCANARY"
+    out = redact_auth_material(line)
+    assert "SESSIONCANARY" not in out
+    assert "TXCANARY" not in out

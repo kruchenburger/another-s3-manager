@@ -514,3 +514,22 @@ def test_plain_http_endpoint_needs_an_allow_listed_origin(monkeypatch):
     assert resolve_destination("http://op.example/token", access.oidc_settings({})) == ("10.0.0.5",)
     with pytest.raises(OidcUnavailable, match="http_origin_not_listed"):
         resolve_destination("http://op.example:8080/token", access.oidc_settings({}))
+
+
+def test_each_connect_attempt_gets_at_least_a_second_while_the_budget_allows(monkeypatch):
+    from another_s3_manager.access.oidc.discovery import PinnedBackend
+
+    clock = [100.0]
+    monkeypatch.setattr("another_s3_manager.access.oidc.discovery.time.monotonic", lambda: clock[0])
+    addresses = tuple(f"203.0.113.{n}" for n in range(1, 11))
+    attempts = fake_sockets(monkeypatch, {address: "refuse" for address in addresses})
+    with pytest.raises(OidcUnavailable, match="upstream_failure"):
+        PinnedBackend("op.example", 443, addresses, deadline=104.0).connect_tcp("op.example", 443, timeout=5)
+    # An equal share would be 0.4 s; the floor keeps a fair try per address.
+    assert attempts[0][2] == 1.0
+    # The floor never exceeds what is left of the overall deadline.
+    clock[0] = 103.5
+    attempts.clear()
+    with pytest.raises(OidcUnavailable):
+        PinnedBackend("op.example", 443, addresses[:2], deadline=104.0).connect_tcp("op.example", 443, timeout=5)
+    assert attempts[0][2] == 0.5

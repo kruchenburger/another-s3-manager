@@ -129,6 +129,9 @@ class DeadlineStream(SyncStream):
             raise
 
 
+_MIN_CONNECT_ATTEMPT = 1.0  # seconds
+
+
 class PinnedBackend(httpcore.NetworkBackend):
     def __init__(self, host, port, addresses, deadline=None):
         self.host, self.port, self.addresses = host, port, addresses
@@ -143,7 +146,10 @@ class PinnedBackend(httpcore.NetworkBackend):
         addresses = tuple(self.addresses)
         for index, address in enumerate(addresses):
             family = socket.AF_INET6 if ":" in address else socket.AF_INET
-            share = remaining(deadline) / (len(addresses) - index)
+            budget = remaining(deadline)
+            # Equal share of what is left, but at least about a second per attempt
+            # while the budget allows, so a slow first answer still gets a fair try.
+            share = min(budget, max(_MIN_CONNECT_ATTEMPT, budget / (len(addresses) - index)))
             sock = socket.socket(family, socket.SOCK_STREAM)
             try:
                 sock.settimeout(min(share, timeout) if timeout is not None else share)

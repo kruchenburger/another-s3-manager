@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from another_s3_manager.access.sessions import validate_lifetime_minutes
+from another_s3_manager.constants import parse_cookie_secure
 
 
 def env_boolean(name, default=False):
@@ -169,7 +170,7 @@ def oidc_settings(config):
     public = os.environ.get("PUBLIC_URL", "")
     client = os.environ.get("OIDC_CLIENT_ID", "")
     allow_http = env_boolean("OIDC_ALLOW_INSECURE_HTTP")
-    secure = env_boolean("COOKIE_SECURE", True)
+    secure = parse_cookie_secure(os.environ.get("COOKIE_SECURE"))
     private = os.environ.get("OIDC_ALLOWED_PRIVATE_ORIGINS", "")
     private_origins = (
         frozenset(origin(part.strip(), allow_http=allow_http, origin_only=True) for part in private.split(","))
