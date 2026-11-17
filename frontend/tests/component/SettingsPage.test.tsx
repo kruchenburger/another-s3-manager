@@ -93,9 +93,13 @@ describe("SettingsPage", () => {
     renderPage();
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Max client load", { selector: "input" })).toBeInTheDocument(),
+      expect(
+        screen.getByLabelText("Max client load", { selector: "input" }),
+      ).toBeInTheDocument(),
     );
-    expect(screen.getByLabelText("Max client load", { selector: "input" })).toHaveValue("10000");
+    expect(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+    ).toHaveValue("10000");
     // Mantine Switch components have role="switch"; addressed by accessible name.
     expect(
       screen.getByRole("switch", { name: /disable deletion/i }),
@@ -133,7 +137,9 @@ describe("SettingsPage", () => {
     });
     renderPage();
     await waitFor(() =>
-      expect(screen.getByLabelText("Max client load", { selector: "input" })).toBeDisabled(),
+      expect(
+        screen.getByLabelText("Max client load", { selector: "input" }),
+      ).toBeDisabled(),
     );
     expect(
       screen.getByRole("switch", { name: /disable deletion/i }),
@@ -153,9 +159,12 @@ describe("SettingsPage", () => {
     // Save is disabled until something is dirty (matches standard form UX).
     // Bump max_client_load to enable Save without changing the MB field —
     // that lets us verify the byte-precision-preserved path on max_file_size.
-    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
-      target: { value: "300" },
-    });
+    fireEvent.change(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+      {
+        target: { value: "300" },
+      },
+    );
     clickSaveSettings();
 
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
@@ -180,9 +189,12 @@ describe("SettingsPage", () => {
     // untouched — that's what this test is verifying. max_client_load lives
     // in the General tab too, but its dirty state only affects that one
     // field; max_file_size_mb stays clean and triggers the byte-preserve path.
-    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
-      target: { value: "300" },
-    });
+    fireEvent.change(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+      {
+        target: { value: "300" },
+      },
+    );
     clickSaveSettings();
 
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
@@ -209,9 +221,12 @@ describe("SettingsPage", () => {
     renderPage();
     await waitForSaveButton();
     // Dirty any field so Save is enabled
-    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
-      target: { value: "300" },
-    });
+    fireEvent.change(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+      {
+        target: { value: "300" },
+      },
+    );
     clickSaveSettings();
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(saveConfig).mock
@@ -270,7 +285,9 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("tab", { name: /mcp/i })).toBeInTheDocument();
 
     // General is the default tab — its fields are reachable by label.
-    expect(screen.getByLabelText("Max client load", { selector: "input" })).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+    ).toBeInTheDocument();
     // Security and MCP tab panels are also mounted (keepMounted) so RTL
     // can find their fields by label even without clicking the tab. Mantine 9
     // mounts inactive keepMounted panels on a deferred tick (not the first
@@ -279,6 +296,37 @@ describe("SettingsPage", () => {
       expect(screen.getByLabelText(/minimum length/i)).toBeInTheDocument(),
     );
     expect(screen.getByLabelText(/enable mcp server/i)).toBeInTheDocument();
+  });
+
+  it("separates the read-only SSO block from the password policy with its own heading", async () => {
+    vi.mocked(getConfig).mockResolvedValue({
+      ...baseConfig,
+      auth_runtime: {
+        issuer: "https://idp.example/realms/team",
+        client_id: "asm",
+        oidc_enabled: true,
+        oidc_available: true,
+        effective_local_login: "all",
+        mapping_mode: "sync",
+      },
+    } as never);
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByText("Single sign-on · read only"),
+      ).toBeInTheDocument(),
+    );
+    const sso = screen.getByText("Single sign-on · read only");
+    const policy = screen.getByText("Password policy");
+    const description = screen.getByText(/Enforced when a user changes/);
+    // The policy text follows its own heading, not the SSO block.
+    expect(
+      sso.compareDocumentPosition(policy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      policy.compareDocumentPosition(description) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("clears dirty state after a successful save (Save button goes back to disabled)", async () => {
@@ -294,9 +342,12 @@ describe("SettingsPage", () => {
     expect(saveButton()).toBeDisabled();
 
     // Dirty a field → Save activates
-    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
-      target: { value: "500" },
-    });
+    fireEvent.change(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+      {
+        target: { value: "500" },
+      },
+    );
     expect(saveButton()).not.toBeDisabled();
 
     // Click Save → mutation resolves → baseline should advance to current
@@ -312,13 +363,18 @@ describe("SettingsPage", () => {
     renderPage();
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Max client load", { selector: "input" })).toBeInTheDocument(),
+      expect(
+        screen.getByLabelText("Max client load", { selector: "input" }),
+      ).toBeInTheDocument(),
     );
 
     // Edit a General field
-    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
-      target: { value: "500" },
-    });
+    fireEvent.change(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+      {
+        target: { value: "500" },
+      },
+    );
     // Edit a Security field (no tab switch needed — keepMounted exposes it)
     fireEvent.change(screen.getByLabelText(/minimum length/i), {
       target: { value: "12" },
@@ -349,9 +405,12 @@ describe("SettingsPage", () => {
 
     await waitForSaveButton();
     // Dirty a field so Save is enabled
-    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
-      target: { value: "300" },
-    });
+    fireEvent.change(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+      {
+        target: { value: "300" },
+      },
+    );
     // First click — should trigger one mutation
     clickSaveSettings();
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
@@ -379,14 +438,21 @@ describe("SettingsPage", () => {
     const { rerender } = renderPage();
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Max client load", { selector: "input" })).toBeInTheDocument(),
+      expect(
+        screen.getByLabelText("Max client load", { selector: "input" }),
+      ).toBeInTheDocument(),
     );
 
     // User starts editing
-    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
-      target: { value: "750" },
-    });
-    expect(screen.getByLabelText("Max client load", { selector: "input" })).toHaveValue("750");
+    fireEvent.change(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+      {
+        target: { value: "750" },
+      },
+    );
+    expect(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+    ).toHaveValue("750");
 
     // Simulate a background refetch by re-resolving getConfig with a fresh
     // object — same payload, new reference. The component re-renders;
@@ -414,7 +480,9 @@ describe("SettingsPage", () => {
     );
     // After "refetch", the user's typed value must still be 750 — NOT 200.
     // (This is the dirty-guard contract: while form.isDirty(), do not repopulate.)
-    expect(screen.getByLabelText("Max client load", { selector: "input" })).toHaveValue("750");
+    expect(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+    ).toHaveValue("750");
   });
 
   it("shows an inline error on Max client load when value exceeds the 200000 cap", async () => {
@@ -424,9 +492,12 @@ describe("SettingsPage", () => {
     await waitForSaveButton();
 
     // Push value over the 200000 cap
-    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
-      target: { value: "500000" },
-    });
+    fireEvent.change(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+      {
+        target: { value: "500000" },
+      },
+    );
 
     // Inline error renders under the input
     await waitFor(() =>
@@ -457,9 +528,12 @@ describe("SettingsPage", () => {
     await waitForSaveButton();
 
     // Initial edit + click Save
-    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
-      target: { value: "300" },
-    });
+    fireEvent.change(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+      {
+        target: { value: "300" },
+      },
+    );
     clickSaveSettings();
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
 
@@ -468,9 +542,12 @@ describe("SettingsPage", () => {
     // baseline on save success and silently lost (button goes disabled,
     // current value stays in the input but isDirty() returns false). The
     // fix uses form.getValues() so the live value stays dirty.
-    fireEvent.change(screen.getByLabelText("Max client load", { selector: "input" }), {
-      target: { value: "400" },
-    });
+    fireEvent.change(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+      {
+        target: { value: "400" },
+      },
+    );
 
     // Resolve the save — onSuccess runs and resets the baseline to the
     // CURRENT live values (300 was submitted, but live is 400 — baseline
@@ -483,7 +560,9 @@ describe("SettingsPage", () => {
 
     // The value the user typed last must still be visible — not snapped
     // back to anything else.
-    expect(screen.getByLabelText("Max client load", { selector: "input" })).toHaveValue("400");
+    expect(
+      screen.getByLabelText("Max client load", { selector: "input" }),
+    ).toHaveValue("400");
   });
 
   it("renders the four MCP big-bucket NumberInputs populated from config", async () => {
@@ -578,7 +657,10 @@ describe("SettingsPage", () => {
   });
 
   it("disables the four big-bucket inputs in read-only mode", async () => {
-    vi.mocked(getConfig).mockResolvedValue({ ...baseConfig, is_read_only: true });
+    vi.mocked(getConfig).mockResolvedValue({
+      ...baseConfig,
+      is_read_only: true,
+    });
     renderPage();
     await waitFor(() =>
       expect(

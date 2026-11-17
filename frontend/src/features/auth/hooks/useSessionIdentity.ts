@@ -184,6 +184,30 @@ export class SessionIdentity {
     return this.pending;
   };
 
+  /**
+   * Focus, pageshow and the cross-tab signal only need to know whether the
+   * browser still holds the same session. Ask quietly first: the same session
+   * keeps the page and its data (only the CSRF token is refreshed); a different
+   * or missing session takes the full replacement path in refresh().
+   */
+  recheck = async (): Promise<void> => {
+    if (this.pending || this.blocked || !this.identity) return this.refresh();
+    const generation = this.generation;
+    let me: MeResponse;
+    try {
+      me = await fetchMe();
+    } catch {
+      return this.refresh();
+    }
+    if (this.pending || generation !== this.generation) return;
+    if (me.session_identity && me.session_identity === this.identity) {
+      setCsrfToken(me.csrf_token);
+      this.client.setQueryData(key, me);
+      return;
+    }
+    return this.refresh();
+  };
+
   logout() {
     this.invalidateActions();
     this.identity = undefined;
@@ -214,7 +238,7 @@ export function useSessionIdentity() {
   );
   useEffect(() => {
     const refresh = () => {
-      void coordinator.refresh();
+      void coordinator.recheck();
     };
     const signal = (event: StorageEvent) => {
       if (event.key === signalKey) refresh();

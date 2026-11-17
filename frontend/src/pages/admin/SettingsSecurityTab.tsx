@@ -18,7 +18,9 @@ export function SettingsSecurityTab({
     <Stack gap="md" maw={520} mt="md">
       {runtime && (
         <Stack gap="xs">
-          <Text fw={600}>Single sign-on · read only</Text>
+          <Text fw={600} size="sm">
+            Single sign-on · read only
+          </Text>
           <Text size="sm">Issuer: {runtime.issuer || "Not configured"}</Text>
           <Text size="sm">
             Client ID: {runtime.client_id || "Not configured"}
@@ -29,6 +31,9 @@ export function SettingsSecurityTab({
           </Text>
         </Stack>
       )}
+      <Text fw={600} size="sm" mt={runtime ? "sm" : undefined}>
+        Password policy
+      </Text>
       <Text size="sm" c="dimmed">
         Enforced when a user changes their own password or an admin
         creates/resets another user&apos;s password. Set any value to 0 to

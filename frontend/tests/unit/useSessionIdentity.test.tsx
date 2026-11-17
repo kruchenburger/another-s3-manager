@@ -180,3 +180,54 @@ it("rejects an old in-flight mutation result after session replacement", async (
   expect(getCsrfToken()).toBe("b-csrf");
   client.clear();
 });
+
+it("test_focus_with_the_same_session_keeps_the_page_and_its_data", async () => {
+  vi.mocked(fetchMe).mockReset();
+  const client = new QueryClient();
+  const coordinator = new SessionIdentity(client);
+  await coordinator.accept(account("a"), coordinator.generation);
+  client.setQueryData(["buckets", "role"], ["bucket-1"]);
+  const states: boolean[] = [];
+  const unsubscribe = coordinator.subscribe(() =>
+    states.push(coordinator.blocked),
+  );
+  vi.mocked(fetchMe).mockResolvedValueOnce({
+    ...account("a"),
+    csrf_token: "csrf-a-2",
+  });
+  await coordinator.recheck();
+  // No loader, no wiped cache: returning to the window is not a page reload.
+  expect(states).toEqual([]);
+  expect(client.getQueryData(["buckets", "role"])).toEqual(["bucket-1"]);
+  expect(getCsrfToken()).toBe("csrf-a-2");
+  expect(fetchMe).toHaveBeenCalledTimes(1);
+  unsubscribe();
+  client.clear();
+});
+
+it("test_focus_with_another_session_replaces_it_and_drops_old_data", async () => {
+  vi.mocked(fetchMe).mockReset();
+  const client = new QueryClient();
+  const coordinator = new SessionIdentity(client);
+  await coordinator.accept(account("a"), coordinator.generation);
+  client.setQueryData(["buckets", "role"], ["bucket-of-a"]);
+  vi.mocked(fetchMe).mockResolvedValue(account("b"));
+  await coordinator.recheck();
+  expect(client.getQueryData(["buckets", "role"])).toBeUndefined();
+  expect(getCsrfToken()).toBe("csrf-b");
+  expect(coordinator.blocked).toBe(false);
+  client.clear();
+});
+
+it("test_focus_after_the_session_is_gone_takes_the_full_path", async () => {
+  vi.mocked(fetchMe).mockReset();
+  const client = new QueryClient();
+  const coordinator = new SessionIdentity(client);
+  await coordinator.accept(account("a"), coordinator.generation);
+  client.setQueryData(["buckets", "role"], ["bucket-of-a"]);
+  vi.mocked(fetchMe).mockRejectedValue(new Error("401"));
+  await coordinator.recheck();
+  expect(client.getQueryData(["buckets", "role"])).toBeUndefined();
+  expect(getCsrfToken()).toBeNull();
+  client.clear();
+});
