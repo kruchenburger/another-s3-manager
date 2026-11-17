@@ -56,6 +56,14 @@ from the workspace root when shared tooling is required.
 - Browser cookie jars have one active account; last callback Set-Cookie wins.
   session_identity is opaque, never a JWT; cross-tab signals contain no identity
   or credential. Account actions wait for authoritative me/CSRF after invalidation.
+- Cookies have one home in `auth.py`: with `COOKIE_SECURE` true they are
+  `__Host-access_token` and `__Host-oidc_tx_*` (Secure, Path=/, no Domain); a plain
+  `access_token` is not a session. `COOKIE_SECURE=false` keeps the old names and
+  logs a startup warning. The client secret is read at code exchange (live
+  rotation; only SSO fails if unreadable) and checked once at startup. Plain
+  `http://` IdP origins must be in `OIDC_ALLOWED_PRIVATE_ORIGINS`. `email` rules
+  need `email_verified: true`; `preferred_username` rules are rejected. File reload
+  is authoritative (no omission merge). At most 10,000 live login transactions.
 - Logout clears ASM's cookie only: it neither ends the IdP session nor revokes a
   copied cookie. Disable prevents JIT recreation; Delete does not. No linking,
   UserInfo, RP logout, MCP OAuth or background IdP sync is implemented here.

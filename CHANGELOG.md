@@ -35,18 +35,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Signing in as another account in one browser replaces the session in every
   open tab.
 - Sign-in metrics carry `method="local"` or `method="oidc"`.
+- **Breaking:** with Secure cookies (`COOKIE_SECURE=true`, the default) the
+  session cookie is now `__Host-access_token` and the SSO login cookies carry
+  the `__Host-` prefix too, so a sibling subdomain cannot plant them. The old
+  `access_token` cookie is not accepted: everyone signs in once after upgrading.
+  Plain-HTTP setups (`COOKIE_SECURE=false`) keep the old names, since browsers
+  refuse `__Host-` cookies without Secure, and log a startup warning.
 
 ### Security
 
 - Outbound calls to the identity provider refuse redirects, private and
   loopback addresses (unless listed exactly in `OIDC_ALLOWED_PRIVATE_ORIGINS`),
   oversized responses and unverified TLS. Authorization codes, state and tokens
-  are redacted from logs.
+  are redacted from logs, including bearer tokens, MCP tokens and JWTs.
+- A dual-stack or multi-address identity provider is reached through every
+  validated address in resolver order, not only the first one.
+- Rotating the client secret file takes effect at the next login without a
+  restart; an unreadable secret blocks SSO only, never local sign-in.
+- Plain `http://` identity provider origins must be listed in
+  `OIDC_ALLOWED_PRIVATE_ORIGINS`; `OIDC_ALLOW_INSECURE_HTTP` logs a warning.
+- Mapping rules on `email` need `email_verified: true` (as rules on `hd` do);
+  rules on `preferred_username` are rejected, use group or app-role claims.
+- SSO account names never become `.`, `..` or `admin` (they get `sso-user` or a
+  `-sso` suffix), and new SSO sign-ins pause while 10,000 are pending.
+- Editing `config.json` on disk now applies deletions on reload exactly as on
+  restart.
 
 ### Upgrade notes
 
-- Nothing changes until `OIDC_ISSUER` is set. Signing out of ASM does not sign
-  you out of the identity provider.
+- Nothing changes until `OIDC_ISSUER` is set, except the cookie rename above:
+  on HTTPS everyone signs in once more. Signing out of ASM does not sign you out
+  of the identity provider.
 
 ## [1.3.1] - 2026-11-13
 
