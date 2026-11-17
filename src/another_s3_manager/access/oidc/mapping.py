@@ -6,6 +6,14 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
+# Claims an IdP may assert without verification; they qualify only with email_verified.
+VERIFIED_EMAIL_CLAIMS = frozenset({"hd", "email"})
+
+
+def verified_email(claims):
+    return claims.get("email_verified") is True
+
+
 def claim_at(claims, path):
     value = claims
     for component in path.split("."):
@@ -43,7 +51,7 @@ def evaluate_mapping(claims, config):
             if isinstance(value, str)
             else (isinstance(value, list) and all(isinstance(item, str) for item in value) and rule["value"] in value)
         )
-        if rule["claim"] == "hd" and claims.get("email_verified") is not True:
+        if rule["claim"] in VERIFIED_EMAIL_CLAIMS and not verified_email(claims):
             matches = False
         if matches:
             count += 1

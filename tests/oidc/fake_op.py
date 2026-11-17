@@ -5,7 +5,7 @@ import hashlib
 import secrets
 import threading
 import time
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs, unquote_plus, urlencode
 
 import httpx
 from authlib.jose import JsonWebKey, jwt
@@ -30,6 +30,8 @@ class FakeOP:
         self.lock = threading.Lock()
         self.claims = {"sub": "reader", "preferred_username": "reader", "groups": ["data-team"]}
         self.token_changes = {}
+        self.discovery_fetches = 0
+        self.token_authorizations = []
 
     @property
     def metadata(self):
@@ -58,14 +60,22 @@ class FakeOP:
 
     def handle(self, request):
         if request.url.path.endswith("openid-configuration"):
+            with self.lock:
+                self.discovery_fetches += 1
             return httpx.Response(200, json=self.metadata)
         if request.url.path == "/jwks":
             return httpx.Response(200, json={"keys": [self.jwk]})
         if request.url.path != "/token":
             return httpx.Response(404)
         data = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+        authorization = request.headers.get("authorization")
+        if authorization and authorization.startswith("Basic "):
+            # client_secret_basic: the client id comes from the form-urlencoded Basic pair.
+            user = base64.b64decode(authorization[6:]).decode().split(":", 1)[0]
+            data.setdefault("client_id", unquote_plus(user))
         with self.lock:
             self.calls += 1
+            self.token_authorizations.append(authorization)
             tx = self.codes.pop(data.get("code"), None)
         challenge = (
             base64.urlsafe_b64encode(hashlib.sha256(data.get("code_verifier", "").encode()).digest())

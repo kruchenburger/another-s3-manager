@@ -53,6 +53,18 @@ def redact_auth_material(value):
     # Split on raw query delimiters before inspecting encoded parameter names.
     value = re.sub(r"([?&])([^=&\s\"'<>]+)=([^&\s]*)", query_parameter, value)
 
+    def quoted_key(match):
+        if re.fullmatch(_SENSITIVE, _decoded_name(match[2]), re.IGNORECASE):
+            return f"{match[1]}{match[2]}{match[1]}: {match[3]}[redacted]{match[3]}"
+        return match[0]
+
+    # Explicit credential shapes run before the generic name=value rule, which stops at
+    # whitespace and lets a previous key swallow the next one in dict/JSON renderings.
+    value = re.sub(r"([\"'])([\w%.-]+)\1\s*:\s*([\"'])(?:(?!\3).)*\3", quoted_key, value)
+    value = re.sub(r"(?i)\bbearer\s+\S+", "Bearer [redacted]", value)
+    value = re.sub(r"as3m_[A-Za-z0-9_-]+", "[redacted]", value)
+    value = re.sub(r"eyJ[\w-]*\.[\w-]*\.[\w-]*", "[redacted]", value)
+
     def field(match):
         if re.fullmatch(_SENSITIVE, _decoded_name(match[1]), re.IGNORECASE):
             return "auth=[redacted]"

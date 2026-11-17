@@ -1,5 +1,6 @@
 import asyncio
 
+import pytest
 from tests.test_oidc_login_integration import begin
 
 from another_s3_manager import access, config
@@ -11,6 +12,45 @@ def test_normalization_bounds():
     assert normalized_username("  ＡＤＭＩＮ  ") == "admin"
     assert len(normalized_username("x" * 100)) == 64
     assert normalized_username(123) == "sso-user"
+    for unaddressable in ("", "   ", ".", "..", ".x", "．．", "...hidden"):
+        assert normalized_username(unaddressable) == "sso-user"
+    assert normalized_username("a.b") == "a.b"
+    assert normalized_username("x.") == "x."
+
+
+@pytest.mark.parametrize("value,expected", [(".", "sso-user"), ("..", "sso-user"), (".x", "sso-user")])
+def test_dot_usernames_become_addressable_jit_accounts(oidc, value, expected):
+    oidc.claims = {"sub": "dots", "preferred_username": value, "groups": ["data-team"]}
+    q, c = begin(oidc)
+    assert access.authenticate_session(asyncio.run(access.complete_oidc_login(q, c)).session).username == expected
+
+
+@pytest.mark.parametrize("existing_admin", [True, False])
+def test_reserved_admin_name_is_always_suffixed(oidc, existing_admin):
+    if existing_admin:
+        users.create_user("admin", "local-hash", is_admin=True)
+    else:
+        # A non-empty database without any account named admin (renamed or deleted).
+        users.create_user("operator", "local-hash", is_admin=True)
+    oidc.claims = {"sub": "claims-admin", "preferred_username": "admin", "groups": ["data-team"]}
+    q, c = begin(oidc)
+    result = asyncio.run(access.complete_oidc_login(q, c))
+    assert access.authenticate_session(result.session).username == "admin-sso"
+    assert (users.get_user_by_username("admin") is not None) is existing_admin
+
+
+@pytest.mark.parametrize(
+    "verified,expected", [(True, "person@corp.example"), (False, "subject-1"), (None, "subject-1")]
+)
+def test_jit_username_uses_email_only_when_verified(oidc, verified, expected):
+    users.create_user("operator", "local-hash", is_admin=True)
+    claims = {"sub": "subject-1", "email": "person@corp.example", "groups": ["data-team"]}
+    if verified is not None:
+        claims["email_verified"] = verified
+    oidc.claims = claims
+    q, c = begin(oidc)
+    result = asyncio.run(access.complete_oidc_login(q, c))
+    assert access.authenticate_session(result.session).username == expected
 
 
 def test_identity_and_username_races_have_no_ghosts(oidc):

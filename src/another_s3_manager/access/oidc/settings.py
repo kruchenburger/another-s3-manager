@@ -2,7 +2,7 @@
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -51,12 +51,40 @@ def origin(url, *, allow_http=False, origin_only=False):
     return f"{scheme}://{host}:{port}"
 
 
+class InsecureOrigin(ValueError):
+    """A plain-HTTP IdP origin that is not explicitly allow-listed."""
+
+
+def outbound_origin(url, settings):
+    """The one rule for IdP origins: plain HTTP only for an explicitly listed origin."""
+    identity = origin(url, allow_http=settings.allow_http)
+    if identity.startswith("http://") and identity not in settings.private_origins:
+        raise InsecureOrigin("Plain HTTP OIDC origins must be listed in OIDC_ALLOWED_PRIVATE_ORIGINS")
+    return identity
+
+
+def client_secret():
+    """Read the current client secret on demand; the file source wins over the variable.
+
+    Nothing caches it, so a rotated secret file takes effect on the next token exchange.
+    Errors never carry the path or the file contents.
+    """
+    if "OIDC_CLIENT_SECRET_FILE" not in os.environ:
+        return os.environ.get("OIDC_CLIENT_SECRET", "")
+    try:
+        secret = Path(os.environ["OIDC_CLIENT_SECRET_FILE"]).read_text(encoding="utf-8").rstrip("\r\n")
+    except (OSError, ValueError):
+        raise ValueError("Cannot read OIDC client secret file") from None
+    if not secret:
+        raise ValueError("Empty OIDC client secret file")
+    return secret
+
+
 @dataclass(frozen=True)
 class OidcSettings:
     issuer: str
     public_url: str
     client_id: str
-    client_secret: str = field(repr=False)
     allow_http: bool
     private_origins: frozenset[str]
     secure_cookie: bool
@@ -121,6 +149,11 @@ def oidc_settings(config):
             raise ValueError("Invalid rule grant")
         if not rule.get("admin", False) and not rule.get("roles", []):
             raise ValueError("Empty mapping rule")
+        if rule["claim"] == "preferred_username":
+            raise ValueError(
+                "Rules on preferred_username are not allowed: the IdP user can often change it. "
+                "Use a group or app-role claim."
+            )
     scopes = oidc.get("scopes", ["openid", "profile", "email"])
     if (
         type(scopes) is not list
@@ -143,7 +176,6 @@ def oidc_settings(config):
         if private
         else frozenset()
     )
-    secret = os.environ.get("OIDC_CLIENT_SECRET", "")
     if issuer:
         if not client or not public:
             raise ValueError("OIDC requires PUBLIC_URL and OIDC_CLIENT_ID")
@@ -153,20 +185,12 @@ def oidc_settings(config):
         origin(public, allow_http=allow_http, origin_only=True)
         if urlsplit(public).scheme.lower() == "https" and not secure:
             raise ValueError("HTTPS OIDC requires secure cookies")
-        if "OIDC_CLIENT_SECRET_FILE" in os.environ:
-            try:
-                secret = Path(os.environ["OIDC_CLIENT_SECRET_FILE"]).read_text(encoding="utf-8").rstrip("\r\n")
-            except (OSError, ValueError):
-                raise ValueError("Cannot read OIDC client secret file") from None
-            if not secret:
-                raise ValueError("Empty OIDC client secret file")
     elif local == "off":
         raise ValueError("Local login off requires configured OIDC")
-    return OidcSettings(
+    settings = OidcSettings(
         issuer,
         public,
         client,
-        secret,
         allow_http,
         private_origins,
         secure,
@@ -178,3 +202,6 @@ def oidc_settings(config):
         ttl,
         mode,
     )
+    if issuer:
+        outbound_origin(issuer, settings)
+    return settings

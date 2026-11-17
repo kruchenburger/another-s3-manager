@@ -1,11 +1,12 @@
 """Web authentication dependencies and compatibility helper exports."""
 
+import logging
 import secrets
 from typing import Any, Dict, Literal
 
 from fastapi import Depends, HTTPException, Request, status
 
-from another_s3_manager import access
+from another_s3_manager import access, constants
 from another_s3_manager.access import (
     check_ban as check_ban,
 )
@@ -97,16 +98,101 @@ def map_web_auth_error(
     return status_code, detail if detail is not None else error.message, reason
 
 
+# The one home for browser cookie names, paths and attributes. With Secure cookies
+# (the default) both cookies carry the __Host- prefix: Secure, Path=/, no Domain, so a
+# sibling subdomain cannot plant them. COOKIE_SECURE=false (plain HTTP on local or
+# trusted networks) keeps the historical names and paths.
+_HOST_PREFIX = "__Host-"
+_LEGACY_SESSION_COOKIE = "access_token"
+_OIDC_TX_PREFIX = "oidc_tx_"
+_OIDC_TX_LEGACY_PATH = "/api/auth/oidc/"
+_logger = logging.getLogger(__name__)
+
+
+def cookies_secure() -> bool:
+    return constants.COOKIE_SECURE
+
+
+def session_cookie_name() -> str:
+    return _HOST_PREFIX + _LEGACY_SESSION_COOKIE if cookies_secure() else _LEGACY_SESSION_COOKIE
+
+
+def session_cookie(request: Request) -> str | None:
+    """The session token; in Secure mode a leftover plain access_token is not a session."""
+    return request.cookies.get(session_cookie_name())
+
+
+def _delete_legacy_session_cookie(response) -> None:
+    if cookies_secure():
+        response.delete_cookie(_LEGACY_SESSION_COOKIE, path="/")
+
+
+def set_session_cookie(response, token: str, max_age: int) -> None:
+    secure = cookies_secure()
+    _delete_legacy_session_cookie(response)
+    response.set_cookie(
+        session_cookie_name(),
+        token,
+        httponly=True,
+        secure=secure,
+        samesite="strict",
+        path="/",
+        max_age=max_age,
+    )
+
+
+def clear_session_cookie(response) -> None:
+    secure = cookies_secure()
+    response.delete_cookie(session_cookie_name(), path="/", httponly=True, secure=secure, samesite="strict")
+    _delete_legacy_session_cookie(response)
+
+
+def oidc_transaction_cookies(request: Request) -> Dict[str, str]:
+    """Transaction cookies under Access's names; cookies of the other mode are ignored."""
+    prefix = _HOST_PREFIX if cookies_secure() else ""
+    return {
+        name[len(prefix) :]: value
+        for name, value in request.cookies.items()
+        if name.startswith(prefix + _OIDC_TX_PREFIX)
+    }
+
+
+def apply_oidc_cookie_operations(response, operations) -> None:
+    secure = cookies_secure()
+    prefix, path = (_HOST_PREFIX, "/") if secure else ("", _OIDC_TX_LEGACY_PATH)
+    for operation in operations:
+        if operation.max_age:
+            response.set_cookie(
+                prefix + operation.name,
+                operation.value,
+                max_age=operation.max_age,
+                httponly=True,
+                secure=secure,
+                samesite="lax",
+                path=path,
+            )
+        else:
+            response.delete_cookie(prefix + operation.name, path=path, httponly=True, secure=secure, samesite="lax")
+
+
+def log_cookie_mode() -> None:
+    if not cookies_secure():
+        _logger.warning(
+            "COOKIE_SECURE=false: cookies lack the Secure flag and the __Host- prefix. "
+            "Plain HTTP is for local or trusted networks only."
+        )
+
+
 def _decode_session_payload(request: Request):
-    return access.decode_session_payload(request.cookies.get("access_token", ""))
+    return access.decode_session_payload(session_cookie(request) or "")
 
 
 def has_valid_session(request: Request) -> bool:
-    return access.session_token_is_wellformed(request.cookies.get("access_token", ""))
+    return access.session_token_is_wellformed(session_cookie(request) or "")
 
 
 def get_current_user(request: Request) -> Dict[str, Any]:
-    token = request.cookies.get("access_token")
+    token = session_cookie(request)
     if not token:
         status_code, detail, _ = map_web_auth_error("cookie")
         raise HTTPException(status_code=status_code, detail=detail)

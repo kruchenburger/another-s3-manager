@@ -118,11 +118,16 @@ def test_oidc_origin_secret_precedence_and_secure_cookie_validation(monkeypatch,
     secret = tmp_path / "secret"
     secret.write_text("file-canary\n")
     monkeypatch.setenv("OIDC_CLIENT_SECRET_FILE", str(secret))
-    assert access.oidc_settings({}).client_secret == "file-canary"
+    from another_s3_manager.access.oidc.settings import client_secret
+
+    assert client_secret() == "file-canary"
     secret.unlink()
-    with pytest.raises(ValueError):
-        access.oidc_settings({})
+    with pytest.raises(ValueError, match="Cannot read OIDC client secret file"):
+        client_secret()
+    # Settings never read the secret, so an unreadable file cannot break them (L1).
+    assert access.oidc_settings({}).local_login == "all"
     monkeypatch.delenv("OIDC_CLIENT_SECRET_FILE")
+    assert client_secret() == "env-canary"
     for public in (
         "https://asm.example/path",
         "https://u@asm.example",
@@ -146,12 +151,21 @@ def test_oidc_origin_secret_precedence_and_secure_cookie_validation(monkeypatch,
             access.oidc_settings({})
 
 
+PREFERRED_USERNAME_DETAIL = (
+    "Rules on preferred_username are not allowed: the IdP user can often change it. Use a group or app-role claim."
+)
+
+
 @pytest.mark.parametrize(
     "auth,detail",
     [
         ({"local_login": "private-input-canary"}, "Invalid local login policy"),
         ({"oidc": {"role_mapping": {"mode": "private-input-canary"}}}, "Invalid mapping mode"),
         ({"oidc": {"role_mapping": {"require_match": False}}}, "require_match must be true"),
+        (
+            {"oidc": {"role_mapping": {"rules": [{"claim": "preferred_username", "value": "boss", "admin": True}]}}},
+            PREFERRED_USERNAME_DETAIL,
+        ),
     ],
 )
 def test_config_post_reports_specific_secret_free_auth_error(app_client, monkeypatch, auth, detail):
@@ -169,3 +183,129 @@ def test_config_post_reports_specific_secret_free_auth_error(app_client, monkeyp
     assert "canary" not in response.text
     assert config.CONFIG_FILE.read_bytes() == disk
     assert config.load_config() == previous
+
+
+def test_preferred_username_rule_in_the_file_is_refused_and_last_good_kept():
+    import json
+
+    previous = config.load_config()
+    bad = {
+        **previous,
+        "auth": {
+            "oidc": {
+                "role_mapping": {"rules": [{"claim": "preferred_username", "value": "boss", "roles": ["Default"]}]}
+            }
+        },
+    }
+    config.CONFIG_FILE.write_text(json.dumps(bad))
+    with pytest.raises(ValueError, match="Rules on preferred_username are not allowed"):
+        config.load_config(force_reload=True)
+    with pytest.raises(ValueError, match="Use a group or app-role claim"):
+        config.load_config()
+    assert config._config_cache == previous
+    # Other claims, including nested ones, stay valid.
+    access.oidc_settings(
+        {"auth": {"oidc": {"role_mapping": {"rules": [{"claim": "realm_access.roles", "value": "x", "admin": True}]}}}}
+    )
+
+
+SECURED = {
+    "local_login": "admins",
+    "oidc": {
+        "role_mapping": {
+            "mode": "initial",
+            "rules": [{"claim": "groups", "value": "admins", "admin": True}],
+        }
+    },
+}
+
+
+@pytest.mark.parametrize("force", [True, False])
+@pytest.mark.parametrize(
+    "edit,expected",
+    [
+        (
+            lambda auth: auth["oidc"]["role_mapping"].pop("rules"),
+            {"local_login": "admins", "oidc": {"role_mapping": {"mode": "initial"}}},
+        ),
+        (
+            lambda auth: auth["oidc"]["role_mapping"].pop("mode"),
+            {"local_login": "admins", "oidc": {"role_mapping": {"rules": SECURED["oidc"]["role_mapping"]["rules"]}}},
+        ),
+        (lambda auth: auth.clear(), {}),
+    ],
+)
+def test_external_reload_treats_the_file_as_authoritative(force, edit, expected):
+    import copy
+    import json
+    import os
+
+    path = config.CONFIG_FILE
+    start = {**config.load_config(), "auth": copy.deepcopy(SECURED)}
+    config.save_config(start)
+    assert config.load_config()["auth"] == SECURED
+    changed = copy.deepcopy(start)
+    edit(changed["auth"])
+    path.write_text(json.dumps(changed) + " " * 7)
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    assert config.load_config(force_reload=force)["auth"] == expected
+    # The next internal save does not write the removed keys back.
+    config.save_config(config.load_config())
+    assert json.loads(path.read_text())["auth"] == expected
+
+
+def test_removing_the_auth_block_from_the_file_takes_effect_on_reload():
+    import json
+
+    config.save_config({**config.load_config(), "auth": SECURED})
+    raw = json.loads(config.CONFIG_FILE.read_text())
+    raw.pop("auth")
+    config.CONFIG_FILE.write_text(json.dumps(raw))
+    assert "auth" not in config.load_config(force_reload=True)
+    assert access.oidc_settings(config.load_config()).mode == "sync"
+
+
+def test_partial_api_update_still_preserves_omitted_security_fields(app_client):
+    from another_s3_manager import users
+    from tests.test_web_user_lifecycle import authenticate
+
+    actor = users.create_user("local-admin", "hash", is_admin=True)
+    headers = authenticate(app_client, actor)
+    config.save_config({**config.load_config(), "auth": SECURED})
+    body = config.load_config()
+    body.pop("auth")
+    assert app_client.post("/api/config", json=body, headers=headers).status_code == 200
+    assert config.load_config(force_reload=True)["auth"] == SECURED
+
+
+def test_plain_http_issuer_must_be_an_allow_listed_origin(monkeypatch, caplog):
+    monkeypatch.setenv("OIDC_ISSUER", "http://op.internal:8091")
+    monkeypatch.setenv("OIDC_CLIENT_ID", "asm")
+    monkeypatch.setenv("PUBLIC_URL", "http://asm.internal")
+    monkeypatch.setenv("COOKIE_SECURE", "false")
+    with pytest.raises(ValueError, match="Invalid OIDC URL"):
+        access.oidc_settings({})
+    monkeypatch.setenv("OIDC_ALLOW_INSECURE_HTTP", "true")
+    with pytest.raises(ValueError, match="must be listed in OIDC_ALLOWED_PRIVATE_ORIGINS"):
+        access.oidc_settings({})
+    monkeypatch.setenv("OIDC_ALLOWED_PRIVATE_ORIGINS", "http://op.internal:8092")
+    with pytest.raises(ValueError, match="must be listed in OIDC_ALLOWED_PRIVATE_ORIGINS"):
+        access.oidc_settings({})
+    monkeypatch.setenv("OIDC_ALLOWED_PRIVATE_ORIGINS", "http://op.internal:8091")
+    monkeypatch.setenv("OIDC_CLIENT_SECRET", "startup-secret-canary")
+    caplog.clear()
+    assert access.oidc_startup({}).allow_http is True
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert any("OIDC_ALLOW_INSECURE_HTTP is enabled" in record.getMessage() for record in warnings)
+    assert "startup-secret-canary" not in caplog.text
+
+
+def test_no_insecure_http_warning_by_default(monkeypatch, caplog):
+    monkeypatch.setenv("OIDC_ISSUER", "https://op.example")
+    monkeypatch.setenv("OIDC_CLIENT_ID", "asm")
+    monkeypatch.setenv("PUBLIC_URL", "https://asm.example")
+    monkeypatch.setenv("COOKIE_SECURE", "true")
+    caplog.clear()
+    access.oidc_startup({})
+    assert "OIDC_ALLOW_INSECURE_HTTP" not in caplog.text

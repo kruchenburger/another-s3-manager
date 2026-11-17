@@ -52,13 +52,19 @@ from another_s3_manager import move_jobs
 from another_s3_manager import users as users_module
 from another_s3_manager.api_tokens import count_active_tokens
 from another_s3_manager.auth import (
+    apply_oidc_cookie_operations,
+    clear_session_cookie,
     get_current_admin_user,
     get_current_user,
     get_jwt_secret_key,
     has_valid_session,
     hash_password,
+    log_cookie_mode,
     map_web_auth_error,
     map_web_oidc_error,
+    oidc_transaction_cookies,
+    session_cookie,
+    set_session_cookie,
     verify_csrf_token,
 )
 from another_s3_manager.config import load_config, resolve_max_file_size, resolve_presigned_ttls, save_config
@@ -66,7 +72,6 @@ from another_s3_manager.constants import (
     APP_DESCRIPTION,
     APP_NAME,
     APP_VERSION,
-    COOKIE_SECURE,
     DEFAULT_ADMIN_PASSWORD,
     PASSWORD_SET_VIA_UI,
     PRESIGNED_STS_WARNING_THRESHOLD,
@@ -318,7 +323,8 @@ async def lifespan(app_: FastAPI):
     why it is a separate, directly-callable function.
     """
     run_startup_tasks()
-    oidc_settings = access_service.oidc_settings(load_config(force_reload=True))
+    log_cookie_mode()
+    oidc_settings = access_service.oidc_startup(load_config(force_reload=True))
     oidc_task = None
     if oidc_settings.enabled:
         import asyncio
@@ -801,30 +807,12 @@ def _enforce_password_policy(password: str) -> None:
 # ============================================================================
 
 
-def _oidc_cookie_operations(response, operations):
-    for operation in operations:
-        if operation.max_age:
-            response.set_cookie(
-                operation.name,
-                operation.value,
-                max_age=operation.max_age,
-                httponly=True,
-                secure=COOKIE_SECURE,
-                samesite="lax",
-                path="/api/auth/oidc/",
-            )
-        else:
-            response.delete_cookie(
-                operation.name, path="/api/auth/oidc/", httponly=True, secure=COOKIE_SECURE, samesite="lax"
-            )
-
-
 _OIDC_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 
 
 @app.get("/api/auth/oidc/login")
 def oidc_login(request: Request, return_to: str = "/"):
-    result = access_service.start_oidc_login(return_to, request.cookies)
+    result = access_service.start_oidc_login(return_to, oidc_transaction_cookies(request))
     if result.code:
         response = JSONResponse(
             {"detail": {"code": result.code}},
@@ -833,13 +821,13 @@ def oidc_login(request: Request, return_to: str = "/"):
         )
     else:
         response = RedirectResponse(result.redirect, status_code=302, headers=_OIDC_HEADERS)
-    _oidc_cookie_operations(response, result.cookies)
+    apply_oidc_cookie_operations(response, result.cookies)
     return response
 
 
 @app.get("/api/auth/oidc/callback")
 async def oidc_callback(request: Request):
-    result = await access_service.complete_oidc_login(request.query_params, request.cookies)
+    result = await access_service.complete_oidc_login(request.query_params, oidc_transaction_cookies(request))
     status_code = map_web_oidc_error("callback", result.code)
     if status_code is not None:
         response = JSONResponse({"detail": {"code": result.code}}, status_code=status_code, headers=_OIDC_HEADERS)
@@ -855,18 +843,10 @@ async def oidc_callback(request: Request):
             + '">Continue</a>',
             headers={**_OIDC_HEADERS, "Content-Security-Policy": "default-src 'none'"},
         )
-        response.set_cookie(
-            "access_token",
-            result.session,
-            httponly=True,
-            secure=COOKIE_SECURE,
-            samesite="strict",
-            path="/",
-            max_age=result.lifetime_minutes * 60,
-        )
+        set_session_cookie(response, result.session, result.lifetime_minutes * 60)
     else:
         response = RedirectResponse(result.redirect, status_code=302, headers=_OIDC_HEADERS)
-    _oidc_cookie_operations(response, result.cookies)
+    apply_oidc_cookie_operations(response, result.cookies)
     return response
 
 
@@ -895,15 +875,7 @@ async def login(
         lifetime = access_service.validate_lifetime_minutes()
         access_token = access_service.issue_session(principal, method="pwd", lifetime_minutes=lifetime)
 
-        response.set_cookie(
-            key="access_token",
-            value=access_token,
-            httponly=True,
-            secure=COOKIE_SECURE,
-            samesite="strict",
-            max_age=lifetime * 60,
-            path="/",
-        )
+        set_session_cookie(response, access_token, lifetime * 60)
 
         return {"user": {"username": username, "is_admin": user.get("is_admin", False)}}
     except HTTPException:
@@ -922,7 +894,7 @@ async def login(
 @app.post("/api/logout")
 async def logout(response: Response):
     """Clear the auth cookie. No auth required — clearing an already-invalid cookie is harmless."""
-    response.delete_cookie("access_token", path="/")
+    clear_session_cookie(response)
     return {"ok": True}
 
 
@@ -2582,7 +2554,7 @@ def get_user_for_download(token: Optional[str] = Query(None), request: Request =
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             candidates.append(auth_header[7:])
-        cookie_token = request.cookies.get("access_token")
+        cookie_token = session_cookie(request)
         if cookie_token:
             candidates.append(cookie_token)
     for candidate in candidates:

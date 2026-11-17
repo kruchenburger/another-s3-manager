@@ -14,12 +14,16 @@ from another_s3_manager.access.sessions import issue_session
 from another_s3_manager.database import session_scope
 from another_s3_manager.models import User, UserIdentity, UserRole
 
-from .mapping import claim_at, evaluate_mapping
+from .mapping import VERIFIED_EMAIL_CLAIMS, claim_at, evaluate_mapping, verified_email
+
+RESERVED_USERNAMES = frozenset({"admin"})
 
 
 def normalized_username(value):
     text = unicodedata.normalize("NFKC", value).strip().lower() if isinstance(value, str) else ""
-    return re.sub(r"[^a-z0-9._@-]", "-", text)[:64] or "sso-user"
+    name = re.sub(r"[^a-z0-9._@-]", "-", text)[:64]
+    # Empty, dot-only or dot-leading names collapse as URL path segments in the admin UI.
+    return "sso-user" if not name or name.startswith(".") else name
 
 
 def login_snapshot(issuer, subject):
@@ -77,16 +81,22 @@ def commit_login(claims, config, settings, expected, seed_hash=None, *, now=None
                         )
                     )
                     session.flush()
+                verified = verified_email(claims)
+                candidates = (
+                    None
+                    if settings.username_claim in VERIFIED_EMAIL_CLAIMS and not verified
+                    else claim_at(claims, settings.username_claim),
+                    claims.get("email") if verified else None,
+                    claims["sub"],
+                )
                 value = next(
-                    (
-                        candidate
-                        for candidate in (claim_at(claims, settings.username_claim), claims.get("email"), claims["sub"])
-                        if isinstance(candidate, str) and candidate.strip()
-                    ),
+                    (candidate for candidate in candidates if isinstance(candidate, str) and candidate.strip()),
                     "sso-user",
                 )
                 base = normalized_username(value)
-                for attempt in range(11):
+                # The reserved break-glass name is never taken by a JIT account, even
+                # after the local admin was renamed or deleted.
+                for attempt in range(1 if base in RESERVED_USERNAMES else 0, 11):
                     suffix = "" if attempt == 0 else "-sso" if attempt == 1 else f"-sso-{attempt}"
                     username = base[: 64 - len(suffix)] + suffix
                     if session.scalar(select(User.id).where(func.lower(User.username) == username)) is not None:

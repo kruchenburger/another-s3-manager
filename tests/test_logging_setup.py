@@ -56,6 +56,40 @@ def test_oidc_canaries_absent_from_final_text_and_json_logs(monkeypatch, capsys,
     assert "CANARY" not in output
 
 
+JWT_CANARY = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJjYW5hcnkifQ.c2lnbmF0dXJlLWNhbmFyeQ"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Authorization: Bearer as3m_SECRETCANARY",
+        "{'Authorization': 'Bearer as3m_DICTCANARY'}",
+        'failed: {"id_token": "' + JWT_CANARY + '", "state": "state-canary"}',
+        "retrying with Bearer as3m_BARECANARY now",
+        "bearer opaque-access-canary",
+        "upstream said " + JWT_CANARY,
+        "{'client_secret': 'quoted-secret-canary', 'safe': 'kept'}",
+        '"code_verifier" : "verifier-canary"',
+    ],
+)
+def test_redaction_covers_bearer_pat_jwt_and_quoted_keys(text):
+    from another_s3_manager.logging_setup import redact_auth_material
+
+    redacted = redact_auth_material(text)
+    assert "canary" not in redacted.lower()
+    assert "as3m_" not in redacted
+    assert "eyJ" not in redacted
+
+
+def test_redaction_keeps_harmless_text():
+    from another_s3_manager.logging_setup import redact_auth_material
+
+    assert redact_auth_material("OIDC outcome=refused category=oidc_state") == (
+        "OIDC outcome=refused category=oidc_state"
+    )
+    assert "'safe': 'kept'" in redact_auth_material("{'client_secret': 'x', 'safe': 'kept'}")
+
+
 @pytest.mark.parametrize("status", [200, 401, 403, 500])
 @pytest.mark.parametrize("format", ["text", "json"])
 def test_access_formatter_preserves_args_and_redacts_query(monkeypatch, status, format):

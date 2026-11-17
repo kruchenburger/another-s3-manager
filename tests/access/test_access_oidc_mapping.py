@@ -47,6 +47,21 @@ def test_hd_requires_boolean_verified_email(verified):
     ).eligible is (verified is True)
 
 
+@pytest.mark.parametrize("verified", [None, False, "true", 1, True])
+def test_email_rule_requires_boolean_verified_email(verified):
+    claims = {"email": "boss@corp.example", "email_verified": verified}
+    result = evaluate_mapping(claims, configured("email", "boss@corp.example", roles=[], admin=True))
+    assert result.eligible is (verified is True)
+    assert result.admin is (verified is True)
+
+
+def test_unverified_email_does_not_block_other_rules():
+    cfg = configured("email", "boss@corp.example", roles=[], admin=True)
+    cfg["auth"]["oidc"]["role_mapping"]["rules"].append({"claim": "groups", "value": "readers", "roles": ["read"]})
+    result = evaluate_mapping({"email": "boss@corp.example", "groups": ["readers"]}, cfg)
+    assert (result.roles, result.admin, result.matched_rules) == (("read",), False, 1)
+
+
 def test_entra_overage_requires_another_effective_rule(caplog):
     claims = {"groups": ["/team/sub"], "_claim_names": {"groups": "source"}}
     assert not evaluate_mapping(claims, configured()).eligible

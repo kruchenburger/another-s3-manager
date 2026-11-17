@@ -82,7 +82,11 @@ def load_config(force_reload: bool = False) -> Dict[str, Any]:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             new_config = json.load(f)
 
-        new_config = _preserve_auth_fields(new_config, _config_cache)
+        # The file is authoritative on reload: no omission-preserving merge, so a key
+        # deleted from the file (rules, the auth block, mode) takes effect exactly as
+        # on restart. Invalid content raises and the last-good snapshot stays.
+        if not isinstance(new_config, dict):
+            raise ValueError("Configuration must be an object")
         access.oidc_settings(new_config)
         for role in new_config.get("roles", []):
             if "allow_delete" in role and type(role["allow_delete"]) is not bool:
@@ -98,7 +102,7 @@ def load_config(force_reload: bool = False) -> Dict[str, Any]:
                     # Try to save migrated config, but skip if file is read-only.
                     # Use internal function to avoid recursion if save_config is wrapped.
                     try:
-                        _save_config_internal(new_config, skip_migration=True)
+                        _save_config_internal(new_config, skip_migration=True, authoritative=True)
                         # _save_config_internal already performs the atomic
                         # rebind of _config_cache/_config_mtime — nothing left
                         # to do here.
@@ -426,14 +430,18 @@ def is_config_writable() -> bool:
 
 
 # Store original save_config for internal use (before it might be wrapped)
-def _save_config_internal(config: Dict[str, Any], skip_migration: bool = False) -> None:
+def _save_config_internal(config: Dict[str, Any], skip_migration: bool = False, authoritative: bool = False) -> None:
     """
     Internal save_config implementation (used to avoid recursion when wrapped).
+
+    `authoritative` is set only when persisting a migrated file reload: that content
+    came from the file itself, so omitted security keys must not be merged back.
     """
     global _config_cache, _config_mtime, _config_size
 
     with access.role_grants_lock, _config_lock:
-        config = _preserve_auth_fields(config, _config_cache)
+        if not authoritative:
+            config = _preserve_auth_fields(config, _config_cache)
         access.oidc_settings(config)
         config = deepcopy(config)
         # Check if config is writable before attempting to save

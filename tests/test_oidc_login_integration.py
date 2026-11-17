@@ -294,3 +294,99 @@ def test_external_file_reload_serializes_with_callback_grants(oidc, monkeypatch,
     from another_s3_manager.access import users
 
     assert access.allowed_roles(users.get_user_by_username("reader"), config.load_config()) == []
+
+
+@pytest.fixture
+def live_op(monkeypatch, tmp_path):
+    """A FakeOP behind a real loopback server and the real outbound path.
+
+    Unlike the `oidc` fixture nothing is shortcut: discovery_for builds the instance,
+    current() performs the first refresh, resolve_destination validates the patched
+    resolver answer and PinnedBackend connects to the pinned address. The client
+    secret comes from a real file.
+    """
+    from tests.oidc.fake_op import FakeOP
+    from tests.oidc.local_http import resolver_for, serve
+
+    holder = {}
+    with serve(lambda request: holder["op"].handle(request)) as port:
+        issuer = f"http://op.example:{port}"
+        op = FakeOP(issuer, "asm", "https://asm.example/api/auth/oidc/callback")
+        holder["op"] = op
+        secret = tmp_path / "client-secret"
+        secret.write_text("first-secret\n")
+        monkeypatch.setenv("OIDC_ISSUER", issuer)
+        monkeypatch.setenv("OIDC_CLIENT_ID", "asm")
+        monkeypatch.setenv("PUBLIC_URL", "https://asm.example")
+        monkeypatch.setenv("COOKIE_SECURE", "true")
+        monkeypatch.setenv("OIDC_ALLOW_INSECURE_HTTP", "true")
+        monkeypatch.setenv("OIDC_ALLOWED_PRIVATE_ORIGINS", issuer)
+        monkeypatch.setenv("OIDC_CLIENT_SECRET_FILE", str(secret))
+        resolver_for(monkeypatch, {"op.example": ["127.0.0.1"]})
+        cfg = config.load_config()
+        cfg["auth"] = {
+            "oidc": {"role_mapping": {"rules": [{"claim": "groups", "value": "data-team", "roles": ["Default"]}]}}
+        }
+        config.save_config(cfg)
+        access.oidc_startup(config.load_config())
+        op.secret_file = secret
+        yield op
+
+
+def basic(secret):
+    import base64
+
+    return "Basic " + base64.b64encode(f"asm:{secret}".encode()).decode()
+
+
+def test_rotated_secret_file_is_used_by_the_next_exchange_on_the_same_discovery(live_op):
+    from another_s3_manager.access.oidc import discovery
+
+    query, cookies = begin(live_op)
+    published = discovery._discovery
+    assert published is not None and live_op.discovery_fetches == 1
+    assert asyncio.run(access.complete_oidc_login(query, cookies)).session
+    assert live_op.token_authorizations == [basic("first-secret")]
+
+    live_op.secret_file.write_text("second-secret\n")
+    query, cookies = begin(live_op)
+    result = asyncio.run(access.complete_oidc_login(query, cookies))
+    assert result.session and result.code is None
+    assert live_op.token_authorizations == [basic("first-secret"), basic("second-secret")]
+    assert discovery._discovery is published
+    assert access.discovery_for(access.oidc_settings(config.load_config())) is published
+    # The rotation needed no new discovery fetch.
+    assert live_op.discovery_fetches == 1
+
+
+def test_removed_secret_file_blocks_only_sso(live_op, app_client, caplog):
+    from another_s3_manager.access import users
+
+    users.create_user("admin", access.hash_password("LocalPassword1"), is_admin=True)
+    query, cookies = begin(live_op)
+    live_op.secret_file.unlink()
+
+    info = app_client.get("/api/app-info")
+    assert info.status_code == 200
+    assert info.json()["auth"]["oidc_enabled"] is True
+    login = app_client.post("/api/login", data={"username": "admin", "password": "LocalPassword1"})
+    assert login.status_code == 200
+    assert config.load_config(force_reload=True)["auth"]["oidc"]["role_mapping"]["rules"]
+
+    start = app_client.get("/api/auth/oidc/login", follow_redirects=False)
+    assert start.status_code == 503
+    assert start.json() == {"detail": {"code": "OIDC_UNAVAILABLE"}}
+    result = asyncio.run(access.complete_oidc_login(query, cookies))
+    assert result.code == "idp_unavailable" and result.session is None
+    assert live_op.calls == 0
+    assert "category=client_secret_unavailable" in caplog.text
+    assert str(live_op.secret_file) not in caplog.text
+
+
+def test_unreadable_secret_file_fails_startup(live_op):
+    live_op.secret_file.write_text("")
+    with pytest.raises(ValueError, match="Empty OIDC client secret file"):
+        access.oidc_startup(config.load_config())
+    live_op.secret_file.unlink()
+    with pytest.raises(ValueError, match="Cannot read OIDC client secret file"):
+        access.oidc_startup(config.load_config())

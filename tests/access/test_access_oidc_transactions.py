@@ -121,3 +121,32 @@ def test_ledger_consume_precedes_exchange_and_survives_restart(oidc):
     reset_engine_for_tests()
     assert asyncio.run(access.complete_oidc_login(query, cookies)).session is None
     assert oidc.calls == 1
+
+
+def test_live_ledger_cap_refuses_start_without_insert(oidc, monkeypatch, caplog):
+    from another_s3_manager.access.oidc import transactions
+
+    monkeypatch.setattr(transactions, "MAX_LIVE_TRANSACTIONS", 3)
+    now = datetime.now(UTC)
+    with session_scope() as session:
+        # Expired and consumed rows never count towards the cap.
+        session.add(OidcLoginTransaction(state_hash="e" * 64, expires_at=now - timedelta(seconds=1)))
+        session.add(OidcLoginTransaction(state_hash="c" * 64, expires_at=now + timedelta(minutes=5), consumed_at=now))
+    for _ in range(3):
+        assert access.start_oidc_login("/", {}).code is None
+
+    def count():
+        with session_scope() as session:
+            return session.scalar(select(func.count()).select_from(OidcLoginTransaction))
+
+    before = count()
+    refused = access.start_oidc_login("/", {})
+    assert refused.code == "OIDC_UNAVAILABLE"
+    assert refused.redirect == "/login"
+    assert not any(operation.max_age for operation in refused.cookies)
+    assert count() == before
+    assert "category=ledger_full" in caplog.text
+    # Below the cap a start inserts again.
+    monkeypatch.setattr(transactions, "MAX_LIVE_TRANSACTIONS", 4)
+    assert access.start_oidc_login("/", {}).code is None
+    assert count() == before + 1

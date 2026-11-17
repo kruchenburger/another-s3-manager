@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import logging
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -11,11 +12,15 @@ from urllib.parse import urlencode
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from jose import JWTError, jwt
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 
 from another_s3_manager.access.sessions import get_jwt_secret_key
 from another_s3_manager.access.users import write_scope
 from another_s3_manager.models import OidcLoginTransaction
+
+logger = logging.getLogger(__name__)
+# Unauthenticated starts write one row each; above this many live rows a start is refused.
+MAX_LIVE_TRANSACTIONS = 10_000
 
 
 @dataclass(frozen=True)
@@ -95,7 +100,9 @@ def new_transaction(return_to, cookies, settings, metadata):
                 operations.append(CookieOperation(name))
     for _, name in sorted(existing, key=lambda item: item[0])[: max(0, len(existing) - 2)]:
         operations.append(CookieOperation(name))
-    register_login_transaction(state, datetime.fromtimestamp(now + 600, UTC))
+    if not register_login_transaction(state, datetime.fromtimestamp(now + 600, UTC)):
+        logger.warning("OIDC outcome=refused category=ledger_full")
+        return OidcStart("/login", code="OIDC_UNAVAILABLE")
     operations.append(
         CookieOperation("oidc_tx_" + state[:8], jwt.encode(payload, transaction_key(), algorithm="HS256"), 600)
     )
@@ -146,11 +153,20 @@ def _purge(session, now):
     )
 
 
-def register_login_transaction(state: str, expires_at: datetime, *, now=None):
+def register_login_transaction(state: str, expires_at: datetime, *, now=None) -> bool:
+    """Insert the hashed state; False (nothing inserted) when the live-row cap is reached."""
     now = now or datetime.now(UTC)
     with write_scope() as session:
         _purge(session, now)
+        live = session.scalar(
+            select(func.count())
+            .select_from(OidcLoginTransaction)
+            .where(OidcLoginTransaction.consumed_at.is_(None), OidcLoginTransaction.expires_at > now)
+        )
+        if live >= MAX_LIVE_TRANSACTIONS:
+            return False
         session.add(OidcLoginTransaction(state_hash=hashlib.sha256(state.encode()).hexdigest(), expires_at=expires_at))
+        return True
 
 
 def consume_login_transaction(state: str, *, now=None) -> bool:

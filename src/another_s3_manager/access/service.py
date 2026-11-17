@@ -425,6 +425,34 @@ def oidc_runtime(config, *, public=False):
     }
 
 
+def oidc_startup(config):
+    """Validate OIDC once at startup: settings, a readable secret source, loud dev flags."""
+    from .oidc.settings import client_secret, oidc_settings
+
+    settings = oidc_settings(config)
+    if settings.enabled:
+        # Fails startup on an unreadable or empty secret file; later reads happen only
+        # at token exchange, so rotation needs no restart and nothing else depends on it.
+        client_secret()
+    if settings.allow_http:
+        logger.warning(
+            "OIDC_ALLOW_INSECURE_HTTP is enabled: plain HTTP is accepted for IdP origins listed in "
+            "OIDC_ALLOWED_PRIVATE_ORIGINS. Development and trusted networks only."
+        )
+    return settings
+
+
+def _oidc_client_secret():
+    """The current secret, or None (logged as a category) when its source is unusable."""
+    from .oidc.settings import client_secret
+
+    try:
+        return client_secret()
+    except ValueError:
+        logger.warning("OIDC client secret unavailable category=client_secret_unavailable")
+        return None
+
+
 def start_oidc_login(return_to: str, transaction_cookies):
     from another_s3_manager.config import load_config
 
@@ -435,6 +463,9 @@ def start_oidc_login(return_to: str, transaction_cookies):
     settings = oidc_settings(load_config())
     if not settings.enabled:
         return OidcStart("/login", code="OIDC_DISABLED")
+    if _oidc_client_secret() is None:
+        # Do not send the browser to the IdP when the code could never be exchanged.
+        return OidcStart("/login", code="OIDC_UNAVAILABLE")
     try:
         snapshot = discovery_for(settings).current()
         return new_transaction(return_to, transaction_cookies, settings, snapshot.metadata)
@@ -496,9 +527,12 @@ def _complete_oidc_login(query, cookies):
     code = query.get("code")
     if not isinstance(code, str) or not code or len(code) > 8192:
         return refusal("expired", "oidc_state")
+    secret = _oidc_client_secret()
+    if secret is None:
+        return refusal("idp_unavailable", "client_secret_unavailable")
     try:
         discovery = discovery_for(settings)
-        claims = exchange_code(discovery, discovery.current(), settings, code, tx)
+        claims = exchange_code(discovery, discovery.current(), settings, code, tx, secret)
     except OidcUnavailable:
         return refusal("idp_unavailable", "idp_unavailable")
     except InvalidIdToken:

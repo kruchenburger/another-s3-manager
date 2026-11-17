@@ -90,7 +90,8 @@ def validate_id_token(token, snapshot, settings, nonce):
         raise InvalidIdToken() from None
 
 
-def exchange_code(discovery, snapshot, settings, code, transaction):
+def exchange_code(discovery, snapshot, settings, code, transaction, client_secret=""):
+    """Exchange the code; the caller passes the secret read for this exchange."""
     data = {
         "grant_type": "authorization_code",
         "code": code,
@@ -98,11 +99,11 @@ def exchange_code(discovery, snapshot, settings, code, transaction):
         "code_verifier": transaction["cv"],
     }
     auth = None
-    if settings.client_secret:
+    if client_secret:
         # OAuth Basic credentials are form-urlencoded before base64 encoding.
         from urllib.parse import quote_plus
 
-        auth = (quote_plus(settings.client_id), quote_plus(settings.client_secret))
+        auth = (quote_plus(settings.client_id), quote_plus(client_secret))
     else:
         data["client_id"] = settings.client_id
     response = discovery.outbound.json("POST", snapshot.metadata["token_endpoint"], data=data, auth=auth)

@@ -18,7 +18,7 @@ import httpcore
 import httpx
 from httpcore._backends.sync import SyncStream
 
-from .settings import origin
+from .settings import InsecureOrigin, outbound_origin
 
 logger = logging.getLogger(__name__)
 MAX_RESPONSE_BYTES = 1024 * 1024
@@ -61,24 +61,32 @@ def normalized_ip(value):
 
 
 def resolve_destination(url, settings):
+    """Validate every resolver answer and return them as a tuple in resolver order.
+
+    The order is kept (RFC 6724 preference from getaddrinfo); the connector tries
+    the addresses in that order and never any address outside this tuple.
+    """
     deadline = _request_deadline.get()
     deadline = deadline if deadline is not None else time.monotonic() + 5
-    identity = origin(url, allow_http=settings.allow_http)
+    try:
+        identity = outbound_origin(url, settings)
+    except InsecureOrigin:
+        raise OidcUnavailable("http_origin_not_listed") from None
+    except ValueError:
+        raise OidcUnavailable("invalid_origin") from None
     parsed = urlsplit(url)
     try:
-        addresses = {str(normalized_ip(parsed.hostname))}
+        addresses = (str(normalized_ip(parsed.hostname)),)
     except ValueError:
-        addresses = {
-            str(normalized_ip(row[4][0]))
-            for row in resolve_dns(
-                parsed.hostname, parsed.port or (443 if parsed.scheme.lower() == "https" else 80), deadline
-            )
-        }
+        answers = resolve_dns(
+            parsed.hostname, parsed.port or (443 if parsed.scheme.lower() == "https" else 80), deadline
+        )
+        addresses = tuple(dict.fromkeys(str(normalized_ip(row[4][0])) for row in answers))
     if not addresses or (
         identity not in settings.private_origins and any(not normalized_ip(ip).is_global for ip in addresses)
     ):
         raise OidcUnavailable("destination_denied")
-    return frozenset(addresses)
+    return addresses
 
 
 class DeadlineStream(SyncStream):
@@ -129,23 +137,35 @@ class PinnedBackend(httpcore.NetworkBackend):
     def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
         if host != self.host or port != self.port:
             raise OidcUnavailable("origin_changed")
-        address = sorted(self.addresses)[0]
-        family = socket.AF_INET6 if ":" in address else socket.AF_INET
-        sock = socket.socket(family, socket.SOCK_STREAM)
         deadline = self.deadline if self.deadline is not None else time.monotonic() + 5
-        try:
-            sock.settimeout(remaining(deadline, timeout))
-            # Numeric socket.connect never performs a second DNS lookup.
-            sock.connect((address, port))
-            if str(normalized_ip(sock.getpeername()[0])) != address:
-                raise OidcUnavailable("peer_changed")
-            for option in socket_options or ():
-                sock.setsockopt(*option)
-            remaining(deadline)
-            return DeadlineStream(sock, deadline)
-        except BaseException:
-            sock.close()
-            raise
+        # Only validated addresses, in resolver order; each attempt gets an equal share
+        # of the remaining budget so one blackholed address cannot starve the rest.
+        addresses = tuple(self.addresses)
+        for index, address in enumerate(addresses):
+            family = socket.AF_INET6 if ":" in address else socket.AF_INET
+            share = remaining(deadline) / (len(addresses) - index)
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            try:
+                sock.settimeout(min(share, timeout) if timeout is not None else share)
+                # Numeric socket.connect never performs a second DNS lookup.
+                sock.connect((address, port))
+            except OSError:
+                sock.close()
+                continue
+            except BaseException:
+                sock.close()
+                raise
+            try:
+                if str(normalized_ip(sock.getpeername()[0])) != address:
+                    raise OidcUnavailable("peer_changed")
+                for option in socket_options or ():
+                    sock.setsockopt(*option)
+                remaining(deadline)
+                return DeadlineStream(sock, deadline)
+            except BaseException:
+                sock.close()
+                raise
+        raise OidcUnavailable("upstream_failure")
 
 
 class PinnedTransport(httpx.HTTPTransport):
@@ -196,7 +216,11 @@ class Outbound:
                     if not isinstance(result, dict):
                         raise OidcUnavailable("invalid_json")
                     return result
-        except (OSError, ValueError, httpx.HTTPError, httpcore.NetworkError, httpcore.TimeoutException):
+        except OidcUnavailable:
+            raise
+        except Exception:
+            # Any other failure (httpx.InvalidURL, RecursionError from hostile JSON, ...)
+            # becomes one sanitized category; nothing from the upstream is carried along.
             raise OidcUnavailable("upstream_failure") from None
         finally:
             _request_deadline.reset(token)
@@ -223,7 +247,7 @@ class Discovery:
         self.settings = settings
         self.outbound = outbound or Outbound(settings)
         self.snapshot = None
-        self.last_refetch = float("-inf")
+        self.last_refetch = {}
         self.lock = threading.RLock()
         self.refresh_lock = threading.Lock()
 
@@ -272,35 +296,51 @@ class Discovery:
             return "stale"
         return "available"
 
+    def claim_refetch(self, slot, category):
+        """The one per-process limiter for on-demand refetches: one per slot per 60 s."""
+        with self.lock:
+            now = time.monotonic()
+            if now - self.last_refetch.get(slot, float("-inf")) < 60:
+                raise OidcUnavailable(category)
+            self.last_refetch[slot] = now
+
     def current(self):
         with self.lock:
             state = self.evaluate_snapshot(self.snapshot)
-            if state == "expired":
-                raise OidcUnavailable("metadata_unavailable")
             if state == "available":
                 return self.snapshot
+        if state == "expired":
+            # Missing or expired metadata: one rate-limited full refresh instead of
+            # staying unavailable until the background task or a restart recovers it.
+            self.claim_refetch("metadata", "metadata_unavailable")
+            return self.refresh()
         return self.refresh(keys_only=True)
 
     def retry_keys(self):
-        with self.lock:
-            now = time.monotonic()
-            if now - self.last_refetch < 60:
-                raise OidcUnavailable("key_refresh_limited")
-            self.last_refetch = now
+        self.claim_refetch("keys", "key_refresh_limited")
         return self.refresh(keys_only=True)
 
     async def run(self):
         delay = 5
         while True:
+            # Refresh the instance discovery_for publishes, so a legitimate
+            # replacement is never left without background refreshes.
+            target = _discovery if _discovery is not None else self
             try:
-                await asyncio.to_thread(self.refresh)
+                await asyncio.to_thread(target.refresh)
                 delay = 5
                 await asyncio.sleep(3600)
-            except (OidcUnavailable, ValueError):
+            except Exception as error:
                 from another_s3_manager.metrics import oidc_discovery_errors_total
 
+                # OidcUnavailable carries only fixed category literals; other errors
+                # are reduced to one category so no upstream text reaches the log.
+                if isinstance(error, OidcUnavailable):
+                    reason = error.args[0] if error.args else "unavailable"
+                else:
+                    reason = "unexpected_error"
                 oidc_discovery_errors_total.inc()
-                logger.warning("OIDC discovery unavailable category=refresh_failed")
+                logger.warning("OIDC discovery unavailable category=refresh_failed reason=%s", reason)
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 300)
 
@@ -310,7 +350,9 @@ _discovery = None
 
 def discovery_for(settings):
     global _discovery
-    fields = ("issuer", "client_id", "public_url", "client_secret", "allow_http", "private_origins")
+    # The client secret is not part of the identity: it is read per token exchange,
+    # so rotating it never replaces (and empties) the published instance.
+    fields = ("issuer", "client_id", "public_url", "allow_http", "private_origins")
     if _discovery is None or any(getattr(_discovery.settings, name) != getattr(settings, name) for name in fields):
         _discovery = Discovery(settings)
     return _discovery
