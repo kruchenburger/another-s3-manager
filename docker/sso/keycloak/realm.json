@@ -1,0 +1,149 @@
+{
+  "realm": "asm-smoke",
+  "enabled": true,
+  "displayName": "ASM LOCAL-ONLY smoke fixture v1",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "attributes": {
+    "asm_smoke_fixture": "asm-local-smoke-v1"
+  },
+  "groups": [
+    {
+      "name": "s3-admins"
+    },
+    {
+      "name": "data-team"
+    },
+    {
+      "name": "team",
+      "subGroups": [
+        {
+          "name": "sub"
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "sso-admin",
+      "enabled": true,
+      "email": "sso-admin@example.test",
+      "emailVerified": false,
+      "firstName": "SSO",
+      "lastName": "Admin",
+      "groups": [
+        "/s3-admins"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${SSO_DEMO_PASSWORD}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "sso-reader",
+      "enabled": true,
+      "email": "sso-reader@example.test",
+      "emailVerified": false,
+      "firstName": "SSO",
+      "lastName": "Reader",
+      "groups": [
+        "/data-team",
+        "/team/sub"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${SSO_DEMO_PASSWORD}",
+          "temporary": false
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "asm",
+      "name": "ASM local smoke",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${SSO_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8080/api/auth/oidc/callback",
+        "http://localhost:5173/api/auth/oidc/callback"
+      ],
+      "webOrigins": [],
+      "defaultClientScopes": [
+        "profile",
+        "groups"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups-full",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "groups-flat",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups_flat",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "groups",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    },
+    {
+      "name": "profile",
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "username",
+            "claim.name": "preferred_username",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ]
+}

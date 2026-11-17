@@ -983,3 +983,8 @@ def test_principal_denial_stops_move_and_cleanup_with_partial_counts(storage, mo
         assert result["failures"][0]["code"] == "ACCESS_DENIED"
         assert result["failures"][0]["key"] == "dest/second"
         fake.delete_objects.assert_called_once()
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_freshness_expiry_preserves_partial_move_and_cleanup_counts(storage, monkeypatch, partial):
+    test_principal_denial_stops_move_and_cleanup_with_partial_counts(storage, monkeypatch, "SSO_AUTHZ_EXPIRED", partial)

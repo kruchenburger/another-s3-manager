@@ -12,6 +12,24 @@ import { useSaveConfig } from "@/features/admin/hooks/useAdminConfig";
 import { configQueryKey } from "@/hooks/useConfig";
 import { adminConfigQueryKey } from "@/features/admin/hooks/useAdminConfig";
 import { meQueryKey } from "@/features/auth/hooks/useMe";
+import { toWritableConfig } from "@/features/admin/api/configShape";
+import type { AppConfig } from "@/types/api";
+
+it("preserves stored auth and opaque OAuth while excluding runtime settings", () => {
+  const config = {
+    roles: [],
+    auth: { local_login: "off", oidc: { session_max_minutes: 5 } },
+    mcp_oauth: { future: ["opaque"] },
+    auth_runtime: { issuer: "environment-derived" },
+  } as unknown as AppConfig;
+  const writable = toWritableConfig(config);
+  expect(writable.auth).toEqual({
+    local_login: "off",
+    oidc: { session_max_minutes: 5 },
+  });
+  expect(writable.mcp_oauth).toEqual({ future: ["opaque"] });
+  expect(writable).not.toHaveProperty("auth_runtime");
+});
 
 function wrap(qc: QueryClient) {
   return ({ children }: { children: ReactNode }) => (

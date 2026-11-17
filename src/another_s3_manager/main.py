@@ -52,12 +52,19 @@ from another_s3_manager import move_jobs
 from another_s3_manager import users as users_module
 from another_s3_manager.api_tokens import count_active_tokens
 from another_s3_manager.auth import (
+    apply_oidc_cookie_operations,
+    clear_session_cookie,
     get_current_admin_user,
     get_current_user,
     get_jwt_secret_key,
     has_valid_session,
     hash_password,
+    log_cookie_mode,
     map_web_auth_error,
+    map_web_oidc_error,
+    oidc_transaction_cookies,
+    session_cookie,
+    set_session_cookie,
     verify_csrf_token,
 )
 from another_s3_manager.config import load_config, resolve_max_file_size, resolve_presigned_ttls, save_config
@@ -65,7 +72,6 @@ from another_s3_manager.constants import (
     APP_DESCRIPTION,
     APP_NAME,
     APP_VERSION,
-    COOKIE_SECURE,
     DEFAULT_ADMIN_PASSWORD,
     PASSWORD_SET_VIA_UI,
     PRESIGNED_STS_WARNING_THRESHOLD,
@@ -317,13 +323,39 @@ async def lifespan(app_: FastAPI):
     why it is a separate, directly-callable function.
     """
     run_startup_tasks()
+    log_cookie_mode()
+    oidc_settings = access_service.oidc_startup(load_config(force_reload=True))
+    oidc_task = None
+    if oidc_settings.enabled:
+        import asyncio
+
+        oidc_task = asyncio.create_task(access_service.discovery_for(oidc_settings).run())
 
     # Enter FastMCP session manager — REQUIRED for /mcp/* to work.
-    async with _mcp_instance.session_manager.run():
-        yield
+    try:
+        async with _mcp_instance.session_manager.run():
+            yield
+    finally:
+        if oidc_task is not None:
+            oidc_task.cancel()
+            import asyncio
+            from contextlib import suppress
+
+            with suppress(asyncio.CancelledError):
+                await oidc_task
 
 
 app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION, lifespan=lifespan)
+
+
+@app.middleware("http")
+async def oidc_document_policy(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/login" or request.url.path.startswith("/api/auth/oidc/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
 
 # No application-level rate limiting. Brute-force defense lives in the
 # username-based ban (auth.record_login_attempt: 3 fails → 1h ban, admins exempt).
@@ -775,6 +807,49 @@ def _enforce_password_policy(password: str) -> None:
 # ============================================================================
 
 
+_OIDC_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+
+
+@app.get("/api/auth/oidc/login")
+def oidc_login(request: Request, return_to: str = "/"):
+    result = access_service.start_oidc_login(return_to, oidc_transaction_cookies(request))
+    if result.code:
+        response = JSONResponse(
+            {"detail": {"code": result.code}},
+            status_code=map_web_oidc_error("start", result.code),
+            headers=_OIDC_HEADERS,
+        )
+    else:
+        response = RedirectResponse(result.redirect, status_code=302, headers=_OIDC_HEADERS)
+    apply_oidc_cookie_operations(response, result.cookies)
+    return response
+
+
+@app.get("/api/auth/oidc/callback")
+async def oidc_callback(request: Request):
+    result = await access_service.complete_oidc_login(request.query_params, oidc_transaction_cookies(request))
+    status_code = map_web_oidc_error("callback", result.code)
+    if status_code is not None:
+        response = JSONResponse({"detail": {"code": result.code}}, status_code=status_code, headers=_OIDC_HEADERS)
+    elif result.session:
+        from html import escape
+
+        target = escape(result.redirect, quote=True)
+        response = HTMLResponse(
+            '<!doctype html><meta http-equiv="refresh" content="0;url='
+            + target
+            + '"><a href="'
+            + target
+            + '">Continue</a>',
+            headers={**_OIDC_HEADERS, "Content-Security-Policy": "default-src 'none'"},
+        )
+        set_session_cookie(response, result.session, result.lifetime_minutes * 60)
+    else:
+        response = RedirectResponse(result.redirect, status_code=302, headers=_OIDC_HEADERS)
+    apply_oidc_cookie_operations(response, result.cookies)
+    return response
+
+
 @app.post("/api/login")
 async def login(
     request: Request,
@@ -785,13 +860,13 @@ async def login(
     """Login endpoint — issues an httpOnly cookie carrying the JWT."""
     try:
         try:
-            principal = access_service.authenticate_local(username, password, {})
+            principal = access_service.authenticate_local(username, password, load_config())
         except access_service.AuthenticationError as error:
             status_code, detail, reason = map_web_auth_error("login", error)
-            auth_logins_total.labels(result=reason).inc()
+            auth_logins_total.labels(method="local", result=reason).inc()
             raise HTTPException(status_code=status_code, detail=detail) from None
         user = principal.to_user_dict()
-        auth_logins_total.labels(result="success").inc()
+        auth_logins_total.labels(method="local", result="success").inc()
 
         # Generate CSRF token and embed in the signed JWT (defence-in-depth).
         # The JWT itself is delivered as an httpOnly cookie so JS cannot read it;
@@ -800,15 +875,7 @@ async def login(
         lifetime = access_service.validate_lifetime_minutes()
         access_token = access_service.issue_session(principal, method="pwd", lifetime_minutes=lifetime)
 
-        response.set_cookie(
-            key="access_token",
-            value=access_token,
-            httponly=True,
-            secure=COOKIE_SECURE,
-            samesite="strict",
-            max_age=lifetime * 60,
-            path="/",
-        )
+        set_session_cookie(response, access_token, lifetime * 60)
 
         return {"user": {"username": username, "is_admin": user.get("is_admin", False)}}
     except HTTPException:
@@ -827,7 +894,7 @@ async def login(
 @app.post("/api/logout")
 async def logout(response: Response):
     """Clear the auth cookie. No auth required — clearing an already-invalid cookie is harmless."""
-    response.delete_cookie("access_token", path="/")
+    clear_session_cookie(response)
     return {"ok": True}
 
 
@@ -860,6 +927,9 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
     return {
         "username": current_user.get("username"),
         "is_admin": is_admin,
+        "auth_source": current_user.get("auth_source", "local"),
+        "managed_by_sso": access_service.managed_by_sso(current_user),
+        **({"session_identity": current_user["session_identity"]} if current_user.get("session_identity") else {}),
         "csrf_token": current_user.get("csrf_token"),  # Return CSRF token for client
         "theme": current_user.get("theme", "auto"),  # Return user's theme preference
         "allowed_roles": allowed_roles,
@@ -877,6 +947,7 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
 async def get_app_info():
     """Get application information (public endpoint)"""
     return {
+        "auth": access_service.oidc_runtime(load_config(), public=True),
         "app_name": APP_NAME,
         "app_description": APP_DESCRIPTION,
         "app_version": APP_VERSION,
@@ -893,6 +964,8 @@ async def list_users(current_user: Dict[str, Any] = Depends(get_current_admin_us
     user_list = get_users_for_admin()
     names = set(available_roles)
     for user in user_list:
+        user["managed_by_sso"] = access_service.managed_by_sso(user)
+        user.pop("mapping_mode_applied", None)
         stored = user["allowed_roles"]
         user["allowed_roles"] = users_module.effective_allowed_roles(stored, names)
         user["missing_roles"] = [name for name in stored if name not in names]
@@ -1595,6 +1668,9 @@ async def get_config(
         effective_role = roles_list[0].get("name", "") if roles_list else ""
 
         safe_config = {
+            "auth": config.get("auth", {}),
+            "mcp_oauth": config.get("mcp_oauth", {}),
+            "auth_runtime": access_service.oidc_runtime(config),
             "roles": [sanitize_role(role) for role in config.get("roles", [])],
             "current_role": effective_role,  # Computed value for frontend (not stored in config)
             "disable_deletion": disable_deletion,
@@ -1734,6 +1810,10 @@ async def update_config(
                 if name not in old_names and name in new_names:
                     raise HTTPException(status_code=400, detail=f"Duplicate role name: {name!r}")
                 new_names.append(name)
+            try:
+                config = config_module.merge_and_validate_update(config, old_config)
+            except ValueError as error:
+                raise HTTPException(422, detail=str(error)) from None
             added = set(new_names) - old_names
             removed = old_names - set(new_names)
 
@@ -2048,7 +2128,10 @@ async def update_config(
                     logger.exception("Failed to prune grants after role removal")
             clear_s3_clients_cache()
             logger.info("S3 client cache cleared after config save")
-            return {"message": "Configuration updated successfully"}
+            return {
+                "message": "Configuration updated successfully",
+                "removed_mapping_rules": list(getattr(config, "removed_mapping_rules", ())),
+            }
         except PermissionError as e:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
         except HTTPException:
@@ -2471,7 +2554,7 @@ def get_user_for_download(token: Optional[str] = Query(None), request: Request =
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             candidates.append(auth_header[7:])
-        cookie_token = request.cookies.get("access_token")
+        cookie_token = session_cookie(request)
         if cookie_token:
             candidates.append(cookie_token)
     for candidate in candidates:
@@ -2989,7 +3072,7 @@ async def serve_spa(full_path: str):
     if not index_file.exists():
         raise HTTPException(status_code=404, detail="React SPA not built yet")
     with open(index_file, "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
+        return HTMLResponse(content=f.read(), headers=_OIDC_HEADERS if full_path == "login" else None)
 
 
 def _account_error(error):

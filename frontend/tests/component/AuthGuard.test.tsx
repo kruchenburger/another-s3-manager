@@ -7,6 +7,10 @@ import {
   AuthGuard,
   SESSION_ENDED_NOTIFICATION_ID,
 } from "@/components/AuthGuard/AuthGuard";
+vi.mock("@/features/auth/hooks/useSessionIdentity", () => ({
+  useSessionIdentity: () => ({ blocked: false }),
+}));
+
 import { ApiError } from "@/utils/apiError";
 
 vi.mock("@/features/auth/hooks/useMe", () => ({

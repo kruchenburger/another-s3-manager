@@ -16,7 +16,14 @@ export function UserMenu() {
 
   const handleLogout = (): void => {
     logout.mutate(undefined, {
-      onSuccess: () => navigate("/login", { replace: true }),
+      onSuccess: () => {
+        if (me.auth_source === "oidc")
+          notifications.show({
+            title: "Signed out of ASM",
+            message: "Your identity provider session remains signed in.",
+          });
+        navigate("/login", { replace: true });
+      },
       onError: () =>
         notifications.show({
           color: "red",
@@ -44,12 +51,14 @@ export function UserMenu() {
       </Menu.Target>
       <Menu.Dropdown>
         <Menu.Label>Signed in as {me.username}</Menu.Label>
-        <Menu.Item
-          leftSection={<KeyRound size={14} />}
-          onClick={() => navigate("/change-password")}
-        >
-          Change password
-        </Menu.Item>
+        {me.auth_source !== "oidc" && (
+          <Menu.Item
+            leftSection={<KeyRound size={14} />}
+            onClick={() => navigate("/change-password")}
+          >
+            Change password
+          </Menu.Item>
+        )}
         <Menu.Item
           leftSection={<Key size={14} />}
           onClick={() => navigate("/api-tokens")}

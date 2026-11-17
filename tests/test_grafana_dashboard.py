@@ -63,6 +63,12 @@ def _exprs(dashboard: dict) -> list[str]:
     return exprs
 
 
+def test_auth_panel_distinguishes_local_and_oidc():
+    queries = [expr for expr in _exprs(_load()) if "as3m_auth_logins_total" in expr]
+    assert queries
+    assert all("sum by (method, result)" in expr for expr in queries)
+
+
 def _datasource_refs(dashboard: dict) -> list[object]:
     """Every `datasource` value used anywhere (panels, targets, template vars)."""
     refs: list[object] = []

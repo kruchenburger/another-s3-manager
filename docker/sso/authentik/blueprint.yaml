@@ -1,0 +1,222 @@
+{
+  "version": 1,
+  "metadata": {
+    "name": "ASM LOCAL-ONLY smoke fixture v1",
+    "labels": {
+      "asm_smoke_fixture": "asm-local-smoke-v1"
+    }
+  },
+  "entries": [
+    {
+      "model": "authentik_core.group",
+      "state": "created",
+      "identifiers": {
+        "pk": "13100000-0000-4000-8000-000000000001",
+        "name": "s3-admins"
+      },
+      "attrs": {
+        "is_superuser": false,
+        "attributes": {
+          "asm_smoke_fixture": "asm-local-smoke-v1"
+        }
+      }
+    },
+    {
+      "model": "authentik_core.group",
+      "state": "created",
+      "identifiers": {
+        "pk": "13100000-0000-4000-8000-000000000002",
+        "name": "data-team"
+      },
+      "attrs": {
+        "is_superuser": false,
+        "attributes": {
+          "asm_smoke_fixture": "asm-local-smoke-v1"
+        }
+      }
+    },
+    {
+      "model": "authentik_core.group",
+      "state": "created",
+      "identifiers": {
+        "pk": "13100000-0000-4000-8000-000000000003",
+        "name": "team"
+      },
+      "attrs": {
+        "is_superuser": false,
+        "attributes": {
+          "asm_smoke_fixture": "asm-local-smoke-v1"
+        }
+      }
+    },
+    {
+      "model": "authentik_core.group",
+      "state": "created",
+      "identifiers": {
+        "pk": "13100000-0000-4000-8000-000000000004",
+        "name": "sub"
+      },
+      "attrs": {
+        "is_superuser": false,
+        "attributes": {
+          "asm_smoke_fixture": "asm-local-smoke-v1"
+        },
+        "parents": [
+          "13100000-0000-4000-8000-000000000003"
+        ]
+      }
+    },
+    {
+      "model": "authentik_core.user",
+      "state": "created",
+      "identifiers": {
+        "username": "sso-admin"
+      },
+      "attrs": {
+        "name": "sso-admin",
+        "is_active": true,
+        "path": "users/asm-local-smoke",
+        "groups": [
+          "13100000-0000-4000-8000-000000000001"
+        ],
+        "password": "__SSO_DEMO_PASSWORD__",
+        "attributes": {
+          "asm_smoke_fixture": "asm-local-smoke-v1"
+        }
+      }
+    },
+    {
+      "model": "authentik_core.user",
+      "state": "created",
+      "identifiers": {
+        "username": "sso-reader"
+      },
+      "attrs": {
+        "name": "sso-reader",
+        "is_active": true,
+        "path": "users/asm-local-smoke",
+        "groups": [
+          "13100000-0000-4000-8000-000000000002",
+          "13100000-0000-4000-8000-000000000004"
+        ],
+        "password": "__SSO_DEMO_PASSWORD__",
+        "attributes": {
+          "asm_smoke_fixture": "asm-local-smoke-v1"
+        }
+      }
+    },
+    {
+      "model": "authentik_flows.flow",
+      "state": "created",
+      "identifiers": {
+        "pk": "13100000-0000-4000-8000-000000000010",
+        "slug": "asm-smoke-authorization"
+      },
+      "attrs": {
+        "name": "asm-smoke-authorization",
+        "title": "ASM local smoke",
+        "designation": "authorization",
+        "authentication": "require_authenticated"
+      }
+    },
+    {
+      "model": "authentik_flows.flow",
+      "state": "created",
+      "identifiers": {
+        "pk": "13100000-0000-4000-8000-000000000011",
+        "slug": "asm-smoke-invalidation"
+      },
+      "attrs": {
+        "name": "asm-smoke-invalidation",
+        "title": "ASM local smoke",
+        "designation": "invalidation",
+        "authentication": "none"
+      }
+    },
+    {
+      "model": "authentik_providers_oauth2.scopemapping",
+      "state": "created",
+      "identifiers": {
+        "pk": "13100000-0000-4000-8000-000000000020",
+        "name": "ASM smoke profile"
+      },
+      "attrs": {
+        "scope_name": "profile",
+        "expression": "return {\"preferred_username\": request.user.username}"
+      }
+    },
+    {
+      "model": "authentik_providers_oauth2.scopemapping",
+      "state": "created",
+      "identifiers": {
+        "pk": "13100000-0000-4000-8000-000000000021",
+        "name": "ASM smoke groups"
+      },
+      "attrs": {
+        "scope_name": "groups",
+        "expression": "return {\"groups\": list(request.user.ak_groups.values_list(\"name\", flat=True))}"
+      }
+    },
+    {
+      "model": "authentik_providers_oauth2.scopemapping",
+      "state": "created",
+      "identifiers": {
+        "pk": "13100000-0000-4000-8000-000000000022",
+        "name": "ASM smoke openid"
+      },
+      "attrs": {
+        "scope_name": "openid",
+        "expression": "return {}"
+      }
+    },
+    {
+      "model": "authentik_providers_oauth2.oauth2provider",
+      "state": "created",
+      "identifiers": {
+        "pk": 131,
+        "name": "ASM local smoke"
+      },
+      "attrs": {
+        "authorization_flow": "13100000-0000-4000-8000-000000000010",
+        "invalidation_flow": "13100000-0000-4000-8000-000000000011",
+        "client_type": "confidential",
+        "client_id": "asm",
+        "client_secret": "__SSO_CLIENT_SECRET__",
+        "grant_types": [
+          "authorization_code"
+        ],
+        "redirect_uris": [
+          {
+            "matching_mode": "strict",
+            "url": "http://localhost:8080/api/auth/oidc/callback"
+          },
+          {
+            "matching_mode": "strict",
+            "url": "http://localhost:5173/api/auth/oidc/callback"
+          }
+        ],
+        "signing_key": "__SIGNING_KEY__",
+        "include_claims_in_id_token": true,
+        "issuer_mode": "per_provider",
+        "sub_mode": "hashed_user_id",
+        "property_mappings": [
+          "13100000-0000-4000-8000-000000000022",
+          "13100000-0000-4000-8000-000000000020",
+          "13100000-0000-4000-8000-000000000021"
+        ]
+      }
+    },
+    {
+      "model": "authentik_core.application",
+      "state": "created",
+      "identifiers": {
+        "slug": "asm"
+      },
+      "attrs": {
+        "name": "ASM local smoke",
+        "provider": 131,
+        "meta_description": "asm-local-smoke-v1"
+      }
+    }
+  ]
+}

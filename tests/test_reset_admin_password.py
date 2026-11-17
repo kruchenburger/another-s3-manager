@@ -52,6 +52,23 @@ class _FakeNonTtyStdin:
         return False
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--enable", "admin", "password", "--yes"],
+        ["--enable", "admin", "--local", "admin", "--yes"],
+        ["--enable", "admin", "--enable", "admin", "--yes"],
+        ["--local", "admin", "--local", "admin", "--yes"],
+    ],
+)
+def test_recovery_flag_grammar_and_enable_without_password(arguments, monkeypatch):
+    from another_s3_manager.reset_admin_password import main
+
+    with pytest.raises(SystemExit) as error:
+        main(arguments)
+    assert error.value.code == 2
+
+
 # --- service function -------------------------------------------------------
 
 
@@ -468,3 +485,45 @@ def test_cli_database_error_fallback_omits_sql_and_parameters_when_orig_is_none(
     assert "fallbackpathhashvalueusedonlyintests" not in err
     assert "[SQL:" not in err
     assert "[parameters:" not in err
+
+
+@pytest.mark.parametrize("flag", ["--enable", "--local"])
+def test_cli_recovery_delegates_target_identity(monkeypatch, flag):
+    from another_s3_manager import access
+    from another_s3_manager.reset_admin_password import main
+
+    identity = (42, "target-generation")
+    calls = []
+
+    def lookup(username):
+        assert username == "target"
+        calls.append("lookup")
+        return identity
+
+    def recover(username, **kwargs):
+        assert username == "target"
+        assert kwargs == {
+            "password": None if flag == "--enable" else "RecoveredPassword1",
+            "enable": flag == "--enable",
+            "expected_identity": identity,
+        }
+        calls.append("recover")
+
+    monkeypatch.setattr(access, "recovery_target_identity", lookup)
+    monkeypatch.setattr(access, "recover_local_account", recover)
+    arguments = [flag, "target", "--yes"]
+    if flag == "--local":
+        arguments.append("RecoveredPassword1")
+    assert main(arguments) == 0
+    assert calls == ["lookup", "recover"]
+
+
+def test_cli_recovery_missing_target_uses_access(monkeypatch, capsys):
+    from another_s3_manager import access
+    from another_s3_manager.reset_admin_password import main
+
+    monkeypatch.setattr(access, "recovery_target_identity", lambda username: None)
+    with pytest.raises(SystemExit) as error:
+        main(["--enable", "missing", "--yes"])
+    assert error.value.code == 1
+    assert "target user does not exist" in capsys.readouterr().err

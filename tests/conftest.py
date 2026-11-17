@@ -65,6 +65,20 @@ def isolated_environment(monkeypatch, tmp_path):
     # A developer or CI runner with ADMIN_PASSWORD_FORCE set in their real environment would
     # otherwise silently change the behavior of every test in the suite (several tests already
     # delenv this by hand -- this makes the whole suite hermetic, not just the ones that noticed).
+    for name in (
+        "OIDC_ISSUER",
+        "OIDC_CLIENT_ID",
+        "OIDC_CLIENT_SECRET",
+        "OIDC_CLIENT_SECRET_FILE",
+        "PUBLIC_URL",
+        "OIDC_ALLOWED_PRIVATE_ORIGINS",
+        "OIDC_ALLOW_INSECURE_HTTP",
+        "LOCAL_LOGIN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    from another_s3_manager.access.oidc import discovery
+
+    discovery._discovery = None
     monkeypatch.delenv("ADMIN_PASSWORD_FORCE", raising=False)
     monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
@@ -291,3 +305,29 @@ def moto_s3():
 
         client._asm_storage_fingerprint = s3_client.role_storage_fingerprint("Default", config.load_config())
         yield client
+
+
+@pytest.fixture
+def oidc(monkeypatch):
+    import httpx
+
+    from another_s3_manager import access, config
+    from another_s3_manager.access.oidc import discovery
+    from tests.oidc.fake_op import FakeOP
+
+    monkeypatch.setenv("OIDC_ISSUER", "https://op.example")
+    monkeypatch.setenv("PUBLIC_URL", "https://asm.example")
+    monkeypatch.setenv("OIDC_CLIENT_ID", "asm")
+    monkeypatch.setenv("COOKIE_SECURE", "true")
+    monkeypatch.setattr(discovery, "resolve_destination", lambda url, settings: frozenset({"93.184.216.34"}))
+    op = FakeOP()
+    cfg = config.load_config()
+    cfg["auth"] = {
+        "oidc": {"role_mapping": {"rules": [{"claim": "groups", "value": "data-team", "roles": ["Default"]}]}}
+    }
+    config.save_config(cfg)
+    settings = access.oidc_settings(cfg)
+    client = discovery.Discovery(settings, discovery.Outbound(settings, httpx.MockTransport(op.handle)))
+    client.refresh()
+    monkeypatch.setattr(discovery, "_discovery", client)
+    return op
