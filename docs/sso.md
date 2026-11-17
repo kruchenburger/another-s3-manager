@@ -109,7 +109,11 @@ read-only; derived runtime fields and secrets are not stored policy.
 
 Production requires HTTPS and Secure cookies. `COOKIE_SECURE=false` with HTTPS
 `PUBLIC_URL` is invalid. Development HTTP requires `OIDC_ALLOW_INSECURE_HTTP=true`
-and `COOKIE_SECURE=false`. HTTP permission grants **no** private-network access.
+and `COOKIE_SECURE=false`; ASM logs a startup warning while the flag is on, and an
+`http://` IdP origin is accepted only when that exact origin is also listed in
+`OIDC_ALLOWED_PRIVATE_ORIGINS`. Never set the flag in production: the code, the
+client secret and the ID token would travel in cleartext. HTTP permission grants
+**no** private-network access by itself.
 Private IdPs additionally require every used private endpoint origin, including
 initial discovery, in `OIDC_ALLOWED_PRIVATE_ORIGINS` (comma-separated exact
 scheme/host/effective-port origins, empty by default). No paths or wildcards.
@@ -118,6 +122,22 @@ no redirects/proxy environment, 5-second timeout and streamed 1 MiB limit apply
 to discovery, refresh, JWKS and token exchange. Adjacent origins gain nothing.
 
 Discovery outages make SSO unavailable without changing local-login policy.
+The client secret is read when ASM exchanges a code, so rotating the mounted
+secret file (a Kubernetes Secret update, a replaced Docker secret) takes effect
+on the next login without a restart; replace the file atomically. An unreadable
+secret file refuses SSO logins only: local login and the login page keep working.
+
+`GET /api/auth/oidc/login` needs no authentication and writes one short-lived
+login record per request. ASM refuses new SSO starts while 10,000 unfinished
+login records are pending, but it has no per-IP rate limit: put
+`/api/auth/oidc/login` and `/api/login` behind your reverse proxy's rate limit.
+
+Rules on identity claims are only as trustworthy as the IdP that asserts them.
+A rule on `email` (like one on `hd`) qualifies only when the ID token carries
+`email_verified: true`; ASM also builds a JIT username from `email` only when it
+is verified. Rules on `preferred_username` are rejected when the configuration
+is loaded or saved: many IdPs let users choose or change that name. Use a group
+or app-role claim for access instead.
 Reverse proxies must redact `code`, `state`, `token`, `id_token_hint`,
 `client_secret`, `code_verifier`, `refresh_token` and cookies. Application
 redaction does not sanitize browser traces; do not collect authentication traces,
@@ -161,6 +181,25 @@ auto-link and no self-link/unlink/convert UI. Changing issuer requires isolated
 new identities, reviewed re-grants and disabling old accounts, or postponing a
 migration requiring linkage until a supported tool exists. Do not edit identity
 rows with raw SQL.
+
+Deprovisioning has limits to know about:
+
+- Presigned URLs created before Disable, IdP removal or freshness expiry keep
+  working until they expire (up to `PRESIGNED_URL_MAX_TTL`, 7 days by default).
+  Lower that limit if links must die with the account.
+- MCP tokens of `initial`-mode accounts have no SSO freshness bound: removing the
+  user in the IdP never reaches them. Disable the ASM account as well.
+- `POST /api/login` and `POST /api/logout` accept cross-site form posts (login
+  CSRF, forced logout).
+
+With Secure cookies (`COOKIE_SECURE=true`, the default, required for HTTPS) the
+session cookie is `__Host-access_token` and the login transaction cookies also
+carry the `__Host-` prefix, so a sibling subdomain cannot plant or overwrite
+them. Upgrading from 1.3.1 signs everyone out once: the old `access_token`
+cookie is no longer accepted. Browsers refuse `__Host-` cookies without Secure,
+so a plain-HTTP setup (`COOKIE_SECURE=false`) keeps unprefixed names and lacks
+this protection; ASM logs a startup warning. Use plain HTTP only for local
+development or a trusted network.
 
 One browser cookie jar has one active ASM account; the last callback Set-Cookie
 wins. Cross-tab invalidation replaces account/cache state and refreshes
